@@ -1,4 +1,4 @@
-# Analytics only: never issues D1 SQL or generates application traffic; classify the historical-comment page shape.
+# Analytics only: no D1 SQL or synthetic app traffic; distinguish query and schema shapes.
 name: Read-only D1 quota audit
 on:
   workflow_dispatch:
