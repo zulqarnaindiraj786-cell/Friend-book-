@@ -47,10 +47,16 @@ jobs:
           import json
           data = json.load(open('tables.json'))
           rows = (data[0].get('results') if isinstance(data, list) else data.get('results')) or []
-          names = [row.get('name') for row in rows]
-          print('::notice::retired tables still present: ' + str(len(names)))
-          if len(names) != 7:
-              raise SystemExit('Expected all seven retired tables to still exist; nothing was dropped.')
+          names = sorted(row.get('name') for row in rows)
+          print('::notice::retired tables still present: ' + json.dumps({'count': len(names), 'names': names}))
+          # The three "*copy" tables never existed in production: the earlier
+          # preflight counted 1 + 4,690 + 1 + 311 = 5,003 rows, so those three
+          # contributed zero rows rather than a table.
+          required = {'friendbook_cf_presence', 'friendbook_cf_presence_sessions',
+                      'friendbook_cf_typing', 'friendbook_cf_typing_sessions'}
+          missing = sorted(required - set(names))
+          if missing:
+              raise SystemExit('Retired tables disappeared without a migration: ' + ', '.join(missing))
           PY
       - name: Two-minute sample of presence routes and cron invocations
         run: |
