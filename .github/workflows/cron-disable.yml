@@ -1,4 +1,4 @@
-name: Disable deployed Worker cron schedules
+name: Disable deployed Worker cron schedules (re-runnable status check)
 on:
   workflow_dispatch:
   push:
@@ -30,6 +30,10 @@ jobs:
             -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" -H 'content-type: application/json' \
             --data '[]')
           echo "::notice::PUT empty schedule list status: $put"; cat put.json; echo
+          echo '--- recent script metadata (name, modified_on, usage_model)'
+          curl -sS -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            "https://api.cloudflare.com/client/v4/accounts/$ACCOUNT/workers/scripts/$SCRIPT" \
+            | python3 -c "import json,sys;d=json.load(sys.stdin);r=d.get('result') or {};print('::notice::script '+json.dumps({k:r.get(k) for k in ('id','modified_on','created_on','usage_model','handlers','last_deployed_from')}))"
           echo '--- schedules after'
           curl -sS -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" "$base" | tee after.json
           echo
