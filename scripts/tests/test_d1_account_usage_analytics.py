@@ -28,6 +28,12 @@ class AccountUsageTests(unittest.TestCase):
         # This exception must not raise the existing index-build preflight budget.
         self.assertFalse(p.within_preflight_budget({'rowsRead': 0, 'rowsWritten': 50_001}))
 
+    def test_notification_read_only_inspection_has_separate_reserve(self):
+        self.assertTrue(p.within_notification_inspection_budget({'rowsRead': 3_000_000, 'rowsWritten': 75_000}))
+        self.assertFalse(p.within_notification_inspection_budget({'rowsRead': 3_000_001, 'rowsWritten': 0}))
+        self.assertFalse(p.within_notification_inspection_budget({'rowsRead': 0, 'rowsWritten': 75_001}))
+        self.assertFalse(p.within_preflight_budget({'rowsRead': 0, 'rowsWritten': 50_001}))
+
     def test_missing_or_invalid_analytics_is_not_treated_as_zero(self):
         with self.assertRaises(ValueError): p.parse({'errors': [{'message': 'rejected'}]})
         for groups in ([], [{'sum': {'rowsRead': None, 'rowsWritten': 0}}], [{'sum': {'rowsRead': -1, 'rowsWritten': 0}}]):

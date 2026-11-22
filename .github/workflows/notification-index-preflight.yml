@@ -21,9 +21,11 @@ jobs:
         run: |
           python3 -m unittest discover -s scripts/tests -p 'test_notification_index_preflight.py' -v
           python3 -m unittest discover -s scripts/tests -p 'test_d1_account_usage_analytics.py' -v
-      - name: Require conservative account headroom before any D1 SQL
-        run: python3 scripts/loadtest/d1_account_usage_analytics.py --preflight-budget
+      # This workflow only inspects at most 5,001 entries per index; it cannot
+      # drop or build indexes. Migration decisions retain their separate 50k gate.
+      - name: Require reserve for bounded read-only inspection
+        run: python3 scripts/loadtest/d1_account_usage_analytics.py --notification-inspection-budget
       - name: Read capped aggregate only
         run: python3 scripts/loadtest/notification_index_preflight.py --require-bounds
       - name: Recheck account headroom after read
-        run: python3 scripts/loadtest/d1_account_usage_analytics.py --preflight-budget
+        run: python3 scripts/loadtest/d1_account_usage_analytics.py --notification-inspection-budget
