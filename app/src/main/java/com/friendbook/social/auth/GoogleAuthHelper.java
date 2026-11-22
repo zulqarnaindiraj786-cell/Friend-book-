@@ -479,7 +479,6 @@ public final class GoogleAuthHelper {
         u.put("contactInfoPrivacy", "Only me");
         u.put("friendsListPrivacy", "Public");
         u.put("lookupPrivacy", "Everyone");
-        u.put("isOnline", false);
         // Privileged flags are server-owned; email alone cannot grant them.
         u.put("isAdmin", false);
         u.put("isVerified", false);
