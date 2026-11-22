@@ -354,6 +354,27 @@ async function boundedChatRows(db,parent,spec) {
   if (legacy || bad) return null;
   const descending=orders[0].direction==='DESCENDING';
   const takeLast=spec.limitToLast===true;
+  // Ordinary older-message pages have a single descending cursor. SQLite may
+  // otherwise walk from the newest message even with the expression index.
+  // Seek the cursor rank/time and include a bounded lower numeric-rank branch
+  // in the same statement; mixed/legacy messages already used the fallback.
+  if (after && !before && descending && !takeLast) {
+    const base=`SELECT path,parent_path,collection_id,doc_id,owner_uid,document_json,create_time,update_time,
+      ${chatRank} AS quota_chat_rank,${chatTime} AS quota_chat_time
+      FROM friendbook_cf_firestore_documents INDEXED BY idx_cf_firestore_chat_created_page WHERE parent_path=?`;
+    const same=`${base} AND (${chatRank})=? AND (${chatTime})<=? AND (${chatTime},doc_id)<(?,?)
+      ORDER BY ${chatTime} DESC,doc_id DESC LIMIT ?`;
+    try {
+      if (after[0]===2) return (await db.prepare(same).bind(parent,2,after[1],after[1],after[2],spec.limit).all())?.results || [];
+      const lower=`${base} AND (${chatRank})=? ORDER BY ${chatTime} DESC,doc_id DESC LIMIT ?`;
+      return (await db.prepare(`SELECT * FROM (${same}) UNION ALL SELECT * FROM (${lower})
+        ORDER BY quota_chat_rank DESC,quota_chat_time DESC,doc_id DESC LIMIT ?`)
+        .bind(parent,4,after[1],after[1],after[2],spec.limit,parent,2,spec.limit,spec.limit).all())?.results || [];
+    } catch(error) {
+      if (!String(error).includes('no such index: idx_cf_firestore_chat_created_page')) throw error;
+      // Old schemas retain the existing non-hinted page query below.
+    }
+  }
   const direction=(descending !== takeLast)?'DESC':'ASC';
   const args=[parent];
   let boundary='';
