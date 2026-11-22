@@ -12,7 +12,7 @@ The write batch first upserts the reaction and then updates an existing unknown 
 
 ## Rollout and rollback
 
-Second-step production deployment 44984939207 and Worker validation 44984939217 succeeded, with read-only connectivity and no production test likes. Android compile/unit run 44984939206 encountered a Robolectric Maven download IOException; Android source was not changed, and a fresh verification is needed.
+Second-step production deployment 44984939207 and Worker validation 44984939217 succeeded, with read-only connectivity and no production test likes. Android compile/unit run 44984939206 encountered a Robolectric Maven download IOException; the unchanged Android code passed the fresh verification 44985053547. No new signed candidate was built.
 
 Compatibility Worker `b19cdc1` was deployed first (44984730032). It still inserts known markers, but changes the old `NOT EXISTS known` condition so missing markers are treated as known. Worker validation 44984730075 and Android compile/unit 44984730045 passed. The second step stops creating new known markers. There is no schema migration and no data backfill.
 
