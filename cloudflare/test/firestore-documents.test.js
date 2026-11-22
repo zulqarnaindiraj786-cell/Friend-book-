@@ -761,6 +761,49 @@ test('free verification requests are owner-private and cannot be self-approved',
   sql.close();
 });
 
+test('payment owner index preserves owner ACL, legacy precedence, count and admin visibility', async () => {
+ const sql=new DatabaseSync(':memory:');
+ for(const ddl of [resourcesSchema,appSchema,schema,readFileSync(new URL('../migrations/0074_payment_owner_lookup.sql',import.meta.url),'utf8')])sql.exec(ddl);
+ const f=sql.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)');
+ const a=sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)');
+ for(let i=0;i<1000;i++)f.run(`payments/f${i}`,'payments','payments',`f${i}`,'alice',JSON.stringify({userId:`unrelated${i}`,status:'pending'}),1,1);
+ f.run('payments/a','payments','payments','a','wrong',JSON.stringify({userId:'alice',status:'pending'}),1,1);
+ f.run('payments/shadow','payments','payments','shadow','alice',JSON.stringify({userId:'bob',status:'pending'}),1,1);
+ a.run('payments/shadow','payments','shadow','alice',JSON.stringify({userId:'alice',status:'pending'}),1);
+ a.run('payments/primitive','payments','primitive','wrong',JSON.stringify({fields:{userId:'alice',status:'pending'}}),1);
+ a.run('payments/wrapped','payments','wrapped','wrong',JSON.stringify({fields:{userId:{stringValue:'alice'},status:{stringValue:'pending'}}}),1);
+ a.run('payments/coerced','payments','coerced','wrong',JSON.stringify({fields:{userId:{stringValue:['alice']},status:{stringValue:'pending'}}}),1);
+ let forced=false,full=0,returned=0,plans=[];
+ const db={prepare(q){
+   if(forced && q.includes('INDEXED BY idx_cf_payments_user'))throw Error('no such index: idx_cf_payments_user');
+   if(q.includes('quota_root_payments'))full++;
+   const stmt=sql.prepare(q);return{bind(...args){return{first:async()=>stmt.get(...args)||null,all:async()=>{
+     const result=stmt.all(...args);
+     if(q.includes('idx_cf_payments_user') || q.includes('idx_cf_legacy_payments_user')) {
+       returned+=result.length;plans.push(...sql.prepare('EXPLAIN QUERY PLAN '+q).all(...args).map(row=>row.detail));
+     }
+     return{results:result};
+   }};}};
+ }};
+ const worker=createWorker(async token=>token),env={DB:db,FIREBASE_PROJECT_ID:'test',PAYMENT_ADMIN_UIDS:'admin'};
+ const query=async(actor,body)=>{
+   const r=await worker.fetch(new Request('https://example.test/v1/firestore/query',{method:'POST',headers:{authorization:'Bearer '+actor,'content-type':'application/json'},body:JSON.stringify({parent:'payments',...body})}),env);
+   assert.equal(r.status,200,await r.clone().text());return (await r.json()).documents;
+ };
+ for(const [actor,body] of [['alice',{}],['alice',{filters:[{field:'userId',op:'==',value:'alice'},{field:'status',op:'==',value:'pending'}],limit:1}],['bob',{}],['admin',{filters:[{field:'userId',op:'==',value:'alice'}]}]]) {
+   forced=false;full=0;returned=0;const fast=await query(actor,body),scans=full,rows=returned;
+   forced=true;const slow=await query(actor,body);forced=false;
+   assert.deepEqual(fast,slow);assert.equal(scans,0);assert.ok(rows<10);
+ }
+ assert.deepEqual((await query('alice',{})).map(doc=>doc.id).sort(),['a','coerced','primitive','wrapped']);
+ const count=await worker.fetch(new Request('https://example.test/v1/firestore/count?parent=payments',{headers:{authorization:'Bearer alice'}}),env);
+ assert.equal((await count.json()).count,4);
+ full=0;assert.equal((await query('admin',{})).length,1005);assert.ok(full>0,'unfiltered administrator retains all records');
+ assert.match(plans.join('\n'),/SEARCH .*idx_cf_payments_user/);
+ assert.match(plans.join('\n'),/SEARCH .*idx_cf_legacy_payments_user/);
+ sql.close();
+});
+
 test('only configured administrators can atomically approve or reject a free review', async () => {
   const sql=new DatabaseSync(':memory:');sql.exec(resourcesSchema);sql.exec(appSchema);sql.exec(schema);sql.exec(readFileSync(new URL('../migrations/0018_social_guards.sql',import.meta.url),'utf8'));
   const db={prepare(query){const stmt=sql.prepare(query);return{bind(...args){return{run:async()=>stmt.run(...args),all:async()=>({results:stmt.all(...args)}),first:async()=>stmt.get(...args)||null};}};},async batch(stmts){sql.exec('BEGIN');try{for(const s of stmts)await s.run();sql.exec('COMMIT');}catch(e){sql.exec('ROLLBACK');throw e;}}};

@@ -446,9 +446,38 @@ function unicodePrefixUpper(prefix) {
   return null;
 }
 
-async function readCollectionRows(db, parent, uid, filters, spec) {
+async function readCollectionRows(db, parent, uid, filters, spec, env) {
   const bounded=spec ? await boundedChatRows(db,parent,spec) ?? await boundedLiveChatRows(db,parent,spec) : null;
   if (bounded!==null) return bounded;
+  if (parent==='payments') {
+    // Ordinary readers can only see their own payments; an administrator may
+    // see all records unless the query itself asks for one particular owner.
+    const requested=filters?.find(f=>f.field==='userId' && f.op==='==' && typeof f.value==='string')?.value;
+    const owner=isPaymentAdmin(env,uid)?requested:uid;
+    if (typeof owner==='string') {
+      const legacyUser=`CASE WHEN json_type(a.document_json,'$.fields')='object' THEN CASE
+        WHEN json_type(a.document_json,'$.fields.userId')='text' THEN json_extract(a.document_json,'$.fields.userId')
+        WHEN json_type(a.document_json,'$.fields.userId.stringValue')='text' THEN json_extract(a.document_json,'$.fields.userId.stringValue')
+        WHEN json_type(a.document_json,'$.fields.userId.stringValue') IS NOT NULL THEN 1 END
+        ELSE json_extract(a.document_json,'$.userId') END`;
+      try {
+        const [canonical,legacy]=await Promise.all([
+          db.prepare(`SELECT * FROM friendbook_cf_firestore_documents INDEXED BY idx_cf_payments_user
+            WHERE parent_path='payments' AND json_extract(document_json,'$.userId')=?`).bind(owner).all(),
+          db.prepare(`SELECT a.* FROM friendbook_cf_documents a INDEXED BY idx_cf_legacy_payments_user
+            WHERE a.collection='payments' AND (${legacyUser})=?
+              AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents f WHERE f.path=a.path)
+            UNION ALL SELECT a.* FROM friendbook_cf_documents a INDEXED BY idx_cf_legacy_payments_user
+            WHERE a.collection='payments' AND (${legacyUser})=1
+              AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents f WHERE f.path=a.path)`).bind(owner).all(),
+        ]);
+        const rows=[...(canonical.results||[]),...(legacy.results||[]).map(appDocumentToFirestoreRow).filter(Boolean)];
+        if(new Set(rows.map(row=>row.doc_id)).size===rows.length)return rows;
+      } catch(error) {
+        if (!/no such index: idx_cf_(?:legacy_)?payments_user/.test(String(error))) throw error;
+      }
+    }
+  }
   if (parent === 'users') {
     const idFilter=filters?.find(f=>f.field==='__name__' && (f.op==='==' || f.op==='in'));
     const requested=idFilter?.op==='==' ? [idFilter.value] : idFilter?.value;
@@ -3252,7 +3281,7 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0, ct
         if (people!==null) return queryResponse(parent,people,body.knownRevisions);
         const page=parent==='notifications'?await boundedNotificationPage(db,uid,body):await boundedFeedPage(db,uid,body,requestUserReads);
         if (page!==null) return queryResponse(parent,await feedEngagement(db,env,uid,body,page,requestUserReads),body.knownRevisions);
-        rows = await readCollectionRows(db, parent, uid, body?.filters, body);
+        rows = await readCollectionRows(db, parent, uid, body?.filters, body, env);
       }
     }
     catch { return json({ error: 'Read unavailable' }, 503); }
@@ -3325,7 +3354,7 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0, ct
     if (parent==='referrals' && !canReadReports(env,uid) && (filters.length!==1
         || filters[0].field!=='refBy' || filters[0].op!=='==' || filters[0].value!==uid)) return json({error:'Forbidden'},403);
     let rows;
-    try { rows = await readCollectionRows(db, parent, uid, filters); }
+    try { rows = await readCollectionRows(db, parent, uid, filters, undefined, env); }
     catch { return json({ error: 'Read unavailable' }, 503); }
     let docs;
     const ownFollowFilters=Array.isArray(filters) ? filters.filter(f=>ownFollowFilter(parent,uid,f)) : [];

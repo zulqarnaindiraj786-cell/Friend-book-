@@ -95,6 +95,13 @@ await measure('unicodePeopleSearch',users,()=>wave(users,async i=>{
   });
   assert.deepEqual(result.documents.map(doc=>doc.id),['unicode-name']);
 }));
+for(let i=0;i<users;i++)add('payments',`review${i}`,`user${i}`,{userId:`user${i}`,status:'pending',type:'tick_blue'});
+await measure('paymentOwnerPage',users,()=>wave(users,async i=>{
+  const result=await call(`user${i}`,'/v1/firestore/query','POST',{
+    parent:'payments',filters:[{field:'userId',op:'==',value:`user${i}`},{field:'status',op:'==',value:'pending'}],limit:1,
+  });
+  assert.deepEqual(result.documents.map(doc=>doc.id),[`review${i}`]);
+}));
 await measure('unchangedProfileHeartbeat',users,()=>wave(users,i=>heartbeat(`user${i}`)));
 await measure('sendMessageAndUpdateRoom',users/2,()=>wave(users/2,slot=>{
   const i=slot*2;
