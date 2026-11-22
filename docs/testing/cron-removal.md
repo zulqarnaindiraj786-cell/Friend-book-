@@ -72,13 +72,37 @@ Deployed cron state:
 * A two-minute `wrangler tail` sample after that change reported
   `cron_invocations: 0`, `other_non_http_events: 0`.
 
-Residual, not fixable from this repository alone:
-* A deployed Worker still runs the previous code until it is uploaded, so
-  `/v1/presence/socket` can still answer (a 403 was sampled). Deleting those
-  routes needs a Worker upload, and the existing deploy workflow applies
-  migration `0086` (the seven-table DROP) in the same run.
-* Installed old APKs keep calling status endpoints; those request lines appear
-  in Cloudflare logs even when the Worker answers 404. Only an app update
-  removes them.
-* Emulator proof of "ChatList open for two minutes" was not possible here: the
-  sandbox has no Android SDK, and the app requires a real login on the emulator.
+## Guarded Worker-only upload (done)
+
+`.github/workflows/worker-only-deploy.yml` uploaded the Worker with the same
+bindings as the normal production workflow, and it deliberately contains no
+`wrangler d1` command. Its guard refused to continue unless the only pending
+migration was `0086`, so no migration and therefore no DROP could run.
+
+Run 45029756270 (upload) and 45030033215 (verification):
+* `wrangler deploy` exit 0; the previous version id was recorded for rollback.
+* pending migrations before the upload: only `0086_remove_unused_status_tables.sql`.
+* `/v1/presence/me`, `/v1/presence/contact/peer`, `/v1/presence/typing/room`
+  and `/v1/presence/socket` now answer **404** on the production host.
+* `/v1/android-config` still answers 200 and `/v1/firestore/query` still answers
+  401 without auth, so the normal API is serving.
+* deployed cron schedules: **0**; a two-minute tail sample after the upload
+  reported `cron_invocations: 0`.
+* `0086` is still pending, so the seven-table DROP has not run.
+
+### Correction to the retired-table inventory
+
+The live schema shows only four of the named tables exist:
+`friendbook_cf_presence`, `friendbook_cf_presence_sessions`,
+`friendbook_cf_typing`, `friendbook_cf_typing_sessions`. The three `*_copy` /
+`*_fullcopy` tables were never created in production; the earlier preflight
+counted `1 + 4,690 + 1 + 311 = 5,003` rows, so those three contributed zero
+rows rather than a table. Step 2's backup and DROP scope is four tables, and
+`0086` stays valid because every statement uses `DROP TABLE IF EXISTS`.
+
+### Remaining caveat
+
+Installed old APKs that still call status endpoints now receive 404; those
+request lines are logged by Cloudflare even though the Worker no longer serves
+the route. Only an app update removes them, and the new debug build's dex
+contains no presence endpoint at all.
