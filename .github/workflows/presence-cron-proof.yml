@@ -178,3 +178,5 @@ jobs:
           if presence_text_other: print('::warning::Non-route log text matched presence; inspect manually.')
           if non_http: print('::warning::Cron invocations still appear until the Worker is uploaded without [triggers].')
           PY
+
+# Re-run marker: aggregate-only proof job.
