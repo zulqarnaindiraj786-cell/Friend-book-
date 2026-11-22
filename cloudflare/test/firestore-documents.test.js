@@ -1386,6 +1386,60 @@ test('chat send retries rolled-back room metadata conflicts without duplicating 
   sql.close();
 });
 
+test('ordinary direct sends guard both snapshots without temporary writes and roll back failures', async () => {
+  const sql=new DatabaseSync(':memory:');sql.exec(resourcesSchema);sql.exec(appSchema);sql.exec(schema);sql.exec(socialGuardSchema);
+  let race=null,fastBatches=0;
+  const db={prepare(q){const stmt=sql.prepare(q);return{bind(...a){return{query:q,run:async()=>stmt.run(...a),all:async()=>({results:stmt.all(...a)}),first:async()=>stmt.get(...a)||null};}};},async batch(stmts){
+    if(stmts.some(s=>s.query.includes('THEN ?3 ELSE NULL END')))fastBatches++;
+    if(race){const fn=race;race=null;fn();}
+    sql.exec('BEGIN');try{for(const st of stmts)await st.run();sql.exec('COMMIT');}catch(e){sql.exec('ROLLBACK');throw e;}
+  }};
+  const app=createWorker(async t=>t),env={DB:db,FIREBASE_PROJECT_ID:'friendbook-test'};
+  const call=(actor,id,participants=['alice','bob'])=>app.fetch(new Request('https://example.test/v1/firestore/batch',{method:'POST',headers:{authorization:'Bearer '+actor,'content-type':'application/json'},body:JSON.stringify({operations:[
+    {op:'set',path:`chats/room/messages/${id}`,data:{senderId:actor,receiverId:'bob',text:id}},
+    {op:'set',path:'chats/room',merge:true,data:{participants,lastMessage:id,unreadCount:{bob:{__fieldValue:'increment',value:1}}}},
+  ]})}),env);
+  const initial=JSON.stringify({participants:['alice','bob'],unreadCount:{bob:0}});
+  sql.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)').run('chats/room','chats','chats','room','alice',initial,1,1);
+  const changes=()=>sql.prepare('SELECT total_changes() n').get().n;
+  let before=changes();assert.equal((await call('alice','m1')).status,200);
+  assert.equal(changes()-before,2,'only message and canonical room change');assert.equal(fastBatches,1);
+  assert.equal(JSON.parse(sql.prepare("SELECT document_json FROM friendbook_cf_firestore_documents WHERE path='chats/room'").get().document_json).unreadCount.bob,1);
+  assert.equal((await call('eve','forged')).status,403);assert.equal(fastBatches,1);
+  race=()=>sql.prepare("UPDATE friendbook_cf_firestore_documents SET document_json=? WHERE path='chats/room'").run(JSON.stringify({participants:['eve','bob'],unreadCount:{bob:1}}));
+  assert.equal((await call('alice','revoked')).status,403,'retry reauthorizes changed membership');
+  assert.equal(sql.prepare("SELECT 1 FROM friendbook_cf_firestore_documents WHERE path='chats/room/messages/revoked'").get(),undefined);
+  sql.prepare("UPDATE friendbook_cf_firestore_documents SET document_json=? WHERE path='chats/room'").run(initial);
+  race=()=>sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)').run('chats/room/messages/legacy','messages','legacy','bob',JSON.stringify({senderId:'bob',text:'old'}),1);
+  assert.equal((await call('alice','legacy')).status,503,'a legacy-only message cannot be overwritten');
+  assert.equal(sql.prepare("SELECT 1 FROM friendbook_cf_firestore_documents WHERE path='chats/room/messages/legacy'").get(),undefined);
+  assert.equal(JSON.parse(sql.prepare("SELECT document_json FROM friendbook_cf_firestore_documents WHERE path='chats/room'").get().document_json).unreadCount.bob,0);
+  sql.exec("CREATE TRIGGER fail_room BEFORE UPDATE ON friendbook_cf_firestore_documents WHEN NEW.path='chats/room' BEGIN SELECT RAISE(ABORT,'simulated failure'); END");
+  assert.equal((await call('alice','rollback')).status,503);
+  assert.equal(sql.prepare("SELECT 1 FROM friendbook_cf_firestore_documents WHERE path='chats/room/messages/rollback'").get(),undefined,'message insert rolls back if room update fails');
+  sql.exec('DROP TRIGGER fail_room');
+  assert.equal((await call('alice','rollback')).status,200);
+  assert.equal(JSON.parse(sql.prepare("SELECT document_json FROM friendbook_cf_firestore_documents WHERE path='chats/room'").get().document_json).unreadCount.bob,1);
+  const roomBeforeMirrorFailure=sql.prepare("SELECT document_json FROM friendbook_cf_firestore_documents WHERE path='chats/room'").get().document_json;
+  sql.exec("CREATE TRIGGER fail_mirror BEFORE INSERT ON friendbook_cf_documents WHEN NEW.path='chats/room' BEGIN SELECT RAISE(ABORT,'simulated mirror failure'); END");
+  assert.equal((await call('bob','mirrorfail',['bob','alice'])).status,503);
+  assert.equal(sql.prepare("SELECT 1 FROM friendbook_cf_firestore_documents WHERE path='chats/room/messages/mirrorfail'").get(),undefined);
+  assert.equal(sql.prepare("SELECT document_json FROM friendbook_cf_firestore_documents WHERE path='chats/room'").get().document_json,roomBeforeMirrorFailure,'mirror failure rolls back room too');
+  sql.exec('DROP TRIGGER fail_mirror');
+  before=changes();assert.equal((await call('bob','reply',['bob','alice'])).status,200);
+  assert.equal(changes()-before,3,'reordered participants still update the mirror');
+  const mirror=JSON.parse(sql.prepare("SELECT document_json FROM friendbook_cf_documents WHERE path='chats/room'").get().document_json);
+  assert.deepEqual(mirror.participants,['bob','alice']);assert.equal(mirror.lastMessage,'reply');
+  const fastBeforeRoot=fastBatches;
+  const legacyRoot=await app.fetch(new Request('https://example.test/v1/firestore/batch',{method:'POST',headers:{authorization:'Bearer alice','content-type':'application/json'},body:JSON.stringify({operations:[
+    {op:'set',path:'messages/root',data:{senderId:'alice',chatId:'room',text:'root message'}},
+    {op:'set',path:'chats/room',merge:true,data:{lastMessage:'root message'}},
+  ]})}),env);
+  assert.equal(legacyRoot.status,200);assert.equal(fastBatches,fastBeforeRoot,'root messages use the compatibility path');
+  assert.ok(sql.prepare("SELECT path FROM friendbook_cf_documents WHERE path='messages/root'").get(),'root message mirror is preserved');
+  sql.close();
+});
+
 test('pending friend requests are atomically unique per sender and recipient', async () => {
  const sql=new DatabaseSync(':memory:');sql.exec(resourcesSchema);sql.exec(appSchema);sql.exec(schema);sql.exec(socialGuardSchema);
  sql.exec(readFileSync(new URL('../migrations/0023_friend_request_lookup_indexes.sql',import.meta.url),'utf8'));

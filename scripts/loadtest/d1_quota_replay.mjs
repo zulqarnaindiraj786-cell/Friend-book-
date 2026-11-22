@@ -116,7 +116,7 @@ await measure('sendMessageAndUpdateRoom',users/2,()=>wave(users/2,slot=>{
   const i=slot*2;
   return batch(`user${i}`,[
     {op:'set',path:messages(i),data:{senderId:`user${i}`,receiverId:`user${i+1}`,text:'offline workload'}},
-    {op:'update',path:`chats/room${i}`,updates:{lastMessage:'offline workload',[`unreadCount.user${i+1}`]:1}},
+    {op:'set',path:`chats/room${i}`,merge:true,data:{lastMessage:'offline workload',unreadCount:{[`user${i+1}`]:1}}},
   ]);
 }));
 await measure('firstReceiptAndUnreadReset',users/2,()=>wave(users/2,i=>receipt(i*2)));

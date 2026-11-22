@@ -3621,62 +3621,92 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0, ct
       const messagePaths=order.filter(p=>chatAuths.get(p).roomPath);
       const guardedPaths=order.filter(p=>splitPath(p).length===2 && ['users','posts','reels','stories','events','pages','lives'].includes(splitPath(p)[0]));
       if ((roomPaths.length || messagePaths.length || guardedPaths.length) && typeof db.batch!=='function') return json({error:'Atomic storage unavailable'},503);
-      for (const p of guardedPaths) statements.push(await chatDocumentGuard(db,p,finalDocs.get(p).existingRow));
-      for (const roomPath of roomPaths) {
-        const entry=finalDocs.get(roomPath), before=entry.existingRow?decodeValue(JSON.parse(entry.existingRow.document_json)):null;
-        if (!entry.existingRow?.[canonicalRootSnapshot] || !addSnapshot(roomPath,entry.existingRow)) {
-          statements.push(...await chatRootGuards(db,roomPath,entry.existingRow));
-        }
-        const ledger=await groupChatLedgerChanges(db,roomPath,before,entry.deleted?null:entry.doc);
-        statements.push(...ledger.guards,...ledger.writes);
-      }
-      // A chat batch authorizes every message, but all messages in a room can
-      // share the same snapshot and atomic check. Root writes already add one.
-      const checkedRooms=new Set(roomPaths);
-      for (const p of messagePaths) {
-        const auth=chatAuths.get(p);
-        if (!auth.room && !pendingRooms.has(splitPath(auth.roomPath)[1])) return json({error:'Forbidden'},403);
-        if (auth.room && !checkedRooms.has(auth.roomPath)) {
-          if (!auth.room[canonicalRootSnapshot] || !addSnapshot(auth.roomPath,auth.room)) {
-            statements.push(await chatDocumentGuard(db,auth.roomPath,auth.room));
-          }
-          checkedRooms.add(auth.roomPath);
-        }
-        const snapshot=finalDocs.get(p).existingRow;
-        if (isRootDocument(p) || !addSnapshot(p,snapshot)) statements.push(await chatDocumentGuard(db,p,snapshot));
-      }
-      flushSnapshots();
-      for (const p of order) {
-        if(unchangedBatchRows.has(p))continue;
-        const entry = finalDocs.get(p);
-      if (entry.deleted) {
-        statements.push(db.prepare('DELETE FROM friendbook_cf_firestore_documents WHERE path = ?').bind(p));
-        if (isRootDocument(p)) statements.push(db.prepare('DELETE FROM friendbook_cf_documents WHERE path = ?').bind(p));
+      const roomPath=roomPaths[0], messagePath=messagePaths[0];
+      const roomEntry=finalDocs.get(roomPath), messageEntry=finalDocs.get(messagePath);
+      const roomBefore=roomEntry?.existingRow ? decodeValue(JSON.parse(roomEntry.existingRow.document_json)) : null;
+      const fastDirectSend=path==='/v1/firestore/batch' && ops.length===2 && order.length===2
+        && ops.every(op=>(op.type||op.op)==='set') && roomPaths.length===1 && messagePaths.length===1
+        && /^chats\/[^/]+\/messages\/[^/]+$/.test(messagePath) && chatAuths.get(messagePath)?.roomPath===roomPath
+        && !messageEntry?.existingRow && !messageEntry?.deleted
+        && roomEntry?.existingRow?.[canonicalRootSnapshot] && !roomEntry.deleted
+        && roomBefore?.isGroup!==true && roomEntry.doc?.isGroup!==true;
+      if (fastDirectSend) {
+        const messageJson=JSON.stringify(messageEntry.doc),roomJson=JSON.stringify(roomEntry.doc);
+        if (messageJson.length>1_800_000 || roomJson.length>1_800_000) return json({error:'Document too large'},413);
+        // The insert itself checks the exact authorized room and both message
+        // stores. A failed check violates path's NOT NULL constraint, rolling
+        // back the whole D1 batch including the room update. No guard row is
+        // inserted or deleted, and a retry redoes reads, transforms and ACLs.
+        statements.push(db.prepare(`INSERT INTO friendbook_cf_firestore_documents
+          (path,parent_path,collection_id,doc_id,owner_uid,document_json,create_time,update_time)
+          VALUES (CASE WHEN EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents WHERE path=?1 AND document_json=?2)
+            AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents WHERE path=?3)
+            AND NOT EXISTS (SELECT 1 FROM friendbook_cf_documents WHERE path=?3) THEN ?3 ELSE NULL END,?4,?5,?6,?7,?8,?9,?9)`)
+          .bind(roomPath,roomEntry.existingRow.document_json,messagePath,parentPath(messagePath),collectionIdOf(messagePath),docIdOf(messagePath),ownerOf(messageEntry.doc,uid),messageJson,now));
+        const roomOwner=ownerOf(roomEntry.doc,roomEntry.existingRow.owner_uid||uid);
+        statements.push(db.prepare(`UPDATE friendbook_cf_firestore_documents SET owner_uid=?,document_json=?,update_time=? WHERE path=?`)
+          .bind(roomOwner,roomJson,now,roomPath));
+        if (!canonicalOnlyRoom(roomPath,roomEntry)) statements.push(db.prepare(`INSERT INTO friendbook_cf_documents(path,collection,doc_id,owner_uid,document_json,updated_at)
+          VALUES (?,?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET owner_uid=excluded.owner_uid,document_json=excluded.document_json,updated_at=excluded.updated_at`)
+          .bind(roomPath,'chats',docIdOf(roomPath),roomOwner,JSON.stringify({...roomEntry.doc,id:docIdOf(roomPath)}),now));
       } else {
-          const parent = parentPath(p);
-          const coll = collectionIdOf(p);
-          const id = docIdOf(p);
-          const owner = ownerOf(entry.doc, entry.existingRow?.owner_uid || uid);
-          const createTime = entry.existingRow?.create_time || now;
-          const serialized = JSON.stringify(entry.doc);
-          if (serialized.length > 1_800_000) return json({ error: 'Document too large' }, 413);
-          statements.push(db.prepare(
-            `INSERT INTO friendbook_cf_firestore_documents(path, parent_path, collection_id, doc_id, owner_uid, document_json, create_time, update_time)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-             ON CONFLICT(path) DO UPDATE SET owner_uid = excluded.owner_uid, document_json = excluded.document_json, update_time = excluded.update_time`
-          ).bind(p, parent, coll, id, owner, serialized, createTime, now));
-          if (isRootDocument(p) && id && coll && !canonicalOnlyRoom(p,entry)) {
-            const appDoc = JSON.stringify({ ...entry.doc, id });
-            const appOwner = owner || (coll === 'users' ? id : '');
+        for (const p of guardedPaths) statements.push(await chatDocumentGuard(db,p,finalDocs.get(p).existingRow));
+        for (const roomPath of roomPaths) {
+          const entry=finalDocs.get(roomPath), before=entry.existingRow?decodeValue(JSON.parse(entry.existingRow.document_json)):null;
+          if (!entry.existingRow?.[canonicalRootSnapshot] || !addSnapshot(roomPath,entry.existingRow)) {
+            statements.push(...await chatRootGuards(db,roomPath,entry.existingRow));
+          }
+          const ledger=await groupChatLedgerChanges(db,roomPath,before,entry.deleted?null:entry.doc);
+          statements.push(...ledger.guards,...ledger.writes);
+        }
+        // A chat batch authorizes every message, but all messages in a room can
+        // share the same snapshot and atomic check. Root writes already add one.
+        const checkedRooms=new Set(roomPaths);
+        for (const p of messagePaths) {
+          const auth=chatAuths.get(p);
+          if (!auth.room && !pendingRooms.has(splitPath(auth.roomPath)[1])) return json({error:'Forbidden'},403);
+          if (auth.room && !checkedRooms.has(auth.roomPath)) {
+            if (!auth.room[canonicalRootSnapshot] || !addSnapshot(auth.roomPath,auth.room)) {
+              statements.push(await chatDocumentGuard(db,auth.roomPath,auth.room));
+            }
+            checkedRooms.add(auth.roomPath);
+          }
+          const snapshot=finalDocs.get(p).existingRow;
+          if (isRootDocument(p) || !addSnapshot(p,snapshot)) statements.push(await chatDocumentGuard(db,p,snapshot));
+        }
+        flushSnapshots();
+        for (const p of order) {
+          if(unchangedBatchRows.has(p))continue;
+          const entry = finalDocs.get(p);
+        if (entry.deleted) {
+          statements.push(db.prepare('DELETE FROM friendbook_cf_firestore_documents WHERE path = ?').bind(p));
+          if (isRootDocument(p)) statements.push(db.prepare('DELETE FROM friendbook_cf_documents WHERE path = ?').bind(p));
+        } else {
+            const parent = parentPath(p);
+            const coll = collectionIdOf(p);
+            const id = docIdOf(p);
+            const owner = ownerOf(entry.doc, entry.existingRow?.owner_uid || uid);
+            const createTime = entry.existingRow?.create_time || now;
+            const serialized = JSON.stringify(entry.doc);
+            if (serialized.length > 1_800_000) return json({ error: 'Document too large' }, 413);
             statements.push(db.prepare(
-              `INSERT INTO friendbook_cf_documents(path, collection, doc_id, owner_uid, document_json, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?)
-               ON CONFLICT(path) DO UPDATE SET owner_uid=excluded.owner_uid, document_json=excluded.document_json, updated_at=excluded.updated_at`
-            ).bind(p, coll, id, appOwner, appDoc, now));
+              `INSERT INTO friendbook_cf_firestore_documents(path, parent_path, collection_id, doc_id, owner_uid, document_json, create_time, update_time)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(path) DO UPDATE SET owner_uid = excluded.owner_uid, document_json = excluded.document_json, update_time = excluded.update_time`
+            ).bind(p, parent, coll, id, owner, serialized, createTime, now));
+            if (isRootDocument(p) && id && coll && !canonicalOnlyRoom(p,entry)) {
+              const appDoc = JSON.stringify({ ...entry.doc, id });
+              const appOwner = owner || (coll === 'users' ? id : '');
+              statements.push(db.prepare(
+                `INSERT INTO friendbook_cf_documents(path, collection, doc_id, owner_uid, document_json, updated_at)
+                 VALUES (?, ?, ?, ?, ?, ?)
+                 ON CONFLICT(path) DO UPDATE SET owner_uid=excluded.owner_uid, document_json=excluded.document_json, updated_at=excluded.updated_at`
+              ).bind(p, coll, id, appOwner, appDoc, now));
+            }
           }
         }
+        if (roomPaths.length || messagePaths.length || guardedPaths.length) statements.push(db.prepare('DELETE FROM friendbook_cf_social_guards').bind());
       }
-      if (roomPaths.length || messagePaths.length || guardedPaths.length) statements.push(db.prepare('DELETE FROM friendbook_cf_social_guards').bind());
       if (typeof db.batch === 'function' && statements.length) {
         await db.batch(statements);
       } else {
@@ -3704,7 +3734,7 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0, ct
       // never retry ambiguous network/storage failures or a potentially committed batch.
       const messages=ops.filter(op => splitPath(op.path)?.length===4 && splitPath(op.path)?.[0]==='chats' && splitPath(op.path)?.[2]==='messages' && (op.op||op.type)==='set');
       const rooms=ops.filter(op => splitPath(op.path)?.length===2 && splitPath(op.path)?.[0]==='chats' && (op.op||op.type)==='set');
-      const guardConflict=/CHECK constraint failed: ok\s*=\s*1|^Room changed$|^Document changed$/i.test(String(error?.message||''));
+      const guardConflict=/CHECK constraint failed: ok\s*=\s*1|NOT NULL constraint failed: friendbook_cf_firestore_documents\.path|^Room changed$|^Document changed$/i.test(String(error?.message||''));
       if (chatRetry<2 && guardConflict && ops.length===2 && messages.length===1 && rooms.length===1
           && parentPath(parentPath(messages[0].path))===rooms[0].path) {
         const replay=new Request(request.url,{method:'POST',headers:request.headers,body:JSON.stringify(body)});
