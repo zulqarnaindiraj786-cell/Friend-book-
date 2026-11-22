@@ -2,6 +2,7 @@
 """Bounded, aggregate-only D1 preflight. No user values or application traffic."""
 import json
 import os
+import sys
 import urllib.error
 import urllib.request
 
@@ -61,6 +62,11 @@ def main():
     summary['truncated'] = row['sampled'] == 5001
     summary['d1_reported_rows_read'] = meta.get('rows_read')
     print('::notice:: Aggregate-only legacy comment preflight ' + json.dumps(summary, sort_keys=True))
+    if '--require-index-build-safe' in sys.argv:
+        # Conservative guard, not an estimate of billed migration writes or
+        # of total database rows. Abort rather than build on unknown volume.
+        if summary['truncated'] or row['largest_exception_route_upper_bound'] >= 65:
+            raise SystemExit('Comment index preflight exceeded its safety bound; no migration attempted.')
 
 
 if __name__ == '__main__':

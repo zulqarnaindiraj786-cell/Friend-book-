@@ -30,7 +30,10 @@ function recordPlan(query,args) {
 const executeWrite=Symbol('executeWrite');
 const db={
   withSession(){return db;},
-  prepare(query){const stmt=sql.prepare(countShadowProbes?query.replace('f.path=c.path','f.path=quota_probe(c.path)'):query);return {bind(...args){recordPlan(query,args);const write=()=>{statements++;const result=stmt.run(...args);return {success:true,meta:{changes:Number(result.changes)}};};return {
+  prepare(query){
+    // Offline-only baseline: simulate the page indexes being absent.
+    if(process.env.QUOTA_FORCE_LEGACY_SCAN==='1' && query.includes('INDEXED BY idx_cf_comment_page_'))throw Error('no such index: idx_cf_comment_page_post');
+    const stmt=sql.prepare(countShadowProbes?query.replace('f.path=c.path','f.path=quota_probe(c.path)'):query);return {bind(...args){recordPlan(query,args);const write=()=>{statements++;const result=stmt.run(...args);return {success:true,meta:{changes:Number(result.changes)}};};return {
     first:async()=>{statements++;const row=stmt.get(...args)||null;if(row)returnedRows++;return row;},
     all:async()=>{statements++;const results=stmt.all(...args);returnedRows+=results.length;return {results};},
     run:async()=>write(), [executeWrite]:()=>/^\s*(SELECT|WITH)\b/i.test(query)||/\bRETURNING\b/i.test(query)
@@ -217,6 +220,18 @@ await measure('repeatSavedPost',users-1,()=>wave(users-1,i=>call(`user${i+1}`,`/
 assert.equal(report.workloads.repeatSavedPost.changedRowsIncludingTriggers,0,'already saved posts');
 sql.prepare("INSERT INTO friendbook_cf_interaction_resources(resource,state) VALUES ('posts/item39','verified') ON CONFLICT(resource) DO NOTHING").run();
 const engagement='/v1/engagement/posts/item39';
+// A busy synthetic legacy post with a small mix of exception encodings.
+// This exercises the real comment handler and indexed D1 batch, not billing.
+for(let i=0;i<188;i++) {
+  const id=`legacy${String(i).padStart(4,'0')}`;
+  addMirror.run(`comments/${id}`,'comments',id,'user0',JSON.stringify({postId:'item39',authorId:'user0',content:id,
+    createdAt:i<180?now+i:'2020-01-01T00:00:00.000Z'}),now+i);
+}
+await measure('legacyCommentPage',users,()=>wave(users,async i=>{
+  const page=await call(`user${i}`,`${engagement}/comments`);
+  assert.equal(page.comments.length,20);assert.equal(page.comments[0].id,'legacy0179');
+}));
+assert.equal(report.workloads.legacyCommentPage.changedRowsIncludingTriggers,0);
 const like=i=>call(`user${i}`,`${engagement}/reactions?response=reaction`,'PUT',{type:'like'});
 const comment=i=>call(`user${i}`,`${engagement}/comments`,'POST',{id:`reply${i}`,text:'A synthetic quota replay comment'});
 const register=i=>call(`user${i}`,'/functions/v1/send-fcm-notification','POST',{action:'register',device_id:`device${i}`,token:`synthetic-not-a-provider-token-${i}`});

@@ -178,6 +178,19 @@ jobs:
               fi
               echo "Chat index preflight: $count membership entries (bounded count only)." | tee -a "$log"
             fi
+            if printf '%s\n' "$pending" | grep -q '0076_legacy_comment_page_indexes.sql'; then
+              # Only aggregate bounded comment data; refuse an unexpectedly large
+              # index build or exception-heavy data rather than consume quota blindly.
+              python3 scripts/loadtest/legacy_comment_preflight.py --require-index-build-safe 2>&1 | tee -a "$log"
+              preflight_status=${PIPESTATUS[0]}
+              if [ "$preflight_status" -ne 0 ]; then
+                echo 'Comment index preflight failed; no migration attempted.' | tee -a "$log"
+                echo "whoami_status=$whoami_status" >> "$GITHUB_OUTPUT"
+                echo "d1_list_status=$d1_list_status" >> "$GITHUB_OUTPUT"
+                echo 'migration_status=comment-index-preflight-failed' >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
+            fi
           fi
           npx wrangler d1 migrations apply friendbook-db --remote 2>&1 | tee -a "$log"
           migration_status=${PIPESTATUS[0]}
