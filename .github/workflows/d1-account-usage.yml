@@ -1,5 +1,5 @@
 # Read-only account-wide analytics only. No D1 SQL, mutations, or app traffic.
-# Investigate reported rapid usage during normal chat and feed activity; no app requests.
+# Recheck reported 20-minute quota consumption without app requests.
 name: Read-only account D1 usage
 on:
   push:

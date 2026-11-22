@@ -1,5 +1,5 @@
 # Analytics only: no D1 SQL or synthetic app traffic; distinguish query and schema shapes.
-# Investigate reported rapid usage during normal chat, feed and engagement.
+# Identify repeated query shapes during reported 20-minute usage.
 # Adaptive aggregates are sampled query analytics, not account-wide billed usage.
 name: Read-only D1 quota audit
 on:

@@ -1,4 +1,4 @@
-# Bounded live diagnosis of reported normal-activity usage; never log URLs, headers, identities, bodies, or raw tail events.
+# Bounded live sample for repeated normal-activity requests; never log URLs, headers, identities, bodies, or raw tail events.
 name: Incident aggregate Worker response sample
 on:
   push:
