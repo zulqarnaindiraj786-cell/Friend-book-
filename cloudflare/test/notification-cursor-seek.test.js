@@ -5,7 +5,7 @@ import { readFileSync } from 'node:fs';
 import { createWorker } from '../../worker.js';
 const migration=n=>readFileSync(new URL(`../migrations/${n}`,import.meta.url),'utf8');
 
-test('numeric notification cursors seek without losing privacy, unread state or legacy rows',async()=>{
+test('numeric and timestamp notification cursors seek without losing privacy, unread state or legacy rows',async()=>{
   const sql=new DatabaseSync(':memory:');
   for(const n of ['0003_additive_interactions.sql','0011_additive_app_documents.sql','0014_additive_firestore_documents.sql','0055_notification_page_indexes.sql'])sql.exec(migration(n));
   const f=sql.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)');
@@ -25,7 +25,7 @@ test('numeric notification cursors seek without losing privacy, unread state or 
   }
   let fail=false;const plans=[];
   const db={prepare(q){
-    const seek=q.includes('INDEXED BY idx_cf_') && q.includes('AND (CASE WHEN') && q.includes(')=2 AND');
+    const seek=q.includes('INDEXED BY idx_cf_') && q.includes('quota_notif_rank');
     if(fail && seek)throw Error('storage unavailable');
     const s=sql.prepare(q);return{bind(...a){return{
       all:async()=>{if(seek)plans.push(sql.prepare('EXPLAIN QUERY PLAN '+q).all(...a).map(r=>r.detail));return{results:s.all(...a)};},
@@ -40,7 +40,7 @@ test('numeric notification cursors seek without losing privacy, unread state or 
     const res=await app.fetch(new Request('https://local.invalid/v1/firestore/query',{method:'POST',headers:{authorization:'Bearer bob','content-type':'application/json'},body:JSON.stringify(body)}),env);
     assert.equal(res.status,200,await res.clone().text());return (await res.json()).documents.map(x=>x.id);
   };
-  for(const unread of [false,true])for(const cursor of [[99,'z'],[4,'n070'],[0,'n060'],[-15,'n003'],[{__type:'timestamp',millis:4},'n159']])for(const limit of [1,7,20,100]){
+  for(const unread of [false,true])for(const cursor of [[99,'z'],[4,'n070'],[0,'n060'],[-15,'n003'],[{__type:'timestamp',millis:99},'z'],[{__type:'timestamp',millis:4},'n159'],[{__type:'timestamp',millis:-15},'n080']])for(const limit of [1,7,20,100]){
     const spec={unread,limit,startAfter:cursor};assert.deepEqual(await query(spec),await query(spec,true),JSON.stringify(spec));
   }
   assert.ok(plans.length>0);
@@ -52,7 +52,7 @@ test('numeric notification cursors seek without losing privacy, unread state or 
   assert.equal((await app.fetch(request,env)).status,503,'unrelated storage failures must not become empty pages');fail=false;
   // Rolling back schema indexes must retain the original unhinted query.
   for(const name of ['idx_cf_notif_page','idx_cf_notif_unread','idx_cf_legacy_notif_page','idx_cf_legacy_notif_unread'])sql.exec(`DROP INDEX ${name}`);
-  for(const unread of [false,true]){const spec={unread,limit:20,startAfter:[0,'n060']};assert.deepEqual(await query(spec),await query(spec,true));}
+  for(const unread of [false,true])for(const cursor of [[0,'n060'],[{__type:'timestamp',millis:4},'n159']]){const spec={unread,limit:20,startAfter:cursor};assert.deepEqual(await query(spec),await query(spec,true));}
   // Wrapped historical data takes the existing complete-merge fallback.
   l.run('notifications/wrapped','notifications','wrapped','alice',JSON.stringify({fields:{fromUserId:{stringValue:'alice'},toUserId:{stringValue:'bob'},isRead:{booleanValue:false},createdAt:{integerValue:'-2'}}}),1);
   const wrapped={limit:20,startAfter:[0,'n060']};assert.deepEqual(await query(wrapped),await query(wrapped,true));

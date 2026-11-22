@@ -1693,14 +1693,14 @@ async function boundedFeedPage(db,uid,spec,requestUserReads) {
       // explicitly, then include the lower numeric rank when a timestamp
       // cursor crosses that boundary. Each bounded branch keeps index ordering;
       // the outer merge is limited to at most two page-sized windows.
-      const seekWindow=(columns,table,index,condition)=>{
+      const seekWindow=(columns,table,index,condition,prefix=[])=>{
         const base=`SELECT ${columns},${rank} AS quota_feed_rank,${time} AS quota_feed_time FROM ${table} a INDEXED BY ${index} WHERE ${condition}`;
         const same=`${base} AND ${rank}=? AND ${time}<=? AND (${time},a.doc_id)<(?,?) ORDER BY ${time} DESC,a.doc_id DESC LIMIT ?`;
-        if(cursor[0]===2) return db.prepare(same).bind(2,cursor[1],cursor[1],cursor[2],chunk).all();
+        if(cursor[0]===2) return db.prepare(same).bind(...prefix,2,cursor[1],cursor[1],cursor[2],chunk).all();
         const lower=`${base} AND ${rank}=? ORDER BY ${time} DESC,a.doc_id DESC LIMIT ?`;
         return db.prepare(`SELECT * FROM (${same}) UNION ALL SELECT * FROM (${lower})
           ORDER BY quota_feed_rank DESC,quota_feed_time DESC,doc_id DESC LIMIT ?`)
-          .bind(4,cursor[1],cursor[1],cursor[2],chunk,2,chunk,chunk).all();
+          .bind(...prefix,4,cursor[1],cursor[1],cursor[2],chunk,...prefix,2,chunk,chunk).all();
       };
       if (cursor && author===null) {
         batches=await Promise.all([
@@ -1709,6 +1709,29 @@ async function boundedFeedPage(db,uid,spec,requestUserReads) {
           seekWindow('a.path,a.collection,a.doc_id,a.owner_uid,a.document_json,a.updated_at',
             'friendbook_cf_documents',`idx_cf_legacy_${root}_feed_page`,`a.collection='${root}' AND NOT COALESCE(${legacyException},0)`),
         ]);
+      } else if (cursor && root==='posts' && author!==null) {
+        // Profile pages use the existing author-prefixed indexes. Without an
+        // explicit rank/time seek SQLite walks every newer post by that author
+        // on each older page. Keep the old bounded query if an older schema has
+        // not yet installed either index; never bypass ACL or legacy shadows.
+        try {
+          batches=await Promise.all([
+            seekWindow('a.path,a.parent_path,a.collection_id,a.doc_id,a.owner_uid,a.document_json,a.create_time,a.update_time',
+              'friendbook_cf_firestore_documents','idx_cf_posts_author_page',`a.parent_path='posts'${byAuthor} AND NOT ${canonicalException}`,[author]),
+            seekWindow('a.path,a.collection,a.doc_id,a.owner_uid,a.document_json,a.updated_at',
+              'friendbook_cf_documents','idx_cf_legacy_posts_author_page',`a.collection='posts'${byLegacyAuthor} AND NOT COALESCE(${legacyException},0)`,[author]),
+          ]);
+        } catch (error) {
+          if (!/no such index: idx_cf_(?:legacy_)?posts_author_page/.test(String(error))) throw error;
+          batches=await Promise.all([
+            db.prepare(`SELECT a.path,a.parent_path,a.collection_id,a.doc_id,a.owner_uid,a.document_json,a.create_time,a.update_time
+              FROM friendbook_cf_firestore_documents a WHERE a.parent_path='posts'${byAuthor}${bound} AND NOT ${canonicalException}
+              ORDER BY ${rank} DESC,${time} DESC,a.doc_id DESC LIMIT ?`).bind(...args).all(),
+            db.prepare(`SELECT a.path,a.collection,a.doc_id,a.owner_uid,a.document_json,a.updated_at
+              FROM friendbook_cf_documents a WHERE a.collection='posts'${byLegacyAuthor}${bound} AND NOT COALESCE(${legacyException},0)
+              ORDER BY ${rank} DESC,${time} DESC,a.doc_id DESC LIMIT ?`).bind(...args).all(),
+          ]);
+        }
       } else {
         batches=await Promise.all([
           db.prepare(`SELECT a.path,a.parent_path,a.collection_id,a.doc_id,a.owner_uid,a.document_json,a.create_time,a.update_time
@@ -1813,10 +1836,10 @@ async function boundedNotificationPage(db,uid,spec) {
   async function readWindow(legacy) {
     if(!delta) {
       const bound=cursor?` AND (${rank},${time},a.doc_id)<(?,?,?)`:'';
-      if (cursor?.[0]===2) {
-        // Numeric is the lowest supported rank, so an older numeric cursor
-        // cannot cross into another rank. Expose the time bound to the index;
-        // timestamp cursors keep the original single-query merge unchanged.
+      if (cursor) {
+        // Expose rank and time as independent index bounds. Timestamp pages
+        // must also include older numeric rows; limit both branches before
+        // merging so deep inbox pages do not walk the newer notifications.
         const index=legacy ? (unread.length?'idx_cf_legacy_notif_unread':'idx_cf_legacy_notif_page')
           : (unread.length?'idx_cf_notif_unread':'idx_cf_notif_page');
         const columns=legacy?'a.path,a.collection,a.doc_id,a.owner_uid,a.document_json,a.updated_at'
@@ -1825,10 +1848,13 @@ async function boundedNotificationPage(db,uid,spec) {
         const condition=legacy?`a.collection='notifications'${byLegacyRecipient}${unreadOnly}`
           :`a.parent_path='notifications'${byRecipient}${unreadOnly}`;
         try {
-          return await db.prepare(`SELECT ${columns} FROM ${table} a INDEXED BY ${index} WHERE ${condition}
-            AND (${rank})=2 AND (${time})<=? AND (${time},a.doc_id)<(?,?)
-            ORDER BY ${time} DESC,a.doc_id DESC LIMIT ?`)
-            .bind(uid,cursor[1],cursor[1],cursor[2],chunk).all();
+          const base=`SELECT ${columns},${rank} AS quota_notif_rank,${time} AS quota_notif_time FROM ${table} a INDEXED BY ${index} WHERE ${condition}`;
+          const same=`${base} AND (${rank})=? AND (${time})<=? AND (${time},a.doc_id)<(?,?) ORDER BY ${time} DESC,a.doc_id DESC LIMIT ?`;
+          if(cursor[0]===2)return await db.prepare(same).bind(uid,2,cursor[1],cursor[1],cursor[2],chunk).all();
+          const lower=`${base} AND (${rank})=2 ORDER BY ${time} DESC,a.doc_id DESC LIMIT ?`;
+          return await db.prepare(`SELECT * FROM (${same}) UNION ALL SELECT * FROM (${lower})
+            ORDER BY quota_notif_rank DESC,quota_notif_time DESC,doc_id DESC LIMIT ?`)
+            .bind(uid,4,cursor[1],cursor[1],cursor[2],chunk,uid,chunk,chunk).all();
         } catch(error) {
           if (!String(error).includes(`no such index: ${index}`)) throw error;
           // Safe with older schemas: retain the original unhinted query.
