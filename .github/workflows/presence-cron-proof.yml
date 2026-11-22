@@ -55,9 +55,12 @@ jobs:
           set -euo pipefail
           npx --yes wrangler@4.157.0 deploy --dry-run --outdir dist-worker > dry-run.log 2>&1
           cat dry-run.log
-          if grep -qi 'cron' dry-run.log; then echo '::error::dry run reports a cron trigger'; exit 1; fi
+          # Wrangler prints "No cron triggers" when the uploaded config has none.
+          if grep -qi 'cron' dry-run.log && ! grep -qi 'no cron triggers' dry-run.log; then
+            echo '::error::dry run reports a cron trigger'; exit 1
+          fi
           ! grep -q '\[triggers\]' wrangler.toml
-          node -e "const c=require('fs').readFileSync('wrangler.toml','utf8');if(/\[triggers\]/m.test(c))process.exit(1)"
+          ! grep -qE '^[[:space:]]*crons[[:space:]]*=' wrangler.toml
   logs:
     if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[presence-cron-proof]')
     runs-on: ubuntu-latest
