@@ -12,6 +12,8 @@ class IndexPlans(unittest.TestCase):
             for migration in sorted(MIGRATIONS.glob('*.sql')):
                 db.executescript(migration.read_text())
             db.executescript((MIGRATIONS / '0038_document_and_reply_indexes.sql').read_text())
+            # Reapplying historical 0038 recreates an index retired in 0079.
+            db.executescript((MIGRATIONS / '0079_remove_unused_message_sender_index.sql').read_text())
             table = 'friendbook_cf_firestore_documents'
             archive = 'friendbook_cf_documents'
             checks = [
@@ -49,7 +51,8 @@ class IndexPlans(unittest.TestCase):
             for obsolete in ('idx_cf_broadcast_users', 'idx_cf_legacy_broadcast_users', 'idx_cf_posts_author',
                              'idx_cf_legacy_posts_author', 'idx_cf_reels_author', 'idx_cf_posts_feed_nonstandard',
                              'idx_cf_legacy_posts_feed_nonstandard', 'idx_cf_chat_nonstandard_order',
-                             'idx_cf_chat_nonstandard_order_v2', 'idx_cf_legacy_users_display_name'):
+                             'idx_cf_chat_nonstandard_order_v2', 'idx_cf_legacy_users_display_name',
+                             'idx_cf_message_sender'):
                 self.assertIsNone(db.execute("SELECT name FROM sqlite_master WHERE type='index' AND name=?", (obsolete,)).fetchone())
             for index, sql, args in checks:
                 with self.subTest(index=index):
