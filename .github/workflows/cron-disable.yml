@@ -1,0 +1,52 @@
+name: Disable deployed Worker cron schedules
+on:
+  workflow_dispatch:
+  push:
+    branches: ['arena/7c7ddb7b-friend-book']
+    paths: ['.github/workflows/cron-disable.yml']
+permissions:
+  contents: read
+jobs:
+  disable:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[crons-off]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Remove every cron schedule from the deployed Worker and verify zero
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          ACCOUNT: 92f3d04598822de2e49e14561218d090
+          SCRIPT: rough-firefly-dd7b
+        run: |
+          set -uo pipefail
+          base="https://api.cloudflare.com/client/v4/accounts/$ACCOUNT/workers/scripts/$SCRIPT/schedules"
+          echo '--- schedules before'
+          curl -sS -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" "$base" | tee before.json
+          echo
+          echo '--- empty the schedule list (no code upload, no migration)'
+          put=$(curl -sS -o put.json -w '%{http_code}' -X PUT "$base" \
+            -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" -H 'content-type: application/json' \
+            --data '{"schedules":[]}')
+          echo "PUT status: $put"; cat put.json; echo
+          if [ "$put" != "200" ]; then
+            echo '--- PUT rejected, trying DELETE'
+            del=$(curl -sS -o del.json -w '%{http_code}' -X DELETE "$base" \
+              -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN")
+            echo "DELETE status: $del"; cat del.json; echo
+          fi
+          echo '--- schedules after'
+          curl -sS -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" "$base" | tee after.json
+          echo
+          python3 - <<'PY'
+          import json
+          before = json.load(open('before.json')).get('result') or {}
+          after = json.load(open('after.json')).get('result') or {}
+          b = before.get('schedules') or []
+          a = after.get('schedules') or []
+          print('::notice::' + json.dumps({'before_count': len(b), 'after_count': len(a),
+                                          'after_expressions': [s.get('cron') for s in a]}))
+          if a:
+              print('::error::Cron schedules are still attached to the deployed Worker.')
+              raise SystemExit(1)
+          print('::notice::Deployed Worker now has no cron schedule; no scheduled invocation can run.')
+          PY
