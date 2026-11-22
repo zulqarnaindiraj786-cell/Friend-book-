@@ -1,5 +1,5 @@
 # Read-only account-wide analytics only. No D1 SQL, mutations, or app traffic.
-# Sample account totals during confirmed normal activity; no app requests.
+# Compare post-sample account totals without app requests.
 name: Read-only account D1 usage
 on:
   push:
