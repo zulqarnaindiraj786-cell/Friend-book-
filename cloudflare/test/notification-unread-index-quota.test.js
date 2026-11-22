@@ -41,6 +41,20 @@ test('unread page index handles compatibility fallback without reading another i
  }
  const expected=await suite();assert.deepEqual(expected.map(x=>x.status),Array(8).fill(200));
  assert.deepEqual(expected.map(x=>x.body.documents?.length??x.body.count),[601,20,20,20,20,0,601,66]);
+ // Non-unread compatibility queries must seek the same recipient even if the
+ // older prefix indexes are absent. Preserve canonical shadowing and wrapped
+ // legacy data; this is an offline experiment, not a production migration.
+ const generic=async(uid)=>{const r=await app.fetch(new Request('https://example.test/v1/firestore/query',{
+  method:'POST',headers:{authorization:`Bearer ${uid}`,'content-type':'application/json'},body:JSON.stringify({parent:'notifications'})}),env);
+  assert.equal(r.status,200);return r.json();};
+ const genericExpected=await Promise.all(['alice','bob'].map(generic));
+ assert.ok(plans.some(x=>x.q.includes('INDEXED BY idx_cf_notif_page') && x.plan.some(p=>p.includes('idx_cf_notif_page')&&p.includes('<expr>=?'))));
+ sql.exec('DROP INDEX idx_cf_firestore_inbox_recipient; DROP INDEX idx_cf_legacy_inbox_recipient');
+ assert.deepEqual(await Promise.all(['alice','bob'].map(generic)),genericExpected);
+ assert.deepEqual(await suite(),expected);
+ assert.ok(plans.some(x=>x.q.includes('INDEXED BY idx_cf_notif_page') && x.plan.some(p=>p.includes('idx_cf_notif_page')&&p.includes('<expr>=?'))));
+ assert.ok(plans.some(x=>x.q.includes('FROM friendbook_cf_documents a WHERE a.collection=\'notifications\'') && x.plan.some(p=>p.includes('idx_cf_legacy_notif_page')&&p.includes('<expr>=?'))));
+ sql.exec(readFileSync(new URL('0025_inbox_recipient_indexes.sql',dir),'utf8'));
  assert.ok(expected.slice(0,5).every(x=>x.body.documents.every(d=>d.data.toUserId==='bob')));
  const forced=()=>plans.filter(x=>x.q.includes('INDEXED BY idx_cf_notif_unread'));
  assert.ok(forced().length>=3);assert.ok(forced().every(x=>x.plan.some(p=>p.includes('idx_cf_notif_unread')&&p.includes('<expr>=?'))));
@@ -58,4 +72,7 @@ test('unread page index handles compatibility fallback without reading another i
  sql.exec('DROP INDEX idx_cf_notif_unread');fallbacks=0;
  assert.deepEqual(await suite(),expected);assert.ok(fallbacks>=3);
  assert.ok(plans.some(x=>x.plan.some(p=>p.includes('idx_cf_inbox_unread'))));
+ sql.exec('DROP INDEX idx_cf_notif_page');
+ assert.deepEqual(await Promise.all(['alice','bob'].map(generic)),genericExpected);
+ assert.ok(plans.some(x=>x.plan.some(p=>p.includes('idx_cf_firestore_inbox_recipient'))));
 });
