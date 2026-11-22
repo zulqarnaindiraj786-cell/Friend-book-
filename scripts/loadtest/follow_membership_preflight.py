@@ -2,6 +2,7 @@
 """Capped aggregate-only D1 follow-list index investigation; no user values."""
 import json
 import os
+import sys
 import urllib.error
 import urllib.request
 
@@ -31,6 +32,8 @@ SELECT (SELECT count(*) FROM canonical) AS canonical_users,
  (SELECT count(*) FROM legacy) AS legacy_users,
  (SELECT count(*) FROM legacy a WHERE NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents f WHERE f.path=a.path)) AS legacy_only,
  (SELECT count(*) FROM arrays WHERE source=0 AND wrapped=1) AS wrapped_legacy,
+ (SELECT count(*) FROM shaped s WHERE source=1 AND EXISTS(SELECT 1 FROM json_each(s.doc) WHERE key IN ('followers','following') GROUP BY key HAVING count(*)>1)) AS canonical_duplicates,
+ (SELECT count(*) FROM shaped s WHERE source=0 AND EXISTS(SELECT 1 FROM json_each(s.doc) WHERE key IN ('followers','following','fields') GROUP BY key HAVING count(*)>1)) AS legacy_duplicates,
  (SELECT coalesce(sum(followers+following),0) FROM arrays) AS sampled_array_entries,
  (SELECT coalesce(max(max(followers,following)),0) FROM arrays) AS largest_array
 """
@@ -51,13 +54,17 @@ def main():
     if not result.get('success') or len(result.get('results',[]))!=1:
         raise SystemExit('D1 returned incomplete preflight; no production changes made.')
     row=result['results'][0]
-    keys=('canonical_users','legacy_users','legacy_only','wrapped_legacy','sampled_array_entries','largest_array')
+    keys=('canonical_users','legacy_users','legacy_only','wrapped_legacy','canonical_duplicates','legacy_duplicates','sampled_array_entries','largest_array')
     if any(type(row.get(k)) is not int or row[k]<0 for k in keys) or max(row['canonical_users'],row['legacy_users'])>1001:
         raise SystemExit('D1 returned invalid aggregates; no production changes made.')
     summary={key:row[key] for key in keys}
     summary['truncated']=max(row['canonical_users'],row['legacy_users'])==1001
     summary['d1_reported_rows_read']=(result.get('meta') or {}).get('rows_read')
     print('::notice:: Aggregate-only follow membership preflight '+json.dumps(summary,sort_keys=True))
+    if '--require-index-build-safe' in sys.argv:
+        if (summary['truncated'] or row['sampled_array_entries']>2000 or row['largest_array']>100
+            or row['canonical_duplicates']>=65 or row['wrapped_legacy']+row['legacy_duplicates']>=65):
+            raise SystemExit('Follow index preflight exceeded safety bounds; no migration attempted.')
 
 
 if __name__=='__main__': main()

@@ -33,6 +33,7 @@ const db={
   prepare(query){
     // Offline-only baseline: simulate the page indexes being absent.
     if(process.env.QUOTA_FORCE_LEGACY_SCAN==='1' && query.includes('INDEXED BY idx_cf_comment_page_'))throw Error('no such index: idx_cf_comment_page_post');
+    if(process.env.QUOTA_FORCE_FOLLOW_SCAN==='1' && query.includes('friendbook_cf_user_follow_'))throw Error('no such table: friendbook_cf_user_follow_membership');
     const stmt=sql.prepare(countShadowProbes?query.replace('f.path=c.path','f.path=quota_probe(c.path)'):query);return {bind(...args){recordPlan(query,args);const write=()=>{statements++;const result=stmt.run(...args);return {success:true,meta:{changes:Number(result.changes)}};};return {
     first:async()=>{statements++;const row=stmt.get(...args)||null;if(row)returnedRows++;return row;},
     all:async()=>{statements++;const results=stmt.all(...args);returnedRows+=results.length;return {results};},
@@ -201,6 +202,11 @@ assert.equal(sql.prepare("SELECT COUNT(*) AS n FROM friendbook_cf_interaction_re
 // not new user actions. The Worker must still authorize and verify both stores.
 const addMirror=sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)');
 const canonicalDoc=sql.prepare('SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?');
+// A small follow list among many unrelated synthetic accounts.
+for(let i=1;i<Math.min(20,users);i++) {
+  const path=`users/user${i}`,data=JSON.parse(canonicalDoc.get(path).document_json);
+  sql.prepare('UPDATE friendbook_cf_firestore_documents SET document_json=? WHERE path=?').run(JSON.stringify({...data,following:['user0']}),path);
+}
 for(let i=0;i<users;i++) {
   const uid=`user${i}`,data=JSON.parse(canonicalDoc.get(`users/${uid}`).document_json);
   addMirror.run(`users/${uid}`,'users',uid,uid,JSON.stringify({...data,id:uid}),now);
@@ -209,6 +215,11 @@ await measure('mirroredPeoplePage',users,()=>wave(users,async i=>{
   const page=await call(`user${i}`,'/v1/firestore/query','POST',{parent:'users',limit:30});
   assert.equal(page.documents.length,Math.min(users+1,30));
 }));
+await measure('followListMembership',users,()=>wave(users,async()=>{
+  const page=await call('user0','/v1/firestore/query','POST',{parent:'users',filters:[{field:'following',op:'array-contains',value:'user0'}],limit:20});
+  assert.equal(page.documents.length,Math.min(19,users-1));
+}));
+assert.equal(report.workloads.followListMembership.changedRowsIncludingTriggers,0);
 await measure('identicalProfileMerge',users,()=>wave(users,i=>call(`user${i}`,`/v1/firestore/document?path=users/user${i}`,'PUT',{data:{displayName:`user${i}`},merge:true})));
 assert.equal(report.workloads.identicalProfileMerge.changedRowsIncludingTriggers,0,'identical profile merge');
 for(let i=1;i<users;i++) {

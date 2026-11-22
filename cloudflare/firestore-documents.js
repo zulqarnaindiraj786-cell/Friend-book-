@@ -449,6 +449,42 @@ function unicodePrefixUpper(prefix) {
 async function readCollectionRows(db, parent, uid, filters, spec, env) {
   const bounded=spec ? await boundedChatRows(db,parent,spec) ?? await boundedLiveChatRows(db,parent,spec) : null;
   if (bounded!==null) return bounded;
+  const membership=parent==='users' && Array.isArray(filters) && filters.find(f=>
+    ['followers','following'].includes(f?.field) && f.op==='array-contains' && typeof f.value==='string'
+      && /^[\x20-\x7e]*$/.test(f.value));
+  if (membership && typeof db.batch==='function') {
+    try {
+      // Derived candidates are only a prefilter. The same JS privacy projection,
+      // filters, ordering and paging still run below. Read all sources in one
+      // D1 transaction so a concurrent mirror update cannot drop a match.
+      const [ready,current,old,unusualCurrent,unusualOld]=await db.batch([
+        db.prepare("SELECT ready FROM friendbook_cf_user_follow_index_state WHERE id=1").bind(),
+        db.prepare(`SELECT f.* FROM friendbook_cf_user_follow_membership m
+          JOIN friendbook_cf_firestore_documents f ON f.path=m.path
+          WHERE m.member=? AND m.kind=? AND m.source=1 AND f.parent_path='users'`).bind(membership.value,membership.field),
+        db.prepare(`SELECT a.* FROM friendbook_cf_user_follow_membership m JOIN friendbook_cf_documents a ON a.path=m.path
+          WHERE m.member=? AND m.kind=? AND m.source=0 AND a.collection='users'
+          AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents f WHERE f.path=a.path AND f.parent_path='users')`).bind(membership.value,membership.field),
+        db.prepare(`SELECT f.* FROM friendbook_cf_user_follow_membership m JOIN friendbook_cf_firestore_documents f ON f.path=m.path
+          WHERE m.member='' AND m.kind='*' AND m.source=1 AND f.parent_path='users' LIMIT 65`).bind(),
+        db.prepare(`SELECT a.* FROM friendbook_cf_user_follow_membership m JOIN friendbook_cf_documents a ON a.path=m.path
+          WHERE m.member='' AND m.kind='*' AND m.source=0 AND a.collection='users'
+          AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents f WHERE f.path=a.path AND f.parent_path='users') LIMIT 65`).bind(),
+      ]);
+      if ([ready,current,old,unusualCurrent,unusualOld].every(r=>r && r.success!==false && Array.isArray(r.results))
+          && ready.results.length===1 && ready.results[0].ready===1 && unusualCurrent.results.length<65 && unusualOld.results.length<65) {
+        const candidates=[...current.results,...unusualCurrent.results,...old.results,...unusualOld.results];
+        // Noncanonical paths can share IDs and rely on the original stable
+        // source ordering; do not attempt to infer that ordering from an index.
+        if (candidates.every(row=>typeof row.doc_id==='string' && row.path===`users/${row.doc_id}`)) {
+          return [...current.results,...unusualCurrent.results,...old.results.map(appDocumentToFirestoreRow).filter(Boolean),
+            ...unusualOld.results.map(appDocumentToFirestoreRow).filter(Boolean)];
+        }
+      }
+    } catch(error) {
+      if (!/no such table: friendbook_cf_user_follow_(?:index_state|membership)/.test(String(error))) throw error;
+    }
+  }
   if (parent==='payments') {
     // Ordinary readers can only see their own payments; an administrator may
     // see all records unless the query itself asks for one particular owner.
