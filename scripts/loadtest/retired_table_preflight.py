@@ -16,6 +16,13 @@ CAP = 5001
 MAX_TOTAL = 5000
 
 
+class SampleLimit(ValueError):
+    def __init__(self, counts, reads):
+        super().__init__('Retired-table sample exceeds the removal cap')
+        self.counts = counts
+        self.reads = reads
+
+
 def inspect(query):
     metadata, meta = query("SELECT name FROM sqlite_master WHERE type='table' AND name IN (" +
                            ','.join('?' for _ in TABLES) + ')', TABLES)
@@ -39,7 +46,7 @@ def inspect(query):
         reads += cost['rows_read']
         counts[name] = rows[0]['n']
     if sum(counts.values()) > MAX_TOTAL:
-        raise ValueError('Retired-table sample exceeds the removal cap')
+        raise SampleLimit(counts, reads)
     return {'table_counts': counts, 'rows_read': reads, 'cap': MAX_TOTAL}
 
 
@@ -64,7 +71,15 @@ def remote_query(sql, params):
 def main():
     try:
         report = inspect(remote_query)
-    except (ValueError, KeyError, TypeError, urllib.error.URLError, TimeoutError):
+    except SampleLimit as exc:
+        print('::warning:: Retired-table sample exceeds safe cap ' + json.dumps({
+            'table_counts': exc.counts, 'rows_read': exc.reads, 'cap': MAX_TOTAL}, sort_keys=True))
+        raise SystemExit('Retired-table preflight failed; no migration attempted.')
+    except (ValueError, KeyError, TypeError, urllib.error.URLError, TimeoutError) as exc:
+        allowed = {'Invalid schema response', 'D1 read accounting unavailable', 'Invalid bounded count',
+                   'Cloudflare token unavailable', 'D1 request failed', 'Incomplete D1 response'}
+        detail = str(exc) if str(exc) in allowed else 'request unavailable'
+        print('::error:: Retired-table preflight: ' + detail)
         raise SystemExit('Retired-table preflight failed; no migration attempted.')
     print('::notice:: Bounded retired-table preflight ' + json.dumps(report, sort_keys=True))
     print('::notice:: DROP billing and concurrent changes remain unknown; cap is not a live quota guarantee.')
