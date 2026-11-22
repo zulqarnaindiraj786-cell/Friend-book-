@@ -514,11 +514,13 @@ async function readCollectionRows(db, parent, uid, filters, spec) {
         db.prepare(`SELECT * FROM friendbook_cf_firestore_documents INDEXED BY idx_cf_lives_status
           WHERE parent_path='lives' AND json_extract(document_json,'$.status')='live'`).bind().all(),
         db.prepare(`SELECT a.* FROM friendbook_cf_documents a INDEXED BY idx_cf_legacy_lives_status
-          WHERE a.collection='lives' AND (${legacyStatus}) IN ('live',1) AND NOT EXISTS (
-            SELECT 1 FROM friendbook_cf_firestore_documents f WHERE f.path=a.path AND f.parent_path='lives'
-          )`).bind().all(),
+          WHERE a.collection='lives' AND (${legacyStatus}) IN ('live',1)`).bind().all(),
       ]);
-      const rows=[...(canonical.results||[]),...(legacy.results||[]).map(appDocumentToFirestoreRow).filter(Boolean)];
+      // Canonical live rooms already read above shadow their legacy copies.
+      // Check only unknown paths to preserve precedence when the current room
+      // is ended or its status no longer matches this discovery query.
+      await markWindowShadows(db,canonical,legacy,'lives');
+      const rows=[...(canonical.results||[]),...(legacy.results||[]).filter(row=>!row.shadowed).map(appDocumentToFirestoreRow).filter(Boolean)];
       // Apply the raw predicate before authorizing the uncommon encoding bucket.
       return rows.filter(row=>rowToDocument(row).data.status==='live');
     } catch(error) {

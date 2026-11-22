@@ -29,7 +29,12 @@ final class PollBudget {
         long base = ListenerPollingPolicy.intervalMs(path, foreground);
         if (base == Long.MAX_VALUE) return false;
         if (failures > 0) return elapsed >= Math.min(300_000L, Math.max(15_000L, base) << failures);
-        if (path.startsWith("chats/") || path.equals("lives") || path.startsWith("lives/")) return elapsed >= base;
+        // Live discovery is a list, not active-room signaling. After unchanged
+        // responses back off from 10s to 20s, returning to 10s after a change.
+        // Explicit invalidations/foreground refresh still bypass this budget.
+        if (path.equals("lives")) return elapsed >= Math.min(20_000L, base << idle);
+        // Keep an open live room/chat and call signaling at their existing cadence.
+        if (path.startsWith("chats/") || path.startsWith("lives/")) return elapsed >= base;
         return elapsed >= Math.min(240_000L, base << idle);
     }
 }

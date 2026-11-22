@@ -11,6 +11,27 @@ public class PollBudgetTest {
             assertFalse(budget.due(path,false,600_000,true));
         }
     }
+    @Test public void liveDiscoveryBacksOffButActiveRoomsStayResponsive() {
+        PollBudget discovery=new PollBudget();
+        assertFalse(discovery.due("lives",true,9_999));
+        assertTrue(discovery.due("lives",true,10_000));
+        discovery.success(false);
+        assertFalse(discovery.due("lives",true,19_999));
+        assertTrue(discovery.due("lives",true,20_000));
+        discovery.success(false);
+        assertFalse(discovery.due("lives",true,19_999));
+        assertTrue(discovery.due("lives",true,20_000));
+        discovery.success(false);
+        assertTrue(discovery.due("lives",true,20_000));
+        assertFalse(discovery.due("lives",false,600_000));
+        discovery.success(true);
+        assertFalse(discovery.due("lives",true,5_000));
+        assertTrue(discovery.due("lives",true,10_000));
+        PollBudget room=new PollBudget();
+        room.success(false);room.success(false);room.success(false);
+        assertTrue(room.due("lives/room",true,5_000));
+        assertTrue(room.due("lives/room/chat",true,5_000));
+    }
     @Test public void activeLiveSignalingBacksOffAndStopsInBackground() {
         PollBudget budget=new PollBudget();
         assertTrue(budget.due("lives/room",true,5_000));

@@ -2043,10 +2043,10 @@ test('live room creation, discovery and end transitions enforce host and viewer 
   sql.exec(readFileSync(new URL('../migrations/0060_live_status_indexes.sql',import.meta.url),'utf8'));
   sql.exec(readFileSync(new URL('../migrations/0070_live_chat_page.sql',import.meta.url),'utf8'));
   let pageRows=0;
-  const plans=[];let roomReads=0;
+  const plans=[];let roomReads=0,liveShadowArgs=[];
   const insert=sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)');
   for (const uid of ['alice','bob']) insert.run(`users/${uid}`,'users',uid,uid,JSON.stringify({displayName:uid}),1);
-  const db={prepare(query){const stmt=sql.prepare(query);return{bind(...args){return{run:async()=>stmt.run(...args),all:async()=>{if(query.includes('INDEXED BY idx_cf_') && query.includes('lives_status')) plans.push(...sql.prepare('EXPLAIN QUERY PLAN '+query).all(...args).map(row=>row.detail));const results=stmt.all(...args);if(args[0]==='lives/room/chat')pageRows+=results.length;return {results};},first:async()=>{if(args[0]==='lives/room')roomReads++;return stmt.get(...args)||null;}};}};},async batch(stmts){sql.exec('BEGIN');try{for(const stmt of stmts)await stmt.run();sql.exec('COMMIT');}catch(e){sql.exec('ROLLBACK');throw e;}}};
+  const db={prepare(query){const stmt=sql.prepare(query);return{bind(...args){return{run:async()=>stmt.run(...args),all:async()=>{if(query.includes('INDEXED BY idx_cf_') && query.includes('lives_status')) plans.push(...sql.prepare('EXPLAIN QUERY PLAN '+query).all(...args).map(row=>row.detail));if(query.includes('SELECT path FROM friendbook_cf_firestore_documents WHERE path IN (') && args.at(-1)==='lives')liveShadowArgs.push(...args.slice(0,-1));const results=stmt.all(...args);if(args[0]==='lives/room/chat')pageRows+=results.length;return {results};},first:async()=>{if(args[0]==='lives/room')roomReads++;return stmt.get(...args)||null;}};}};},async batch(stmts){sql.exec('BEGIN');try{for(const stmt of stmts)await stmt.run();sql.exec('COMMIT');}catch(e){sql.exec('ROLLBACK');throw e;}}};
   const app=createWorker(async token=>token),env={DB:db,FIREBASE_PROJECT_ID:'friendbook-test'};
   const call=(uid,path,method='GET',body)=>app.fetch(new Request(`https://example.test${path}`,{method,headers:{authorization:`Bearer ${uid}`,'content-type':'application/json'},...(body?{body:JSON.stringify(body)}:{})}),env);
   const doc='/v1/firestore/document?path=lives/room';
@@ -2071,7 +2071,11 @@ test('live room creation, discovery and end transitions enforce host and viewer 
     const r=await call('bob','/v1/firestore/query','POST',{parent:'lives',limit:25,filters:[{field:'status',...filter}]});
     assert.equal(r.status,200);return (await r.json()).documents.map(row=>row.id);
   };
+  liveShadowArgs=[];
   const liveEqual=await discover({op:'==',value:'live'});
+  assert.ok(!liveShadowArgs.includes('lives/room'),'a live canonical row needs no shadow lookup');
+  assert.ok(liveShadowArgs.includes('lives/shadow'),'an ended canonical row must shadow a stale live mirror');
+  assert.ok(liveShadowArgs.includes('lives/legacyLive'),'legacy-only rooms still get a canonical check');
   plans.length=0;
   assert.deepEqual(await discover({op:'in',value:['live']}),liveEqual);
   assert.match(plans.join('\n'),/SEARCH.*idx_cf_lives_status/);

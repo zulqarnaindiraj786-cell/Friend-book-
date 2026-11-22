@@ -116,6 +116,26 @@ await measure('profileDetail',users,()=>wave(users,async i=>{
   assert.equal(profile.document.email,undefined);
 }));
 for(const root of ['posts','reels','stories','lives','notifications']) assert.equal(report.workloads[`page-${root}`].changedRowsIncludingTriggers,0);
+// Exercise private group projections and indexed tag search with synthetic data.
+add('groups','private','user0',{name:'fixture',privacy:'Private',adminId:'user0',adminIds:['user0'],moderatorIds:[],members:['user0'],pendingMemberIds:['user1'],invitedUids:['user1'],bannedMemberIds:[]});
+sql.prepare("INSERT INTO friendbook_cf_trusted_groups(group_path,owner_uid) VALUES ('groups/private','user0')").run();
+await measure('privateGroupProjection',users-2,()=>wave(users-2,async i=>{
+  const group=await call(`user${i+2}`,'/v1/firestore/document?path=groups/private');
+  assert.deepEqual(group.data.pendingMemberIds,[]);assert.deepEqual(group.data.invitedUids,[]);assert.deepEqual(group.data.members,[]);
+}));
+add('posts','tagpublic','user0',{authorId:'user0',createdAt:now,privacy:'Public',content:'#quota_replay'});
+add('posts','tagprivate','user0',{authorId:'user0',createdAt:now+1,privacy:'Only me',content:'#quota_replay'});
+await measure('tagSearch',users-1,()=>wave(users-1,async i=>{
+  const page=await call(`user${i+1}`,'/v1/firestore/query','POST',{parent:'posts',postTag:'#quota_replay',limit:5});
+  assert.deepEqual(page.documents.map(d=>d.id),['tagpublic']);
+}));
+for(let i=1;i<users;i++) add('stories',`view${i}`,'user0',{authorId:'user0',privacy:'Public',expiresAt:timestamp(now+100000),viewedBy:[],reactions:{}});
+const storyView=i=>call(`user${i+1}`,'/v1/firestore/story-engagement','POST',{id:`view${i+1}`,op:'view'});
+await measure('firstStoryView',users-1,()=>wave(users-1,storyView));
+await measure('repeatStoryView',users-1,()=>wave(users-1,storyView));
+assert.equal(report.workloads.repeatStoryView.changedRowsIncludingTriggers,0,'repeat story views');
+assert.equal(report.workloads.privateGroupProjection.changedRowsIncludingTriggers,0);
+assert.equal(report.workloads.tagSearch.changedRowsIncludingTriggers,0);
 sql.prepare("INSERT INTO friendbook_cf_interaction_resources(resource,state) VALUES ('posts/item39','verified') ON CONFLICT(resource) DO NOTHING").run();
 const engagement='/v1/engagement/posts/item39';
 const like=i=>call(`user${i}`,`${engagement}/reactions?response=reaction`,'PUT',{type:'like'});
