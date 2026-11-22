@@ -2021,27 +2021,40 @@ async function unfriendBatch(db,uid,ops,now,indexedCandidates=false) {
   if (userRows.some(r=>!r)) return forbidden();
   const users=userRows.map(r=>decodeValue(JSON.parse(r.document_json)));
   if (users.some(u=>u.friendsCount!==undefined && (!Number.isSafeInteger(u.friendsCount) || u.friendsCount<0))) return forbidden();
-  const guards=[];
+  // The common one-friend removal can assert its three snapshots and exact
+  // duplicate count in one transactional guard row. Larger legacy duplicate
+  // batches retain the old guards and avoid exceeding SQL parameter limits.
+  const coalesce=friendRows.length===1,guards=[],guardPredicates=[],guardArgs=[];
   for (const row of [...friendRows,...userRows]) {
     // Keep the transaction guard; a second read of an already-canonical
     // snapshot before the batch cannot improve its race protection.
     const canonical=row[canonicalRootSnapshot] ? row : await db.prepare('SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?').bind(row.path).first();
     const legacy=canonical?null:await db.prepare('SELECT document_json FROM friendbook_cf_documents WHERE path=?').bind(row.path).first();
     if ((canonical && canonical.document_json!==row.document_json) || (!canonical && (!legacy || appDocumentToFirestoreRow({path:row.path,collection:row.collection_id,doc_id:row.doc_id,document_json:legacy.document_json})?.document_json!==row.document_json))) return json({error:'Friendship changed'},409);
-    guards.push(db.prepare('INSERT INTO friendbook_cf_social_guards(ok) SELECT CASE WHEN (? = 1 AND (SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?) = ?) OR (? = 0 AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents WHERE path=?) AND (SELECT document_json FROM friendbook_cf_documents WHERE path=?) = ?) THEN 1 ELSE 0 END').bind(canonical?1:0,row.path,row.document_json,canonical?1:0,row.path,row.path,legacy?.document_json||''));
+    const predicate=`((? = 1 AND (SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?) = ?)
+      OR (? = 0 AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents WHERE path=?)
+        AND (SELECT document_json FROM friendbook_cf_documents WHERE path=?) = ?))`;
+    const args=[canonical?1:0,row.path,row.document_json,canonical?1:0,row.path,row.path,legacy?.document_json||''];
+    if(coalesce){guardPredicates.push(predicate);guardArgs.push(...args);}
+    else guards.push(db.prepare(`INSERT INTO friendbook_cf_social_guards(ok) SELECT CASE WHEN ${predicate} THEN 1 ELSE 0 END`).bind(...args));
   }
   // Refuse a partial removal if duplicate friendship rows exist. Test both native
   // JSON and historical Firestore envelopes, ignoring stale legacy mirrors.
   const candidates=await friendshipCandidates(db,uid,indexedCandidates);
-  const countSql=`INSERT INTO friendbook_cf_social_guards(ok) SELECT CASE WHEN (SELECT count(*) FROM (${candidates.sql}) d WHERE (
+  const countPredicate=`(SELECT count(*) FROM (${candidates.sql}) d WHERE (
     (json_array_length(d.document_json,'$.participants')=2 AND
      ((json_extract(d.document_json,'$.participants[0]')=? AND json_extract(d.document_json,'$.participants[1]')=?) OR
       (json_extract(d.document_json,'$.participants[0]')=? AND json_extract(d.document_json,'$.participants[1]')=?))) OR
     (json_array_length(d.document_json,'$.fields.participants.arrayValue.values')=2 AND
      ((json_extract(d.document_json,'$.fields.participants.arrayValue.values[0].stringValue')=? AND json_extract(d.document_json,'$.fields.participants.arrayValue.values[1].stringValue')=?) OR
       (json_extract(d.document_json,'$.fields.participants.arrayValue.values[0].stringValue')=? AND json_extract(d.document_json,'$.fields.participants.arrayValue.values[1].stringValue')=?)))
-  ))=? THEN 1 ELSE 0 END`;
-  guards.push(db.prepare(countSql).bind(...candidates.args,uid,other,other,uid,uid,other,other,uid,friendRows.length));
+  ))=?`;
+  const countArgs=[...candidates.args,uid,other,other,uid,uid,other,other,uid,friendRows.length];
+  if(coalesce){
+    guardPredicates.push(countPredicate);guardArgs.push(...countArgs);
+    guards.push(db.prepare(`INSERT INTO friendbook_cf_social_guards(ok) SELECT CASE WHEN
+      ${guardPredicates.map(p=>`(${p})`).join(' AND ')} THEN 1 ELSE 0 END`).bind(...guardArgs));
+  } else guards.push(db.prepare(`INSERT INTO friendbook_cf_social_guards(ok) SELECT CASE WHEN ${countPredicate} THEN 1 ELSE 0 END`).bind(...countArgs));
   const statements=[...guards];
   for (const row of friendRows) {
     statements.push(db.prepare('DELETE FROM friendbook_cf_firestore_documents WHERE path=?').bind(row.path));
