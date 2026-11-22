@@ -5,7 +5,8 @@ import {readFileSync} from 'node:fs';
 import {createWorker} from '../../worker.js';
 
 const migration=name=>readFileSync(new URL(`../migrations/${name}`,import.meta.url),'utf8');
-const candidate=readFileSync(new URL('../migrations/0077_user_follow_membership.sql',import.meta.url),'utf8');
+const initial=readFileSync(new URL('../migrations/0077_user_follow_membership.sql',import.meta.url),'utf8');
+const candidate=readFileSync(new URL('../migrations/0078_follow_trigger_cost.sql',import.meta.url),'utf8');
 
 test('follow membership candidate matches full scan and maintains changes without rewriting on heartbeat',async t=>{
   const sql=new DatabaseSync(':memory:');t.after(()=>sql.close());
@@ -32,7 +33,9 @@ test('follow membership candidate matches full scan and maintains changes withou
   cur.run('users/dup','users','users','dup','dup','{"uid":"dup","followers":[],"followers":["viewer"]}',1,1);
   old.run('users/dupOld','users','dupOld','dupOld','{"uid":"dupOld","followers":[],"followers":["viewer"]}',1);
   old.run('users/dupFields','users','dupFields','dupFields','{"fields":null,"fields":{"uid":{"stringValue":"dupFields"},"followers":{"arrayValue":{"values":[{"stringValue":"viewer"}]}}}}',1);
-  sql.exec(candidate);
+  addCurrent('escaped',{uid:'escaped',followers:['viewer'],bio:'line one\nline two'});
+  cur.run('users/escapedKey','users','users','escapedKey','escapedKey','{"uid":"escapedKey","follo\\u0077ers":["viewer"]}',1,1);
+  sql.exec(initial);sql.exec(candidate);
   const original=sql.prepare('SELECT * FROM friendbook_cf_user_follow_membership ORDER BY member,kind,source,path').all();
   sql.exec(candidate);
   assert.deepEqual(sql.prepare('SELECT * FROM friendbook_cf_user_follow_membership ORDER BY member,kind,source,path').all(),original,'migration rebackfills exact edges');
