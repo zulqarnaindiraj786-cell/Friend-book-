@@ -64,6 +64,7 @@ jobs:
           python3 cloudflare/test/schema_test.py
           python3 cloudflare/test/migration_test.py
           python3 cloudflare/test/index_plan_test.py
+          python3 -m unittest scripts.tests.test_fcm_claim_migration_gate scripts.tests.test_d1_account_usage_analytics
       - name: Verify Save Forever R2 configuration (no R2 object deletion)
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -135,6 +136,7 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: '92f3d04598822de2e49e14561218d090'
           WRANGLER_SEND_METRICS: 'false'
+          HEAD_COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
         run: |
           set +e
           mkdir -p "$RUNNER_TEMP/d1-migration-diagnostics"
@@ -161,6 +163,20 @@ jobs:
               echo "d1_list_status=$d1_list_status" >> "$GITHUB_OUTPUT"
               echo 'migration_status=baseline-not-ready' >> "$GITHUB_OUTPUT"
               exit 0
+            fi
+            # The incremental FCM bridge makes only an empty table and trigger;
+            # never mix it with an unexpected index build or backfill. Explicit
+            # opt-in is required, and account analytics must retain a reserve.
+            if printf '%s\n' "$pending" | grep -q '0085_fcm_claims_incremental.sql' || [[ "$HEAD_COMMIT_MESSAGE" == *'[fcm-bridge-only]'* ]]; then
+              printf '%s\n' "$pending" > "$RUNNER_TEMP/fcm-pending.txt"
+              if [[ "$HEAD_COMMIT_MESSAGE" != *'[fcm-bridge-only]'* ]] || ! python3 scripts/loadtest/fcm_claim_migration_gate.py pending "$RUNNER_TEMP/fcm-pending.txt" \
+                || ! python3 scripts/loadtest/d1_account_usage_analytics.py --fcm-metadata-budget; then
+                echo 'FCM metadata-only safety gate failed; no migration attempted.' | tee -a "$log"
+                echo "whoami_status=$whoami_status" >> "$GITHUB_OUTPUT"
+                echo "d1_list_status=$d1_list_status" >> "$GITHUB_OUTPUT"
+                echo 'migration_status=fcm-metadata-preflight-failed' >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
             fi
             if printf '%s\n' "$pending" | grep -q '0073_chat_membership_source_seek.sql'; then
               # Limit the one-off index build rather than unexpectedly consuming
@@ -245,6 +261,17 @@ jobs:
           npx wrangler d1 migrations apply friendbook-db --remote 2>&1 | tee -a "$log"
           migration_status=${PIPESTATUS[0]}
           printf '%s\n' "migration_exit_code=$migration_status" | tee -a "$log"
+          if [ "$migration_status" -eq 0 ]; then
+            # Verify on every deployment, not only the initial rollout: a later
+            # deployment must not bypass a missing or altered bridge. Read
+            # schema metadata only, never claims or application records.
+            schema="$RUNNER_TEMP/fcm-bridge-schema.json"
+            npx wrangler d1 execute friendbook-db --remote --json --command "SELECT type,name,sql FROM sqlite_master WHERE name IN ('friendbook_cf_fcm_device_claims','friendbook_cf_fcm_device_claims_v2','cf_fcm_claims_legacy_bridge') LIMIT 3" > "$schema" 2>> "$log"
+            if [ "$?" -ne 0 ] || ! python3 scripts/loadtest/fcm_claim_migration_gate.py schema "$schema"; then
+              echo 'FCM bridge schema verification failed; old Worker remains deployed.' | tee -a "$log"
+              migration_status='fcm-schema-check-failed'
+            fi
+          fi
           echo "whoami_status=$whoami_status" >> "$GITHUB_OUTPUT"
           echo "d1_list_status=$d1_list_status" >> "$GITHUB_OUTPUT"
           echo "migration_status=$migration_status" >> "$GITHUB_OUTPUT"

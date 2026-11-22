@@ -44,6 +44,12 @@ def within_preflight_budget(result):
     return result['rowsRead'] <= 3_000_000 and result['rowsWritten'] <= 50_000
 
 
+def within_fcm_metadata_budget(result):
+    # Applies only to a metadata-only table/trigger rollout with no index build,
+    # backfill or row scan. This is a reserve, not a live-balance guarantee.
+    return result['rowsRead'] <= 3_000_000 and result['rowsWritten'] <= 75_000
+
+
 def main():
     token = os.environ.get('CLOUDFLARE_API_TOKEN')
     if not token:
@@ -64,6 +70,8 @@ def main():
     print('::notice:: Analytics may be delayed/adaptive; this is not a guaranteed live quota balance.')
     if '--preflight-budget' in sys.argv and not within_preflight_budget(result):
         raise SystemExit('Conservative preflight budget exceeded; no D1 SQL or migration attempted.')
+    if '--fcm-metadata-budget' in sys.argv and not within_fcm_metadata_budget(result):
+        raise SystemExit('FCM metadata-only rollout reserve exceeded; no migration attempted.')
 
 
 if __name__ == '__main__':

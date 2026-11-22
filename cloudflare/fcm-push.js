@@ -121,6 +121,25 @@ async function sendFcm(env, access, message) {
   return response;
 }
 
+// Both stores are checked atomically in the insert. The migration's legacy
+// trigger performs the inverse check for old Workers during rollout/rollback.
+// A missing v2 table is the pre-migration schema; all other failures fail closed.
+export async function claimFcmDevice(db, eventKey, now) {
+  let table='friendbook_cf_fcm_device_claims_v2', result;
+  try {
+    result=await db.prepare(`INSERT INTO friendbook_cf_fcm_device_claims_v2(event_key, created_at)
+      SELECT ?1, ?2 WHERE NOT EXISTS (SELECT 1 FROM friendbook_cf_fcm_device_claims WHERE event_key=?1)
+      ON CONFLICT(event_key) DO NOTHING`).bind(eventKey,now).run();
+  } catch(error) {
+    if (!/no such table: friendbook_cf_fcm_device_claims_v2\b/i.test(String(error))) throw error;
+    table='friendbook_cf_fcm_device_claims';
+    result=await db.prepare(`INSERT INTO friendbook_cf_fcm_device_claims(event_key, created_at)
+      VALUES (?, ?) ON CONFLICT(event_key) DO NOTHING`).bind(eventKey,now).run();
+  }
+  if (!result?.success || ![0,1].includes(result.meta?.changes)) throw new Error('claim metadata unavailable');
+  return {acquired:result.meta.changes===1,table};
+}
+
 async function sendToDevices(env, db, actor, target, data, event, deviceId = null) {
   const devices = await (deviceId
     ? db.prepare('SELECT device_id, token FROM friendbook_cf_fcm_devices WHERE user_id = ? AND device_id = ?').bind(target,deviceId)
@@ -135,32 +154,33 @@ async function sendToDevices(env, db, actor, target, data, event, deviceId = nul
     while (index < devices.length) {
       const device = devices[index++];
       const claimKey = `fcm:${event}:${device.device_id}`;
-      // D1 writes use run(); changes identifies the winning insert atomically.
+      // D1 changes identifies the winner. Release only the store acquired by
+      // this attempt if FCM fails; never delete the other store's claim.
+      let claim;
       try {
-        const result=await db.prepare(`INSERT INTO friendbook_cf_fcm_device_claims(event_key, created_at)
-          VALUES (?, ?) ON CONFLICT(event_key) DO NOTHING`).bind(claimKey,Date.now()).run();
-        if (!result?.success || ![0,1].includes(result.meta?.changes)) throw new Error('claim metadata unavailable');
-        if (result.meta.changes===0) { duplicate++; continue; }
+        claim=await claimFcmDevice(db,claimKey,Date.now());
+        if (!claim.acquired) { duplicate++; continue; }
       } catch { reasons.add("D1_CLAIM_FAILED"); failed++; continue; }
+      const release=()=>db.prepare(`DELETE FROM ${claim.table} WHERE event_key = ?`).bind(claimKey).run();
       try {
         const r = await sendFcm(env, access, buildFcmMessage({token:device.token}, data));
         const result = await r.json().catch(() => ({}));
         if (r.ok && result.name) { accepted++; continue; }
         const code = result.error?.details?.find(x => x.errorCode)?.errorCode;
         if (code === 'UNREGISTERED') {
-          await db.prepare('DELETE FROM friendbook_cf_fcm_device_claims WHERE event_key = ?').bind(claimKey).run();
+          await release();
           await db.prepare('DELETE FROM friendbook_cf_fcm_devices WHERE device_id = ? AND token = ?').bind(device.device_id, device.token).run().catch(() => {});
           invalid++;
         } else {
           reasons.add(code === 'SENDER_ID_MISMATCH' ? 'SENDER_ID_MISMATCH'
             : [400,401,403,404,429,500,503].includes(r.status) ? `FCM_HTTP_${r.status}` : 'FCM_PROVIDER_ERROR');
           failed++;
-          await db.prepare('DELETE FROM friendbook_cf_fcm_device_claims WHERE event_key = ?').bind(claimKey).run().catch(() => {});
+          await release().catch(() => {});
         }
       } catch {
         reasons.add("FCM_NETWORK_ERROR");
         failed++;
-        await db.prepare('DELETE FROM friendbook_cf_fcm_device_claims WHERE event_key = ?').bind(claimKey).run().catch(() => {});
+        await release().catch(() => {});
       }
     }
   }));
