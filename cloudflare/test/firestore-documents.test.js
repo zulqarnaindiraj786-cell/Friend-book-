@@ -1203,8 +1203,11 @@ test('direct chat replies accept reversed participant order without adding a new
 
 test('sender create-only notifications are atomic and never overwrite recipient read state', async () => {
   const sql=new DatabaseSync(':memory:');sql.exec(resourcesSchema);sql.exec(appSchema);sql.exec(schema);sql.exec(socialGuardSchema);
-  let race=false;
-  const db={prepare(q){const s=sql.prepare(q);return{bind(...a){return{run:async()=>s.run(...a),all:async()=>({results:s.all(...a)}),first:async()=>s.get(...a)||null};}};},async batch(stmts){if(race){race=false;sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)').run('notifications/race','notifications','race','alice',JSON.stringify({fromUserId:'alice',toUserId:'bob',isRead:true,text:'winner'}),1);}sql.exec('BEGIN');try{for(const s of stmts)await s.run();sql.exec('COMMIT');}catch(e){sql.exec('ROLLBACK');throw e;}}};
+  let race='';
+  const db={prepare(q){const s=sql.prepare(q);return{bind(...a){return{run:async()=>s.run(...a),all:async()=>({results:s.all(...a)}),first:async()=>s.get(...a)||null};}};},async batch(stmts){
+    if(race==='legacy')sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)').run('notifications/race','notifications','race','alice',JSON.stringify({fromUserId:'alice',toUserId:'bob',isRead:true,text:'winner'}),1);
+    if(race==='canonical')sql.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)').run('notifications/race2','notifications','notifications','race2','alice',JSON.stringify({fromUserId:'alice',toUserId:'bob',isRead:true,text:'winner'}),1,1);
+    race='';sql.exec('BEGIN');try{for(const s of stmts)await s.run();sql.exec('COMMIT');}catch(e){sql.exec('ROLLBACK');throw e;}}};
   const app=createWorker(async t=>t),env={DB:db,FIREBASE_PROJECT_ID:'friendbook-test'};
   const req=(uid,id,method,body)=>app.fetch(new Request('https://example.test/v1/firestore/document?path=notifications/'+id,{method,headers:{authorization:'Bearer '+uid,'content-type':'application/json'},...(body?{body:JSON.stringify(body)}:{})}),env);
   const data={fromUserId:'alice',toUserId:'bob',isRead:false,text:'hello'};
@@ -1213,9 +1216,17 @@ test('sender create-only notifications are atomic and never overwrite recipient 
   assert.equal((await req('bob','n','PATCH',{fields:{isRead:true}})).status,200);
   assert.equal((await req('alice','n','PUT',{data,createOnly:true})).status,409);
   assert.equal(JSON.parse(sql.prepare('SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?').get('notifications/n').document_json).isRead,true);
-  race=true;assert.equal((await req('alice','race','PUT',{data,createOnly:true})).status,409);
+  race='legacy';assert.equal((await req('alice','race','PUT',{data,createOnly:true})).status,409);
   assert.equal(sql.prepare('SELECT path FROM friendbook_cf_firestore_documents WHERE path=?').get('notifications/race'),undefined);
   assert.equal(JSON.parse(sql.prepare('SELECT document_json FROM friendbook_cf_documents WHERE path=?').get('notifications/race').document_json).text,'winner');
+  race='canonical';assert.equal((await req('alice','race2','PUT',{data,createOnly:true})).status,409);
+  assert.equal(sql.prepare('SELECT path FROM friendbook_cf_documents WHERE path=?').get('notifications/race2'),undefined);
+  assert.equal(JSON.parse(sql.prepare('SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?').get('notifications/race2').document_json).isRead,true);
+  sql.exec("CREATE TRIGGER fail_notice_mirror BEFORE INSERT ON friendbook_cf_documents WHEN NEW.path='notifications/fail' BEGIN SELECT RAISE(ABORT,'injected failure'); END");
+  assert.notEqual((await req('alice','fail','PUT',{data,createOnly:true})).status,200);
+  assert.equal(sql.prepare('SELECT path FROM friendbook_cf_firestore_documents WHERE path=?').get('notifications/fail'),undefined,'mirror failure must roll back canonical insert');
+  assert.equal((await req('eve','denied','PUT',{data,createOnly:true})).status,403);
+  assert.equal(sql.prepare('SELECT path FROM friendbook_cf_firestore_documents WHERE path=?').get('notifications/denied'),undefined);
   sql.close();
 });
 

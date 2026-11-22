@@ -3066,11 +3066,15 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0, ct
         const id=docIdOf(docPath), serialized=JSON.stringify(next);
         if (serialized.length>1_800_000) return json({error:'Document too large'},413);
         try {
+          // Validate absence in both stores inside the insert itself. A race
+          // forces a NOT NULL failure and rolls back the entire batch, without
+          // inserting and deleting a temporary guard row for every notification.
           await db.batch([
-            await chatDocumentGuard(db,docPath,null),
-            db.prepare('INSERT INTO friendbook_cf_firestore_documents(path,parent_path,collection_id,doc_id,owner_uid,document_json,create_time,update_time) VALUES (?,?,?,?,?,?,?,?)').bind(docPath,'notifications','notifications',id,uid,serialized,now,now),
-            db.prepare('INSERT INTO friendbook_cf_documents(path,collection,doc_id,owner_uid,document_json,updated_at) VALUES (?,?,?,?,?,?)').bind(docPath,'notifications',id,uid,JSON.stringify({...next,id}),now),
-            db.prepare('DELETE FROM friendbook_cf_social_guards').bind()
+            db.prepare(`INSERT INTO friendbook_cf_firestore_documents(path,parent_path,collection_id,doc_id,owner_uid,document_json,create_time,update_time)
+              VALUES (CASE WHEN NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents WHERE path=?1)
+                AND NOT EXISTS (SELECT 1 FROM friendbook_cf_documents WHERE path=?1) THEN ?1 ELSE NULL END,
+                'notifications','notifications',?2,?3,?4,?5,?5)`).bind(docPath,id,uid,serialized,now),
+            db.prepare('INSERT INTO friendbook_cf_documents(path,collection,doc_id,owner_uid,document_json,updated_at) VALUES (?,?,?,?,?,?)').bind(docPath,'notifications',id,uid,JSON.stringify({...next,id}),now)
           ]);
           return json({exists:true,id,path:docPath,parent:'notifications',collection:'notifications',data:next,createTime:now,updateTime:now});
         } catch(e) {

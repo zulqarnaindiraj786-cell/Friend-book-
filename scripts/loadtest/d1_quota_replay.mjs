@@ -261,6 +261,17 @@ for(const [label,operation] of [['PostReaction',like],['Comment',comment],['Devi
   await measure(`repeat${label}`,users,()=>wave(users,operation));
   assert.equal(report.workloads[`repeat${label}`].changedRowsIncludingTriggers,0,`repeated ${label}`);
 }
+// Create-only notifications are durable and must never overwrite the recipient's
+// read state. The replay creates no FCM pushes and contacts no external service.
+const noticePath=i=>`/v1/firestore/document?path=notifications/synthetic_event${i}`;
+const noticeBody=i=>({data:{fromUserId:'user0',toUserId:`user${i}`,type:'like',isRead:false,text:'offline notification'},createOnly:true});
+await measure('firstNotificationCreate',users-1,()=>wave(users-1,i=>call('user0',noticePath(i+1),'PUT',noticeBody(i+1))));
+await measure('duplicateNotificationCreate',users-1,()=>wave(users-1,async i=>{
+  const res=await app.fetch(new Request(`https://offline.invalid${noticePath(i+1)}`,{method:'PUT',
+    headers:{authorization:'Bearer user0','content-type':'application/json'},body:JSON.stringify(noticeBody(i+1))}),env);
+  assert.equal(res.status,409);
+}));
+assert.equal(report.workloads.duplicateNotificationCreate.changedRowsIncludingTriggers,0,'duplicate notification creation');
 assert.equal(sql.prepare("SELECT total FROM friendbook_cf_reaction_totals WHERE resource='posts/item39' AND type='like'").get().total,users);
 assert.equal(report.workloads.unchangedProfileHeartbeat.changedRowsIncludingTriggers,0);
 assert.equal(report.workloads.duplicateReceiptAndUnreadReset.changedRowsIncludingTriggers,0);
