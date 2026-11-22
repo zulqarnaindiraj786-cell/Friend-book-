@@ -92,6 +92,62 @@ export async function promote(query, plan) {
   return {before:plan.legacy_only, inserted:inserted.length, after:after.legacy_only};
 }
 
+// Read-only, bounded classification of root rows. This is a moving scan, not
+// a snapshot or authorization to write. In particular, root messages are also
+// projected into nested chat paths by a separate compatibility bridge.
+const ROOT_NAMES = new Set(['users','posts','reels','stories','chats','messages','friends','friend_requests',
+  'follows','groups','pages','notifications','official_broadcasts','officialBroadcasts','lives','pokes',
+  'payments','pushDevices','reports','feedback','config','events','gifts','referrals','subscriptions',
+  'comments','likes','followers','following','saves']);
+const PREVIEW_SQL = `SELECT l.path,l.collection,l.doc_id,l.owner_uid,l.document_json,l.updated_at
+ FROM friendbook_cf_documents l WHERE l.path>? AND NOT EXISTS
+ (SELECT 1 FROM friendbook_cf_firestore_documents f WHERE f.path=l.path)
+ ORDER BY l.path LIMIT ?`;
+
+export function classifyRoot(source) {
+  if (!source || typeof source.collection!=='string' || !source.collection || source.collection.includes('/')
+      || typeof source.doc_id!=='string' || !source.doc_id || source.doc_id.includes('/')
+      || source.path!==`${source.collection}/${source.doc_id}` || typeof source.owner_uid!=='string'
+      || typeof source.document_json!=='string' || source.document_json.length>100000
+      || !Number.isSafeInteger(source.updated_at)) return 'unsafe_shape';
+  let normalized;
+  try { normalized=appDocumentToFirestoreRow(source); } catch { return 'unsafe_shape'; }
+  if (!normalized || !Number.isSafeInteger(normalized.create_time) || !Number.isSafeInteger(normalized.update_time)) return 'unsafe_shape';
+  const oldFields=toFirestoreFields(source.document_json);
+  const candidate=JSON.parse(normalized.document_json);
+  if (oldFields?.id?.stringValue===source.doc_id) candidate.id=source.doc_id;
+  const saved=JSON.stringify(candidate);
+  if (!isDeepStrictEqual(toPlainDocument(source.document_json,source.doc_id),toPlainDocument(saved,source.doc_id))) return 'plain_projection_diff';
+  if (!isDeepStrictEqual(oldFields,toFirestoreFields(saved))) return 'auth_projection_diff';
+  if (!isDeepStrictEqual(JSON.parse(normalized.document_json),candidate)) return 'facade_projection_diff';
+  if (source.collection==='users' && ['followers','following'].some(key=>Array.isArray(candidate[key]) && candidate[key].length>20)) return 'fanout_limit';
+  if (source.collection==='chats' && Array.isArray(candidate.participants) && candidate.participants.length>20) return 'fanout_limit';
+  return 'equivalent_root_only';
+}
+
+export async function previewRoots(query, max=10000, batch=30) {
+  if (!Number.isInteger(max) || max<1 || max>10000 || !Number.isInteger(batch) || batch<1 || batch>30) throw Error('invalid preview bounds');
+  let after='', sampled=0, reads=0, exhausted=false;
+  const collections={};
+  while (sampled<max) {
+    const result=await query(PREVIEW_SQL,[after,Math.min(batch,max-sampled)]);
+    if (!Array.isArray(result.results) || !Number.isSafeInteger(result.meta?.rows_read) || result.meta.rows_read<0) throw Error('preview accounting unavailable');
+    reads+=result.meta.rows_read;
+    if (reads>150000) throw Error('preview read cap exceeded');
+    if (!result.results.length) { exhausted=true; break; }
+    for (const source of result.results) {
+      if (typeof source.path!=='string' || source.path<=after) throw Error('preview order invalid');
+      after=source.path; sampled++;
+      const collection=ROOT_NAMES.has(source.collection)?source.collection:'other';
+      const summary=collections[collection] ||= {};
+      const category=classifyRoot(source);
+      summary[category]=(summary[category]||0)+1;
+    }
+    if (result.results.length<Math.min(batch,max-(sampled-result.results.length))) { exhausted=true; break; }
+  }
+  return {collections,sampled,truncated:!exhausted,rows_read:reads};
+}
+
 async function remote(sql,params) {
   const token=process.env.CLOUDFLARE_API_TOKEN;
   if (!token) throw Error('missing credential');
@@ -105,15 +161,22 @@ async function remote(sql,params) {
 
 if (process.argv[1] && import.meta.url===new URL(`file://${process.argv[1]}`).href) {
   try {
-    const plan=await readPlan(remote);
-    console.log(`::notice:: Verified candidate plan: sampled=${plan.sampled}, legacy_only_before=${plan.legacy_only}`);
-    if (process.argv.includes('--apply')) {
-      const result=await promote(remote,plan);
-      console.log(`::notice:: User backfill verification: legacy_only_before=${result.before}, inserted=${result.inserted}, legacy_only_after=${result.after}`);
-    } else console.log('::notice:: Read-only preview; no documents changed.');
+    if (process.argv.includes('--preview-roots')) {
+      if (process.argv.includes('--apply')) throw Error('invalid preview bounds');
+      const result=await previewRoots(remote);
+      console.log('::notice:: Moving read-only root preview '+JSON.stringify(result));
+      console.log('::warning:: Root preview does not verify nested-chat message coverage or enable cutover.');
+    } else {
+      const plan=await readPlan(remote);
+      console.log(`::notice:: Verified candidate plan: sampled=${plan.sampled}, legacy_only_before=${plan.legacy_only}`);
+      if (process.argv.includes('--apply')) {
+        const result=await promote(remote,plan);
+        console.log(`::notice:: User backfill verification: legacy_only_before=${result.before}, inserted=${result.inserted}, legacy_only_after=${result.after}`);
+      } else console.log('::notice:: Read-only preview; no documents changed.');
+    }
   } catch (error) {
     // Do not include raw database/provider errors: they may contain profile data.
-    console.error(`::error:: Safe backfill stopped: ${['unsafe source shape','unsafe normalized metadata','legacy id projection differs','typed field projection differs','plain document projection differs','follow-index fanout cap','user inventory unsafe','inventory changed','atomic guard changed; verification required','post-insert verification failed','coverage changed during verification'].includes(error.message) ? error.message : 'preflight unavailable'}`);
+    console.error(`::error:: Safe backfill stopped: ${['unsafe source shape','unsafe normalized metadata','legacy id projection differs','typed field projection differs','plain document projection differs','follow-index fanout cap','user inventory unsafe','inventory changed','atomic guard changed; verification required','post-insert verification failed','coverage changed during verification','invalid preview bounds','preview accounting unavailable','preview read cap exceeded','preview order invalid'].includes(error.message) ? error.message : 'preflight unavailable'}`);
     process.exitCode=1;
   }
 }

@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {DatabaseSync} from 'node:sqlite';
 import {readFileSync} from 'node:fs';
-import {readPlan, promote, statement, planCandidate} from '../../scripts/loadtest/backfill_legacy_users.mjs';
+import {readPlan, promote, statement, planCandidate, classifyRoot, previewRoots} from '../../scripts/loadtest/backfill_legacy_users.mjs';
 
 function fixture(t) {
  const db=new DatabaseSync(':memory:');t.after(()=>db.close());
@@ -45,4 +45,28 @@ test('refuses more than two legacy users without any writes',async t=>{
  const {db,add,query}=fixture(t);add('a');add('b');add('c');
  await assert.rejects(readPlan(query),/inventory unsafe/);
  assert.equal(db.prepare('SELECT count(*) n FROM friendbook_cf_firestore_documents').get().n,0);
+});
+
+test('root preview distinguishes facade, authorization, and plain projection differences',()=>{
+ const base={path:'chats/a',collection:'chats',doc_id:'a',owner_uid:'alice',updated_at:1,document_json:'{"participants":["alice"]}'};
+ assert.equal(classifyRoot(base),'equivalent_root_only');
+ assert.equal(classifyRoot({...base,document_json:'{"id":"a","participants":["alice"]}'}),'facade_projection_diff');
+ assert.equal(classifyRoot({...base,document_json:'{"id":"wrong"}'}),'plain_projection_diff');
+ assert.equal(classifyRoot({...base,path:'chats/a/nested/b'}),'unsafe_shape');
+ assert.equal(classifyRoot({...base,document_json:JSON.stringify({participants:Array(21).fill('x')})}),'fanout_limit');
+});
+
+test('moving preview scans only unshadowed rows, buckets unknown collections, and detects limits',async t=>{
+ const {db}=fixture(t);
+ db.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)').run('chats/a','chats','a','alice','{"participants":["alice"]}',1);
+ db.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)').run('private/b','private','b','bob','{"id":"b"}',1);
+ db.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)').run('users/a','users','a','a','{}',1);
+ db.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)').run('users/a','users','users','a','a','{}',1,1);
+ const query=async(sql,params)=>({results:db.prepare(sql).all(...params),meta:{rows_read:1}});
+ const summary=await previewRoots(query,10,1);
+ assert.equal(summary.sampled,2); assert.equal(summary.truncated,false);
+ assert.deepEqual(summary.collections,{chats:{equivalent_root_only:1},other:{facade_projection_diff:1}});
+ assert.equal((await previewRoots(query,1,1)).truncated,true);
+ await assert.rejects(previewRoots(async()=>({results:[],meta:{}})),/accounting/);
+ assert.equal(db.prepare('SELECT count(*) n FROM friendbook_cf_firestore_documents').get().n,1);
 });
