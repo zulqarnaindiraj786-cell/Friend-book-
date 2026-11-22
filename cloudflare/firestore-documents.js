@@ -648,25 +648,40 @@ async function readCollectionRows(db, parent, uid, filters, spec, env) {
     // Canonical membership wins over stale legacy mirrors. The normal document
     // ACL still runs before results are returned to the caller.
     try {
-      const fetchMembership=hint=>Promise.all([
-        db.prepare(`SELECT f.* FROM friendbook_cf_chat_participants m ${hint}
+      const queryCanonical=hint=>db.prepare(`SELECT f.* FROM friendbook_cf_chat_participants m ${hint}
         JOIN friendbook_cf_firestore_documents f ON f.path=m.chat_path
-        WHERE m.participant_uid=? AND m.source=1`).bind(uid).all(),
-        db.prepare(`SELECT a.* FROM friendbook_cf_chat_participants m ${hint}
-        JOIN friendbook_cf_documents a ON a.path=m.chat_path
-        WHERE m.participant_uid=? AND m.source=0`).bind(uid).all(),
-      ]);
-      let canonical,legacy;
-      try { [canonical,legacy]=await fetchMembership('INDEXED BY idx_cf_chat_participant_source'); }
+        WHERE m.participant_uid=? AND m.source=1`).bind(uid).all();
+      let canonical,hint='INDEXED BY idx_cf_chat_participant_source';
+      try { canonical=await queryCanonical(hint); }
       catch(error) {
-        // Safe rolling deployment or old local fixtures: retain the same ACL
-        // and complete results if the additive index is not present yet.
+        // Safe rolling deployment or old local fixtures retain the same ACL.
         if (!String(error).includes('no such index: idx_cf_chat_participant_source')) throw error;
-        [canonical,legacy]=await fetchMembership('');
+        hint=''; canonical=await queryCanonical(hint);
       }
-      // Most rooms exist in both stores. Reuse the canonical membership window
-      // rather than probing each mirror. Unknown paths still need checking:
-      // a canonical room may have removed this user and must shadow the mirror.
+      const canonicalPaths=new Set((canonical.results||[]).map(row=>row.path));
+      let legacy;
+      if (!canonicalPaths.size) {
+        // With no canonical membership there can be no mirror to skip; retain
+        // the single legacy join, avoiding extra work for historical accounts.
+        legacy=await db.prepare(`SELECT a.* FROM friendbook_cf_chat_participants m ${hint}
+          JOIN friendbook_cf_documents a ON a.path=m.chat_path
+          WHERE m.participant_uid=? AND m.source=0`).bind(uid).all();
+      } else {
+        // Read only membership keys first. Most are mirrors of the canonical
+        // rows already obtained, and need no legacy document lookup at all.
+        const memberships=await db.prepare(`SELECT m.chat_path AS path FROM friendbook_cf_chat_participants m ${hint}
+          WHERE m.participant_uid=? AND m.source=0`).bind(uid).all();
+        const unknown=[...new Set((memberships.results||[]).map(row=>row.path).filter(path=>!canonicalPaths.has(path)))];
+        legacy={results:[]};
+        for(let offset=0;offset<unknown.length;offset+=90) {
+          const paths=unknown.slice(offset,offset+90);
+          const page=await db.prepare(`SELECT * FROM friendbook_cf_documents WHERE path IN (${paths.map(()=>'?').join(',')})`)
+            .bind(...paths).all();
+          legacy.results.push(...(page.results||[]));
+        }
+      }
+      // A canonical room can have removed this user and still shadow a stale
+      // legacy membership. Unknown paths must be checked before the ACL.
       await markWindowShadows(db,canonical,legacy);
       return [...(canonical?.results || []).map(row=>({...row,[canonicalRootSnapshot]:true})), ...(legacy?.results || []).filter(row=>!row.shadowed).map(appDocumentToFirestoreRow).filter(Boolean)];
     } catch (error) {

@@ -1302,12 +1302,16 @@ test('chat membership windows reuse canonical rooms and still hide stale legacy 
   for(let i=0;i<120;i++){const id=`mirror${i}`;addCurrent(id,['alice','bob']);addOld(id,['alice','bob']);}
   addOld('removed',['alice','bob']);addCurrent('removed',['alice','carol']);
   addOld('historical',['alice','bob']);
+  addOld('legacySolo',['alice','zoe']);
   for(let i=0;i<91;i++)addOld(`old${i}`,['alice','bob']);
-  // A bad derived-membership row cannot authorize a caller.
+  // Bad derived-membership rows, including a dangling path and forged legacy
+  // membership, cannot authorize a caller or make a missing room appear.
   sql.exec("INSERT INTO friendbook_cf_chat_participants VALUES ('eve','chats/mirror0',1)");
-  const checked=[],membershipPlans=[];
+  sql.exec("INSERT INTO friendbook_cf_chat_participants VALUES ('eve','chats/historical',0)");
+  sql.exec("INSERT INTO friendbook_cf_chat_participants VALUES ('bob','chats/missing',0)");
+  const checked=[],legacyFetches=[],membershipPlans=[];
   const db={prepare(q){const stmt=sql.prepare(q);return{bind(...args){return{
-    all:async()=>{if(q.includes('SELECT path FROM friendbook_cf_firestore_documents WHERE path IN ('))checked.push(args);if(q.includes('INDEXED BY idx_cf_chat_participant_source'))membershipPlans.push(...sql.prepare('EXPLAIN QUERY PLAN '+q).all(...args).map(row=>row.detail));return {results:stmt.all(...args)};},
+    all:async()=>{if(q.includes('SELECT path FROM friendbook_cf_firestore_documents WHERE path IN ('))checked.push(args);if(q.includes('SELECT * FROM friendbook_cf_documents WHERE path IN ('))legacyFetches.push(args);if(q.includes('INDEXED BY idx_cf_chat_participant_source'))membershipPlans.push(...sql.prepare('EXPLAIN QUERY PLAN '+q).all(...args).map(row=>row.detail));return {results:stmt.all(...args)};},
     first:async()=>stmt.get(...args)||null,run:async()=>stmt.run(...args)
   };}};}};
   const app=createWorker(async t=>t),env={DB:db,FIREBASE_PROJECT_ID:'test'};
@@ -1322,14 +1326,20 @@ test('chat membership windows reuse canonical rooms and still hide stale legacy 
   assert.deepEqual(new Set(checked.flat()),new Set(['chats/historical','chats/removed',...Array.from({length:91},(_,i)=>`chats/old${i}`)]));
   assert.equal(checked.length,2);
   assert.ok(checked.every(args=>args.length<=90));
+  assert.deepEqual(new Set(legacyFetches.flat()),new Set([...checked.flat(),'chats/missing']));
+  assert.ok(legacyFetches.every(args=>args.length<=90));
+  assert.ok(!legacyFetches.flat().some(path=>path.startsWith('chats/mirror')));
   assert.deepEqual(await list('eve'),[]);
   // Existing deployments without the new index have just used the fallback.
-  // With migration 0073, both joins seek the caller AND the selected store.
+  // With migration 0073, both membership reads seek the caller AND store.
   sql.exec(readFileSync(new URL('../migrations/0073_chat_membership_source_seek.sql',import.meta.url),'utf8'));
   const indexed=await list('bob');
   assert.deepEqual(indexed.map(d=>d.id).sort(),rooms.map(d=>d.id).sort());
   assert.equal(membershipPlans.filter(p=>/SEARCH m USING COVERING INDEX idx_cf_chat_participant_source \(participant_uid=\? AND source=\?\)/.test(p)).length,2);
   assert.deepEqual(await list('eve'),[]);
+  const fetchCount=legacyFetches.length;
+  assert.deepEqual((await list('zoe')).map(d=>d.id),['legacySolo']);
+  assert.equal(legacyFetches.length,fetchCount); // no canonical membership: old join path
   sql.close();
 });
 
