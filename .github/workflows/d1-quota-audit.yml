@@ -1,5 +1,5 @@
 # Analytics only: no D1 SQL or synthetic app traffic; distinguish query and schema shapes.
-# Read delayed query shapes after the normal-activity samples.
+# Read delayed query shapes during the continuing whole-app quota investigation.
 # Adaptive aggregates are sampled query analytics, not account-wide billed usage.
 name: Read-only D1 quota audit
 on:
