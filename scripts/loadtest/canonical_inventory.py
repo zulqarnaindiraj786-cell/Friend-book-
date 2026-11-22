@@ -38,12 +38,30 @@ def inspect(query):
             'rows_read': read}
 
 
+def inspect_users(query):
+    rows, meta = query('''WITH sample AS MATERIALIZED (
+      SELECT path FROM friendbook_cf_documents INDEXED BY idx_friendbook_cf_documents_collection_updated
+      WHERE collection='users' LIMIT 1001
+    ) SELECT COUNT(*) AS sampled, COALESCE(SUM(CASE WHEN f.path IS NULL THEN 1 ELSE 0 END),0) AS legacy_only
+      FROM sample LEFT JOIN friendbook_cf_firestore_documents f ON f.path=sample.path''', ())
+    if len(rows) != 1:
+        raise ValueError('Invalid user inventory')
+    sampled, missing = rows[0].get('sampled'), rows[0].get('legacy_only')
+    read = meta.get('rows_read')
+    if (type(sampled) is not int or type(missing) is not int or not 0 <= missing <= sampled <= 1001
+            or type(read) is not int or read < 0):
+        raise ValueError('Invalid user inventory')
+    return {'sampled': sampled, 'legacy_only': missing, 'truncated': sampled == 1001, 'rows_read': read}
+
+
 def main():
+    import sys
+    users_only = '--users' in sys.argv
     try:
-        result = inspect(remote_query)
+        result = inspect_users(remote_query) if users_only else inspect(remote_query)
     except (ValueError, KeyError, TypeError, urllib.error.URLError, TimeoutError):
         raise SystemExit('Inventory unavailable; no changes made.')
-    print('::notice:: Bounded document inventory ' + json.dumps(result, sort_keys=True))
+    print('::notice:: Bounded ' + ('user' if users_only else 'document') + ' inventory ' + json.dumps(result, sort_keys=True))
     if result['truncated']:
         print('::warning:: Inventory is truncated; it does not prove complete coverage.')
 

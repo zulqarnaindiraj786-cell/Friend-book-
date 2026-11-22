@@ -21,5 +21,5 @@ jobs:
         run: |
           set -e
           python3 scripts/loadtest/d1_account_usage_analytics.py --notification-inspection-budget
-          python3 -m scripts.loadtest.canonical_inventory
+          python3 -m scripts.loadtest.canonical_inventory --users
           python3 scripts/loadtest/d1_account_usage_analytics.py --notification-inspection-budget
