@@ -51,8 +51,8 @@ def within_fcm_metadata_budget(result):
 
 
 def within_user_backfill_budget(result):
-    # Only for the separately tested, atomic at-most-two user or friend-request
-    # promotion. Users have strict follower/following fanout caps. Delayed
+    # Only for separately tested, atomic at-most-two user, friend-request or
+    # friendship promotions. Users have strict follower/following fanout caps. Delayed
     # analytics are not a live quota balance and do not predict billing.
     return result['rowsRead'] <= 3_000_000 and result['rowsWritten'] <= 60_000
 

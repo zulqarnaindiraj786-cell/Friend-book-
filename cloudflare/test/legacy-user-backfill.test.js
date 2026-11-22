@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {DatabaseSync} from 'node:sqlite';
 import {readFileSync} from 'node:fs';
 import {readPlan, promote, statement, planCandidate, classifyRoot, previewRoots} from '../../scripts/loadtest/backfill_legacy_users.mjs';
-import {canReadFriendRequest, canDeleteFriendRequest} from '../social-access.js';
+import {canReadFriendRequest, canDeleteFriendRequest, friendshipReadView} from '../social-access.js';
 
 function fixture(t) {
  const db=new DatabaseSync(':memory:');t.after(()=>db.close());
@@ -95,4 +95,22 @@ test('friend request promotion is bounded, guarded, and retains read/delete auth
  assert.deepEqual(await promote(query,refreshed),{before:2,inserted:2,after:0});
  assert.equal(db.prepare('SELECT count(*) n FROM friendbook_cf_documents').get().n,2);
  await assert.rejects(readPlan(query,'messages'),/unsupported collection/);
+});
+
+test('friendship promotion keeps membership authorization and guards source edits',async t=>{
+ const {db,query}=fixture(t);
+ const data={id:'a',participants:['alice','bob'],createdAt:10};
+ db.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)').run('friends/a','friends','a','alice',JSON.stringify(data),1);
+ const plan=await readPlan(query,'friends'), old={...JSON.parse(plan.planned[0].row.document_json)};
+ delete old.id; // Legacy Firestore projection removed the redundant id.
+ const promoted=JSON.parse(plan.planned[0].row.document_json);
+ for(const uid of ['alice','bob','stranger']) {
+   const prior=friendshipReadView(uid,old), next=friendshipReadView(uid,promoted);
+   assert.equal(prior===null,next===null);
+   if (prior) { assert.deepEqual({...prior,id:'a'},next); }
+ }
+ db.prepare('DELETE FROM friendbook_cf_documents WHERE path=?').run('friends/a');
+ const action=statement(plan.planned);
+ assert.equal((await query(action.sql,action.params)).results.length,0);
+ assert.equal(db.prepare('SELECT count(*) n FROM friendbook_cf_firestore_documents').get().n,0);
 });

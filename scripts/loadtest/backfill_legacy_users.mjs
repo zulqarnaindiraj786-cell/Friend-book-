@@ -16,7 +16,7 @@ const CANDIDATES = `SELECT l.path,l.collection,l.doc_id,l.owner_uid,l.document_j
  LIMIT 3`;
 const FIELDS = ['path','parent_path','collection_id','doc_id','owner_uid','document_json','create_time','update_time'];
 
-const PROMOTION_COLLECTIONS = new Set(['users','friend_requests']);
+const PROMOTION_COLLECTIONS = new Set(['users','friend_requests','friends']);
 export function planCandidate(source, collection='users') {
   if (!PROMOTION_COLLECTIONS.has(collection) || !source || source.collection !== collection || typeof source.path !== 'string'
       || source.path !== `${collection}/${source.doc_id}` || !source.doc_id || source.doc_id.includes('/')
@@ -173,7 +173,8 @@ if (process.argv[1] && import.meta.url===new URL(`file://${process.argv[1]}`).hr
       console.log('::notice:: Moving read-only root preview '+JSON.stringify(result));
       console.log('::warning:: Root preview does not verify nested-chat message coverage or enable cutover.');
     } else {
-      const collection=process.argv.includes('--friend-requests')?'friend_requests':'users';
+      if (process.argv.includes('--friend-requests') && process.argv.includes('--friends')) throw Error('unsupported collection');
+      const collection=process.argv.includes('--friend-requests')?'friend_requests':process.argv.includes('--friends')?'friends':'users';
       const plan=await readPlan(remote,collection);
       console.log(`::notice:: Verified ${collection} candidate plan: sampled=${plan.sampled}, legacy_only_before=${plan.legacy_only}`);
       if (process.argv.includes('--apply')) {
