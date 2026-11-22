@@ -2,15 +2,13 @@ import { CallRelay } from './cloudflare/call-relay.js';
 export { CallRelay };
 import { openLiveRelay, LiveRelay } from './cloudflare/live-relay.js';
 export { LiveRelay };
-import { runMaintenance } from './cloudflare/maintenance.js';
 import { viewCounters } from './cloudflare/view-counters.js';
 import { contentReadAllowed } from './cloudflare/document-policy.js';
 import { uploadVideo, uploadPhoto, uploadPhoneVideo } from './cloudflare/video-r2.js';
 import { androidRelease } from './cloudflare/android-release.js';
 import { interactions } from './cloudflare/interactions.js';
 import { appDocuments, requestAccountReads, saveProfileProjection } from './cloudflare/app-documents.js';
-import { drainBroadcastPush } from './cloudflare/fcm-push.js';
-import { firestoreDocuments, resumeOfficialBroadcasts, readProfileMutationSnapshot } from './cloudflare/firestore-documents.js';
+import { firestoreDocuments, readProfileMutationSnapshot } from './cloudflare/firestore-documents.js';
 import { fcmGateway, pushIncomingCall } from './cloudflare/fcm-push.js';
 import { createRemoteJWKSet, jwtVerify } from 'jose';
 import { accountStatus } from './cloudflare/account-access.js';
@@ -186,9 +184,8 @@ export function createWorker(verify = verifyFirebaseToken) {
   };
 }
 const app = createWorker();
-export default {...app, scheduled(controller, env, ctx) {
-  if (controller.cron === '* * * * *') {
-    ctx.waitUntil(resumeOfficialBroadcasts(env));
-    ctx.waitUntil(drainBroadcastPush(env));
-  } else ctx.waitUntil(runMaintenance(env, {broadcastPush:null}));
-}};
+// No cron triggers are configured and no scheduled handler is exported, so the
+// Worker runs only in response to requests. Notification push is delivered by
+// the write path; retiring the cron also stops the 15-minute R2 cleanup retry
+// and the official-broadcast pump (see docs/testing/cron-removal.md).
+export default app;

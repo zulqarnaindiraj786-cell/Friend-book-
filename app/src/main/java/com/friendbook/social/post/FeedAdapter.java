@@ -2046,7 +2046,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             LinearLayout col = (LinearLayout) itemView;
             col.setLayoutParams(new RecyclerView.LayoutParams(-1, -2));
 
-            // 1. Authentic friendbook Composer Row FIRST (Avatar+Green Dot · "What's on your mind?" · Photo)
+            // 1. Authentic friendbook Composer Row FIRST (Avatar · "What's on your mind?" · Photo)
             LinearLayout row = Ui.row(c);
             row.setBackgroundColor(Ui.card(c));
             row.setGravity(Gravity.CENTER_VERTICAL);
@@ -2056,11 +2056,6 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             int s = Ui.dp(c, 42);
             composeAvatar = new ImageView(c);
             avWrap.addView(composeAvatar, new FrameLayout.LayoutParams(s, s));
-            View onlineDot = new View(c);
-            onlineDot.setBackground(Ui.roundStroke(c, Ui.GREEN, 7, Ui.card(c), 2));
-            int ds = Ui.dp(c, 13);
-            FrameLayout.LayoutParams dlp = new FrameLayout.LayoutParams(ds, ds, Gravity.BOTTOM | Gravity.END);
-            avWrap.addView(onlineDot, dlp);
             avWrap.setOnClickListener(v -> {
                 if (host != null && Fb.uid() != null) host.openProfile(Fb.uid());
             });

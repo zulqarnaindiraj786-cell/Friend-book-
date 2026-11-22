@@ -343,9 +343,6 @@ public class SettingsActivity extends Activity {
                 "Who can tag: " + (me != null ? me.tagPrivacy : "Everyone")
                         + (me != null && me.tagReviewEnabled ? " · Tag review ON" : ""),
                 this::taggingDialog));
-        body.addView(rowI(Icons.ACTIVE, "Active status is off",
-                "Online green dot and last seen are disabled for everyone",
-                () -> Ui.toast(this, "Active status is off for everyone")));
         body.addView(switchRowI(Icons.READ_RECEIPTS, "Read receipts in Messenger (Seen ✓✓)",
                 Prefs.readReceipts(this), (btn, on) -> Prefs.setReadReceipts(this, on)));
         body.addView(rowI(Icons.BAN, "Blocking",

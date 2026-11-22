@@ -46,10 +46,6 @@ dataset = "friendbook_views"
 binding = "VIDEO_BUCKET"
 bucket_name = "friendbook"
 
-[triggers]
-# Expires transient realtime state and retries temporary Cloudinary cleanup; never deletes R2 videos.
-crons = ["*/15 * * * *", "* * * * *"]
-
 [[durable_objects.bindings]]
 name = "LIVE_RELAY"
 class_name = "LiveRelay"

@@ -709,22 +709,6 @@ public class Ui {
         }
     }
 
-    public static View onlineDot(Context c) {
-        final int d = dp(c, 13);
-        View v = new View(c) {
-            @Override
-            protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
-                setMeasuredDimension(d, d);
-            }
-        };
-        GradientDrawable g = circle(GREEN);
-        g.setSize(d, d);
-        g.setStroke(dp(c, 2), card(c));
-        v.setBackground(g);
-        v.setLayoutParams(new ViewGroup.LayoutParams(d, d));
-        return v;
-    }
-
     /** Split a list of docs into chunks for whereIn queries (max 10 per query). */
     public static <T> List<List<T>> chunks(List<T> in, int size) {
         List<List<T>> out = new ArrayList<>();

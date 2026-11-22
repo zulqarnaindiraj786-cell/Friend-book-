@@ -127,7 +127,7 @@ export async function readD1DocumentFields(db, path) {
   return fields;
 }
 
-// Only server-verified friendship transitions can authorize private content or presence.
+// Only server-verified friendship transitions can authorize private content.
 // Legacy records are not trusted merely because their document ID looks correct.
 export async function hasD1Friendship(db, uidA, uidB) {
   if (!db || !validSegment(uidA) || !validSegment(uidB) || uidA===uidB) return null;

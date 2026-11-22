@@ -1008,12 +1008,12 @@ async function mutateProfile(db, uid, path, body, method, now, profileRow) {
       let next=method==='PATCH' ? applyUpdate(before,fields,now)
         : applySet(before,body?.data || {},Boolean(body?.merge),body?.mergeFields || null,now);
       if (!profileWriteAllowed(path,uid,before,next)) return json({error:'Forbidden'},403);
-      // Old Android clients send these exact five fields on each presence
-      // transition/heartbeat. Ignore only that shape when online status is off;
-      // preserve an actual visibility preference change and all mixed edits.
-      const presenceKeys=['isOnline','isActive','showActiveStatus','lastSeenMs','lastSeen'];
-      if (method==='PATCH' && existing && Object.keys(fields).length===presenceKeys.length
-          && Object.keys(fields).every(key=>presenceKeys.includes(key))
+      // Legacy Android clients may send these exact five status fields together.
+      // Ignore only that shape; preserve an actual visibility preference change
+      // and every mixed edit. The current app sends none of them.
+      const legacyStatusFields=['isOnline','isActive','showActiveStatus','lastSeenMs','lastSeen'];
+      if (method==='PATCH' && existing && Object.keys(fields).length===legacyStatusFields.length
+          && Object.keys(fields).every(key=>legacyStatusFields.includes(key))
           && ['isOnline','isActive','showActiveStatus'].every(key=>typeof fields[key]==='boolean')
           && Number.isSafeInteger(fields.lastSeenMs) && fields.lastSeen?.__fieldValue==='serverTimestamp') {
         if (before.showActiveStatus===fields.showActiveStatus) return json(rowToDocument(existing));

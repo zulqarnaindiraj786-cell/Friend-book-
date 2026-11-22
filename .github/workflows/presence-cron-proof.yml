@@ -1,0 +1,124 @@
+name: Presence and cron removal proof
+on:
+  workflow_dispatch:
+  push:
+    branches: ['arena/7c7ddb7b-friend-book']
+    paths: ['.github/workflows/presence-cron-proof.yml']
+permissions:
+  contents: read
+jobs:
+  artifact:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[presence-cron-proof]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.11.1
+      - name: Install Android SDK 36
+        run: |
+          set -euo pipefail
+          SDKM="$(command -v sdkmanager || find "$ANDROID_HOME/cmdline-tools" -type f -path '*/bin/sdkmanager' | sort -V | tail -1)"
+          "$SDKM" 'platforms;android-36' 'build-tools;36.0.0'
+      - name: Build debug APK
+        run: gradle :app:assembleDebug --no-daemon --console=plain
+      - name: Assert the compiled APK has no presence endpoint or online-dot code
+        run: |
+          set -euo pipefail
+          apk=app/build/outputs/apk/debug/app-debug.apk
+          unzip -o -q "$apk" -d apk-contents
+          # Case-insensitive scan of every dex string pool; must be zero.
+          hits=$(grep -a -i -c 'presence' apk-contents/classes*.dex | awk -F: '{s+=$2}END{print s+0}')
+          echo "::notice::presence strings in compiled dex: $hits"
+          test "$hits" -eq 0
+          ! grep -a -q 'onlineDot' apk-contents/classes*.dex
+      - name: Assert the deployable Worker config has no cron schedule
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          npx --yes wrangler@4.157.0 deploy --dry-run --outdir dist-worker > dry-run.log 2>&1
+          cat dry-run.log
+          if grep -qi 'cron' dry-run.log; then echo '::error::dry run reports a cron trigger'; exit 1; fi
+          ! grep -q '\[triggers\]' wrangler.toml
+          node -e "const c=require('fs').readFileSync('wrangler.toml','utf8');if(/\[triggers\]/m.test(c))process.exit(1)"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: FriendBook-presence-cron-debug-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
+  logs:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[presence-cron-proof]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Count presence requests and cron invocations for about two minutes
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: 92f3d04598822de2e49e14561218d090
+        run: |
+          python3 - <<'PY'
+          import subprocess,select,time,json,collections,os,signal
+          p=subprocess.Popen(['npx','--yes','wrangler@4.157.0','tail','rough-firefly-dd7b','--format','json'],
+                             stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,start_new_session=True)
+          deadline=time.monotonic()+125
+          buffer='';decoder=json.JSONDecoder();events=0;http=0;presence_lines=0;non_http=0
+          status=collections.Counter()
+          def handle(obj):
+            global events,http,presence_lines,non_http
+            if isinstance(obj,list):
+              for item in obj: handle(item)
+              return
+            if not isinstance(obj,dict): return
+            events+=1
+            details=obj.get('event') or {}
+            if not isinstance(details,dict): details={}
+            request=details.get('request')
+            if isinstance(request,dict) and isinstance(request.get('url'),str):
+              http+=1
+              url=request['url']
+              if '/v1/presence' in url or 'presence' in url.lower(): presence_lines+=1
+              status[(request.get('method',''), str((details.get('response') or {}).get('status'))) ]+=1
+            else:
+              # Cron/scheduled invocations arrive without an inbound HTTP request.
+              non_http+=1
+            if 'presence' in json.dumps(obj).lower(): presence_lines+=1
+          try:
+            while time.monotonic()<deadline:
+              r,_,_=select.select([p.stdout],[],[],min(1,max(0,deadline-time.monotonic())))
+              if not r:
+                if p.poll() is not None: break
+                continue
+              chunk=os.read(p.stdout.fileno(),65536)
+              if not chunk: break
+              buffer+=chunk.decode('utf-8','replace')
+              while buffer:
+                starts=[i for i in (buffer.find('{'),buffer.find('[')) if i>=0]
+                if not starts: buffer='';break
+                buffer=buffer[min(starts):]
+                try: obj,end=decoder.raw_decode(buffer)
+                except ValueError:
+                  if len(buffer)>1048576: buffer=''
+                  break
+                buffer=buffer[end:];handle(obj)
+          finally:
+            try: os.killpg(p.pid,signal.SIGTERM)
+            except ProcessLookupError: pass
+            try: p.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+              os.killpg(p.pid,signal.SIGKILL);p.wait()
+          print('::notice::'+json.dumps({'window_seconds':120,'events':events,'http_events':http,
+              'presence_related_events':presence_lines,'non_http_cron_events':non_http,
+              'status_mix':[{'method':k[0],'status':k[1],'count':v} for k,v in sorted(status.items()) if v>=3]}))
+          if not events: print('::warning::No parseable tail events; do not infer absence of traffic.')
+          if presence_lines: print('::error::Presence-related traffic is still visible in production logs.')
+          if non_http: print('::warning::Cron invocations still appear until the Worker is uploaded without [triggers].')
+          PY
