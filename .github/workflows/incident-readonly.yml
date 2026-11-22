@@ -33,3 +33,21 @@ jobs:
           meta=rows[0].get('meta') or {}
           print('::notice::Bounded D1 read succeeded; rows_read=',meta.get('rows_read'),'rows_written=',meta.get('rows_written'))
           PY
+      - name: Read aggregate Worker usage and invocation errors
+        env:
+          TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          python3 - <<'PY'
+          import datetime as dt,json,os,urllib.request,sys
+          now=dt.datetime.now(dt.timezone.utc)
+          fmt=lambda t:t.strftime('%Y-%m-%dT%H:%M:%SZ')
+          for label,start in [('utc_day',now.replace(hour=0,minute=0,second=0,microsecond=0)),('last_hour',now-dt.timedelta(hours=1))]:
+            q='''{viewer {accounts(filter:{accountTag:"92f3d04598822de2e49e14561218d090"}) {workersInvocationsAdaptive(limit:1000,filter:{datetime_geq:"%s",datetime_leq:"%s"}) {dimensions {scriptName status} sum {requests errors subrequests}}}}}'''%(fmt(start),fmt(now))
+            req=urllib.request.Request('https://api.cloudflare.com/client/v4/graphql',data=json.dumps({'query':q}).encode(),headers={'Authorization':'Bearer '+os.environ['TOKEN'],'Content-Type':'application/json'})
+            try:
+              with urllib.request.urlopen(req,timeout=30) as r: body=json.load(r)
+              if body.get('errors'): print('::warning::Worker analytics unavailable:',json.dumps([x.get('message') for x in body['errors']]));continue
+              groups=body['data']['viewer']['accounts'][0]['workersInvocationsAdaptive']
+              print('::notice::Worker analytics',label,'time',fmt(now),json.dumps(groups))
+            except Exception as e: print('::warning::Worker analytics unavailable:',type(e).__name__)
+          PY
