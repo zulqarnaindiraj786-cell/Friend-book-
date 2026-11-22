@@ -1,0 +1,15 @@
+# Bounded realtime presence maintenance
+
+## Problem and implementation
+
+The fifteen-minute cleanup formerly searched all expired sessions for up to 100 *deletable* rows. A retained last session per user is essential to prevent older legacy presence/visibility from resurfacing, but a large population of these rows can be re-examined on every run. This is a structural risk; the current production row count and contribution to the reported spike have not been measured.
+
+The new sweep examines at most 100 expired rows per invocation (including rows which must remain). It checkpoints the last timestamp/SQLite rowid in a single small R2 object and wraps at the end. A fresh indexed D1 DELETE rechecks both expiry and the existence of a newer/tie-winning session at execution time; it cannot deliberately delete a user's final session. Updates and inserted rows behind the cursor are considered after wrap. The checkpoint contains only timestamp and rowid, never UIDs, profile data or presence values; the existing bucket may be publicly served, so it should not be assumed private. The code touches no video or counter keys. Missing/corrupt/unavailable R2 defers presence cleanup and reports a sanitized maintenance error rather than reverting to an unbounded scan; typing cleanup remains independent. A failed checkpoint write or overlapping cron may repeat work but the guarded deletion remains safe. This is not an atomic lock; regressions in overlapping checkpoint writes can repeat pages.
+
+At the configured fifteen-minute cadence, the normal maximum is 96 R2 GETs and 96 PUTs per day (about 2,976 each in 31 days), one tiny object, plus bounded D1 queries. This adds R2 operations, whose account-wide free allowance is shared with all other R2 usage; it does not guarantee the free tier will never be exhausted. If more than roughly 9,600 old rows arrive per day, the sweep may fall behind; a single sweep through 5,000 retained rows takes roughly 13 hours, not one run. Failure alerts and cleanup backlog need observation. No schema changes or backfill are required.
+
+## Local verification and limits
+
+On a simplified Miniflare D1 fixture with 5,000 old single-session users, the prior presence-only deletion reports 15,001 rows read and zero rows written. The new first and second whole realtime-maintenance invocations each report 602 rows read and zero written, including the typing query. This is synthetic metadata, not live billing or an estimate of this account's savings; other data distributions may differ. Separate SQLite tests exercise multi-device retention and ties, full-sweep result equivalence, indexed cursor continuation, wrap and late rows, concurrent runs, renewal during deletion, rowid reuse, R2/D1 failure and independent typing cleanup. Query plans and fixture results are not proof of production performance.
+
+The optimization does not disable normal presence, privacy, chat, feeds, likes, comments or notifications. Production deploy and aggregate quota observation are separate checks; even after deployment neither the root cause of the reported burst nor capacity for 3–4k active users is established.

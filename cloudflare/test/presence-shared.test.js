@@ -8,7 +8,7 @@ function fixture() {
   const sql=new DatabaseSync(':memory:');
   for (const file of ['0010_additive_presence_realtime.sql','0011_additive_app_documents.sql','0014_additive_firestore_documents.sql','0031_presence_sessions.sql','0033_typing_sessions.sql','0064_presence_read_seeks.sql'])
     sql.exec(readFileSync(new URL(`../migrations/${file}`,import.meta.url),'utf8'));
-  const db=()=>({prepare(q){const s=sql.prepare(q);return{bind(...args){return{run:async()=>s.run(...args),first:async()=>s.get(...args)||null,all:async()=>({results:s.all(...args)})};}};}});
+  const db=()=>({prepare(q){const s=sql.prepare(q);return{bind(...args){return{run:async()=>({success:true,meta:{changes:Number(s.run(...args).changes)}}),first:async()=>s.get(...args)||null,all:async()=>({success:true,results:s.all(...args)})};}};}});
   return {sql,db};
 }
 
@@ -108,14 +108,15 @@ test('scheduled maintenance prunes bounded expired rows and retains the presence
   const typing=sql.prepare('INSERT INTO friendbook_cf_typing_sessions VALUES (?,?,?,?,?)');
   for (let i=0;i<101;i++) typing.run('room','alice',String(i),1,1);
   typing.run('room','bob','fresh',1,now);
-  const alarms=[];
-  await runMaintenance({DB:db()},{now,broadcastPush:async()=>{},videoCleanup:async()=>{throw new Error('private details');},report:v=>alarms.push(JSON.parse(v))});
+  const alarms=[];let checkpoint=null;
+  const bucket={async get(){return checkpoint===null?null:{size:checkpoint.length,async json(){return JSON.parse(checkpoint);}};},async put(key,body){checkpoint=body;}};
+  await runMaintenance({DB:db(),VIDEO_BUCKET:bucket},{now,broadcastPush:async()=>{},videoCleanup:async()=>{throw new Error('private details');},report:v=>alarms.push(JSON.parse(v))});
   assert.deepEqual(alarms,[{event:'friendbook.maintenance_failed',job:'temporary-video'}]);
   assert.equal(sql.prepare('SELECT COUNT(*) AS n FROM friendbook_cf_typing_sessions').get().n,2);
   assert.equal(sql.prepare('SELECT COUNT(*) AS n FROM friendbook_cf_presence_sessions').get().n,2);
   assert.equal((await readPresence(db(),'alice',now)).online,true);
   assert.deepEqual(await readPresence(db(),'bob',now),{uid:'bob',online:false,lastSeen:0});
-  await runMaintenance({DB:db()},{now,broadcastPush:async()=>{},videoCleanup:async()=>{},report:()=>assert.fail('unexpected maintenance error')});
+  await runMaintenance({DB:db(),VIDEO_BUCKET:bucket},{now,broadcastPush:async()=>{},videoCleanup:async()=>{},report:()=>assert.fail('unexpected maintenance error')});
   assert.equal(sql.prepare('SELECT COUNT(*) AS n FROM friendbook_cf_typing_sessions').get().n,1);
   assert.equal(sql.prepare('SELECT COUNT(*) AS n FROM friendbook_cf_typing_sessions WHERE updated_at=?').get(now).n,1);
   sql.close();
