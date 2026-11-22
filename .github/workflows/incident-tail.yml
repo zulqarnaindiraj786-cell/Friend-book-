@@ -1,4 +1,4 @@
-# Privacy-preserving two-minute sample during reported normal activity; no URLs, headers, identities, bodies or raw events.
+# Privacy-preserving repeat-pattern sample; never output URLs, targets, identities, headers, bodies or raw events.
 name: Incident aggregate Worker response sample
 on:
   push:
@@ -23,9 +23,9 @@ jobs:
           python3 - <<'PY'
           import subprocess,select,time,json,urllib.parse,collections,os,signal
           p=subprocess.Popen(['npx','--yes','wrangler@4.157.0','tail','rough-firefly-dd7b','--format','json'],stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,start_new_session=True)
-          counts=collections.Counter();methods=collections.Counter();write_roots=collections.Counter();deadline=time.monotonic()+135;buffer='';decoder=json.JSONDecoder();objects=0
+          counts=collections.Counter();methods=collections.Counter();write_roots=collections.Counter();denied_targets=collections.Counter();target_overflow=0;deadline=time.monotonic()+135;buffer='';decoder=json.JSONDecoder();objects=0
           def handle(event):
-            global objects
+            global objects, target_overflow
             if isinstance(event,list):
               for item in event: handle(item)
               return
@@ -60,6 +60,12 @@ jobs:
             if type(status) is not int: status=0
             counts[(route,status)]+=1
             methods[(route,method if method in ('GET','POST','PUT','PATCH','DELETE') else 'other')]+=1
+            # Count target repetition only in memory. No path, token, identity,
+            # per-target count or reversible hash is ever printed or saved.
+            # A target may be requested by multiple actors; this is not a per-user count.
+            if route=='presence/contact' and status==403:
+              if path in denied_targets or len(denied_targets)<1000: denied_targets[path]+=1
+              else: target_overflow+=1
           try:
             while time.monotonic()<deadline:
               readable,_,_=select.select([p.stdout],[],[],min(1,max(0,deadline-time.monotonic())))
@@ -88,6 +94,8 @@ jobs:
           print('::notice::Aggregate live sample; no URLs, identities or bodies: '+json.dumps([{'route':k[0],'status':k[1],'count':v} for k,v in sorted(counts.items())]))
           common_methods=[{'route':k[0],'method':k[1],'count':v} for k,v in sorted(methods.items()) if v>=3]
           print('::notice::Request methods by allowlisted route (rare categories suppressed; not D1 costs): '+json.dumps({'categories':common_methods,'suppressed_requests':sum(v for v in methods.values() if v<3)}))
+          if sum(denied_targets.values())>=3:
+            print('::notice::Denied contact aggregate; target may be shared by multiple users: '+json.dumps({'requests':sum(denied_targets.values()),'distinct_targets':len(denied_targets),'requests_to_targets_with_3_or_more':sum(n for n in denied_targets.values() if n>=3),'overflow_requests':target_overflow}))
           common=[{'method':k[0],'root':k[1],'count':v} for k,v in sorted(write_roots.items()) if v>=3]
           rare=sum(v for v in write_roots.values() if v<3)
           print('::notice::Document mutation requests by allowlisted root (rare categories suppressed; not database writes): '+json.dumps({'categories':common,'suppressed_requests':rare}))
