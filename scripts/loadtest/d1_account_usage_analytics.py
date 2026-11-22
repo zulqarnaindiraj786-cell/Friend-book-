@@ -1,0 +1,61 @@
+#!/usr/bin/env python3
+"""Read-only account-wide daily D1 analytics. No app queries or database changes.
+
+These dashboard-source analytics can be delayed or adaptive and are not a
+transactional quota balance. Never use them alone to guarantee migration safety.
+"""
+import datetime as dt
+import json
+import os
+import urllib.error
+import urllib.request
+
+
+def make_query(day):
+    # No databaseId filter: totals include every D1 database in the account.
+    return '''query($account: String!, $day: Date!) {
+      viewer { accounts(filter: {accountTag: $account}) {
+        d1AnalyticsAdaptiveGroups(limit: 1, filter: {date_geq: $day, date_leq: $day}) {
+          sum { rowsRead rowsWritten }
+        }
+      } }
+    }''', {'account': '92f3d04598822de2e49e14561218d090', 'day': day}
+
+
+def parse(payload):
+    if payload.get('errors'):
+        raise ValueError('Analytics request rejected')
+    accounts = payload['data']['viewer']['accounts']
+    if len(accounts) != 1:
+        raise ValueError('Account analytics unavailable')
+    groups = accounts[0]['d1AnalyticsAdaptiveGroups']
+    if len(groups) != 1:
+        raise ValueError('Daily analytics unavailable')
+    values = groups[0]['sum']
+    if any(type(values.get(k)) is not int or values[k] < 0 for k in ('rowsRead', 'rowsWritten')):
+        raise ValueError('Invalid daily analytics')
+    return {'rowsRead': values['rowsRead'], 'rowsWritten': values['rowsWritten']}
+
+
+def main():
+    token = os.environ.get('CLOUDFLARE_API_TOKEN')
+    if not token:
+        raise SystemExit('Cloudflare token unavailable; no changes made.')
+    now = dt.datetime.now(dt.timezone.utc)
+    query, variables = make_query(now.date().isoformat())
+    req = urllib.request.Request('https://api.cloudflare.com/client/v4/graphql',
+        data=json.dumps({'query': query, 'variables': variables}).encode(),
+        headers={'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json'})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as response:
+            result = parse(json.load(response))
+    except (urllib.error.URLError, ValueError, TimeoutError, KeyError, TypeError):
+        raise SystemExit('Account analytics unavailable; no changes made.')
+    print('::notice:: Account-wide D1 daily analytics ' + json.dumps({
+        **result, 'utc_date': now.date().isoformat(), 'queried_at': now.isoformat()
+    }, sort_keys=True))
+    print('::notice:: Analytics may be delayed/adaptive; this is not a guaranteed live quota balance.')
+
+
+if __name__ == '__main__':
+    main()
