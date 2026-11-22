@@ -17,4 +17,4 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Per-collection legacy-only coverage
-        run: python3 scripts/loadtest/verify_root_backfill.py
+        run: python3 -m scripts.loadtest.verify_root_backfill

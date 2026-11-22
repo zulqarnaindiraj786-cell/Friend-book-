@@ -54,11 +54,11 @@ jobs:
           exit $status
       - name: Read-only per-collection coverage check
         if: always() && contains(github.event.head_commit.message, '[legacy-roots-backfill]')
-        run: python3 scripts/loadtest/verify_root_backfill.py
+        run: python3 -m scripts.loadtest.verify_root_backfill
       - name: Whole-table read-only inventory (reporting only)
         continue-on-error: true
         if: always() && contains(github.event.head_commit.message, '[legacy-roots-backfill]')
-        run: python3 scripts/loadtest/canonical_inventory.py --full
+        run: python3 -m scripts.loadtest.canonical_inventory --full
       - name: Account reserve after writing
         if: always()
         run: python3 scripts/loadtest/d1_account_usage_analytics.py --root-backfill-budget
