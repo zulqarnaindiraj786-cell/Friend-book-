@@ -1,0 +1,81 @@
+# Step 2 of the owner's plan: back up the retired status tables, then apply
+# migration 0086 (DROP) in a run that deploys no Worker code. The DROP can only
+# start when the verified backup artifact exists in the same run.
+name: Retired tables backup and drop
+on:
+  workflow_dispatch:
+  push:
+    branches: ['arena/7c7ddb7b-friend-book']
+    paths:
+      - '.github/workflows/retired-backup-drop.yml'
+      - 'scripts/loadtest/backup_retired_tables.py'
+permissions:
+  contents: read
+concurrency:
+  group: friendbook-retired-drop
+  cancel-in-progress: false
+jobs:
+  backup-and-drop:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[retired-backup-drop]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: '92f3d04598822de2e49e14561218d090'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci --ignore-scripts
+      - name: Refuse to run unless 0086 is the only pending migration
+        run: |
+          set -uo pipefail
+          npx --yes wrangler@4.157.0 d1 migrations list friendbook-db --remote > pending.log 2>&1
+          status=$?
+          printf '%s' "$status" > pending-status.txt
+          cat pending.log
+          python3 - <<'PY'
+          import re, sys
+          text = open('pending.log', encoding='utf-8', errors='replace').read()
+          status = int(open('pending-status.txt').read().strip() or '1')
+          names = sorted(set(re.findall(r'(\d{4}_[A-Za-z0-9_]+\.sql)', text)))
+          print('::notice:: pending migrations: ' + str(names or 'none'))
+          if status != 0 or names != ['0086_remove_unused_status_tables.sql']:
+              print('::error:: This run only applies 0086 and nothing else; refusing.')
+              sys.exit(1)
+          PY
+      - name: Account reserve before the drop
+        run: python3 -m scripts.loadtest.d1_account_usage_analytics --retired-drop-budget
+      - name: Read-only preflight (aggregate counts, weight, references)
+        run: python3 -m scripts.loadtest.retired_table_preflight
+      - name: Back up every existing retired table and verify the backup
+        run: python3 -m scripts.loadtest.backup_retired_tables
+      - uses: actions/upload-artifact@v4
+        with:
+          name: retired-tables-backup-${{ github.run_id }}
+          path: retired-backup/
+          retention-days: 90
+          if-no-files-found: error
+      - name: Apply migration 0086 (DROP) without deploying any Worker code
+        run: |
+          set -uo pipefail
+          test -f retired-backup/manifest.json || { echo '::error::Backup manifest missing; no DROP attempted.'; exit 1; }
+          npx --yes wrangler@4.157.0 d1 migrations apply friendbook-db --remote --yes 2>&1 | tee drop.log
+          status=${PIPESTATUS[0]}
+          echo "::notice::migrations apply exit: $status"
+          exit $status
+      - name: Verify the live table list no longer contains them
+        run: python3 -m scripts.loadtest.verify_retired_drop
+      - name: Zero runtime references to the dropped tables
+        run: |
+          set -uo pipefail
+          hits=$(grep -rlE 'friendbook_cf_(presence|typing)' worker.js cloudflare/*.js 2>/dev/null || true)
+          if [ -n "$hits" ]; then
+            echo "::error::Runtime code still references a dropped table."
+            echo "$hits"
+            exit 1
+          fi
+          echo '::notice:: No Worker runtime file references a dropped table (migrations kept for history).'
+      - name: Account reserve after the drop
+        run: python3 -m scripts.loadtest.d1_account_usage_analytics --retired-drop-budget
