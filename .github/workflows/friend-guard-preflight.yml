@@ -16,7 +16,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Test bounds and aggregate privacy locally
-        run: python3 -m unittest discover -s scripts/tests -p 'test_friend_guard_index_preflight.py' -v
+        run: |
+          python3 -m unittest discover -s scripts/tests -p 'test_friend_guard_index_preflight.py' -v
+          python3 -m unittest discover -s scripts/tests -p 'test_d1_account_usage_analytics.py' -v
+      - name: Require conservative account analytics headroom before the D1 query
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: python3 scripts/loadtest/d1_account_usage_analytics.py --preflight-budget
       - name: Run bounded read-only aggregate (no app traffic or migrations)
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}

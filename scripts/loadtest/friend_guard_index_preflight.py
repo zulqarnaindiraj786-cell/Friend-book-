@@ -11,10 +11,10 @@ import os
 import urllib.error
 import urllib.request
 
-CAP = 2001
+CAP = 10001
 SQL = """
-WITH canonical AS (SELECT parent_path,document_json FROM friendbook_cf_firestore_documents LIMIT 2001),
-legacy AS (SELECT collection,document_json FROM friendbook_cf_documents LIMIT 2001),
+WITH canonical AS (SELECT parent_path,document_json FROM friendbook_cf_firestore_documents LIMIT 10001),
+legacy AS (SELECT collection,document_json FROM friendbook_cf_documents LIMIT 10001),
 cstats AS (SELECT COUNT(*) AS sampled,
   COALESCE(SUM(CASE WHEN parent_path='friends' THEN 1 ELSE 0 END),0) AS friends,
   COALESCE(SUM(CASE WHEN parent_path='friends' AND NOT json_valid(document_json) THEN 1 ELSE 0 END),0) AS invalid,

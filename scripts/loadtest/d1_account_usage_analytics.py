@@ -7,6 +7,7 @@ transactional quota balance. Never use them alone to guarantee migration safety.
 import datetime as dt
 import json
 import os
+import sys
 import urllib.error
 import urllib.request
 
@@ -37,6 +38,12 @@ def parse(payload):
     return {'rowsRead': values['rowsRead'], 'rowsWritten': values['rowsWritten']}
 
 
+def within_preflight_budget(result):
+    # Deliberately large margins for delayed analytics, sampling, normal activity
+    # and index work. This is still not a guaranteed live quota balance.
+    return result['rowsRead'] <= 3_500_000 and result['rowsWritten'] <= 60_000
+
+
 def main():
     token = os.environ.get('CLOUDFLARE_API_TOKEN')
     if not token:
@@ -55,6 +62,8 @@ def main():
         **result, 'utc_date': now.date().isoformat(), 'queried_at': now.isoformat()
     }, sort_keys=True))
     print('::notice:: Analytics may be delayed/adaptive; this is not a guaranteed live quota balance.')
+    if '--preflight-budget' in sys.argv and not within_preflight_budget(result):
+        raise SystemExit('Conservative preflight budget exceeded; no D1 SQL or migration attempted.')
 
 
 if __name__ == '__main__':
