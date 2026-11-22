@@ -41,7 +41,7 @@ def parse(payload):
 def within_preflight_budget(result):
     # Deliberately large margins for delayed analytics, sampling, normal activity
     # and index work. This is still not a guaranteed live quota balance.
-    return result['rowsRead'] <= 3_500_000 and result['rowsWritten'] <= 60_000
+    return result['rowsRead'] <= 3_000_000 and result['rowsWritten'] <= 50_000
 
 
 def main():

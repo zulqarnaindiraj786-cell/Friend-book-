@@ -17,9 +17,9 @@ class AccountUsageTests(unittest.TestCase):
         self.assertEqual(p.parse(payload), {'rowsRead': 10, 'rowsWritten': 3})
 
     def test_preflight_budget_has_reserve(self):
-        self.assertTrue(p.within_preflight_budget({'rowsRead': 3_500_000, 'rowsWritten': 60_000}))
-        self.assertFalse(p.within_preflight_budget({'rowsRead': 3_500_001, 'rowsWritten': 10}))
-        self.assertFalse(p.within_preflight_budget({'rowsRead': 10, 'rowsWritten': 60_001}))
+        self.assertTrue(p.within_preflight_budget({'rowsRead': 3_000_000, 'rowsWritten': 50_000}))
+        self.assertFalse(p.within_preflight_budget({'rowsRead': 3_000_001, 'rowsWritten': 10}))
+        self.assertFalse(p.within_preflight_budget({'rowsRead': 10, 'rowsWritten': 50_001}))
 
     def test_missing_or_invalid_analytics_is_not_treated_as_zero(self):
         with self.assertRaises(ValueError): p.parse({'errors': [{'message': 'rejected'}]})
