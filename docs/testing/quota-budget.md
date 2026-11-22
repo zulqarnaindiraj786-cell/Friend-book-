@@ -75,3 +75,9 @@ The production read-only follow-up (Actions run 44877309679) reported 2,258,129 
 | Profile and people lists | Request-local reuse, indexed recent profiles, and first picker request sized to the displayed page. Repeat unchanged heartbeat writes are skipped. | Real clients still on older Android polling behavior. |
 
 This is a code-path and representative test audit, not a claim that all possible production requests consume the minimum or that Free quota cannot be exhausted. Do not generate synthetic production traffic to fill the measurement gaps.
+
+### Reset-window baseline before consolidated deployment
+
+Read-only Cloudflare Analytics audit 44965096457 (UTC 2026-11-22 00:07) reported, for this database rather than a single device or the whole account, an adaptive daily aggregate of 39,288 rows read and 4,429 rows written. In the preceding 15 minutes its largest reported read shapes included notification page queries (15,616 reads / 244 executions and 7,776 / 243), friends (5,841 / 51), and point lookups (4,401 / 4,401). The two notification shapes may be parts of the same logical request and cannot be attributed to one installation from this report. Leading write shapes included canonical/legacy document inserts and social-guard deletion; the aggregates do not identify individual features. Sampling, different windows, and indexing prevent direct comparison to a dashboard screenshot or a causal claim. Investigate notification invalidations, clients and document writes with matched windows; do not remove correctness or authorization checks based on these aggregates alone.
+
+The pending Worker batch includes migrations 0068–0071, conditional writes and index changes. Local Worker, schema, migration and index-plan tests pass; actual D1 costs and user-visible behavior require post-deployment observation, not extrapolation from local SQLite or the baseline above. The deployment may itself use D1 write quota for migrations.
