@@ -859,7 +859,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
             profile.put("contactInfoPrivacy", "Only me");
             profile.put("friendsListPrivacy", "Public");
             profile.put("lookupPrivacy", "Everyone");
-            profile.put("isOnline", true);
+            profile.put("isOnline", false);
             profile.put("friendsCount", 0);
             profile.put("followers", new ArrayList<String>());
             profile.put("following", new ArrayList<String>());

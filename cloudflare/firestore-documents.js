@@ -1022,7 +1022,7 @@ export async function liveSocketCoversProfileHeartbeat(db,uid,before,next,fields
   } catch { return false; } // Pre-migration/missing session state uses the existing fallback.
 }
 
-async function mutateProfile(db, uid, path, body, method, now, profileRow) {
+async function mutateProfile(db, uid, path, body, method, now, profileRow, onlineStatusDisabled = false) {
   if (splitPath(path)[1] !== uid) return json({error:'Forbidden'},403);
   for (let attempt=0; attempt<4; attempt++) {
     try {
@@ -1035,9 +1035,20 @@ async function mutateProfile(db, uid, path, body, method, now, profileRow) {
       if (body.createOnly===true && existing) return json({error:'ALREADY_EXISTS'},409);
       const before=existing ? decodeValue(JSON.parse(existing.document_json)) : null;
       const fields=body?.fields || body?.data || body?.updates || {};
-      const next=method==='PATCH' ? applyUpdate(before,fields,now)
+      let next=method==='PATCH' ? applyUpdate(before,fields,now)
         : applySet(before,body?.data || {},Boolean(body?.merge),body?.mergeFields || null,now);
       if (!profileWriteAllowed(path,uid,before,next)) return json({error:'Forbidden'},403);
+      // Old Android clients send these exact five fields on each presence
+      // transition/heartbeat. Ignore only that shape when online status is off;
+      // preserve an actual visibility preference change and all mixed edits.
+      const presenceKeys=['isOnline','isActive','showActiveStatus','lastSeenMs','lastSeen'];
+      if (onlineStatusDisabled && method==='PATCH' && existing && Object.keys(fields).length===presenceKeys.length
+          && Object.keys(fields).every(key=>presenceKeys.includes(key))
+          && ['isOnline','isActive','showActiveStatus'].every(key=>typeof fields[key]==='boolean')
+          && Number.isSafeInteger(fields.lastSeenMs) && fields.lastSeen?.__fieldValue==='serverTimestamp') {
+        if (before.showActiveStatus===fields.showActiveStatus) return json(rowToDocument(existing));
+        next=applyUpdate(before,{showActiveStatus:fields.showActiveStatus},now);
+      }
       if(method==='PATCH' && (redundantProfileHeartbeat(before,next,fields,now)
           || await liveSocketCoversProfileHeartbeat(db,uid,before,next,fields,now)))return json(rowToDocument(existing));
       // A literal, unchanged PATCH does not need to rewrite canonical, mirror,
@@ -3319,7 +3330,7 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0, ct
     try { body = await request.json(); } catch { return json({ error: 'Invalid JSON' }, 400); }
     if (!body || typeof body !== 'object' || Array.isArray(body)) return json({error:'Invalid body'},400);
     if (splitPath(docPath).length===2 && splitPath(docPath)[0]==='users')
-      return await mutateProfile(db,uid,docPath,body,'PATCH',now,identity.profileRow);
+      return await mutateProfile(db,uid,docPath,body,'PATCH',now,identity.profileRow,env.ONLINE_STATUS_DISABLED === 'true');
     if (splitPath(docPath).length===2 && ['posts','reels'].includes(splitPath(docPath)[0]))
       return await mutatePost(db,uid,docPath,body,'PATCH',now);
     if (splitPath(docPath)[0] === 'payments') {

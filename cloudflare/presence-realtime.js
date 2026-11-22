@@ -98,6 +98,26 @@ export async function presenceRealtime(request, env, identity) {
   const uid = identity?.uid;
   if (!validId(uid)) return json({ error: 'Unauthorized' }, 401);
 
+  // Online status is separate from typing. Old clients get a stable offline
+  // answer and a non-retryable socket rejection, without session D1 access.
+  if (env.ONLINE_STATUS_DISABLED === 'true') {
+    if (path === '/v1/presence/socket') {
+      if (request.method !== 'GET') return json({error:'Method not allowed'},405);
+      return json({error:'Online status disabled'},403);
+    }
+    if (path === '/v1/presence/me') {
+      if (request.method !== 'GET') return json({error:'Method not allowed'},405);
+      return json({uid,online:false,lastSeen:0});
+    }
+    const disabledContact=/^\/v1\/presence\/contact\/([^/]+)$/.exec(path);
+    if (disabledContact) {
+      if (request.method !== 'GET') return json({error:'Method not allowed'},405);
+      let target; try {target=decodeURIComponent(disabledContact[1]);} catch {return json({error:'Invalid target'},400);}
+      if (!validId(target)) return json({error:'Invalid target'},400);
+      return json({uid:target,online:false,lastSeen:0});
+    }
+  }
+
   if (path === '/v1/presence/me') {
     if (request.method !== 'GET') return json({ error: 'Method not allowed' }, 405);
     try { return json(await readPresence(env.DB, uid, Date.now())); }

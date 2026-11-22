@@ -3272,6 +3272,31 @@ test('healthy socket saves redundant profile writes without suppressing fallback
  assert.equal(JSON.parse(row.document_json).showActiveStatus,false);
 });
 
+test('disabled online status suppresses old client heartbeat writes but preserves privacy and profile edits', async t=>{
+ const sql=new DatabaseSync(':memory:');t.after(()=>sql.close());
+ for(const ddl of [resourcesSchema,appSchema,schema,socialGuardSchema])sql.exec(ddl);
+ const now=Date.now(), profile={uid:'alice',displayName:'Alice',isOnline:true,isActive:true,showActiveStatus:true,lastSeenMs:100,lastSeen:{__type:'timestamp',millis:100}};
+ sql.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)').run('users/alice','users','users','alice','alice',JSON.stringify(profile),1,1);
+ sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)').run('users/alice','users','alice','alice',JSON.stringify(profile),1);
+ const db={prepare(q){const stmt=sql.prepare(q);return{bind(...args){return{run:async()=>stmt.run(...args),all:async()=>({results:stmt.all(...args)}),first:async()=>stmt.get(...args)||null};}};},async batch(stmts){sql.exec('BEGIN');try{for(const s of stmts)await s.run();sql.exec('COMMIT');}catch(e){sql.exec('ROLLBACK');throw e;}}};
+ const app=createWorker(async token=>token),env={DB:db,FIREBASE_PROJECT_ID:'test',ONLINE_STATUS_DISABLED:'true'};
+ const patch=(fields,actor='alice')=>app.fetch(new Request('https://example.test/v1/firestore/document?path=users/alice',{method:'PATCH',headers:{authorization:`Bearer ${actor}`,'content-type':'application/json'},body:JSON.stringify({fields})}),env);
+ const heartbeat={isOnline:true,isActive:true,showActiveStatus:true,lastSeenMs:now,lastSeen:{__fieldValue:'serverTimestamp'}};
+ const total=()=>sql.prepare('SELECT total_changes() n').get().n;
+ const original=total();assert.equal((await patch(heartbeat)).status,200);assert.equal(total(),original);
+ assert.equal((await patch({...heartbeat,isOnline:false,isActive:false})).status,200);assert.equal(total(),original);
+ assert.equal((await patch(heartbeat,'bob')).status,403);assert.equal(total(),original);
+ assert.equal((await patch({...heartbeat,isOnline:false,isActive:false,showActiveStatus:false})).status,200);
+ let row=JSON.parse(sql.prepare("SELECT document_json FROM friendbook_cf_documents WHERE path='users/alice'").get().document_json);
+ assert.equal(row.showActiveStatus,false);assert.equal(row.lastSeenMs,100);
+ const afterPrivacy=total();assert.equal((await patch({...heartbeat,showActiveStatus:false})).status,200);assert.equal(total(),afterPrivacy);
+ assert.equal((await patch({displayName:'Changed'})).status,200);
+ row=JSON.parse(sql.prepare("SELECT document_json FROM friendbook_cf_firestore_documents WHERE path='users/alice'").get().document_json);
+ assert.equal(row.displayName,'Changed');assert.equal(row.showActiveStatus,false);
+ assert.equal((await patch({...heartbeat,displayName:'Mixed edit'})).status,200);
+ assert.equal(JSON.parse(sql.prepare("SELECT document_json FROM friendbook_cf_firestore_documents WHERE path='users/alice'").get().document_json).displayName,'Mixed edit');
+});
+
 test('indexed friendship guards reject racing historical duplicates without partial changes', async () => {
   const sql=new DatabaseSync(':memory:');
   for(const n of ['0003_additive_interactions.sql','0011_additive_app_documents.sql','0014_additive_firestore_documents.sql','0018_social_guards.sql','0019_trusted_friendships.sql','0027_friend_participant_indexes.sql']) sql.exec(readFileSync(new URL(`../migrations/${n}`,import.meta.url),'utf8'));

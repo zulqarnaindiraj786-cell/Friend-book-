@@ -82,6 +82,7 @@ public class Presence {
 
     /** Initialize presence: connect to Cloudflare WebSocket, start D1 heartbeat. */
     public static void init() {
+        if (!BuildConfig.ONLINE_STATUS_ENABLED) return;
         String uid = Fb.uid();
         if (uid == null) { goOffline(); return; }
         Context c = com.friendbook.social.App.instance;
@@ -126,6 +127,7 @@ public class Presence {
 
     /** Go offline: close Cloudflare WS, write offline to D1. */
     public static void goOffline() {
+        if (!BuildConfig.ONLINE_STATUS_ENABLED) return;
         foregroundActive = false;
         H.removeCallbacks(FIRESTORE_HEARTBEAT);
         if (cloudSocket != null) {
@@ -138,6 +140,7 @@ public class Presence {
 
     /** Update active status visibility (privacy toggle). */
     public static void setActiveStatusVisible(boolean visible) {
+        if (!BuildConfig.ONLINE_STATUS_ENABLED) return;
         activeStatusVisible = visible;
         if (cloudSocket != null) {
             try { cloudSocket.activeStatus(visible); } catch (Throwable ignored) { }
@@ -187,7 +190,7 @@ public class Presence {
 
     /** Evaluates whether a Firestore user doc is genuinely online right now (respects privacy + five-minute freshness). */
     public static boolean isUserOnlineDoc(@Nullable DocumentSnapshot d) {
-        if (d == null || !d.exists()) return false;
+        if (!BuildConfig.ONLINE_STATUS_ENABLED || d == null || !d.exists()) return false;
         Boolean show = d.getBoolean("showActiveStatus");
         if (show != null && !show) return false;
         boolean active = firestoreActive(d);
@@ -195,7 +198,7 @@ public class Presence {
     }
 
     @NonNull public static String formatActiveStatus(boolean online, long lastSeenMs) {
-        return online ? "Active now" : TimeAgoUtil.formatLastSeen(lastSeenMs, now());
+        return !BuildConfig.ONLINE_STATUS_ENABLED ? "" : online ? "Active now" : TimeAgoUtil.formatLastSeen(lastSeenMs, now());
     }
 
     /** Handle to a live presence or typing watcher; close() to detach. */
@@ -237,6 +240,10 @@ public class Presence {
      */
     public static Handle watchPresence(String uid, PresenceCallback cb) {
         Handle h = new Handle();
+        if (!BuildConfig.ONLINE_STATUS_ENABLED) {
+            H.post(() -> { if (!h.closed) cb.onPresence(false, 0L); });
+            return h;
+        }
         final boolean[] fsSeen = {false};
         final boolean[] fsOnline = {false};
         final long[] fsLastSeen = {0L};

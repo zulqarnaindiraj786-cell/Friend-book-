@@ -102,6 +102,18 @@ test('rowid reuse between selection and deletion still protects the replacement 
   f.sql.close();
 });
 
+test('disabled online status skips presence cleanup and R2 but retains typing cleanup',async()=>{
+  const f=setup();
+  f.sql.prepare('INSERT INTO friendbook_cf_presence_sessions VALUES (?,?,?,?,?)').run('alice','a',0,0,1);
+  f.sql.prepare('INSERT INTO friendbook_cf_typing_sessions VALUES (?,?,?,?,?)').run('chat','alice','phone',0,1);
+  f.setFailGet(true);
+  await pruneExpiredRealtime(f.db,now,f.bucket,true);
+  assert.equal(f.sql.prepare('SELECT COUNT(*) n FROM friendbook_cf_presence_sessions').get().n,1);
+  assert.equal(f.sql.prepare('SELECT COUNT(*) n FROM friendbook_cf_typing_sessions').get().n,0);
+  assert.equal(f.pages.length,0);assert.equal(f.writes.length,0);
+  f.sql.close();
+});
+
 test('storage failures never advance cursor; typing cleanup still runs without checkpoint',async()=>{
   const f=setup(),add=f.sql.prepare('INSERT INTO friendbook_cf_presence_sessions VALUES (?,?,?,?,?)');
   add.run('alice','old',1,1,1);add.run('alice','new',1,1,2);

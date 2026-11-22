@@ -28,6 +28,26 @@ test('separate isolates see presence and old disconnect cannot hide another devi
   sql.close();
 });
 
+test('disabled online status does not read or write presence and leaves typing independent', async () => {
+  const {sql,db}=fixture();
+  sql.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)')
+    .run('chats/room','chats','chats','room','alice',JSON.stringify({participants:['alice','bob']}),1,1);
+  const env={DB:db(),REALTIME_WS_ENABLED:'true',ONLINE_STATUS_DISABLED:'true'};
+  const request=(path,method='GET',body)=>presenceRealtime(new Request(`https://example.test${path}`,{
+    method,headers:{'Content-Type':'application/json'},...(body?{body:JSON.stringify(body)}:{})}),env,{uid:'alice'});
+  let accesses=0; const tracked=env.DB; env.DB={prepare(q){if(q.includes('friendbook_cf_presence'))accesses++;return tracked.prepare(q);}};
+  assert.deepEqual(await (await request('/v1/presence/me')).json(),{uid:'alice',online:false,lastSeen:0});
+  assert.deepEqual(await (await request('/v1/presence/contact/bob')).json(),{uid:'bob',online:false,lastSeen:0});
+  assert.equal((await request('/v1/presence/socket','GET')).status,403);
+  assert.equal((await request('/v1/presence/me','PUT')).status,405);
+  assert.equal((await request('/v1/presence/contact/%2F')).status,400);
+  assert.equal(accesses,0);
+  assert.equal((await request('/v1/presence/typing/room','PUT',{typing:true})).status,200);
+  assert.equal((await presenceRealtime(new Request('https://example.test/v1/presence/typing/room'),env,{uid:'bob'})).status,200);
+  assert.equal(sql.prepare('SELECT COUNT(*) n FROM friendbook_cf_typing_sessions').get().n,1);
+  sql.close();
+});
+
 test('typing is shared across isolates and only room members can observe or send it', async () => {
   const {sql,db}=fixture();
   sql.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)')

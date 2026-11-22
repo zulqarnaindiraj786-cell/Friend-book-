@@ -11,7 +11,9 @@ android {
     defaultConfig {
         applicationId 'com.friendbook.social'
         buildConfigField 'boolean', 'D1_INTERACTIONS_ENABLED', 'true'
+        // Typing remains enabled; online status / last-seen is separately disabled.
         buildConfigField 'boolean', 'CLOUDFLARE_PRESENCE_ENABLED', 'true'
+        buildConfigField 'boolean', 'ONLINE_STATUS_ENABLED', 'false'
         // Real view counters live in Cloudflare Analytics Engine (one event per view, uniq(uid) = one
         // view per user forever, zero D1 writes). The Home Feed does zero views work: no request, no
         // D1, no KV. Firebase is auth only.
@@ -19,8 +21,8 @@ android {
         buildConfigField 'String', 'CLOUDFLARE_API_URL', '"https://rough-firefly-dd7b.zulqarnaindiraj786.workers.dev"'
         minSdk 24
         targetSdk 36
-        versionCode 171
-        versionName '2.10.29'
+        versionCode 172
+        versionName '2.10.30'
         ndk {
             debugSymbolLevel 'FULL'
         }
