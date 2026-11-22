@@ -1,5 +1,5 @@
 # Read-only account-wide analytics only. No D1 SQL, mutations, or app traffic.
-# Recheck account-wide daily usage after the friendship-list optimization; no app requests.
+# Investigate reported rapid usage during normal chat and feed activity; no app requests.
 name: Read-only account D1 usage
 on:
   push:
