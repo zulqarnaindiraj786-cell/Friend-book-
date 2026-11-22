@@ -1,5 +1,5 @@
 # Analytics only: no D1 SQL or synthetic app traffic; distinguish query and schema shapes.
-# Follow up migration 0080 without querying or mutating application data.
+# Follow up migration 0083 without querying or mutating application data.
 name: Read-only D1 quota audit
 on:
   workflow_dispatch:
