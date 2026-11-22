@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
 import { readFileSync } from 'node:fs';
 import { createWorker } from '../../worker.js';
+import { appDocumentToFirestoreRow } from '../firestore-documents.js';
 const migration=n=>readFileSync(new URL(`../migrations/${n}`,import.meta.url),'utf8');
 
 test('numeric and timestamp notification cursors seek without losing privacy, unread state or legacy rows',async()=>{
@@ -15,7 +16,7 @@ test('numeric and timestamp notification cursors seek without losing privacy, un
     const id=`n${String(i).padStart(3,'0')}`,time=Math.floor((i%80)/4)-15;
     const doc={fromUserId:'alice',toUserId:'bob',isRead:i%3===0,createdAt:i<80?time:{__type:'timestamp',millis:time}};
     if(i%3!==0)f.run(`notifications/${id}`,'notifications','notifications',id,'alice',JSON.stringify(doc),1,1);
-    if(i%3!==1)l.run(`notifications/${id}`,'notifications',id,'alice',JSON.stringify(doc),1);
+    if(i%3!==1)l.run(`notifications/${id}`,'notifications',id,'alice',JSON.stringify({...doc,id}),1);
   }
   // Matching legacy copies must stay hidden if canonical ownership/read state changed.
   for(const [id,canonical] of [['wrong-user',{toUserId:'eve',isRead:false}],['now-read',{toUserId:'bob',isRead:true}]]){
@@ -33,16 +34,38 @@ test('numeric and timestamp notification cursors seek without losing privacy, un
     };}};
   }};
   const app=createWorker(async t=>t),env={DB:db,FIREBASE_PROJECT_ID:'test'};
-  const query=async(spec,reference=false)=>{
+  const query=async(spec,reference=false,detail=false)=>{
     const filters=[{field:'toUserId',op:'==',value:'bob'},...(spec.unread?[{field:'isRead',op:'==',value:false}]:[]),...(reference?[{field:'fromUserId',op:'==',value:'alice'}]:[])];
     const {unread,...other}=spec;
     const body={parent:'notifications',filters,orderBy:[{field:'createdAt',direction:'DESCENDING'}],...other};
     const res=await app.fetch(new Request('https://local.invalid/v1/firestore/query',{method:'POST',headers:{authorization:'Bearer bob','content-type':'application/json'},body:JSON.stringify(body)}),env);
-    assert.equal(res.status,200,await res.clone().text());return (await res.json()).documents.map(x=>x.id);
+    assert.equal(res.status,200,await res.clone().text());
+    const docs=(await res.json()).documents;
+    return detail ? docs.map(({shadowed,...x})=>x) : docs.map(x=>x.id);
   };
   for(const unread of [false,true])for(const cursor of [[99,'z'],[4,'n070'],[0,'n060'],[-15,'n003'],[{__type:'timestamp',millis:99},'z'],[{__type:'timestamp',millis:4},'n159'],[{__type:'timestamp',millis:-15},'n080']])for(const limit of [1,7,20,100]){
     const spec={unread,limit,startAfter:cursor};assert.deepEqual(await query(spec),await query(spec,true),JSON.stringify(spec));
   }
+  // Model the proposed matching-id backfill for all unshadowed rows. Cursor
+  // pages and unread filtering must return the same IDs and ordering before
+  // and after canonical precedence changes. This fixture is not a production
+  // cutover authorization and does not cover every historical shape.
+  const specs=[];
+  for(const unread of [false,true]) for(const startAfter of [undefined,[0,'n060'],[{__type:'timestamp',millis:4},'n159']])
+    for(const limit of [1,7,20,100]) specs.push({unread,limit,...(startAfter?{startAfter}:{})});
+  const beforePromotion=await Promise.all(specs.map(spec=>query(spec,false,true)));
+  const oldRows=sql.prepare(`SELECT l.* FROM friendbook_cf_documents l WHERE l.collection='notifications'
+    AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents f WHERE f.path=l.path)`).all();
+  assert.ok(oldRows.length>0);
+  const promotedPaths=new Set(oldRows.map(row=>row.path));
+  for (const page of beforePromotion) for (const doc of page)
+    if (promotedPaths.has(doc.path)) doc.data.id=doc.id; // The documented facade change.
+  for(const source of oldRows) {
+    const row=appDocumentToFirestoreRow(source), data=JSON.parse(row.document_json);
+    data.id=source.doc_id;
+    f.run(row.path,row.parent_path,row.collection_id,row.doc_id,row.owner_uid,JSON.stringify(data),row.create_time,row.update_time);
+  }
+  assert.deepEqual(await Promise.all(specs.map(spec=>query(spec,false,true))),beforePromotion);
   assert.ok(plans.length>0);
   for(const p of plans){const plan=p.join('\n');assert.match(plan,/idx_cf_(?:legacy_)?notif_(?:page|unread)/);assert.match(plan,/<expr>=\?/);assert.match(plan,/<expr><\?/);}
   // Delta path retains its original ordering and seek; it is not this shortcut.
