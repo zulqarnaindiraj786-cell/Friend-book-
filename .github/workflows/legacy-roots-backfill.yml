@@ -47,3 +47,5 @@ jobs:
       - name: Account reserve after writing
         if: always()
         run: python3 scripts/loadtest/d1_account_usage_analytics.py --root-backfill-budget
+
+# Re-run marker for the verified bulk promotion.
