@@ -264,6 +264,36 @@ test('legacy comment count uses the lookup indexes rather than scanning all root
   assert.match(plan,/SEARCH a USING INDEX sqlite_autoindex_friendbook_cf_documents_1 \(path=\?\)/);
 });
 
+test('grouped legacy counts match individual indexed counts, shadowing and blocked authors', async t => {
+  const f=fixture();t.after(f.close);
+  f.sql.exec(readFileSync(new URL('../migrations/0032_legacy_comment_lookup.sql',import.meta.url),'utf8'));
+  const {legacyCommentCount,legacyCommentCountsStatement}=await import('../comment-api.js');
+  const add=f.sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)');
+  const row=(id,data)=>add.run(`comments/${id}`,'comments',id,'',JSON.stringify(data),1);
+  row('one',{postId:'p0',authorId:'alice'});
+  row('two',{post_id:'p0',uid:'bob'});
+  row('blocked',{resource:'posts/p0',userId:'blocked'});
+  row('deleted',{postId:'p0',authorId:'alice',deleted:true});
+  row('shadow',{postId:'p1',authorId:'alice'});
+  row('wrapped',{fields:{postId:{stringValue:'p1'},authorId:{stringValue:'alice'}}});
+  row('same',{postId:'p2',post_id:'p2',resource:'posts/p2',authorId:'alice'});
+  f.sql.prepare('INSERT INTO friendbook_cf_comments VALUES (?,?,?,?,?,?)').run('posts/p1','shadow','alice','text',null,1);
+  const resources=Array.from({length:20},(_,i)=>`posts/p${i}`),blocked=['blocked','blocked'];
+  const expected=await Promise.all(resources.map(resource=>legacyCommentCount(f.env.DB,resource,blocked)));
+  const grouped=(await legacyCommentCountsStatement(f.env.DB,resources,blocked).all()).results.map(row=>row.n);
+  assert.deepEqual(grouped,expected);assert.deepEqual(grouped.slice(0,3),[2,1,1]);
+  // All three legacy selectors still use their expression indexes for each branch.
+  const prepare=f.env.DB.prepare;let plans=[],bindCount=0,queryLength=0;
+  const db={prepare(query){return{bind(...args){bindCount=args.length;queryLength=query.length;
+    plans=f.sql.prepare('EXPLAIN QUERY PLAN '+query).all(...args).map(row=>row.detail);
+    return prepare.call(f.env.DB,query).bind(...args);
+  }};}};
+  await legacyCommentCountsStatement(db,resources,blocked).all();
+  assert.equal(bindCount,41);assert.ok(queryLength<100000);
+  for(const name of ['idx_cf_comment_lookup_post','idx_cf_comment_lookup_post_legacy','idx_cf_comment_lookup_resource'])assert.match(plans.join('\n'),new RegExp(name));
+  assert.equal((plans.join('\n').match(/SEARCH a USING INDEX sqlite_autoindex_friendbook_cf_documents_1/g)||[]).length,20);
+});
+
 test('legacy D1 comments remain readable and support authorized replies and reactions without overwriting sources', async t => {
   const f=fixture();t.after(f.close);
   const original={postId:'p1',authorId:'user2',content:'old comment',createdAt:12,likes:3,reactions:{user2:'love'},likedBy:['user2']};
@@ -370,12 +400,30 @@ test('a full 20-post Feed page batches engagement without individual summary req
   let batchCalls=0;
   const db={...f.env.DB,async batch(statements){
     batchCalls++;
-    assert.equal(statements.length,40);
+    assert.equal(statements.length,21);
     return f.env.DB.batch(statements);
   }};
   const result=await batchEngagementReads(db,resources,'user1',[]);
   assert.equal(batchCalls,1);
   assert.equal(result.size,20);
+});
+
+test('grouped Feed engagement equals individual summaries with blocked and legacy comments', async t=>{
+  const f=fixture();t.after(f.close);
+  f.sql.exec(readFileSync(new URL('../migrations/0032_legacy_comment_lookup.sql',import.meta.url),'utf8'));
+  const add=f.sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)');
+  for(const [id,post,author] of [['a','p1','allowed'],['b','p1','blocked'],['c','p2','allowed']]) {
+    add.run(`comments/${id}`,'comments',id,author,JSON.stringify({postId:post,authorId:author,content:id,createdAt:10}),1);
+  }
+  f.sql.prepare('INSERT INTO friendbook_cf_comments VALUES (?,?,?,?,?,?)').run('posts/p1','new','allowed','current',null,20);
+  const resources=['posts/p1','posts/p2'],blocked=['blocked'];
+  const preloaded=await batchEngagementReads(f.env.DB,resources,'user1',blocked);
+  assert.equal(preloaded.size,2);
+  for(const resource of resources) {
+    const grouped=await engagementSummary(f.env.DB,resource,'user1','owner',blocked,preloaded.get(resource));
+    const individual=await engagementSummary(f.env.DB,resource,'user1','owner',blocked);
+    assert.deepEqual(grouped,individual);
+  }
 });
 
 test('post detail returns only newer comments, stable continuation and reaction totals', async t=>{

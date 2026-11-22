@@ -30,16 +30,17 @@ function legacyMillis(value) {
 const legacyField = name => `CASE WHEN json_type(a.document_json,'$.fields')='object' THEN json_extract(a.document_json,'$.fields.${name}.stringValue') ELSE json_extract(a.document_json,'$.${name}') END`;
 const legacyFlag = name => `CASE WHEN json_type(a.document_json,'$.fields')='object' THEN json_extract(a.document_json,'$.fields.${name}.booleanValue') ELSE json_extract(a.document_json,'$.${name}') END`;
 const legacyAuthor=`COALESCE(NULLIF(${legacyField('authorId')},''),NULLIF(${legacyField('userId')},''),NULLIF(${legacyField('uid')},''))`;
-const legacyWhere=`json_valid(a.document_json)
+const legacyPredicate=(id='?',resource='?',blocked='?')=>`json_valid(a.document_json)
  AND a.path IN (
-  SELECT a.path FROM friendbook_cf_documents a WHERE a.collection='comments' AND ${legacyField('postId')}=?
-  UNION SELECT a.path FROM friendbook_cf_documents a WHERE a.collection='comments' AND ${legacyField('post_id')}=?
-  UNION SELECT a.path FROM friendbook_cf_documents a WHERE a.collection='comments' AND ${legacyField('resource')}=?
+  SELECT a.path FROM friendbook_cf_documents a WHERE a.collection='comments' AND ${legacyField('postId')}=${id}
+  UNION SELECT a.path FROM friendbook_cf_documents a WHERE a.collection='comments' AND ${legacyField('post_id')}=${id}
+  UNION SELECT a.path FROM friendbook_cf_documents a WHERE a.collection='comments' AND ${legacyField('resource')}=${resource}
  )
  AND COALESCE(${legacyFlag('removed')},0)=0 AND COALESCE(${legacyFlag('deleted')},0)=0 AND COALESCE(${legacyFlag('isDeleted')},0)=0
  AND typeof(${legacyAuthor})='text' AND length(${legacyAuthor})>0
- AND ${legacyAuthor} NOT IN (SELECT value FROM json_each(?))
- AND NOT EXISTS (SELECT 1 FROM friendbook_cf_comments c WHERE c.resource=? AND c.id=a.doc_id)`;
+ AND ${legacyAuthor} NOT IN (SELECT value FROM json_each(${blocked}))
+ AND NOT EXISTS (SELECT 1 FROM friendbook_cf_comments c WHERE c.resource=${resource} AND c.id=a.doc_id)`;
+const legacyWhere=legacyPredicate();
 function legacyBindings(resource,blocked) {
   const id=resource.slice(resource.indexOf('/')+1);
   return [id,id,resource,JSON.stringify(blocked||[]),resource];
@@ -47,6 +48,20 @@ function legacyBindings(resource,blocked) {
 export function legacyCommentCountStatement(db,resource,blocked=[]) {
   return db.prepare(`SELECT COUNT(*) AS n FROM friendbook_cf_documents a WHERE ${legacyWhere}`)
     .bind(...legacyBindings(resource,blocked));
+}
+// Keep the exact same per-resource indexed predicates, but group the small
+// authorized Feed page's count statements into one D1 statement. Reuse numbered
+// parameters so twenty resources need just 41 bindings, below D1's limit.
+export function legacyCommentCountsStatement(db,resources,blocked=[]) {
+  if(!Array.isArray(resources) || resources.length<1 || resources.length>20) throw Error('Invalid count batch');
+  const bindings=[JSON.stringify(blocked||[])];
+  const selects=resources.map((resource,i)=>{
+    const id=resource.slice(resource.indexOf('/')+1);
+    bindings.push(resource,id);
+    const res=`?${2+i*2}`,post=`?${3+i*2}`;
+    return `SELECT ${i} AS slot, COUNT(*) AS n FROM friendbook_cf_documents a WHERE ${legacyPredicate(post,res,'?1')}`;
+  });
+  return db.prepare(selects.join(' UNION ALL ')).bind(...bindings);
 }
 export async function legacyCommentCount(db,resource,blocked=[]) {
   const row=await legacyCommentCountStatement(db,resource,blocked).first();

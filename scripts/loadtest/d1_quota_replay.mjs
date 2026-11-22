@@ -133,6 +133,13 @@ for(const root of ['posts','reels']){
     assert.deepEqual(page.documents.map(doc=>doc.id),['item39','item38','item37','item36','item35']);
   }));
 }
+await measure('feedEngagementFive',users-1,()=>wave(users-1,async i=>{
+  const page=await call(`user${i+1}`,'/v1/firestore/query','POST',{
+    parent:'posts',limit:5,feedEngagement:true,orderBy:[{field:'createdAt',direction:'DESCENDING'}],
+  });
+  assert.deepEqual(page.documents.map(doc=>doc.id),['item39','item38','item37','item36','item35']);
+  assert.ok(page.documents.every(doc=>doc.engagement && doc.engagement.comments===0));
+}));
 const timestamp=millis=>({__type:'timestamp',millis});
 add('stories','active','user0',{authorId:'user0',privacy:'Public',expiresAt:timestamp(now+100000)});
 add('stories','expired','user0',{authorId:'user0',privacy:'Public',expiresAt:timestamp(now-1)});

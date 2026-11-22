@@ -1,4 +1,4 @@
-import { commentsAPI, reactorsAPI, commentSelect, normalized, legacyCommentCount, legacyCommentCountStatement, legacyPage } from './comment-api.js';
+import { commentsAPI, reactorsAPI, commentSelect, normalized, legacyCommentCount, legacyCommentCountsStatement, legacyPage } from './comment-api.js';
 import { requestAccountReads } from './app-documents.js';
 import { authorizePost } from './firebase-post-access.js';
 const json = (body, status = 200) => Response.json(body, {
@@ -94,11 +94,16 @@ export const MAX_FEED_ENGAGEMENT_PAGE = 20;
 export async function batchEngagementReads(db, resources, uid, blocked) {
   if (resources.length < 2 || resources.length > MAX_FEED_ENGAGEMENT_PAGE || typeof db.batch !== 'function') return new Map();
   try {
-    const rows=await db.batch(resources.flatMap(resource=>[
-      engagementStatement(db,resource,uid,blocked),legacyCommentCountStatement(db,resource,blocked),
-    ]));
-    if(rows.length!==resources.length*2 || rows.some(row=>row.success===false || !row.results?.[0]))return new Map();
-    return new Map(resources.map((resource,i)=>[resource,{canonical:rows[i*2].results[0],count:Number(rows[i*2+1].results[0].n)||0}]));
+    const rows=await db.batch([
+      ...resources.map(resource=>engagementStatement(db,resource,uid,blocked)),
+      legacyCommentCountsStatement(db,resources,blocked),
+    ]);
+    const counts=rows.at(-1)?.results;
+    if(rows.length!==resources.length+1 || rows.some(row=>row.success===false)
+        || rows.slice(0,-1).some(row=>!row.results?.[0]) || !counts || counts.length!==resources.length)return new Map();
+    const bySlot=new Map(counts.map(row=>[row.slot,row.n]));
+    if(bySlot.size!==resources.length || resources.some((_,i)=>!bySlot.has(i)))return new Map();
+    return new Map(resources.map((resource,i)=>[resource,{canonical:rows[i].results[0],count:Number(bySlot.get(i))||0}]));
   } catch { return new Map(); }
 }
 

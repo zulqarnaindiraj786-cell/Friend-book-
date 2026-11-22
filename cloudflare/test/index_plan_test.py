@@ -49,12 +49,50 @@ class IndexPlans(unittest.TestCase):
             for obsolete in ('idx_cf_broadcast_users', 'idx_cf_legacy_broadcast_users', 'idx_cf_posts_author',
                              'idx_cf_legacy_posts_author', 'idx_cf_reels_author', 'idx_cf_posts_feed_nonstandard',
                              'idx_cf_legacy_posts_feed_nonstandard', 'idx_cf_chat_nonstandard_order',
-                             'idx_cf_chat_nonstandard_order_v2'):
+                             'idx_cf_chat_nonstandard_order_v2', 'idx_cf_legacy_users_display_name'):
                 self.assertIsNone(db.execute("SELECT name FROM sqlite_master WHERE type='index' AND name=?", (obsolete,)).fetchone())
             for index, sql, args in checks:
                 with self.subTest(index=index):
                     plan = db.execute('EXPLAIN QUERY PLAN ' + sql, args).fetchall()
                     self.assertTrue(any(index in row[-1] for row in plan), plan)
+
+    def test_obsolete_legacy_name_index_is_removed_without_losing_prefix_seek(self):
+        with sqlite3.connect(':memory:') as db:
+            for migration in sorted(MIGRATIONS.glob('*.sql')):
+                if migration.name != '0075_remove_obsolete_legacy_name_index.sql':
+                    db.executescript(migration.read_text())
+            db.execute('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)',
+                       ('users/alice', 'users', 'alice', 'alice', '{"displayName":"Alice","lastSeenMs":0}', 1))
+            update = "UPDATE friendbook_cf_documents SET document_json=json_set(document_json,'$.lastSeenMs',?) WHERE path='users/alice'"
+            def writes():
+                steps = [0]
+                def tick():
+                    steps[0] += 1
+                    return 0
+                db.set_progress_handler(tick, 1)
+                try:
+                    for i in range(1000):
+                        db.execute(update, (i,))
+                finally:
+                    db.set_progress_handler(None, 0)
+                return steps[0]
+            before = writes()
+            db.executescript((MIGRATIONS / '0075_remove_obsolete_legacy_name_index.sql').read_text())
+            db.executescript((MIGRATIONS / '0075_remove_obsolete_legacy_name_index.sql').read_text())
+            after = writes()
+            self.assertLess(after, before)
+            self.assertIsNone(db.execute("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_cf_legacy_users_display_name'").fetchone())
+            self.assertIsNotNone(db.execute("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_cf_legacy_people_cursor_prefix'").fetchone())
+            legacy = """CASE WHEN json_type(document_json,'$.fields')='object' THEN CASE
+              WHEN json_type(document_json,'$.fields.displayName')='text' THEN json_extract(document_json,'$.fields.displayName')
+              WHEN json_type(document_json,'$.fields.displayName.stringValue')='text' THEN json_extract(document_json,'$.fields.displayName.stringValue')
+              WHEN json_type(document_json,'$.fields.displayName.stringValue') IS NOT NULL THEN 1 END
+              ELSE json_extract(document_json,'$.displayName') END"""
+            query = f"SELECT path FROM friendbook_cf_documents INDEXED BY idx_cf_legacy_people_cursor_prefix WHERE collection='users' AND ({legacy})>=? AND ({legacy})<?"
+            plan = db.execute('EXPLAIN QUERY PLAN '+query, ('Al','Am')).fetchall()
+            self.assertTrue(any('SEARCH' in row[-1] and 'idx_cf_legacy_people_cursor_prefix' in row[-1] for row in plan),plan)
+            self.assertEqual(db.execute(query, ('Al','Am')).fetchall(), [('users/alice',)])
+            # SQLite VM instructions and the presence of an index are not D1 billed writes.
 
     def test_chat_membership_source_index_reduces_local_work_without_changing_results(self):
         with sqlite3.connect(':memory:') as db:
