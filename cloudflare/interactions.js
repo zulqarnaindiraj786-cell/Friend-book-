@@ -149,8 +149,9 @@ export async function interactions(request, env, identity, match, authorize = au
       if (request.method === 'PUT') {
         if (Object.keys(data).some(k => k !== 'type') || (data.type !== null && !types.has(data.type))) return json({ error: 'Invalid reaction' }, 400);
         // Set desired state, not toggle: a retried request cannot double-increment.
-        // Missing history already means a known timestamp to reactorsAPI; only
-        // an explicit unknown marker makes an identical action refresh its time.
+        // Missing history already means a known timestamp to reactorsAPI. Keep
+        // only legacy explicit unknown markers, and transition them atomically
+        // with the reaction when the user performs a fresh action.
         const writes = [
           db.prepare(`INSERT INTO friendbook_cf_reactions(resource,uid,type,updated_at)
             VALUES (?,?,?,?) ON CONFLICT(resource,uid) DO UPDATE SET type=excluded.type,updated_at=excluded.updated_at
@@ -158,8 +159,8 @@ export async function interactions(request, env, identity, match, authorize = au
               SELECT 1 FROM friendbook_cf_reaction_history h WHERE h.resource=excluded.resource AND h.uid=excluded.uid AND h.timestamp_known=0
             )`)
             .bind(resource, identity.uid, data.type, Date.now()),
-          db.prepare(`INSERT INTO friendbook_cf_reaction_history(resource,uid,timestamp_known)
-            VALUES (?,?,1) ON CONFLICT(resource,uid) DO UPDATE SET timestamp_known=1 WHERE friendbook_cf_reaction_history.timestamp_known IS NOT 1`)
+          db.prepare(`UPDATE friendbook_cf_reaction_history SET timestamp_known=1
+            WHERE resource=? AND uid=? AND timestamp_known=0`)
             .bind(resource, identity.uid)
         ];
         if (new URL(request.url).searchParams.get('response') === 'reaction') {

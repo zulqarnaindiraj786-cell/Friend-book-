@@ -239,6 +239,64 @@ test('same reaction without provenance keeps its already-known timestamp', async
   const page=await (await call(f.env,'reactors')).json();
   assert.equal(page.reactors[0].createdAt,123);assert.equal(page.reactors[0].timestampKnown,1);
 });
+test('fresh reactions use implicit known timestamps and retries remain write-free', async t => {
+  const f=fixture();t.after(f.close);
+  const options={query:'?response=reaction'};
+  assert.equal((await call(f.env,'reactions','PUT',{type:'like'},options)).status,200);
+  assert.equal(f.sql.prepare('SELECT COUNT(*) n FROM friendbook_cf_reaction_history').get().n,0);
+  const initial=f.sql.prepare("SELECT updated_at FROM friendbook_cf_reactions WHERE resource='posts/p1' AND uid='user1'").get().updated_at;
+  let page=await (await call(f.env,'reactors')).json();
+  assert.equal(page.reactors[0].timestampKnown,1);assert.equal(page.reactors[0].createdAt,initial);
+  const changes=f.sql.prepare('SELECT total_changes() n').get().n;
+  assert.equal((await call(f.env,'reactions','PUT',{type:'like'},options)).status,200);
+  assert.equal(f.sql.prepare('SELECT total_changes() n').get().n,changes);
+  assert.equal(f.sql.prepare("SELECT updated_at FROM friendbook_cf_reactions WHERE resource='posts/p1' AND uid='user1'").get().updated_at,initial);
+  assert.equal((await call(f.env,'reactions','PUT',{type:'love'},options)).status,200);
+  assert.deepEqual((await (await call(f.env,'reactions')).json()).types,[{type:'love',count:1,mine:1}]);
+  assert.equal((await call(f.env,'reactions','PUT',{type:null},options)).status,200);
+  assert.deepEqual((await (await call(f.env,'reactors')).json()).reactors,[]);
+  assert.equal((await call(f.env,'reactions','PUT',{type:'like'},options)).status,200);
+  assert.equal(f.sql.prepare('SELECT COUNT(*) n FROM friendbook_cf_reaction_history').get().n,0);
+});
+test('prepared rollback worker interoperates with reactions without provenance rows', async t => {
+  const f=fixture();t.after(f.close);
+  assert.equal((await call(f.env,'reactions','PUT',{type:'like'},{query:'?response=reaction'})).status,200);
+  const initial=f.sql.prepare("SELECT updated_at FROM friendbook_cf_reactions WHERE resource='posts/p1' AND uid='user1'").get().updated_at;
+  // SQL from the deployed compatibility step (b19cdc1). It may insert the
+  // history marker after rollback, but must not refresh an identical reaction.
+  f.sql.exec('BEGIN');try{
+    f.sql.prepare(`INSERT INTO friendbook_cf_reactions(resource,uid,type,updated_at) VALUES(?,?,?,?)
+      ON CONFLICT(resource,uid) DO UPDATE SET type=excluded.type,updated_at=excluded.updated_at
+      WHERE friendbook_cf_reactions.type IS NOT excluded.type OR EXISTS (SELECT 1 FROM friendbook_cf_reaction_history h
+        WHERE h.resource=excluded.resource AND h.uid=excluded.uid AND h.timestamp_known=0)`).run('posts/p1','user1','like',initial+1000);
+    f.sql.prepare(`INSERT INTO friendbook_cf_reaction_history(resource,uid,timestamp_known) VALUES(?,?,1)
+      ON CONFLICT(resource,uid) DO UPDATE SET timestamp_known=1 WHERE friendbook_cf_reaction_history.timestamp_known IS NOT 1`).run('posts/p1','user1');
+    f.sql.exec('COMMIT');
+  }catch(error){f.sql.exec('ROLLBACK');throw error;}
+  assert.equal(f.sql.prepare('SELECT updated_at FROM friendbook_cf_reactions WHERE uid=?').get('user1').updated_at,initial);
+  assert.equal(f.sql.prepare('SELECT timestamp_known FROM friendbook_cf_reaction_history WHERE uid=?').get('user1').timestamp_known,1);
+  assert.deepEqual((await (await call(f.env,'reactions')).json()).types,[{type:'like',count:1,mine:1}]);
+  const changed=f.sql.prepare('SELECT total_changes() n').get().n;
+  assert.equal((await call(f.env,'reactions','PUT',{type:'like'},{query:'?response=reaction'})).status,200);
+  assert.equal(f.sql.prepare('SELECT total_changes() n').get().n,changed);
+});
+test('unknown reaction timestamp transition rolls back entirely on a failed batch', async t => {
+  const f=fixture();t.after(f.close);
+  f.sql.exec("INSERT INTO friendbook_cf_reactions VALUES ('posts/p1','user1','like',0)");
+  f.sql.exec("INSERT INTO friendbook_cf_reaction_history VALUES ('posts/p1','user1',0)");
+  f.sql.exec("CREATE TRIGGER fail_reaction_history BEFORE UPDATE ON friendbook_cf_reaction_history BEGIN SELECT RAISE(ABORT,'failed'); END");
+  assert.equal((await call(f.env,'reactions','PUT',{type:'love'},{query:'?response=reaction'})).status,503);
+  assert.deepEqual({...f.sql.prepare("SELECT type,updated_at FROM friendbook_cf_reactions WHERE resource='posts/p1' AND uid='user1'").get()},{type:'like',updated_at:0});
+  assert.equal(f.sql.prepare("SELECT timestamp_known FROM friendbook_cf_reaction_history WHERE resource='posts/p1' AND uid='user1'").get().timestamp_known,0);
+  assert.deepEqual((await (await call(f.env,'reactions')).json()).types,[{type:'like',count:1,mine:1}]);
+  let page=await (await call(f.env,'reactors')).json();assert.equal(page.reactors[0].createdAt,null);
+  f.sql.exec('DROP TRIGGER fail_reaction_history');
+  assert.equal((await call(f.env,'reactions','PUT',{type:'like'},{query:'?response=reaction'})).status,200);
+  page=await (await call(f.env,'reactors')).json();assert.ok(page.reactors[0].createdAt>0);assert.equal(page.reactors[0].timestampKnown,1);
+  const changes=f.sql.prepare('SELECT total_changes() n').get().n;
+  assert.equal((await call(f.env,'reactions','PUT',{type:'like'},{query:'?response=reaction'})).status,200);
+  assert.equal(f.sql.prepare('SELECT total_changes() n').get().n,changes);
+});
 test('known epoch zero is distinct from unknown, and schema upgrade retains existing rows', async t => {
   const f = fixture(); t.after(f.close);
   f.sql.exec("INSERT INTO friendbook_cf_reactions VALUES ('posts/p1','user1','like',0)");
