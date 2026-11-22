@@ -1293,6 +1293,24 @@ async function boundedRecentPeoplePage(db,env,uid,spec) {
   }
 }
 
+// Mark legacy copies using the already-read canonical window first. A copy
+// outside that window may still exist and take precedence, so batch only those
+// unknown paths. Parent is restricted for Feed/Reels to match their prior
+// shadow predicate; notifications deliberately check any canonical path.
+async function markWindowShadows(db,canonical,legacy,parent=null) {
+  const canonicalPaths=new Set((canonical.results||[]).map(row=>row.path));
+  const legacyRows=legacy.results||[];
+  const unknown=[...new Set(legacyRows.map(row=>row.path).filter(path=>!canonicalPaths.has(path)))];
+  // Stay below D1's bound-variable limit even for a 100-item page.
+  for (let offset=0;offset<unknown.length;offset+=90) {
+    const slice=unknown.slice(offset,offset+90);
+    const result=await db.prepare(`SELECT path FROM friendbook_cf_firestore_documents WHERE path IN (${slice.map(()=>'?').join(',')})${parent ? ' AND parent_path=?' : ''}`)
+      .bind(...slice,...(parent?[parent]:[])).all();
+    for (const row of result.results||[]) canonicalPaths.add(row.path);
+  }
+  for (const row of legacyRows) row.shadowed=canonicalPaths.has(row.path);
+}
+
 // Merge raw indexed windows before applying shadow filtering. Equal canonical
 // keys win; stale legacy entries only advance the cursor and never render.
 function mergeMirroredWindow(canonical,legacy,spec,chunk) {
@@ -1372,16 +1390,16 @@ async function boundedFeedPage(db,uid,spec,requestUserReads) {
       db.prepare(`SELECT a.path,a.parent_path,a.collection_id,a.doc_id,a.owner_uid,a.document_json,a.create_time,a.update_time
         FROM friendbook_cf_firestore_documents a ${author===null?`INDEXED BY idx_cf_${root}_feed_page`:''} WHERE a.parent_path='${root}'${byAuthor}${bound} AND NOT ${canonicalException}
         ORDER BY ${rank} DESC,${time} DESC,a.doc_id DESC LIMIT ?`).bind(...args).all(),
-      db.prepare(`SELECT a.*, EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents f WHERE f.path=a.path AND f.parent_path='${root}') AS shadowed
-        FROM (SELECT a.path,a.collection,a.doc_id,a.owner_uid,a.document_json,a.updated_at
+      db.prepare(`SELECT a.path,a.collection,a.doc_id,a.owner_uid,a.document_json,a.updated_at
           FROM friendbook_cf_documents a ${author===null?`INDEXED BY idx_cf_legacy_${root}_feed_page`:''}
           WHERE a.collection='${root}'${byLegacyAuthor}${bound} AND NOT COALESCE(${legacyException},0)
-          ORDER BY ${rank} DESC,${time} DESC,a.doc_id DESC LIMIT ?) a`).bind(...args).all(),
+          ORDER BY ${rank} DESC,${time} DESC,a.doc_id DESC LIMIT ?`).bind(...args).all(),
     ]); } catch(error) {
       if (/no such index: idx_cf_(?:legacy_)?(?:posts|reels)_feed_page/.test(String(error))) return null;
       throw error;
     }
     const [canonical,legacy]=batches;
+    await markWindowShadows(db,canonical,legacy,root);
     const docs=mergeMirroredWindow(canonical,legacy,spec,chunk);
     const last=docs.at(-1), value=last?.data.createdAt;
     const nextCursor=last?[typeof value==='number'?2:4,typeof value==='number'?value:value.millis,last.id]:null;
@@ -1485,18 +1503,9 @@ async function boundedNotificationPage(db,uid,spec) {
   }
   for (;;) {
     const [canonical,legacy]=await Promise.all([readWindow(false),readWindow(true)]);
-    const canonicalPaths=new Set((canonical.results||[]).map(row=>row.path));
-    const legacyRows=legacy.results||[];
-    const unknown=[...new Set(legacyRows.map(row=>row.path).filter(path=>!canonicalPaths.has(path)))];
-    // A canonical copy outside the current window can still shadow an older,
-    // differently ordered, unread or differently owned legacy copy. Check only
-    // those unknown paths, in one bounded primary-key query, before merging.
-    if (unknown.length) {
-      const result=await db.prepare(`SELECT path FROM friendbook_cf_firestore_documents WHERE path IN (${unknown.map(()=>'?').join(',')})`)
-        .bind(...unknown).all();
-      for (const row of result.results||[]) canonicalPaths.add(row.path);
-    }
-    for (const row of legacyRows) row.shadowed=canonicalPaths.has(row.path);
+    // A differently ordered, read or owned canonical row outside the window
+    // still shadows the legacy copy; check only paths not in this window.
+    await markWindowShadows(db,canonical,legacy);
     const docs=mergeMirroredWindow(canonical,legacy,seekSpec,chunk);
     if (!docs.length) break;
     const allowed=docs.filter(doc=>!doc.shadowed && canReadNotification(doc.path,uid,doc.data));
@@ -2256,9 +2265,13 @@ async function storyEngagement(request,env,uid,now) {
       if((doc.viewedBy!==undefined && !Array.isArray(doc.viewedBy)) || (doc.reactions!==undefined && (!doc.reactions || typeof doc.reactions!=='object' || Array.isArray(doc.reactions))))return json({error:'Invalid story'},409);
       const next={...doc,viewedBy:[...new Set([...(doc.viewedBy||[]),uid])]};
       if(input.op==='react')next.reactions={...(doc.reactions||{}),[uid]:input.emoji};
+      const encoded=JSON.stringify(next);if(encoded.length>1_800_000)return json({error:'Document too large'},413);
+      // Reopening a story or retrying an identical reaction must not rewrite
+      // two indexed documents and temporary guards. Authorization and expiry
+      // checks above still run, and legacy-only rows still promote normally.
+      if(row[canonicalRootSnapshot] && encoded===row.document_json)return json({ok:true});
       const guards=await Promise.all([chatDocumentGuard(db,path,row),chatDocumentGuard(db,`users/${uid}`,viewer),chatDocumentGuard(db,`users/${owner}`,author)]);
       guards.push(db.prepare('INSERT INTO friendbook_cf_social_guards(ok) SELECT CASE WHEN COALESCE((SELECT friend_path FROM friendbook_cf_trusted_friendships WHERE uid_low=? AND uid_high=?),\'\') = ? THEN 1 ELSE 0 END').bind(low,high,friend?.friend_path||''));
-      const encoded=JSON.stringify(next);if(encoded.length>1_800_000)return json({error:'Document too large'},413);
       await db.batch([...guards,
         db.prepare(`INSERT INTO friendbook_cf_firestore_documents(path,parent_path,collection_id,doc_id,owner_uid,document_json,create_time,update_time) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET owner_uid=excluded.owner_uid,document_json=excluded.document_json,update_time=excluded.update_time`).bind(path,'stories','stories',input.id,owner,encoded,row.create_time||now,now),
         db.prepare(`INSERT INTO friendbook_cf_documents(path,collection,doc_id,owner_uid,document_json,updated_at) VALUES (?,?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET owner_uid=excluded.owner_uid,document_json=excluded.document_json,updated_at=excluded.updated_at`).bind(path,'stories',input.id,owner,JSON.stringify({...next,id:input.id}),now),

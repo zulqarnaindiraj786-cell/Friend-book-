@@ -1469,17 +1469,28 @@ for (const root of ['posts','reels']) test(`bounded ${root} pages fill after pri
   const id=`old${i}`, data=JSON.stringify({authorId:'alice',privacy:'Public',createdAt:{__type:'timestamp',millis:-1-i}});
   f.run(root+'/'+id,root,root,id,'alice',data,1,1);a.run(root+'/'+id,root,id,'alice',data,1);
  }
- let batchReads=0,maxRows=0,postReads=0,legacyProbes=0;
+ let batchReads=0,maxRows=0,postReads=0,legacyProbes=0,shadowChecks=0;
  sql.function('quota_probe',path=>{legacyProbes++;return path;});
  const pageLimits=[];
- const db={prepare(q){const stmt=sql.prepare(q.includes('ORDER BY CASE WHEN json_type(a.document_json')?q.replace('f.path=a.path','f.path=quota_probe(a.path)'):q);return{bind(...args){return{all:async()=>{const results=stmt.all(...args);if(q.includes('ORDER BY CASE WHEN json_type(a.document_json')){batchReads++;pageLimits.push(args.at(-1));maxRows=Math.max(maxRows,results.length);}return{results};},first:async()=>{if(q.includes('SELECT document_json') && String(args[0]).startsWith(root+'/'))postReads++;return stmt.get(...args)||null;}};}};}};
+ const db={prepare(q){const stmt=sql.prepare(q.includes('ORDER BY CASE WHEN json_type(a.document_json')?q.replace('f.path=a.path','f.path=quota_probe(a.path)'):q);return{bind(...args){return{all:async()=>{const results=stmt.all(...args);if(q.includes('SELECT path FROM friendbook_cf_firestore_documents WHERE path IN (')){shadowChecks++;assert.ok(args.length<=100,'bounded D1 variables');}if(q.includes('ORDER BY CASE WHEN json_type(a.document_json')){batchReads++;pageLimits.push(args.at(-1));maxRows=Math.max(maxRows,results.length);}return{results};},first:async()=>{if(q.includes('SELECT document_json') && String(args[0]).startsWith(root+'/'))postReads++;return stmt.get(...args)||null;}};}};}};
  const app=createWorker(async t=>t),env={DB:db,FIREBASE_PROJECT_ID:'friendbook-test'};
  const query=async(spec,full=false)=>{let body={parent:root,orderBy:[{field:'createdAt',direction:'DESCENDING'}],limit:12,...spec};if(full)body.filters=[{field:'privacy',op:'!=',value:'Never'}];const r=await app.fetch(new Request('https://example.test/v1/firestore/query',{method:'POST',headers:{authorization:'Bearer bob','content-type':'application/json'},body:JSON.stringify(body)}),env);assert.equal(r.status,200,await r.clone().text());return (await r.json()).documents;};
  const first=await query({}),base=await query({},true);assert.deepEqual(first.map(d=>d.id),base.map(d=>d.id));assert.equal(first.length,12);assert.ok(batchReads>=4);assert.ok(maxRows<=24);assert.deepEqual(pageLimits.slice(0,2),[12,12]);assert.ok(legacyProbes<=72,`legacy probes: ${legacyProbes}`);
- legacyProbes=0;
+ legacyProbes=0;shadowChecks=0;
  const mirrorCursor={startAfter:[{__type:'timestamp',millis:0},'p000']};
- assert.deepEqual((await query(mirrorCursor)).map(d=>d.id),(await query(mirrorCursor,true)).map(d=>d.id));
+ const mirrored=await query(mirrorCursor);
+ assert.equal(shadowChecks,0,'fully mirrored page needs no extra canonical shadow probes');
+ assert.deepEqual(mirrored.map(d=>d.id),(await query(mirrorCursor,true)).map(d=>d.id));
  assert.ok(legacyProbes<=12,`mirror-only page must not scan older copies: ${legacyProbes}`);
+ // Legacy-only windows may be as large as 100. Split shadow checks below
+ // D1's bound-variable ceiling without losing any historical rows.
+ for(let i=0;i<100;i++) {
+  const id=`legacyOnly${i}`;
+  a.run(`${root}/${id}`,root,id,'alice',JSON.stringify({authorId:'alice',privacy:'Public',createdAt:{__type:'timestamp',millis:-3000-i}}),1);
+ }
+ shadowChecks=0;
+ const onlyOld=await query({limit:100,startAfter:[{__type:'timestamp',millis:-2999},'p000']});
+ assert.equal(onlyOld.length,100);assert.equal(shadowChecks,2,'100 unknown paths require two bounded checks');
  const last=first.at(-1),after={startAfter:[last.data.createdAt,last.id]};const second=await query(after),baseSecond=await query(after,true);assert.deepEqual(second.map(d=>d.id),baseSecond.map(d=>d.id));assert.equal(new Set([...first,...second].map(d=>d.id)).size,24);
  if(root==='posts') {
   sql.prepare("UPDATE friendbook_cf_documents SET document_json=? WHERE path='posts/p098'").run(JSON.stringify({fields:{authorId:{stringValue:'alice'},privacy:{stringValue:'Public'}}}));
@@ -1777,8 +1788,14 @@ test('story engagement records only authorized actor, retries races, and mirrors
  assert.equal((await call('bob',{id:'s1',op:'view'})).status,200);
  let story=JSON.parse(sql.prepare("SELECT document_json FROM friendbook_cf_firestore_documents WHERE path='stories/s1'").get().document_json);
  assert.deepEqual(story.viewedBy,['carol','bob']);
+ const changes=()=>sql.prepare('SELECT total_changes() AS n').get().n;
+ let before=changes();
  assert.equal((await call('bob',{id:'s1',op:'view'})).status,200);
+ assert.equal(changes(),before,'repeat view must not rewrite story or guards');
  assert.equal((await call('bob',{id:'s1',op:'react',emoji:'❤️'})).status,200);
+ before=changes();
+ assert.equal((await call('bob',{id:'s1',op:'react',emoji:'❤️'})).status,200);
+ assert.equal(changes(),before,'repeat reaction must not rewrite story or guards');
  story=JSON.parse(sql.prepare("SELECT document_json FROM friendbook_cf_firestore_documents WHERE path='stories/s1'").get().document_json);
  assert.deepEqual(story.viewedBy,['carol','bob']);assert.deepEqual(story.reactions,{bob:'❤️'});
  const mirror=JSON.parse(sql.prepare("SELECT document_json FROM friendbook_cf_documents WHERE path='stories/s1'").get().document_json);assert.deepEqual(mirror.viewedBy,story.viewedBy);assert.deepEqual(mirror.reactions,story.reactions);
