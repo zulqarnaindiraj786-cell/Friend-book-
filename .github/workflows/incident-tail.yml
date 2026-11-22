@@ -1,4 +1,4 @@
-# Bounded live sample for repeated normal-activity requests; never log URLs, headers, identities, bodies, or raw tail events.
+# Privacy-preserving two-minute sample during reported normal activity; no URLs, headers, identities, bodies or raw events.
 name: Incident aggregate Worker response sample
 on:
   push:
@@ -9,13 +9,13 @@ jobs:
   sample:
     if: contains(github.event.head_commit.message, '[incident-tail]')
     runs-on: ubuntu-latest
-    timeout-minutes: 3
+    timeout-minutes: 4
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: Count endpoint categories and HTTP statuses for one minute
+      - name: Count endpoint categories, methods and HTTP statuses for up to two minutes
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: 92f3d04598822de2e49e14561218d090
@@ -23,7 +23,7 @@ jobs:
           python3 - <<'PY'
           import subprocess,select,time,json,urllib.parse,collections,os,signal
           p=subprocess.Popen(['npx','--yes','wrangler@4.157.0','tail','rough-firefly-dd7b','--format','json'],stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,start_new_session=True)
-          counts=collections.Counter();write_roots=collections.Counter();deadline=time.monotonic()+75;buffer='';decoder=json.JSONDecoder();objects=0
+          counts=collections.Counter();methods=collections.Counter();write_roots=collections.Counter();deadline=time.monotonic()+135;buffer='';decoder=json.JSONDecoder();objects=0
           def handle(event):
             global objects
             if isinstance(event,list):
@@ -34,8 +34,8 @@ jobs:
             details=event.get('event') or {}
             if not isinstance(details,dict): return
             request=details.get('request') or {}
-            if not isinstance(request,dict) or not isinstance(request.get('url',''),str): return
-            parsed=urllib.parse.urlsplit(request.get('url',''));path=parsed.path
+            if not isinstance(request,dict) or not isinstance(request.get('url'),str) or not request.get('url'): return
+            parsed=urllib.parse.urlsplit(request['url']);path=parsed.path
             # Only aggregate fixed root categories; never emit the URL, ID, query
             # string, body or a rare single-category count. These are requests,
             # not a measurement of D1 rows or proof that a write committed.
@@ -59,6 +59,7 @@ jobs:
             status=response.get('status') if isinstance(response,dict) else 0
             if type(status) is not int: status=0
             counts[(route,status)]+=1
+            methods[(route,method if method in ('GET','POST','PUT','PATCH','DELETE') else 'other')]+=1
           try:
             while time.monotonic()<deadline:
               readable,_,_=select.select([p.stdout],[],[],min(1,max(0,deadline-time.monotonic())))
@@ -85,6 +86,8 @@ jobs:
             except subprocess.TimeoutExpired:
               os.killpg(p.pid,signal.SIGKILL);p.wait()
           print('::notice::Aggregate live sample; no URLs, identities or bodies: '+json.dumps([{'route':k[0],'status':k[1],'count':v} for k,v in sorted(counts.items())]))
+          common_methods=[{'route':k[0],'method':k[1],'count':v} for k,v in sorted(methods.items()) if v>=3]
+          print('::notice::Request methods by allowlisted route (rare categories suppressed; not D1 costs): '+json.dumps({'categories':common_methods,'suppressed_requests':sum(v for v in methods.values() if v<3)}))
           common=[{'method':k[0],'root':k[1],'count':v} for k,v in sorted(write_roots.items()) if v>=3]
           rare=sum(v for v in write_roots.values() if v<3)
           print('::notice::Document mutation requests by allowlisted root (rare categories suppressed; not database writes): '+json.dumps({'categories':common,'suppressed_requests':rare}))
