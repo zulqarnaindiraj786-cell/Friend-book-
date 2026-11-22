@@ -32,3 +32,50 @@ Read-only moving scan 45022108993 evaluated 4,668 unshadowed root records withou
 A disposable notification fixture compares cursor pages, unread filtering, privacy shadows and full response projections before and after promoting matching-ID legacy rows; it passes with the documented added `id`. This is useful local coverage, not proof for all production records or permission to bulk-write them.
 
 Root-path coverage is not enough for messages: the live code also synthesizes nested `chats/{chatId}/messages/{messageId}` from legacy root messages using an ID prefix or `chatId`. It keeps any existing nested message in preference to the legacy one. A promotion must model that separate alias mapping, potential prefix ambiguity and conflicts, and concurrent changes; simply copying the root `messages/…` path or observing zero root-only paths does not justify deleting the chat bridge. Retain the fallback.
+
+## Completed root backfill (2026-11-22)
+
+Bulk promotion of provably-equivalent legacy-only root rows
+(`scripts/loadtest/promote_legacy_roots.mjs`) ran three times; the third run was
+idempotent and inserted nothing.
+
+| Collection | Legacy before | Backfilled | Legacy after |
+| --- | --- | --- | --- |
+| chats | 318 | 318 | 0 |
+| messages | 896 | 896 | 0 |
+| notifications | 2,407 | 2,407 | 0 |
+| posts | 598 | 598 | 0 |
+| comments | 422 | 422 | 0 |
+
+Safety rules that produced those numbers:
+* a row is written only when the canonical projection is the same document
+  (identical plain projection, typed fields identical apart from the redundant
+  `id`), so the only facade change is that `id` now appears;
+* 101 comment rows differed only in how `createdAt` was encoded; they were
+  promoted under an explicit, value-equal opt-in that compares the numeric
+  instant on both sides;
+* 34 comment rows carried a plain `createdAt` number against a typed timestamp
+  with the same millis and were promoted by the same opt-in;
+* every insert keeps its own guards (source JSON and `updated_at` unchanged, no
+  canonical row yet) inside the same statement as the write, so concurrent
+  edits can only skip a row;
+* one statement per row keeps D1's 100-bound-variable and compound-select limits.
+
+Read-only proof run 45084547209 reports, as legacy rows / legacy-only / canonical:
+chats 851/0/1088, messages 906/0/906, notifications 6,679/0/6,679, posts 730/0/730,
+comments 422/0/422, users 424/0/442, friends 138/0/499, friend_requests 457/0/1,667.
+Other collections still hold 24 legacy-only root rows (groups 10, live_chat 9,
+reels 3, lives 1, stories 1), so the legacy fallback stays for those only.
+
+## Retired tables: backup then DROP (run 45084742177)
+
+* Migration guard required `0086` to be the only pending migration; it was.
+* Backup `scripts/loadtest/backup_retired_tables.py` wrote one JSONL file per
+  existing table, re-read every table and matched checksums: presence 1,
+  presence_sessions 4,690, typing 1, typing_sessions 311 = 5,003 rows. The
+  artifact `retired-tables-backup-45084742177` is kept for 90 days.
+* `wrangler d1 migrations apply` then ran in a workflow that deploys no Worker
+  code; the live schema now reports `retired_tables_remaining: 0` and the
+  dropped names are absent from `sqlite_master`.
+* No Worker runtime file references a dropped table; the historical CREATE
+  statements stay in migrations so a fresh database can still be built.
