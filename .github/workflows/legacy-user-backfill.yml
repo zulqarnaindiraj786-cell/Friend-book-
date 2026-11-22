@@ -1,4 +1,5 @@
 # Bounded user-only promotion; no values or identities in logs.
+# Preview run 45021216684 passed on both current candidates before enabling apply.
 name: Legacy user promotion
 on:
   push:
