@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
 import { readFileSync } from 'node:fs';
-import { prepare, batchStatement, promoteCollection, legacyOnly } from '../../scripts/loadtest/promote_legacy_roots.mjs';
+import { prepare, rowStatement, promoteCollection, legacyOnly } from '../../scripts/loadtest/promote_legacy_roots.mjs';
 
 function fixture(t) {
   const db = new DatabaseSync(':memory:');
@@ -48,10 +48,13 @@ test('a concurrent legacy edit or canonical insert skips exactly that row', asyn
   db.prepare('UPDATE friendbook_cf_documents SET document_json=? WHERE path=?').run('{"authorId":"alice","createdAt":9,"id":"p2"}', 'posts/p2');
   db.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)')
     .run('posts/p3', 'posts', 'posts', 'p3', 'alice', '{"authorId":"alice","createdAt":3,"id":"p3"}', 1, 1);
-  const action = batchStatement(planned);
-  const done = (await query(action.sql, action.params)).results;
-  assert.equal(done.length, 3);
-  assert.ok(!done.some(hit => hit.path === 'posts/p2' || hit.path === 'posts/p3'));
+  const results = [];
+  for (const entry of planned) {
+    const action = rowStatement(entry);
+    results.push(...(await query(action.sql, action.params)).results);
+  }
+  assert.equal(results.length, 3);
+  assert.ok(!results.some(hit => hit.path === 'posts/p2' || hit.path === 'posts/p3'));
   assert.equal(db.prepare("SELECT document_json FROM friendbook_cf_firestore_documents WHERE path='posts/p3'").get().document_json,
     '{"authorId":"alice","createdAt":3,"id":"p3"}');
 });
@@ -62,7 +65,8 @@ test('unsafe shapes and stale metadata never get promoted', () => {
   assert.equal(prepare({ ...base, path: 'posts/other' }).reason, 'unsafe_shape');
   assert.equal(prepare({ ...base, updated_at: 1.5 }).reason, 'unsafe_shape');
   assert.equal(prepare({ ...base, document_json: 'x'.repeat(100_001) }).reason, 'unsafe_shape');
-  assert.throws(() => batchStatement([]), /unsafe plan length/);
-  assert.equal(batchStatement(Array.from({ length: 7 }, () => prepare(base))).params.length, 91);
-  assert.throws(() => batchStatement(Array.from({ length: 8 }, () => prepare(base))), /unsafe plan length/);
+  const statement = rowStatement(prepare(base));
+  assert.equal(statement.params.length, 10);
+  assert.match(statement.sql, /NOT EXISTS/);
+  assert.throws(() => rowStatement({}), /unsafe plan length/);
 });

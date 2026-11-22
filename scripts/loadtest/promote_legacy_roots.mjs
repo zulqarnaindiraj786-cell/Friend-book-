@@ -18,7 +18,7 @@ const FIELDS = ['path', 'parent_path', 'collection_id', 'doc_id', 'owner_uid', '
 const SAFE = new Set(['equivalent_root_only', 'facade_projection_diff']);
 // D1 rejects more than 100 bound variables per statement. Each guarded row
 // binds 13 values (8 canonical columns + 5 source guards), so seven rows fit.
-export const MAX_ROWS_PER_STATEMENT = 7;
+export 
 
 // Keyset page over one collection. The composite index (collection, updated_at)
 // avoids a table scan; the NOT EXISTS probe is answered by the canonical
@@ -90,37 +90,45 @@ function differingFields(fromJson, toJson) {
   return [...names].slice(0, 8);
 }
 
-// One guarded statement per batch. Each row keeps its own source-race guard and
-// its own NOT EXISTS guard, so a concurrent edit or a concurrent canonical
-// write can only skip that single row, never write a stale copy.
-export function batchStatement(planned) {
-  if (!Array.isArray(planned) || !planned.length || planned.length > MAX_ROWS_PER_STATEMENT
-      || planned.some(entry => entry?.status !== 'promote' || entry.row.collection_id !== planned[0].row.collection_id))
+// One guarded INSERT .. SELECT per row. D1 caps a statement at 100 bound
+// variables and rejects long compound SELECTs, so a per-row statement is the
+// portable shape: it binds 10 values and keeps both guards (source unchanged,
+// no canonical row yet) inside the same statement as the write.
+export function rowStatement({ row, source }) {
+  if (!row || !source || typeof source.document_json !== 'string' || !Number.isSafeInteger(source.updated_at))
     throw Error('unsafe plan length');
-  const values = [], selections = [], guards = [];
-  for (const { row, source } of planned) {
-    const slots = FIELDS.map(key => { values.push(row[key]); return `?${values.length}`; });
-    const sourceSlots = ['owner_uid', 'document_json', 'updated_at', 'collection', 'doc_id'].map(key => {
-      values.push(source[key]); return `?${values.length}`;
-    });
-    guards.push(`EXISTS (SELECT 1 FROM friendbook_cf_documents WHERE path=${slots[0]} AND owner_uid=${sourceSlots[0]}`
-      + ` AND document_json=${sourceSlots[1]} AND updated_at=${sourceSlots[2]} AND collection=${sourceSlots[3]}`
-      + ` AND doc_id=${sourceSlots[4]}) AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents WHERE path=${slots[0]})`);
-    selections.push(`SELECT ${slots.join(',')} WHERE (${guards.at(-1)})`);
-  }
   return {
-    sql: `INSERT INTO friendbook_cf_firestore_documents(${FIELDS.join(',')}) ${selections.join(' UNION ALL ')}`
-      + ' ON CONFLICT(path) DO NOTHING RETURNING path',
-    params: values,
+    sql: `INSERT INTO friendbook_cf_firestore_documents(${FIELDS.join(',')})
+      SELECT ?1,?2,?3,?4,?5,?6,?7,?8 FROM friendbook_cf_documents l
+      WHERE l.path=?1 AND l.collection=?3 AND l.doc_id=?4 AND l.owner_uid=?5
+        AND l.document_json=?9 AND l.updated_at=?10
+        AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents f WHERE f.path=?1)
+      ON CONFLICT(path) DO NOTHING RETURNING path`,
+    params: [...FIELDS.map(key => row[key]), source.document_json, source.updated_at],
   };
 }
 
-export async function verifyBatch(query, planned) {
-  for (const { row } of planned) {
+// The INSERT SELECT is the verification: a returned path can only exist when
+// the source row still matched and this exact document_json was written. A
+// small sample is still read back to catch a schema-level surprise.
+export async function verifySample(query, planned, limit = 2) {
+  for (const { row } of planned.slice(0, limit)) {
     const got = (await query(`SELECT ${FIELDS.join(',')} FROM friendbook_cf_firestore_documents WHERE path=?`, [row.path])).results;
     if (got.length !== 1 || !FIELDS.every(key => isDeepStrictEqual(got[0][key], row[key])))
       throw Error('post-insert verification failed');
   }
+}
+
+async function runPool(tasks, concurrency) {
+  let index = 0;
+  const results = new Array(tasks.length);
+  await Promise.all(Array.from({ length: Math.min(concurrency, tasks.length) }, async () => {
+    while (index < tasks.length) {
+      const mine = index++;
+      results[mine] = await tasks[mine]();
+    }
+  }));
+  return results;
 }
 
 /**
@@ -155,13 +163,14 @@ export async function promoteCollection(query, collection, {
       } else if (prepared[index].facadeChanged) facades++;
     });
     const planned = prepared.filter(entry => entry.status === 'promote');
-    for (let start = 0; start < planned.length; start += MAX_ROWS_PER_STATEMENT) {
-      const chunk = planned.slice(start, start + MAX_ROWS_PER_STATEMENT);
-      const action = batchStatement(chunk);
+    const written = await runPool(planned.map(entry => async () => {
+      const action = rowStatement(entry);
       const done = (await query(action.sql, action.params)).results || [];
-      await verifyBatch(query, chunk.filter(entry => done.some(hit => hit.path === entry.row.path)));
-      inserted += done.length;
-    }
+      return done.length === 1 && done[0].path === entry.row.path;
+    }), 6);
+    const confirmed = planned.filter((_, position) => written[position]);
+    inserted += confirmed.length;
+    if (confirmed.length) await verifySample(query, confirmed);
     if (rows.length < batch) break;
   }
   const after = await legacyOnly(query, collection);
