@@ -1936,18 +1936,23 @@ async function acceptFriendBatch(db, uid, ops, now) {
   const prior=existingPair ? await readRow(db,existingPair.path) : null;
   if (existingPair && (!prior || !friendshipReadView(uid,decodeValue(JSON.parse(prior.document_json)))?.participants.includes(other))) return json({error:'Friendship changed'},409);
   const snapshots=[reqRow,...userRows,...(prior?[prior]:[])];
-  const guards=[];
+  // Keep all snapshot, duplicate and absence checks in the same D1 batch,
+  // but store their combined assertion in one temporary guard row.
+  const guardPredicates=[],guardArgs=[];
   for (const row of snapshots) {
     // Canonical root reads already contain the exact JSON checked in the batch.
     // Legacy-only rows still need the canonical/legacy promotion check.
     const canonical=row[canonicalRootSnapshot] ? row : await db.prepare('SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?').bind(row.path).first();
     const legacy=canonical ? null : await db.prepare('SELECT document_json FROM friendbook_cf_documents WHERE path=?').bind(row.path).first();
     if ((canonical && canonical.document_json!==row.document_json) || (!canonical && (!legacy || appDocumentToFirestoreRow({path:row.path,collection:row.collection_id,doc_id:row.doc_id,document_json:legacy.document_json})?.document_json!==row.document_json))) return json({error:'Request changed'},409);
-    guards.push(db.prepare('INSERT INTO friendbook_cf_social_guards(ok) SELECT CASE WHEN (? = 1 AND (SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?) = ?) OR (? = 0 AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents WHERE path=?) AND (SELECT document_json FROM friendbook_cf_documents WHERE path=?) = ?) THEN 1 ELSE 0 END').bind(canonical?1:0,row.path,row.document_json,canonical?1:0,row.path,row.path,legacy?.document_json || ''));
+    guardPredicates.push(`((? = 1 AND (SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?) = ?)
+      OR (? = 0 AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents WHERE path=?)
+        AND (SELECT document_json FROM friendbook_cf_documents WHERE path=?) = ?))`);
+    guardArgs.push(canonical?1:0,row.path,row.document_json,canonical?1:0,row.path,row.path,legacy?.document_json || '');
   }
   // Check both native and historical array envelopes, with canonical rows winning over mirrors.
-  const duplicateSql=`INSERT INTO friendbook_cf_social_guards(ok) SELECT CASE WHEN NOT EXISTS (
-    SELECT 1 FROM (
+  if (!prior) {
+    guardPredicates.push(`NOT EXISTS (SELECT 1 FROM (
       SELECT document_json FROM friendbook_cf_firestore_documents WHERE parent_path='friends'
       UNION ALL SELECT a.document_json FROM friendbook_cf_documents a WHERE a.collection='friends'
         AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents f WHERE f.path=a.path)
@@ -1956,10 +1961,15 @@ async function acceptFriendBatch(db, uid, ops, now) {
        AND EXISTS (SELECT 1 FROM json_each(d.document_json,'$.participants') WHERE value=?))
       OR (EXISTS (SELECT 1 FROM json_each(d.document_json,'$.fields.participants.arrayValue.values') WHERE json_extract(value,'$.stringValue')=?)
        AND EXISTS (SELECT 1 FROM json_each(d.document_json,'$.fields.participants.arrayValue.values') WHERE json_extract(value,'$.stringValue')=?))
-    )) THEN 1 ELSE 0 END`;
-  if (!prior) guards.push(db.prepare(duplicateSql).bind(uid,other,uid,other));
+    ))`);
+    guardArgs.push(uid,other,uid,other);
+  }
   // A create must not overwrite either table, even if the caller guesses an ID.
-  guards.push(db.prepare('INSERT INTO friendbook_cf_social_guards(ok) SELECT CASE WHEN NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents WHERE path=?) AND NOT EXISTS (SELECT 1 FROM friendbook_cf_documents WHERE path=?) THEN 1 ELSE 0 END').bind(friendOp.path,friendOp.path));
+  guardPredicates.push(`NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents WHERE path=?)
+    AND NOT EXISTS (SELECT 1 FROM friendbook_cf_documents WHERE path=?)`);
+  guardArgs.push(friendOp.path,friendOp.path);
+  const guards=[db.prepare(`INSERT INTO friendbook_cf_social_guards(ok) SELECT CASE WHEN
+    ${guardPredicates.map(p=>`(${p})`).join(' AND ')} THEN 1 ELSE 0 END`).bind(...guardArgs)];
   const next=[{...request,status:'accepted'},...users.map(u=>({...u,friendsCount:(u.friendsCount || 0)+(prior?0:1)})),...(prior?[]:[{participants:[uid,other],createdAt:{__type:'timestamp',millis:now}}])];
   const paths=[reqOp.path,`users/${uid}`,`users/${other}`,...(prior?[]:[friendOp.path])];
   const writes=[];
