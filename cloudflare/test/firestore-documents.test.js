@@ -2563,6 +2563,12 @@ test('indexed display-name prefix keeps canonical precedence and supports legacy
   assert.deepEqual(await mentions({}),wanted);
   assert.deepEqual(await mentions({startAfter:['Amber','primitive']}),['legacy','match']);
   assert.deepEqual(await mentions({endBefore:['Amir','match']}),wanted.slice(0,-1));
+  const filtered=await createWorker(async token=>token).fetch(new Request('https://example.test/v1/firestore/query',{
+    method:'POST',headers:{authorization:'Bearer actor','content-type':'application/json'},body:JSON.stringify({
+      parent:'users',limit:10,filters:[{field:'displayName',op:'>=',value:'Am'},{field:'displayName',op:'<=',value:'Am\uf8ff'}],
+    }),
+  }),{DB:db,FIREBASE_PROJECT_ID:'test'});
+  assert.equal(filtered.status,200);assert.deepEqual((await filtered.json()).documents.map(doc=>doc.id).sort(),wanted.slice().sort());
   assert.equal(scans,0,'prefix pages must not scan the users collection');
   assert.match(plans.join('\n'),/SEARCH a USING INDEX idx_cf_legacy_people_cursor_prefix/);
 
@@ -2609,8 +2615,20 @@ test('Unicode mention-prefix index is a superset of the UTF-16 cursor and preser
     assert.equal(fastScans,0,`indexed prefix ${term}`);assert.ok(indexed>=2);
     assert.ok(actual.every(doc=>doc.data.email===undefined && doc.id!=='hidden' && doc.id!=='shadow'));
   }
+  const filtered=async(term,extra={})=>{
+    const response=await worker.fetch(new Request('https://example.test/v1/firestore/query',{method:'POST',headers:{authorization:'Bearer actor','content-type':'application/json'},body:JSON.stringify({parent:'users',limit:10,filters:[{field:'displayName',op:'>=',value:term},{field:'displayName',op:'<=',value:term+'\uf8ff'}],...extra})}),env);
+    assert.equal(response.status,200,await response.clone().text());return (await response.json()).documents;
+  };
+  for(const term of ['آ','आ','你好','é','e\u0301','😀','\ud7ff','Z\u{10ffff}']) {
+    force=false;scans=0;indexed=0;const actual=await filtered(term),fastScans=scans;
+    force=true;const expected=await filtered(term);force=false;
+    assert.deepEqual(actual,expected,`filtered UTF-16 boundary for ${term}`);
+    assert.equal(fastScans,0);assert.ok(indexed>=2);
+    assert.ok(actual.every(doc=>doc.data.email===undefined && doc.id!=='hidden' && doc.id!=='shadow'));
+  }
   // The UTF-16 U+F8FF bound excludes BMP U+F900, but includes a supplementary suffix.
   const arabic=await query('آ');assert.ok(arabic.some(doc=>doc.data.displayName==='آ😀'));
+  const arabicFiltered=await filtered('آ');assert.ok(arabicFiltered.some(doc=>doc.id==='envelope'));assert.ok(arabicFiltered.some(doc=>doc.id==='coerced'));
   const emoji=await query('😀');assert.ok(!emoji.some(doc=>doc.data.displayName==='😀\uf900'));
   const constrained={startAfter:['آبت','coerced'],endBefore:['آ😀','n2'],limit:2};
   force=false;const page=await query('آ',constrained);force=true;assert.deepEqual(page,await query('آ',constrained));

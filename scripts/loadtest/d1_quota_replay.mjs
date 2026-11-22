@@ -89,6 +89,12 @@ await measure('unicodeMentionPrefix',users,()=>wave(users,async i=>{
   });
   assert.deepEqual(result.documents.map(doc=>doc.id),['unicode-name']);
 }));
+await measure('unicodePeopleSearch',users,()=>wave(users,async i=>{
+  const result=await call(`user${i}`,'/v1/firestore/query','POST',{
+    parent:'users',filters:[{field:'displayName',op:'>=',value:'آ'},{field:'displayName',op:'<=',value:'آ\uf8ff'}],limit:10,
+  });
+  assert.deepEqual(result.documents.map(doc=>doc.id),['unicode-name']);
+}));
 await measure('unchangedProfileHeartbeat',users,()=>wave(users,i=>heartbeat(`user${i}`)));
 await measure('sendMessageAndUpdateRoom',users/2,()=>wave(users/2,slot=>{
   const i=slot*2;

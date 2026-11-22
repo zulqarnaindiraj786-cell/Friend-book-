@@ -505,18 +505,31 @@ async function readCollectionRows(db, parent, uid, filters, spec) {
     }
     const lo=filters?.find(f=>f.field==='displayName' && f.op==='>=')?.value;
     const hi=filters?.find(f=>f.field==='displayName' && f.op==='<=')?.value;
-    if (typeof lo==='string' && /^[\x20-\x7e]{2,60}$/.test(lo) && hi===lo+'\uf8ff') {
-      // Use the indexed ASCII prefix range as a superset; the normal filters and ACL
-      // still check every result, including Unicode suffixes and legacy precedence.
-      const end=lo.slice(0,-1)+String.fromCharCode(lo.charCodeAt(lo.length-1)+1);
-      const canonicalName="json_extract(document_json,'$.displayName')";
-      const legacyName="CASE WHEN json_type(a.document_json,'$.fields')='object' THEN json_extract(a.document_json,'$.fields.displayName.stringValue') ELSE json_extract(a.document_json,'$.displayName') END";
-      const [a,b]=await Promise.all([
-        db.prepare(`SELECT * FROM friendbook_cf_firestore_documents INDEXED BY idx_cf_users_display_name WHERE parent_path='users' AND ${canonicalName}>=? AND ${canonicalName}<?`).bind(lo,end).all(),
-        db.prepare(`SELECT a.* FROM friendbook_cf_documents a INDEXED BY idx_cf_legacy_users_display_name WHERE collection='users' AND (${legacyName})>=? AND (${legacyName})<?
-          AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents f WHERE f.path=a.path)`).bind(lo,end).all(),
-      ]);
-      return [...(a.results||[]),...(b.results||[]).map(appDocumentToFirestoreRow).filter(Boolean)];
+    const end=unicodePrefixUpper(lo);
+    if (end!==null && hi===lo+'\uf8ff') {
+      // Both primitive and Firestore-envelope names (including coerced
+      // stringValue variants) must enter the same projection and filter path.
+      const legacyName=`CASE WHEN json_type(a.document_json,'$.fields')='object' THEN CASE
+        WHEN json_type(a.document_json,'$.fields.displayName')='text' THEN json_extract(a.document_json,'$.fields.displayName')
+        WHEN json_type(a.document_json,'$.fields.displayName.stringValue')='text' THEN json_extract(a.document_json,'$.fields.displayName.stringValue')
+        WHEN json_type(a.document_json,'$.fields.displayName.stringValue') IS NOT NULL THEN 1 END
+        ELSE json_extract(a.document_json,'$.displayName') END`;
+      try {
+        const [canonical,legacy]=await Promise.all([
+          db.prepare(`SELECT * FROM friendbook_cf_firestore_documents INDEXED BY idx_cf_users_display_name
+            WHERE parent_path='users' AND json_extract(document_json,'$.displayName')>=? AND json_extract(document_json,'$.displayName')<?`).bind(lo,end).all(),
+          db.prepare(`SELECT a.* FROM friendbook_cf_documents a INDEXED BY idx_cf_legacy_people_cursor_prefix
+            WHERE a.collection='users' AND (${legacyName})>=? AND (${legacyName})<?
+              AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents f WHERE f.path=a.path)
+            UNION ALL SELECT a.* FROM friendbook_cf_documents a INDEXED BY idx_cf_legacy_people_cursor_prefix
+            WHERE a.collection='users' AND (${legacyName})=1
+              AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents f WHERE f.path=a.path)`).bind(lo,end).all(),
+        ]);
+        const rows=[...(canonical.results||[]),...(legacy.results||[]).map(appDocumentToFirestoreRow).filter(Boolean)];
+        if(new Set(rows.map(row=>row.doc_id)).size===rows.length)return rows;
+      } catch(error) {
+        if (!/no such index: idx_cf_(?:users_display_name|legacy_people_cursor_prefix)/.test(String(error))) throw error;
+      }
     }
   }
   if (parent==='lives' && filters?.some(f=>f.field==='status' && ((f.op==='==' && f.value==='live')
