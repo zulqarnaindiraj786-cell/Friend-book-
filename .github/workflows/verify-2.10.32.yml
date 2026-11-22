@@ -1,0 +1,57 @@
+# Prove the published 2.10.32 APK keeps the original signing certificate and
+# upgrades the previous release in place.
+name: Verify published 2.10.32 APK
+on:
+  workflow_dispatch:
+  push:
+    branches: ['arena/7c7ddb7b-friend-book']
+    paths: ['.github/workflows/verify-2.10.32.yml']
+permissions:
+  contents: read
+jobs:
+  install:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[verify-2.10.32]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Download both published APKs
+        run: |
+          set -euo pipefail
+          gh release download v2.10.32 -p friendbook.apk -D candidate
+          gh release download friendbook-2.10.31-cloudflare-47f3662 -p app-release.apk -D previous
+          ls -l candidate previous
+      - name: Compare signing certificates and version codes
+        run: |
+          set -euo pipefail
+          tools="$ANDROID_HOME/build-tools/36.0.0"
+          if [ ! -x "$tools/apksigner" ]; then sdkmanager 'build-tools;36.0.0'; fi
+          for dir in previous candidate; do
+            "$tools/apksigner" verify --print-certs "$dir"/*.apk | grep 'certificate SHA-256 digest:' > "$dir/cert.txt"
+            "$tools/aapt" dump badging "$dir"/*.apk | grep -E "^package:" > "$dir/badging.txt"
+            cat "$dir/badging.txt"
+          done
+          diff -u previous/cert.txt candidate/cert.txt
+          echo '::notice::Both APKs are signed by the same certificate.'
+          grep -q "versionCode='174'" candidate/badging.txt
+          echo '::notice::Candidate is version code 174.'
+      - name: Enable KVM for the emulator
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Fresh install and in-place upgrade on Android
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          arch: x86_64
+          disable-animations: true
+          script: |
+            adb install candidate/*.apk
+            adb uninstall com.friendbook.social
+            adb install previous/*.apk
+            adb install -r candidate/*.apk
+            adb shell dumpsys package com.friendbook.social | grep 'versionCode=174'
+            echo '::notice::In-place upgrade from 2.10.31 to 2.10.32 succeeded.'
