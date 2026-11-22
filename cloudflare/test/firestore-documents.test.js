@@ -1135,6 +1135,41 @@ test('chat message query checks room membership once, not once per message', asy
   sql.close();
 });
 
+test('chat membership windows reuse canonical rooms and still hide stale legacy membership', async () => {
+  const sql=new DatabaseSync(':memory:');
+  for (const ddl of [resourcesSchema,appSchema,schema]) sql.exec(ddl);
+  sql.exec(readFileSync(new URL('../migrations/0040_chat_participant_lookup.sql',import.meta.url),'utf8'));
+  const canonical=sql.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)');
+  const legacy=sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)');
+  const addOld=(id,people)=>legacy.run(`chats/${id}`,'chats',id,'alice',JSON.stringify({participants:people}),1);
+  const addCurrent=(id,people)=>canonical.run(`chats/${id}`,'chats','chats',id,'alice',JSON.stringify({participants:people}),1,1);
+  for(let i=0;i<120;i++){const id=`mirror${i}`;addCurrent(id,['alice','bob']);addOld(id,['alice','bob']);}
+  addOld('removed',['alice','bob']);addCurrent('removed',['alice','carol']);
+  addOld('historical',['alice','bob']);
+  for(let i=0;i<91;i++)addOld(`old${i}`,['alice','bob']);
+  // A bad derived-membership row cannot authorize a caller.
+  sql.exec("INSERT INTO friendbook_cf_chat_participants VALUES ('eve','chats/mirror0',1)");
+  const checked=[];
+  const db={prepare(q){const stmt=sql.prepare(q);return{bind(...args){return{
+    all:async()=>{if(q.includes('SELECT path FROM friendbook_cf_firestore_documents WHERE path IN ('))checked.push(args);return {results:stmt.all(...args)};},
+    first:async()=>stmt.get(...args)||null,run:async()=>stmt.run(...args)
+  };}};}};
+  const app=createWorker(async t=>t),env={DB:db,FIREBASE_PROJECT_ID:'test'};
+  const list=async uid=>{
+    const response=await app.fetch(new Request('https://example.test/v1/firestore/query',{method:'POST',headers:{authorization:`Bearer ${uid}`,'content-type':'application/json'},body:JSON.stringify({parent:'chats'})}),env);
+    assert.equal(response.status,200,await response.clone().text());return (await response.json()).documents;
+  };
+  const rooms=await list('bob');
+  assert.equal(rooms.length,212);
+  assert.ok(rooms.some(d=>d.id==='historical'));
+  assert.ok(!rooms.some(d=>d.id==='removed'));
+  assert.deepEqual(new Set(checked.flat()),new Set(['chats/historical','chats/removed',...Array.from({length:91},(_,i)=>`chats/old${i}`)]));
+  assert.equal(checked.length,2);
+  assert.ok(checked.every(args=>args.length<=90));
+  assert.deepEqual(await list('eve'),[]);
+  sql.close();
+});
+
 test('inbox sorts all eligible rooms by current message time before limiting the page', async () => {
   const sql=new DatabaseSync(':memory:');sql.exec(resourcesSchema);sql.exec(appSchema);sql.exec(schema);sql.exec(socialGuardSchema);
   const insert=sql.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)');

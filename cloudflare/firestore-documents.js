@@ -537,10 +537,13 @@ async function readCollectionRows(db, parent, uid, filters, spec) {
         WHERE m.participant_uid=? AND m.source=1`).bind(uid).all(),
         db.prepare(`SELECT a.* FROM friendbook_cf_chat_participants m
         JOIN friendbook_cf_documents a ON a.path=m.chat_path
-        WHERE m.participant_uid=? AND m.source=0
-        AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents f WHERE f.path=a.path)`).bind(uid).all(),
+        WHERE m.participant_uid=? AND m.source=0`).bind(uid).all(),
       ]);
-      return [...(canonical?.results || []).map(row=>({...row,[canonicalRootSnapshot]:true})), ...(legacy?.results || []).map(appDocumentToFirestoreRow).filter(Boolean)];
+      // Most rooms exist in both stores. Reuse the canonical membership window
+      // rather than probing each mirror. Unknown paths still need checking:
+      // a canonical room may have removed this user and must shadow the mirror.
+      await markWindowShadows(db,canonical,legacy);
+      return [...(canonical?.results || []).map(row=>({...row,[canonicalRootSnapshot]:true})), ...(legacy?.results || []).filter(row=>!row.shadowed).map(appDocumentToFirestoreRow).filter(Boolean)];
     } catch (error) {
       if (!String(error).includes('no such table: friendbook_cf_chat_participants')) throw error;
     }
