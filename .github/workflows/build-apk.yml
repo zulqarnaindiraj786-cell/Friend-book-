@@ -57,14 +57,6 @@ jobs:
           fi
           exit "$RESULT"
 
-      - name: Exercise executable presence lifecycle coordinators (fake ports, not device proof)
-        run: |
-          mkdir -p "$RUNNER_TEMP/presence-coordinators"
-          javac -d "$RUNNER_TEMP/presence-coordinators" app/src/main/java/com/friendbook/social/core/PresencePolicy.java app/src/main/java/com/friendbook/social/core/PresenceSessionPolicy.java app/src/main/java/com/friendbook/social/core/PresenceSocketController.java app/src/main/java/com/friendbook/social/core/PresenceWritePolicy.java scripts/loadtest/java/PresenceSessionPolicyCheck.java scripts/loadtest/java/PresenceSocketControllerCheck.java scripts/loadtest/java/PresenceWritePolicyCheck.java
-          java -cp "$RUNNER_TEMP/presence-coordinators" PresenceSessionPolicyCheck
-          java -cp "$RUNNER_TEMP/presence-coordinators" PresenceSocketControllerCheck
-          java -cp "$RUNNER_TEMP/presence-coordinators" PresenceWritePolicyCheck
-
       - name: Ensure Android SDK 36
         run: |
           echo "ANDROID_HOME=$ANDROID_HOME"
@@ -179,8 +171,8 @@ jobs:
         if: steps.rel.outputs.exit != '0'
         run: exit 1
 
-      - name: Require actual Android presence test results, not source-only checks
-        run: python3 scripts/ci/verify_presence_android_tests.py
+      - name: Require actual Android core test results, not source-only checks
+        run: python3 scripts/ci/verify_android_tests.py
 
       - name: Mark branch artifacts as migration candidates, not a production capacity pass
         if: github.ref != 'refs/heads/main'

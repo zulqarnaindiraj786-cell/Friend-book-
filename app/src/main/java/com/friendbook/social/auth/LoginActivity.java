@@ -17,7 +17,6 @@ import com.friendbook.social.core.Admin;
 import com.friendbook.social.core.Fb;
 import com.friendbook.social.core.Notify;
 import com.friendbook.social.core.Prefs;
-import com.friendbook.social.core.Presence;
 import com.friendbook.social.core.Ui;
 import com.friendbook.social.main.MainActivity;
 import com.friendbook.social.settings.SessionsActivity;
@@ -292,7 +291,7 @@ public class LoginActivity extends Activity {
 
     private void openMain() {
         Fb.startMeListener();
-        Presence.init();
+
         startActivity(new Intent(this, MainActivity.class));
         finishAffinity();
     }

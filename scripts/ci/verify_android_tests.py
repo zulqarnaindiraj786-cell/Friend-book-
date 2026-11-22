@@ -1,9 +1,9 @@
-"""Require executed, passing Android presence suites before packaging candidates."""
+"""Require executed, passing Android core suites before packaging candidates."""
 import os
 from pathlib import Path
 import xml.etree.ElementTree as ET
 
-SUITES = ('CloudPresenceSocketTest', 'PresenceSessionPolicyTest', 'PresenceWritePolicyTest', 'R2VideoClientTest')
+SUITES = ('RealtimeSoundGateTest', 'BannerSizeTest', 'R2VideoClientTest')
 
 
 def verify(root):
@@ -24,7 +24,7 @@ def verify(root):
 
 if __name__ == '__main__':
     results = verify('app/build/test-results/testReleaseUnitTest')
-    lines = ['### Executed Android/JVM presence suites (loopback/mocked auth; NOT device/capacity proof)']
+    lines = ['### Executed Android/JVM core suites (loopback/mocked auth; NOT device/capacity proof)']
     lines.extend(f'- {name}: {count} tests PASS, no skips' for name, count in results)
     print('\n'.join(lines))
     if os.environ.get('GITHUB_STEP_SUMMARY'):

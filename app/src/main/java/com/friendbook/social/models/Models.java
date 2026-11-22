@@ -14,7 +14,7 @@ public class Models {
     public static class User {
         public String uid, displayName, email, photoUrl, bio, coverUrl, birthday;
         public String work, education, currentCity, hometown, relationshipStatus, relationship, website, pronouns, phone, phoneNumber;
-        public boolean isOnline, isAdmin, isModerator, banned, isVerified;
+        public boolean isAdmin, isModerator, banned, isVerified;
         public long suspendedUntil;
         public boolean suspendedLifetime;
 
@@ -36,8 +36,7 @@ public class Models {
         }
         public boolean deactivated, loginAlerts, tagReviewEnabled, professionalMode;
         public boolean hideReactionCounts;
-        public boolean showActiveStatus = true;
-        public long lastSeen, createdAt;
+        public long createdAt;
         public int friendsCount;
         public int stars;     // Stars balance (monetization)
         public String tickLevel = "none"; // none | blue | gold | diamond
@@ -120,15 +119,6 @@ public class Models {
             u.tagReviewEnabled = Format.boolOf(m, "tagReviewEnabled");
             u.professionalMode = Format.boolOf(m, "professionalMode");
             u.hideReactionCounts = Format.boolOf(m, "hideReactionCounts");
-            u.showActiveStatus = m == null || !m.containsKey("showActiveStatus") || Format.boolOf(m, "showActiveStatus");
-            long lsTs = Format.ts(m == null ? null : m.get("lastSeen"));
-            long lsMs = (m != null && m.get("lastSeenMs") instanceof Number)
-                    ? ((Number) m.get("lastSeenMs")).longValue() : 0L;
-            u.lastSeen = com.friendbook.social.BuildConfig.ONLINE_STATUS_ENABLED && u.showActiveStatus ? (lsTs > 0 ? lsTs : lsMs) : 0L;
-            boolean rawOnline = m != null && m.containsKey("isActive") ? Format.boolOf(m, "isActive") : Format.boolOf(m, "isOnline");
-            if (m != null && m.containsKey("isOnline") && !Format.boolOf(m, "isOnline")) rawOnline = false;
-            u.isOnline = com.friendbook.social.BuildConfig.ONLINE_STATUS_ENABLED && u.showActiveStatus && com.friendbook.social.core.PresencePolicy.isFreshOnline(
-                    rawOnline, u.lastSeen, com.friendbook.social.core.Presence.now());
             u.createdAt = Format.ts(m == null ? null : m.get("createdAt"));
             u.friendsCount = Format.intOf(m, "friendsCount");
             u.stars = Format.intOf(m, "stars");
@@ -773,7 +763,6 @@ public class Models {
         public boolean onlyAdminsCanSend;
         public List<String> adminIds = new ArrayList<>();
         public List<String> participants = new ArrayList<>();
-        public Map<String, Boolean> typing = new HashMap<>();
         public Map<String, String> participantNames = new HashMap<>();
         public Map<String, String> participantPhotos = new HashMap<>();
 
@@ -810,13 +799,6 @@ public class Models {
             }
             if(ts<=0)ts=Format.ts(m == null ? null : m.get("lastMessageAt"));
             c.lastMessageTime = ts;
-            Object t = m == null ? null : m.get("typing");
-            if (t instanceof Map) {
-                for (Map.Entry<?, ?> e : ((Map<?, ?>) t).entrySet()) {
-                    if (e.getValue() instanceof Boolean)
-                        c.typing.put(String.valueOf(e.getKey()), (Boolean) e.getValue());
-                }
-            }
             Object pn = m == null ? null : m.get("participantNames");
             if (pn instanceof Map) {
                 for (Map.Entry<?, ?> e : ((Map<?, ?>) pn).entrySet()) {

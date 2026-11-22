@@ -87,7 +87,7 @@ def main():
             except Exception:
                 already_seeded = False
             if not already_seeded:
-                for migration in ('0001_additive_profiles.sql', '0009_additive_video_processing.sql', '0010_additive_presence_realtime.sql', '0011_additive_app_documents.sql'):
+                for migration in ('0001_additive_profiles.sql', '0009_additive_video_processing.sql', '0011_additive_app_documents.sql'):
                     sql_text = Path('cloudflare/migrations/' + migration).read_text()
                     for stmt in statements(sql_text):
                         upper = stmt.upper()

@@ -4,9 +4,9 @@ from pathlib import Path
 ROOT=Path(__file__).resolve().parents[2]
 JAVA=ROOT/'app/src/main/java/com/friendbook/social'
 class FeedReadBudgetTest(unittest.TestCase):
-    def test_feed_first_page_is_five_and_cache_first(self):
+    def test_feed_first_page_is_twenty_and_cache_first(self):
         source=(JAVA/'main/HomeFragment.java').read_text()
-        self.assertIn('private static final int PAGE = 5;',source)
+        self.assertIn('private static final int PAGE = 20;',source)
         first=source.split('private void startPostsQuery(boolean forceReload)',1)[1].split('private void consumePostsSnapshot',1)[0]
         self.assertIn('feedQuery.limit(PAGE)', first)
         self.assertIn('FEATURED_REELS_PAGE = 20;', source)

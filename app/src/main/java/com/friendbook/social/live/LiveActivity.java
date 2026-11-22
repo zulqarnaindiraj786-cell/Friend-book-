@@ -1726,7 +1726,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
 
     private final Set<String> processedPacketIds = new HashSet<>();
 
-    private final com.friendbook.social.core.RealtimeSoundGate giftSoundGate = new com.friendbook.social.core.RealtimeSoundGate(com.friendbook.social.core.Presence.now());
+    private final com.friendbook.social.core.RealtimeSoundGate giftSoundGate = new com.friendbook.social.core.RealtimeSoundGate(System.currentTimeMillis());
     private void onChatSnapshot(List<DocumentSnapshot> docs, boolean fromCache) {
         boolean soundEligible = giftSoundGate.begin(fromCache);
         List<ChatItem> visibleMessages = new ArrayList<>();
@@ -1746,7 +1746,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
             // Immediately hide permanently blocked users from Live Chat!
             if (!uid.isEmpty() && Fb.me != null && Fb.me.blocked != null && Fb.me.blocked.contains(uid)) {
                 if ("gift".equals(type)) giftSoundGate.observe(id, Format.longOf(m, "createdAtMs"),
-                        com.friendbook.social.core.Presence.now(), soundEligible);
+                        System.currentTimeMillis(), soundEligible);
                 continue;
             }
 
@@ -1774,7 +1774,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
                 String gName = Format.strOr(m, "giftName", "Gift");
                 long giftTime = Format.ts(m.get("createdAt"));
                 if (giftTime <= 0) giftTime = Format.longOf(m, "createdAtMs");
-                boolean freshGiftSound = giftSoundGate.observe(id, giftTime, com.friendbook.social.core.Presence.now(), soundEligible);
+                boolean freshGiftSound = giftSoundGate.observe(id, giftTime, System.currentTimeMillis(), soundEligible);
                 if (isNewPacket && stars > 0) {
                     totalGiftsCount++;
                     int prev = supporterStars.containsKey(uid) ? supporterStars.get(uid) : 0;

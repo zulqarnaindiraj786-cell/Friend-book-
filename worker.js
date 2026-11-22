@@ -6,7 +6,6 @@ import { runMaintenance } from './cloudflare/maintenance.js';
 import { viewCounters } from './cloudflare/view-counters.js';
 import { contentReadAllowed } from './cloudflare/document-policy.js';
 import { uploadVideo, uploadPhoto, uploadPhoneVideo } from './cloudflare/video-r2.js';
-import { presenceRealtime } from './cloudflare/presence-realtime.js';
 import { androidRelease } from './cloudflare/android-release.js';
 import { interactions } from './cloudflare/interactions.js';
 import { appDocuments, requestAccountReads, saveProfileProjection } from './cloudflare/app-documents.js';
@@ -69,13 +68,11 @@ export function createWorker(verify = verifyFirebaseToken) {
         || path === '/v1/admin/recover-social' || path === '/v1/admin/moderation' || path === '/v1/admin/broadcast' || path === '/v1/firestore/story-engagement';
       const fcm = path === '/functions/v1/send-fcm-notification' || path === '/functions/v1/bulk-mentions';
       const docs = path === '/v1/docs' || /^\/v1\/docs\/[^/]+\/[^/]+$/.test(path);
-      const presence = path === '/v1/presence/socket' || path === '/v1/presence/me'
-        || /^\/v1\/presence\/(contact|typing)\/[^/]+$/.test(path);
       const engagement = /^\/v1\/engagement\/(posts|reels)\/([^/]+)\/(reactions|comments|reactors)$/.exec(path);
       // Real view counters live in Cloudflare D1 (Firebase is auth only, never view data).
       const viewsMatch = /^\/v1\/views\/(posts|reels)\/([^/]+)$/.exec(path);
       const views = path === '/v1/views' || Boolean(viewsMatch);
-      if (path !== '/health' && path !== '/health/r2' && path !== '/v1/me' && !engagement && !video && !photo && !presence && !docs && !views && !firestore && !fcm && !live && !callMedia) return json({ error: 'Not found' }, 404);
+      if (path !== '/health' && path !== '/health/r2' && path !== '/v1/me' && !engagement && !video && !photo && !docs && !views && !firestore && !fcm && !live && !callMedia) return json({ error: 'Not found' }, 404);
       if ((path === '/health' || path === '/health/r2') && request.method !== 'GET') return json({ error: 'Method not allowed' }, 405);
       if (path === '/v1/me' && request.method !== 'GET' && request.method !== 'PUT') return json({ error: 'Method not allowed' }, 405);
       if (path === '/health/r2') {
@@ -107,11 +104,6 @@ export function createWorker(verify = verifyFirebaseToken) {
       let uid;
       try { uid = await verify(bearer[1], env.FIREBASE_PROJECT_ID); }
       catch { return json({ error: 'Unauthorized' }, 401); }
-      // Disabled typing exposes no account/chat data and cannot mutate state.
-      // Handle it before the account D1 lookup so older polling clients do not
-      // burn rows; signed identity and input validation still apply.
-      if (env.TYPING_DISABLED === 'true' && /^\/v1\/presence\/typing\/[^/]+$/.test(path))
-        return presenceRealtime(request,env,{uid});
       // Keep the own-profile read available so the Android app can detect a ban
       // and sign out, but reject all other operations for disabled accounts.
       const ownProfileRead=path==='/v1/firestore/document' && request.method==='GET'
@@ -175,7 +167,6 @@ export function createWorker(verify = verifyFirebaseToken) {
           return viewCounters(request,env,{uid},null,url,Date.now,ctx);
         } catch { return json({error:'View access unavailable'},503); }
       }
-      if (presence) return presenceRealtime(request, env, { uid, token: bearer[1], viewerProfile });
       if (engagement) return interactions(request, env, { uid, token: bearer[1], project: env.FIREBASE_PROJECT_ID, db: env.DB, viewerProfile }, engagement);
       try {
         if (request.method === 'PUT') {

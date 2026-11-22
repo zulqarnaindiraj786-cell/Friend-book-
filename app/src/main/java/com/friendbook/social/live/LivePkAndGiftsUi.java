@@ -787,7 +787,6 @@ public final class LivePkAndGiftsUi {
                 FastCache.putUser(u);
                 friendUsers.add(u);
             }
-            friendUsers.sort((u1, u2) -> Boolean.compare(u2.isOnline, u1.isOnline));
 
             if (friendUsers.isEmpty()) {
                 listCol.addView(Ui.tv(a, "No users available to invite right now.", 13, 0xAAFFFFFF));
@@ -803,23 +802,12 @@ public final class LivePkAndGiftsUi {
                 ImageView av = new ImageView(a);
                 Ui.avatar(a, av, u.photoUrl);
                 avWrap.addView(av, new FrameLayout.LayoutParams(Ui.dp(a, 40), Ui.dp(a, 40)));
-                if (u.isOnline) {
-                    View dot = new View(a);
-                    GradientDrawable gd = new GradientDrawable();
-                    gd.setShape(GradientDrawable.OVAL);
-                    gd.setColor(0xFF31A24C);
-                    gd.setStroke(Ui.dp(a, 1.5f), 0xFF14161E);
-                    dot.setBackground(gd);
-                    avWrap.addView(dot, new FrameLayout.LayoutParams(
-                            Ui.dp(a, 11), Ui.dp(a, 11), Gravity.BOTTOM | Gravity.END));
-                }
                 row.addView(avWrap);
 
                 LinearLayout info = Ui.col(a);
                 info.setPadding(Ui.dp(a, 10), 0, Ui.dp(a, 8), 0);
                 info.addView(Ui.tvBold(a, u.displayName, 13.5f, Color.WHITE));
-                info.addView(Ui.tv(a, u.isOnline ? "Active now · Sends Live Video to Inbox" : "Tap Invite · Sends Live Video to Inbox", 11f,
-                        u.isOnline ? 0xFF69F0AE : 0x99FFFFFF));
+                info.addView(Ui.tv(a, "Tap Invite · Sends Live Video to Inbox", 11f, 0x99FFFFFF));
                 row.addView(info, new LinearLayout.LayoutParams(0, -2, 1f));
 
                 final TextView invBtn = Ui.roundChip(a, "Invite", 0xFFFE2C55, Color.WHITE, 12);

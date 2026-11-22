@@ -100,6 +100,7 @@ public class D1DocumentStore {
         final PollBudget budget = new PollBudget();
         final AtomicBoolean inFlight = new AtomicBoolean(false);
         final AtomicBoolean refreshPending = new AtomicBoolean(false);
+        final AtomicBoolean forceDelivery = new AtomicBoolean(false);
 
         org.json.JSONObject revisions = new org.json.JSONObject();
         org.json.JSONArray priorRows = new org.json.JSONArray();
@@ -112,7 +113,6 @@ public class D1DocumentStore {
 
     private D1DocumentStore() {
         poller.scheduleWithFixedDelay(this::pollActiveListeners, 5, 5, TimeUnit.SECONDS);
-        poller.scheduleWithFixedDelay(this::pollVisibleChatFallback, 5, 5, TimeUnit.SECONDS);
     }
 
     /** A single authenticated refresh when the process actually returns to foreground. */
@@ -430,6 +430,16 @@ public class D1DocumentStore {
         chatPushRefresh.hint(chatId);
     }
 
+    /** Manual retry for an open conversation when a push is delayed or unavailable. */
+    public void refreshChatMessages(String chatId) {
+        if (chatId == null || chatId.isEmpty() || chatId.indexOf('/') >= 0) return;
+        String path = "chats/" + chatId + "/messages";
+        for (QueryListenerEntry entry : queryListeners) {
+            if (entry.active && path.equals(entry.query.parentPath)) entry.forceDelivery.set(true);
+        }
+        notifyCollectionListeners(path);
+    }
+
     public void refreshInboxFromPush(String type) {
         final String actor = authenticatedUid();
         // Combine a short burst of notification pushes without using their
@@ -469,19 +479,6 @@ public class D1DocumentStore {
                 e.refreshPending.set(true);
                 scheduleQueryRead(e);
             }
-        }
-    }
-
-    // Push is the fast path. Catch a delayed/missing push only while a chat or inbox is open.
-    private void pollVisibleChatFallback() {
-        if (!com.friendbook.social.App.isForeground()) return;
-        long now = android.os.SystemClock.elapsedRealtime();
-        if (!D1DocumentTransport.periodicAllowed(now)) return;
-        for (QueryListenerEntry entry : queryListeners) {
-            String path = entry.query.parentPath;
-            boolean chat = ListenerPollingPolicy.isChatMessages(path);
-            if (entry.active && chat && entry.budget.chatFallbackDue(now - entry.lastAttemptMs, true))
-                scheduleQueryRead(entry);
         }
     }
 
@@ -526,8 +523,9 @@ public class D1DocumentStore {
             // A push arriving after this point must get one follow-up read, even
             // when the current HTTP request returns the pre-message snapshot.
             entry.refreshPending.set(false);
+            boolean forceDelivery = entry.forceDelivery.getAndSet(false);
             entry.lastAttemptMs = android.os.SystemClock.elapsedRealtime();
-            try { D1DocumentTransport.runForActor(entry.actor, () -> { deliverQuery(entry); return null; }); }
+            try { D1DocumentTransport.runForActor(entry.actor, () -> { deliverQuery(entry, forceDelivery); return null; }); }
             catch (Exception ignored) { }
             finally {
                 entry.inFlight.set(false);
@@ -590,7 +588,7 @@ public class D1DocumentStore {
         return copy.toString();
     }
 
-    private void deliverQuery(QueryListenerEntry entry) {
+    private void deliverQuery(QueryListenerEntry entry, boolean forceDelivery) {
         if (!entry.active) return;
         try {
             org.json.JSONObject body=toQueryJson(entry.query);
@@ -628,7 +626,7 @@ public class D1DocumentStore {
             // must be delivered even when its contents match the cached snapshot.
             boolean changed = entry.deliveryState.server(fp);
             entry.budget.success(changed);
-            if (!changed) return;
+            if (!changed && !forceDelivery) return;
             QuerySnapshot snap = entry.query.parseQuerySnapshot(arr);
             mainHandler.post(() -> {
                 if (entry.active && entry.actor.equals(authenticatedUid())) entry.listener.onEvent(snap, null);

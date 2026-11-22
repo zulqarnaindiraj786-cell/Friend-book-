@@ -20,7 +20,6 @@ import androidx.recyclerview.widget.RecyclerView;
 
 import com.friendbook.social.core.Fb;
 import com.friendbook.social.core.Format;
-import com.friendbook.social.core.Presence;
 import com.friendbook.social.core.Prefs;
 import com.friendbook.social.core.Ui;
 import com.friendbook.social.models.Models;
@@ -39,7 +38,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-/** 1:1 chat: realtime messages, typing, presence, seen/delivered, images, deletes. */
+/** 1:1 chat: realtime messages, seen/delivered, images, deletes. */
 public class ChatActivity extends Activity implements MessagesAdapter.Actions {
 
     private static final int PICK_IMG = 51;
@@ -68,8 +67,7 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
     private boolean isGroupChat = false;
     private boolean isTeamChat = false;
     private Models.ChatRoom groupRoom;
-    private TextView presenceTv, nameTv;
-    private View peerOnlineDot;
+    private TextView subtitleTv, nameTv;
     private View composerRoot;
     private TextView readOnlyBanner;
     private ImageView barTick;
@@ -78,10 +76,8 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
     private EditText input;
     private MessagesAdapter adapter;
     private RecyclerView rv;
+    private androidx.swiperefreshlayout.widget.SwipeRefreshLayout messageRefresh;
     private ListenerRegistration msgReg, userReg, roomReg;
-    private Presence.Handle presence;
-    private boolean peerOnline = false;
-    private long peerLastSeen = 0L;
     private boolean initialScrollDone = false;
     private boolean forceScrollBottom = false;
     private boolean unreadResetOnce = false;
@@ -124,7 +120,7 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         LinearLayout root = Ui.col(this);
         root.setBackgroundColor(Ui.isDark(this) ? Ui.bg(this) : Color.WHITE);
 
-        // Clean Messenger-style white header: <  [Avatar+GreenDot] Name / Active status   [Call] [Video] [Gear]
+        // Clean Messenger-style white header: <  [Avatar] Name   [Call] [Video] [Gear]
         LinearLayout bar = Ui.row(this);
         bar.setBackgroundColor(Ui.card(this));
         bar.setGravity(Gravity.CENTER_VERTICAL);
@@ -139,18 +135,6 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         barAvatar = new ImageView(this);
         Ui.avatar(this, barAvatar, isTeamChat ? Ui.TEAM_AVATAR_TOKEN : peerPhoto);
         avatarWrap.addView(barAvatar, new android.widget.FrameLayout.LayoutParams(avPx, avPx, Gravity.CENTER));
-
-        peerOnlineDot = new View(this);
-        android.graphics.drawable.GradientDrawable dotBg = new android.graphics.drawable.GradientDrawable();
-        dotBg.setShape(android.graphics.drawable.GradientDrawable.OVAL);
-        dotBg.setColor(0xFF31A24C);
-        dotBg.setStroke(Ui.dp(this, 2), Ui.card(this));
-        peerOnlineDot.setBackground(dotBg);
-        peerOnlineDot.setVisibility(View.GONE);
-        int dotPx = Ui.dp(this, 12);
-        android.widget.FrameLayout.LayoutParams dotLp =
-                new android.widget.FrameLayout.LayoutParams(dotPx, dotPx, Gravity.BOTTOM | Gravity.END);
-        avatarWrap.addView(peerOnlineDot, dotLp);
 
         LinearLayout.LayoutParams avWrapLp = new LinearLayout.LayoutParams(Ui.dp(this, 42), Ui.dp(this, 42));
         avWrapLp.leftMargin = Ui.dp(this, 2);
@@ -173,11 +157,11 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         nameRow.addView(nameTv, new LinearLayout.LayoutParams(-2, -2));
         nameRow.addView(barTick, tickp);
 
-        presenceTv = Ui.tv(this, "", 12.5f, Ui.sub(this));
-        presenceTv.setSingleLine(true);
-        presenceTv.setVisibility(View.GONE);
+        subtitleTv = Ui.tv(this, "", 12.5f, Ui.sub(this));
+        subtitleTv.setSingleLine(true);
+        subtitleTv.setVisibility(View.GONE);
         nameCol.addView(nameRow);
-        nameCol.addView(presenceTv);
+        nameCol.addView(subtitleTv);
         bar.addView(nameCol, ncp);
 
         // Top-right Voice Call, Video Call & Settings Gear icons (exact match to screenshot!)
@@ -278,7 +262,14 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
                 if(dy<0 && list.getScrollState()!=RecyclerView.SCROLL_STATE_IDLE && !historyFailed && manager!=null && manager.findFirstVisibleItemPosition()<=2) loadOlderMessages();
             }
         });
-        android.widget.FrameLayout messageWrap=new android.widget.FrameLayout(this);messageWrap.addView(rv,new android.widget.FrameLayout.LayoutParams(-1,-1));
+        messageRefresh = new androidx.swiperefreshlayout.widget.SwipeRefreshLayout(this);
+        messageRefresh.setColorSchemeColors(Ui.BLUE);
+        messageRefresh.addView(rv);
+        messageRefresh.setOnRefreshListener(() -> {
+            if (msgReg == null) { messageRefresh.setRefreshing(false); return; }
+            Fb.db().refreshChatMessages(chatId);
+        });
+        android.widget.FrameLayout messageWrap=new android.widget.FrameLayout(this);messageWrap.addView(messageRefresh,new android.widget.FrameLayout.LayoutParams(-1,-1));
         threadStatus=Ui.tv(this,"Opening conversation…",14,Ui.sub(this));
         threadStatus.setGravity(Gravity.CENTER); Ui.pad(threadStatus,20,8,20,8);
         messageWrap.addView(threadStatus,new android.widget.FrameLayout.LayoutParams(-1,-2,Gravity.CENTER));
@@ -446,21 +437,6 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         return wrap;
     }
 
-    private void refreshPresenceText() {
-        if (presenceTv == null || isGroupChat || isTeamChat) return;
-        if (peerOnlineDot != null) {
-            peerOnlineDot.setVisibility(peerOnline ? View.VISIBLE : View.GONE);
-        }
-        String label = Presence.formatActiveStatus(peerOnline, peerLastSeen);
-        if (label.isEmpty()) {
-            presenceTv.setText("");
-            presenceTv.setVisibility(View.GONE);
-        } else {
-            presenceTv.setText(label);
-            presenceTv.setVisibility(View.VISIBLE);
-        }
-    }
-
     @Override
     protected void onStart() {
         super.onStart();
@@ -481,8 +457,8 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
                         peerPhoto = groupRoom.groupPhoto == null ? "" : groupRoom.groupPhoto;
                         nameTv.setText(peerName);
                         barTick.setVisibility(View.GONE);
-                        presenceTv.setText(groupRoom.participants.size() + " members");
-                        presenceTv.setVisibility(View.VISIBLE);
+                        subtitleTv.setText(groupRoom.participants.size() + " members");
+                        subtitleTv.setVisibility(View.VISIBLE);
                         if (!peerPhoto.isEmpty()) {
                             barAvatar.setPadding(0, 0, 0, 0);
                             Ui.avatar(this, barAvatar, peerPhoto);
@@ -517,8 +493,8 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
             com.friendbook.social.core.Icons.setTickBadge(barTick, "gold", false);
             Ui.avatar(this, barAvatar, Ui.TEAM_AVATAR_TOKEN);
             adapter.setPeerPhoto(Ui.TEAM_AVATAR_TOKEN);
-            presenceTv.setText("Official friendbook Team");
-            presenceTv.setVisibility(View.VISIBLE);
+            subtitleTv.setText("Official friendbook Team");
+            subtitleTv.setVisibility(View.VISIBLE);
         } else {
             // Listen for incoming Voice/Video Calls on this 1:1 chat doc too!
             roomReg = Fb.db().collection("chats").document(chatId)
@@ -543,15 +519,9 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
                         adapter.setPeerPhoto(peerPhoto);
                     });
 
-            // Live Presence (Firestore + RTDB merged + 30s live age refresh, never wiped by typing!)
-            presence = Presence.watch(peerId, (online, lastSeen) -> {
-                peerOnline = online;
-                peerLastSeen = lastSeen;
-                refreshPresenceText();
-            });
         }
 
-        // Parse only changed documents, not 200 message bodies on every receipt/typing update.
+        // Parse only changed documents, not 200 message bodies on every receipt update.
         if(!java.util.Objects.equals(messageActor,Fb.uid())){
             messageSnapshots.clear();historyMessages.clear();pendingMessages.clear();historyRanges.clear();maskedHistoryIds.clear();historyEnd=null;lastServerMessage=null;historyCursor=null;historyMore=true;initialScrollDone=false;adapter.setData(new ArrayList<>());messageActor=Fb.uid();
         }
@@ -560,13 +530,14 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         final Set<String> knownAtAttach=new HashSet<>(historyMessages.keySet());knownAtAttach.addAll(messageSnapshots.keySet());
         final boolean[] firstServer={true};
         final Set<String> previewIds=new HashSet<>();
-        final com.friendbook.social.core.RealtimeSoundGate soundGate = new com.friendbook.social.core.RealtimeSoundGate(Presence.now());
+        final com.friendbook.social.core.RealtimeSoundGate soundGate = new com.friendbook.social.core.RealtimeSoundGate(System.currentTimeMillis());
         msgReg = Fb.db().collection("chats").document(chatId)
                 .collection("messages")
                 .orderBy("createdAt", Query.Direction.ASCENDING)
                 .limitToLast(10)
                 .addSnapshotListener(com.friendbook.social.d1.documents.MetadataChanges.INCLUDE, (snap, err) -> {
                     if (chatGeneration!=historyGeneration || !java.util.Objects.equals(chatActor,Fb.uid()) || isFinishing()) return;
+                    if (snap == null || !snap.getMetadata().isFromCache()) messageRefresh.setRefreshing(false);
                     if(snap==null) {
                         if(err!=null && (err.getCode()==com.friendbook.social.d1.documents.D1DocumentStoreException.Code.PERMISSION_DENIED
                                 || err.getCode()==com.friendbook.social.d1.documents.D1DocumentStoreException.Code.UNAUTHENTICATED)) {
@@ -625,7 +596,7 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
                         boolean cached=snap.getMetadata().isFromCache() || snap.getMetadata().hasPendingWrites(),playSound=false;
                         boolean eligible=soundGate.begin(cached);Set<String> hidden=hiddenMsgs();
                         for(DocumentSnapshot doc:snap){Models.Message m=messageSnapshots.get(doc.getId());
-                            if(m!=null && soundGate.observe(m.id,m.createdAt,Presence.now(),eligible) && !hidden.contains(m.id)
+                            if(m!=null && soundGate.observe(m.id,m.createdAt,System.currentTimeMillis(),eligible) && !hidden.contains(m.id)
                                     && !java.util.Objects.equals(Fb.uid(),m.senderId) && !m.isDeleted && !"system".equals(m.type) && !"call".equals(m.type))playSound=true;}
                         soundGate.end(cached);if(playSound)com.friendbook.social.core.SoundManager.playNewMessage(this);
                         markVisibleReceipts();return;
@@ -654,7 +625,7 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
                     for (DocumentSnapshot d : snap) {
                         Models.Message m = messageSnapshots.get(d.getId());
                         if (m == null) { m = Models.Message.fromDoc(d); messageSnapshots.put(d.getId(), m); }
-                        boolean freshSound = soundGate.observe(m.id, m.createdAt, Presence.now(), soundEligible);
+                        boolean freshSound = soundGate.observe(m.id, m.createdAt, System.currentTimeMillis(), soundEligible);
                         if (hidden.contains(m.id)) continue;
                         list.add(m);
                         if (freshSound && me != null && !me.equals(m.senderId) && !m.isDeleted
@@ -803,7 +774,6 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         if (msgReg != null) msgReg.remove();
         if (userReg != null) userReg.remove();
         if (roomReg != null) roomReg.remove();
-        if (presence != null) presence.close();
         MessagesAdapter.stopVoice();
         if (recording) { stopRecording(false); }
     }
@@ -889,8 +859,6 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         Map<String, Object> unread = new HashMap<>();
         unread.put(peerId, FieldValue.increment(1));
         unread.put(me, 0);
-        Map<String, Object> typingOff = new HashMap<>();
-        typingOff.put(me, false);
         Map<String, String> names = new HashMap<>();
         names.put(me, Fb.myName());
         if (peerName != null && !peerName.isEmpty()) names.put(peerId, peerName);
@@ -904,7 +872,6 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
                 "lastMessage", lastMsg == null ? "" : lastMsg,
                 "lastMessageTime", FieldValue.serverTimestamp(),
                 "lastMessageTimeMs", System.currentTimeMillis(),
-                "typing", typingOff,
                 "unreadCount", unread);
     }
 

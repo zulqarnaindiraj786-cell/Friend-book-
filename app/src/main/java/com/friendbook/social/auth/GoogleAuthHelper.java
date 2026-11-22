@@ -37,7 +37,6 @@ import com.friendbook.social.core.Admin;
 import com.friendbook.social.core.Fb;
 import com.friendbook.social.core.Notify;
 import com.friendbook.social.core.Prefs;
-import com.friendbook.social.core.Presence;
 import com.friendbook.social.core.Ui;
 import com.friendbook.social.main.MainActivity;
 import com.friendbook.social.settings.SessionsActivity;
@@ -616,7 +615,7 @@ public final class GoogleAuthHelper {
 
     private static void openMain(Activity a) {
         Fb.startMeListener();
-        Presence.init();
+
         a.startActivity(new Intent(a, MainActivity.class));
         a.finishAffinity();
     }

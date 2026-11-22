@@ -13,10 +13,9 @@ import android.os.Looper;
 
 import com.friendbook.social.core.Fb;
 import com.friendbook.social.core.Prefs;
-import com.friendbook.social.core.Presence;
 import com.friendbook.social.core.Ui;
 
-/** Application class: boots Firebase, presence, wellbeing timer and shake-to-report detector. */
+/** Application class: boots Firebase, wellbeing timer and shake-to-report detector. */
 public class App extends Application implements SensorEventListener {
 
     public static App instance;
@@ -30,11 +29,6 @@ public class App extends Application implements SensorEventListener {
     private volatile int resumedCount = 0;
     private long backgroundSince = -5000L;
     private final Handler timeHandler = new Handler(Looper.getMainLooper());
-    private final Runnable deferredOffline = () -> {
-        if (startedCount <= 0) {
-            Presence.goOffline();
-        }
-    };
     private final Runnable timeTick = new Runnable() {
         @Override
         public void run() {
@@ -68,7 +62,7 @@ public class App extends Application implements SensorEventListener {
         com.friendbook.social.core.ConsentManager.ensureInitialized(this);
         installCrashReporter();
         // A push or background worker can create the Application without an
-        // Activity. Do not start online presence or profile listeners here;
+        // Activity. Do not start profile listeners here;
         // the first started Activity below owns foreground startup.
 
         // Track real foreground time + apply friendbook zero-lag screen transitions
@@ -104,9 +98,7 @@ public class App extends Application implements SensorEventListener {
                 }
             }
             @Override public void onActivityStarted(Activity a) {
-                timeHandler.removeCallbacks(deferredOffline);
                 if (startedCount == 0 && Fb.uid() != null) {
-                    Presence.init();
                     Fb.ensureMeFresh();
                 }
                 startedCount++;
@@ -114,10 +106,6 @@ public class App extends Application implements SensorEventListener {
             }
             @Override public void onActivityStopped(Activity a) {
                 startedCount = Math.max(0, startedCount - 1);
-                if (startedCount == 0) {
-                    timeHandler.removeCallbacks(deferredOffline);
-                    timeHandler.postDelayed(deferredOffline, 500L);
-                }
             }
             @Override public void onActivitySaveInstanceState(Activity a, Bundle b) { }
             @Override public void onActivityDestroyed(Activity a) { }

@@ -24,7 +24,6 @@ import com.friendbook.social.core.Fb;
 import com.friendbook.social.core.Format;
 import com.friendbook.social.core.Icons;
 import com.friendbook.social.core.Prefs;
-import com.friendbook.social.core.Presence;
 import com.friendbook.social.core.Ui;
 import com.friendbook.social.models.Models;
 import com.friendbook.social.post.SavedPostsActivity;
@@ -666,7 +665,7 @@ public class SettingsActivity extends Activity {
                 if (active) {
                     Ui.toast(this, "Already signed in as " + target.name);
                 } else {
-                    Presence.goOffline();
+
                     com.friendbook.social.core.FastCache.clearAll(this);
                     com.friendbook.social.auth.GoogleAuthHelper.signOutGoogle(this);
                     com.friendbook.social.push.PushManager.unregister(com.friendbook.social.App.instance);
@@ -1310,7 +1309,7 @@ public class SettingsActivity extends Activity {
             Prefs.saveAccount(this, Fb.uid(), Fb.auth().getCurrentUser().getEmail(),
                     Fb.myName(), Fb.myPhoto());
         }
-        Presence.goOffline();
+
         com.friendbook.social.core.FastCache.clearAll(this);
         com.friendbook.social.auth.GoogleAuthHelper.signOutGoogle(this);
         com.friendbook.social.push.PushManager.unregister(com.friendbook.social.App.instance);

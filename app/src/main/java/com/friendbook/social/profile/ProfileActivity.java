@@ -37,7 +37,6 @@ import com.friendbook.social.core.Fb;
 import com.friendbook.social.core.Format;
 import com.friendbook.social.core.Icons;
 import com.friendbook.social.core.Notify;
-import com.friendbook.social.core.Presence;
 import com.friendbook.social.core.Ui;
 import com.friendbook.social.friends.FollowListActivity;
 import com.friendbook.social.friends.UsersAdapter;
@@ -98,7 +97,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
     private String profileSearchQuery = "";
 
     private TextView topTitleTv, editTopIcon, guardBadge;
-    private TextView nameT, categoryT, bioT, statsT, presenceT;
+    private TextView nameT, categoryT, bioT, statsT;
     private String boundAvatarUrl, boundCoverUrl;
     private Map<String, Object> boundProfileFields;
     private ImageView nameTick, cover, avatar;
@@ -125,7 +124,6 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
 
     private final List<Models.Post> allLoadedPosts = new ArrayList<>();
     private ListenerRegistration userReg, friendsReg, ownerFriendsReg, outReg, inReg, postsReg, reelsReg;
-    private Presence.Handle presenceH;
     private final List<String> friendIds = new ArrayList<>();
     private final List<String> ownerFriendIds = new ArrayList<>();
     private final Map<String, Models.User> userCache = new HashMap<>();
@@ -270,9 +268,6 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
         statsT.setEllipsize(android.text.TextUtils.TruncateAt.END);
         rightNameCol.addView(statsT);
 
-        presenceT = Ui.tv(this, "", 12, Ui.GREEN);
-        presenceT.setVisibility(View.GONE);
-        rightNameCol.addView(presenceT);
         heroTopStack.addView(rightNameCol, rncLp);
 
         // Full 114dp Circular Profile Picture overlapping bottom-left of Cover Photo & top-left of Name Strip
@@ -953,17 +948,6 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
                         incomingRequestId = hasIn ? snap.getDocuments().get(0).getId() : null;
                         computeFriendState();
                     });
-            presenceH = Presence.watch(uid, (online, lastSeen) -> {
-                if (online) {
-                    presenceT.setText("🟢 Active now");
-                    presenceT.setVisibility(View.VISIBLE);
-                } else if (lastSeen > 0) {
-                    presenceT.setText(Presence.formatActiveStatus(false, lastSeen));
-                    presenceT.setVisibility(View.VISIBLE);
-                } else {
-                    presenceT.setVisibility(View.GONE);
-                }
-            });
         }
         if(activeTab==3)startFriendPages();
         if(activeTab==1) startReelsWatcher();
@@ -1111,7 +1095,6 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
         if (postsReg != null) postsReg.remove();
         if (reelsReg != null) reelsReg.remove();
         if (subReg != null) subReg.remove();
-        if (presenceH != null) presenceH.close();
     }
 
     private int displayedFollowerCount() {
@@ -2010,7 +1993,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
             friendUsers.add(u);
             UsersAdapter.Row r = new UsersAdapter.Row();
             r.user = u;
-            r.subtitle = "Friend"; // Live profile/chat status comes from Presence.watch, never this cached user card.
+            r.subtitle = "Friend";
             rows.add(r);
         }
         friendsAdapter.setData(rows);

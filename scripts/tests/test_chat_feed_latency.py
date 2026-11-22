@@ -27,14 +27,15 @@ class ChatFeedLatencyTest(unittest.TestCase):
         self.assertIn('isCurrentFeedSlotAd(slotOrdinal, currentNativeAd)', feed)
         self.assertIn('return id & Long.MAX_VALUE', feed)
 
-    def test_delayed_push_fallback_is_foreground_and_chat_scoped(self):
+    def test_chat_uses_push_and_manual_refresh_not_periodic_fallback(self):
         store = (ROOT / 'd1/documents/D1DocumentStore.java').read_text()
-        fallback = store.split('private void pollVisibleChatFallback()', 1)[1].split('private void pollActiveListeners()', 1)[0]
-        self.assertIn('App.isForeground()', fallback)
-        self.assertIn('periodicAllowed(now)', fallback)
-        self.assertIn('entry.active && chat', fallback)
-        self.assertIn('chatFallbackDue(now - entry.lastAttemptMs, true)', fallback)
-        self.assertIn('scheduleQueryRead(entry)', fallback)
+        self.assertNotIn('pollVisibleChatFallback', store)
+        self.assertIn('String path = "chats/" + chatId + "/messages"', store)
+        self.assertIn('entry.forceDelivery.set(true)', store)
+        self.assertIn('if (!changed && !forceDelivery) return;', store)
+        chat = (ROOT / 'chat/ChatActivity.java').read_text()
+        self.assertIn('setOnRefreshListener', chat)
+        self.assertIn('refreshChatMessages(chatId)', chat)
 
     def test_feed_first_page_does_not_queue_behind_other_reads(self):
         query = (ROOT / 'd1/documents/Query.java').read_text()

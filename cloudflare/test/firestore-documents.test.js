@@ -403,20 +403,6 @@ test('profiles and chats: private fields, membership and write bypasses across A
   assert.equal((await call('bob','/v1/firestore/document?path=users/alice','PUT',{data:{displayName:'Alice'},merge:true})).status,403);
   assert.equal((await call('alice','/v1/firestore/document?path=users/alice','PATCH',{fields:{bio:'new'}})).status,200);
   assert.ok(profileChanges()>saved,'a changed profile still commits');
-  const profileHeartbeat={isOnline:true,isActive:true,showActiveStatus:true,lastSeenMs:Date.now(),lastSeen:{__fieldValue:'serverTimestamp'}};
-  const profilePath='/v1/firestore/document?path=users/alice';
-  assert.equal((await call('alice',profilePath,'PATCH',{fields:profileHeartbeat})).status,200);
-  const mirrorProfile=()=>sql.prepare("SELECT document_json FROM friendbook_cf_documents WHERE path='users/alice'").get().document_json;
-  const beforeHeartbeatMirror=mirrorProfile();
-  sql.exec("UPDATE friendbook_cf_firestore_documents SET document_json=json_set(document_json,'$.lastSeen.millis',1) WHERE path='users/alice'");
-  const beforeQuietHeartbeat=profileChanges();
-  const heartbeatResult=await call('alice',profilePath,'PATCH',{fields:profileHeartbeat});
-  assert.equal(heartbeatResult.status,200);
-  assert.ok((await heartbeatResult.json()).data.lastSeen.millis>1);
-  assert.equal(profileChanges()-beforeQuietHeartbeat,1,'quiet fallback heartbeat needs only one canonical row change');
-  assert.equal(mirrorProfile(),beforeHeartbeatMirror);
-  assert.equal((await call('alice',profilePath,'PATCH',{fields:{...profileHeartbeat,isOnline:false,isActive:false,showActiveStatus:false}})).status,200);
-  assert.equal(JSON.parse(mirrorProfile()).showActiveStatus,false,'privacy transitions still update both stores');
   const profile=await (await call('bob','/v1/firestore/document?path=users/alice')).json();
   assert.equal(profile.data.displayName,'Alice');assert.equal(profile.data.email,undefined);assert.equal(profile.data.twoFactorPin,undefined);
   const other=await (await call('bob','/v1/docs/users/alice')).json();assert.equal(other.document.email,undefined);
@@ -2110,7 +2096,7 @@ test('disabled account cannot use D1 routes but can read its own status for sign
  for (const [path,method,body] of [
   ['/v1/firestore/query','POST',{parent:'chats'}],
   ['/v1/firestore/document?parent=reports','POST',{data:{reportedBy:'alice',reason:'spam'}}],
-  ['/v1/presence/me','GET'], ['/v1/docs/users/alice','PUT',{displayName:'x'}],
+  ['/v1/docs/users/alice','PUT',{displayName:'x'}],
   ['/v1/firestore/document?path=users/alice','PATCH',{fields:{banned:false}}]
  ]) assert.equal((await call(path,method,body)).status,403,path);
  sql.prepare('UPDATE friendbook_cf_firestore_documents SET document_json=? WHERE path=?').run(JSON.stringify({uid:'alice',banned:false}),'users/alice');
@@ -3236,40 +3222,6 @@ test('recent friend suggestions seek indexed profiles and preserve privacy, hist
   assert.match(plans.join('\n'),/SEARCH.*idx_cf_legacy_recent_people/);
   assert.doesNotMatch(plans.join('\n'),/USE TEMP B-TREE/);
   sql.close();
-});
-
-test('healthy socket saves redundant profile writes without suppressing fallback or visibility changes', async t=>{
- const sql=new DatabaseSync(':memory:');t.after(()=>sql.close());
- for(const ddl of [resourcesSchema,appSchema,schema,socialGuardSchema])sql.exec(ddl);
- for(const file of ['0031_presence_sessions.sql','0064_presence_read_seeks.sql'])
-   sql.exec(readFileSync(new URL(`../migrations/${file}`,import.meta.url),'utf8'));
- const now=Date.now(), prior=now-240_000;
- const profile={uid:'alice',isOnline:true,isActive:true,showActiveStatus:true,lastSeenMs:prior,lastSeen:{__type:'timestamp',millis:prior}};
- sql.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)').run('users/alice','users','users','alice','alice',JSON.stringify(profile),prior,prior);
- sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)').run('users/alice','users','alice','alice',JSON.stringify(profile),prior);
- sql.prepare('INSERT INTO friendbook_cf_presence_sessions VALUES (?,?,?,?,?)').run('alice','socket',1,1,now-1000);
- let batches=0, changes=0, profileReads=0;
- const db={prepare(q){const stmt=sql.prepare(q);return{bind(...args){return{run:async()=>{const result=stmt.run(...args);changes+=result.changes;return result;},all:async()=>({results:stmt.all(...args)}),first:async()=>{if(args[0]==='users/alice')profileReads++;return stmt.get(...args)||null;}};}};},async batch(stmts){batches++;sql.exec('BEGIN');try{for(const s of stmts)await s.run();sql.exec('COMMIT');}catch(e){sql.exec('ROLLBACK');throw e;}}};
- const app=createWorker(async token=>token),env={DB:db,FIREBASE_PROJECT_ID:'test'};
- const patch=(flags={},actor='alice')=>app.fetch(new Request('https://example.test/v1/firestore/document?path=users/alice',{method:'PATCH',headers:{authorization:`Bearer ${actor}`,'content-type':'application/json'},body:JSON.stringify({fields:{isOnline:true,isActive:true,showActiveStatus:true,lastSeenMs:now,lastSeen:{__fieldValue:'serverTimestamp'},...flags}})}),env);
- assert.equal((await patch({},'bob')).status,403);
- profileReads=0;
- assert.equal((await patch()).status,200);
- assert.equal(profileReads,1,'the account gate and heartbeat share one profile read');
- assert.equal(batches,0);assert.equal(changes,0);
- sql.prepare('UPDATE friendbook_cf_presence_sessions SET last_seen=?').run(now-220_000);
- const beforeFallback=sql.prepare('SELECT total_changes() n').get().n;
- assert.equal((await patch()).status,200);
- assert.equal(batches,0);assert.equal(changes,0);
- assert.equal(sql.prepare('SELECT total_changes() n').get().n-beforeFallback,1);
- sql.prepare('UPDATE friendbook_cf_presence_sessions SET last_seen=?').run(now-1000);
- const offline={isOnline:false,isActive:false,showActiveStatus:false};
- assert.equal((await patch(offline)).status,200);
- assert.equal(batches,1);assert.equal(changes,2,'canonical and mirror change without temporary guards');
- assert.equal((await patch(offline)).status,200);
- assert.equal(batches,1);assert.equal(changes,2);
- const row=sql.prepare("SELECT document_json FROM friendbook_cf_documents WHERE path='users/alice'").get();
- assert.equal(JSON.parse(row.document_json).showActiveStatus,false);
 });
 
 test('disabled online status suppresses old client heartbeat writes but preserves privacy and profile edits', async t=>{

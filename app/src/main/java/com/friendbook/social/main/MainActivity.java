@@ -24,7 +24,6 @@ import com.friendbook.social.core.Fb;
 import com.friendbook.social.core.FeedAlgorithm;
 import com.friendbook.social.core.Icons;
 import com.friendbook.social.core.Prefs;
-import com.friendbook.social.core.Presence;
 import com.friendbook.social.core.Ui;
 import com.friendbook.social.friends.SearchActivity;
 import com.friendbook.social.groups.GroupsActivity;
@@ -212,7 +211,7 @@ public class MainActivity extends Activity {
         // ⚡ Defer non-critical SDK/network listeners until AFTER Frame #1 paints!
         Looper.myQueue().addIdleHandler(() -> {
             Fb.ensureMeFresh();
-            Presence.init();
+
             startBadgeListeners();
             watchReferralsForFreeTick();
             AdsConfig.startWatching();
@@ -767,7 +766,7 @@ public class MainActivity extends Activity {
         refreshLiteUi();
         if (!ConsentManager.canRequestAds(this)) ConsentManager.retryConsentOnResume(this);
         Fb.ensureMeFresh();
-        Presence.init();
+
         // Delay until Main is visible; never show a permission dialog from background/PIN/login.
         notificationPermissionHandler.removeCallbacks(notificationPermissionPrompt);
         notificationPermissionHandler.postDelayed(notificationPermissionPrompt, 2000L);

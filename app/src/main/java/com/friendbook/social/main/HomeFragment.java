@@ -57,7 +57,7 @@ import java.util.Set;
  */
 public class HomeFragment extends Fragment implements FeedAdapter.Host {
 
-    private static final int PAGE = 5;
+    private static final int PAGE = 20;
     private static final int FEATURED_REELS_PAGE = 20;
     private static final long NOTE_TTL_MS = 24L * 3600_000L;
 

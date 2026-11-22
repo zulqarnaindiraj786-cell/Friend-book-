@@ -40,18 +40,10 @@ public class PollBudgetTest {
         assertTrue(budget.due("lives/room",true,30_000));
         assertFalse(budget.due("lives/room",false,600_000));
     }
-    @Test public void quietChatFallsBackLessOftenAndNewActivityRestoresFastChecks() {
+    @Test public void chatMessagesNeverPollEvenInForeground() {
         PollBudget budget = new PollBudget();
-        assertFalse(budget.chatFallbackDue(2_000, true));
-        assertTrue(budget.chatFallbackDue(5_000, true));
-        for (int i = 0; i < 3; i++) budget.success(false);
-        assertFalse(budget.chatFallbackDue(19_999, true));
-        assertTrue(budget.chatFallbackDue(20_000, true));
-        assertFalse(budget.chatFallbackDue(39_999, false));
-        assertTrue(budget.chatFallbackDue(40_000, false));
-        budget.success(true);
-        assertFalse(budget.chatFallbackDue(2_000, true));
-        assertTrue(budget.chatFallbackDue(5_000, true));
-        assertTrue(budget.chatFallbackDue(10_000, false));
+        assertFalse(budget.due("chats/c1/messages", true, 600_000));
+        budget.failure();
+        assertFalse(budget.due("chats/c1/messages", true, 600_000));
     }
 }

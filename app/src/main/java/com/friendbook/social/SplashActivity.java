@@ -8,7 +8,6 @@ import com.friendbook.social.auth.LoginActivity;
 import com.friendbook.social.core.FastCache;
 import com.friendbook.social.core.Fb;
 import com.friendbook.social.core.Prefs;
-import com.friendbook.social.core.Presence;
 import com.friendbook.social.main.MainActivity;
 
 /**
@@ -47,7 +46,7 @@ public class SplashActivity extends Activity {
             startActivity(new Intent(this, LockActivity.class));
         } else {
             Fb.startMeListener();
-            Presence.init();
+
             startActivity(new Intent(this, MainActivity.class));
         }
         overridePendingTransition(0, 0);

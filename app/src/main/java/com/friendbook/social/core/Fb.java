@@ -106,7 +106,7 @@ public class Fb {
                     if (u.banned && !Admin.isOwnerEmail(u.email)) {
                         me = null;
                         FastCache.clearAll(com.friendbook.social.App.instance);
-                        Presence.goOffline();
+
                         com.friendbook.social.push.PushManager.unregister(com.friendbook.social.App.instance);
                         auth().signOut();
                         android.content.Context app = com.friendbook.social.App.instance;

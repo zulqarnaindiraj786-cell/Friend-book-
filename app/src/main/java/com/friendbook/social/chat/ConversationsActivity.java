@@ -492,10 +492,9 @@ public class ConversationsActivity extends Activity {
             row.setClipChildren(true);row.setClipToPadding(true);
             Ui.pad(row, 12, 10, 12, 10);
 
-            FrameLayout avWrap = (FrameLayout) getLayoutInflater().inflate(com.friendbook.social.R.layout.view_presence_avatar, row, false);
-            ImageView av = avWrap.findViewById(com.friendbook.social.R.id.presence_avatar);
-            View dot = avWrap.findViewById(com.friendbook.social.R.id.presence_green_dot);
-            row.addView(avWrap);
+            ImageView av = new ImageView(ConversationsActivity.this);
+            av.setContentDescription("Profile photo");
+            row.addView(av, new LinearLayout.LayoutParams(Ui.dp(ConversationsActivity.this, 54), Ui.dp(ConversationsActivity.this, 54)));
 
             LinearLayout mid = Ui.col(ConversationsActivity.this);
             LinearLayout.LayoutParams mp = new LinearLayout.LayoutParams(0, -2, 1);
@@ -523,21 +522,17 @@ public class ConversationsActivity extends Activity {
             TextView time = Ui.tv(ConversationsActivity.this, "", 11, Ui.sub(ConversationsActivity.this));
             TextView badge = Ui.badge(ConversationsActivity.this);
             TextView pin = Ui.tv(ConversationsActivity.this, "", 12, Ui.sub(ConversationsActivity.this));
-            TextView lastActive = (TextView) getLayoutInflater().inflate(com.friendbook.social.R.layout.view_last_active, right, false);
-            lastActive.setTextColor(Ui.sub(ConversationsActivity.this));
             right.addView(time);
-            right.addView(lastActive);
             right.addView(badge);
             right.addView(pin);
             row.addView(right);
-            return new VH(row, av, dot, name, tick, last, time, badge, pin, lastActive);
+            return new VH(row, av, name, tick, last, time, badge, pin);
         }
 
         @Override
         public void onBindViewHolder(@NonNull VH h, int position) {
             Room r = rooms.get(position);
-            h.lastActive.setVisibility(View.GONE); h.time.setVisibility(View.VISIBLE);
-            h.dot.setVisibility(View.GONE);
+            h.time.setVisibility(View.VISIBLE);
             h.av.setPadding(0, 0, 0, 0);
             h.av.setBackground(null);
 
@@ -611,19 +606,12 @@ public class ConversationsActivity extends Activity {
             h.itemView.setOnLongClickListener(v -> { Room current=existingRoom(r.room.id);if(current!=null)roomMenu(current);return true; });
         }
 
-        @Override
-        public void onViewRecycled(@NonNull VH h) {
-            super.onViewRecycled(h);
-            h.dot.setVisibility(View.GONE); h.lastActive.setVisibility(View.GONE);
-        }
-
         class VH extends RecyclerView.ViewHolder {
             ImageView av, tick;
-            View dot;
-            TextView name, last, time, badge, pin, lastActive;
-            VH(View v, ImageView a, View d, TextView n, ImageView tk, TextView l, TextView t, TextView b, TextView p, TextView active) {
+            TextView name, last, time, badge, pin;
+            VH(View v, ImageView a, TextView n, ImageView tk, TextView l, TextView t, TextView b, TextView p) {
                 super(v);
-                av = a; dot = d; name = n; tick = tk; last = l; time = t; badge = b; pin = p; lastActive = active;
+                av = a; name = n; tick = tk; last = l; time = t; badge = b; pin = p;
             }
         }
     }

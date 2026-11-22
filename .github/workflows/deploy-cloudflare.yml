@@ -35,7 +35,7 @@ jobs:
         with:
           node-version: '22'
           cache: npm
-      - name: Require existing resources and active Cloudflare D1/R2/Realtime configuration
+      - name: Require existing resources and active Cloudflare D1/R2 configuration
         run: |
           python3 - <<'PY'
           import pathlib, re, tomllib
@@ -45,9 +45,6 @@ jobs:
           assert cfg['vars']['D1_INTERACTIONS_ENABLED'] == 'true'
           assert cfg['vars']['VIDEO_R2_ENABLED'] == 'true'
           assert cfg['vars']['VIDEO_R2_RETENTION_VERIFIED'] == 'true'
-          assert cfg['vars']['REALTIME_WS_ENABLED'] == 'true'
-          assert cfg['vars']['ONLINE_STATUS_DISABLED'] == 'true'
-          assert cfg['vars']['TYPING_DISABLED'] == 'true'
           assert cfg['vars']['FIREBASE_PROJECT_ID'] == 'friendbook-17551'
           assert cfg['d1_databases'] == [{
               'binding': 'DB', 'database_name': 'friendbook-db',
@@ -57,7 +54,7 @@ jobs:
           android = pathlib.Path('app/build.gradle').read_text()
           gates = re.findall(r"buildConfigField\s+['\"]boolean['\"]\s*,\s*['\"]D1_INTERACTIONS_ENABLED['\"]\s*,\s*['\"]([^'\"]+)['\"]", android)
           assert gates in (['true'], ['false']), 'Android D1 gate must be valid'
-          print('Existing Worker + DB verified; Cloudflare D1, Realtime Presence, and R2 Video enabled.')
+          print('Existing Worker + DB verified; Cloudflare D1 and R2 Video enabled.')
           PY
       - run: npm ci --ignore-scripts
       - run: npm test
@@ -165,6 +162,17 @@ jobs:
               echo "d1_list_status=$d1_list_status" >> "$GITHUB_OUTPUT"
               echo 'migration_status=baseline-not-ready' >> "$GITHUB_OUTPUT"
               exit 0
+            fi
+            # Destructive, explicitly authorized removal must not ride along with
+            # an unrelated deployment or run without account quota headroom.
+            if printf '%s\n' "$pending" | grep -q '0086_remove_unused_status_tables.sql'; then
+              if [[ "$HEAD_COMMIT_MESSAGE" != *'[drop-retired-status]'* ]] || ! python3 scripts/loadtest/d1_account_usage_analytics.py --preflight-budget; then
+                echo 'Retired-table removal preflight failed; no migration attempted.' | tee -a "$log"
+                echo "whoami_status=$whoami_status" >> "$GITHUB_OUTPUT"
+                echo "d1_list_status=$d1_list_status" >> "$GITHUB_OUTPUT"
+                echo 'migration_status=retired-table-preflight-failed' >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
             fi
             # The incremental FCM bridge makes only an empty table and trigger;
             # never mix it with an unexpected index build or backfill. Explicit
@@ -342,8 +350,8 @@ jobs:
           mkdir -p /tmp/deploy-logs
           rm -f /tmp/deploy-logs/*.log /tmp/wrangler.toml.shipped
           cp wrangler.toml /tmp/wrangler.toml.bak
-          VARS_R2_ON="--var D1_INTERACTIONS_ENABLED:true --var VIDEO_R2_ENABLED:true --var VIDEO_R2_RETENTION_VERIFIED:true --var REALTIME_WS_ENABLED:true --var ONLINE_STATUS_DISABLED:true --var TYPING_DISABLED:true"
-          VARS_R2_OFF="--var D1_INTERACTIONS_ENABLED:true --var VIDEO_R2_ENABLED:false --var VIDEO_R2_RETENTION_VERIFIED:false --var REALTIME_WS_ENABLED:true --var ONLINE_STATUS_DISABLED:true --var TYPING_DISABLED:true"
+          VARS_R2_ON="--var D1_INTERACTIONS_ENABLED:true --var VIDEO_R2_ENABLED:true --var VIDEO_R2_RETENTION_VERIFIED:true"
+          VARS_R2_OFF="--var D1_INTERACTIONS_ENABLED:true --var VIDEO_R2_ENABLED:false --var VIDEO_R2_RETENTION_VERIFIED:false"
 
           # Removes ONLY the Analytics Engine block. D1, R2, KV, crons and vars all stay, so a refused
           # AE binding can never cost another binding the way the old truncation fallback did.

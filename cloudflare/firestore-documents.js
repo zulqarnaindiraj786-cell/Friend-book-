@@ -992,37 +992,7 @@ function rowToDocument(row) {
 // Recompute a profile transform after a conflicting friend/follow/profile write.
 // The snapshot guard and both copies commit together, so concurrent edits cannot
 // silently erase relationship counters or another device's profile changes.
-// Existing clients also mirror presence into the profile. Skip only repeated
-// heartbeat-only patches, never visibility transitions or profile edits.
-function unchangedHeartbeatFlags(before,next,fields) {
-  const allowed=['isOnline','isActive','showActiveStatus','lastSeenMs','lastSeen'];
-  const keys=Object.keys(fields);
-  return !!before && keys.length===allowed.length && keys.every(key=>allowed.includes(key))
-    && ['isOnline','isActive','showActiveStatus'].every(key=>typeof before[key]==='boolean' && before[key]===next[key]);
-}
-
-export function redundantProfileHeartbeat(before,next,fields,now) {
-  if(!unchangedHeartbeatFlags(before,next,fields))return false;
-  const previous=before.lastSeen?.__type==='timestamp'?before.lastSeen.millis:0;
-  if(!Number.isFinite(previous) || previous<=0 || now<previous)return false;
-  // Signing out/backgrounding twice does not mean the user was seen again.
-  return (!next.isOnline && !next.isActive) || now-previous<180_000;
-}
-
-export async function liveSocketCoversProfileHeartbeat(db,uid,before,next,fields,now) {
-  if(!unchangedHeartbeatFlags(before,next,fields) || !next.isOnline || !next.isActive || !next.showActiveStatus
-      || fields.lastSeen?.__fieldValue!=='serverTimestamp')return false;
-  try {
-    // Socket beats every 180s; leave a short grace window but allow the legacy
-    // heartbeat to write when the socket has not actually renewed its lease.
-    const row=await db.prepare(`SELECT 1 AS fresh FROM friendbook_cf_presence_sessions INDEXED BY idx_cf_presence_visible_online_seen
-      WHERE uid=? AND visible=1 AND online=1 AND last_seen>? AND last_seen<=? LIMIT 1`)
-      .bind(uid,now-210_000,now).first();
-    return row?.fresh===1;
-  } catch { return false; } // Pre-migration/missing session state uses the existing fallback.
-}
-
-async function mutateProfile(db, uid, path, body, method, now, profileRow, onlineStatusDisabled = false) {
+async function mutateProfile(db, uid, path, body, method, now, profileRow) {
   if (splitPath(path)[1] !== uid) return json({error:'Forbidden'},403);
   for (let attempt=0; attempt<4; attempt++) {
     try {
@@ -1042,15 +1012,13 @@ async function mutateProfile(db, uid, path, body, method, now, profileRow, onlin
       // transition/heartbeat. Ignore only that shape when online status is off;
       // preserve an actual visibility preference change and all mixed edits.
       const presenceKeys=['isOnline','isActive','showActiveStatus','lastSeenMs','lastSeen'];
-      if (onlineStatusDisabled && method==='PATCH' && existing && Object.keys(fields).length===presenceKeys.length
+      if (method==='PATCH' && existing && Object.keys(fields).length===presenceKeys.length
           && Object.keys(fields).every(key=>presenceKeys.includes(key))
           && ['isOnline','isActive','showActiveStatus'].every(key=>typeof fields[key]==='boolean')
           && Number.isSafeInteger(fields.lastSeenMs) && fields.lastSeen?.__fieldValue==='serverTimestamp') {
         if (before.showActiveStatus===fields.showActiveStatus) return json(rowToDocument(existing));
         next=applyUpdate(before,{showActiveStatus:fields.showActiveStatus},now);
       }
-      if(method==='PATCH' && (redundantProfileHeartbeat(before,next,fields,now)
-          || await liveSocketCoversProfileHeartbeat(db,uid,before,next,fields,now)))return json(rowToDocument(existing));
       // A literal, unchanged PATCH does not need to rewrite canonical, mirror,
       // and guard rows. Keep transforms and legacy promotion on the write path.
       if(method==='PATCH' && existing?.[canonicalRootSnapshot] && literalFields(fields)
@@ -1063,19 +1031,6 @@ async function mutateProfile(db, uid, path, body, method, now, profileRow, onlin
         const state=await unchangedRootState(db,path,existing,next);
         if(!state.current)throw new Error('Document changed');
         if(state.mirror)return json(rowToDocument(existing));
-      }
-      // A quiet fallback heartbeat only renews timestamps. Keep visibility
-      // transitions and legacy profile promotion on the dual-write path.
-      if (method==='PATCH' && existing?.[canonicalRootSnapshot] && unchangedHeartbeatFlags(before,next,fields)
-          && next.isOnline===true && next.isActive===true && next.showActiveStatus===true
-          && Number.isSafeInteger(fields.lastSeenMs) && fields.lastSeen?.__fieldValue==='serverTimestamp') {
-        const serialized=JSON.stringify(next);
-        if (serialized.length>1_800_000) throw new Error('Document too large');
-        const updated=await db.prepare(`UPDATE friendbook_cf_firestore_documents SET document_json=?,update_time=?
-          WHERE path=? AND document_json=? AND update_time=? RETURNING path`)
-          .bind(serialized,now,path,existing.document_json,existing.update_time).first();
-        if (!updated) throw new Error('Document changed');
-        return json(rowToDocument({...existing,document_json:serialized,update_time:now}));
       }
       return json(rowToDocument(await writeRow(db,path,next,now,existing,true,true)));
     } catch (error) {
@@ -3333,7 +3288,7 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0, ct
     try { body = await request.json(); } catch { return json({ error: 'Invalid JSON' }, 400); }
     if (!body || typeof body !== 'object' || Array.isArray(body)) return json({error:'Invalid body'},400);
     if (splitPath(docPath).length===2 && splitPath(docPath)[0]==='users')
-      return await mutateProfile(db,uid,docPath,body,'PATCH',now,identity.profileRow,env.ONLINE_STATUS_DISABLED === 'true');
+      return await mutateProfile(db,uid,docPath,body,'PATCH',now,identity.profileRow);
     if (splitPath(docPath).length===2 && ['posts','reels'].includes(splitPath(docPath)[0]))
       return await mutatePost(db,uid,docPath,body,'PATCH',now);
     if (splitPath(docPath)[0] === 'payments') {
