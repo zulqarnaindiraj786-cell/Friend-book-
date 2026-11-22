@@ -12,37 +12,46 @@ from scripts.loadtest.retired_table_preflight import remote_query
 COLLECTIONS = ('chats', 'messages', 'notifications', 'posts', 'comments',
                'users', 'friends', 'friend_requests')
 
-SQL = '''SELECT ?1 AS collection,
-  (SELECT COUNT(*) FROM friendbook_cf_documents WHERE collection=?1) AS legacy_rows,
-  (SELECT COUNT(*) FROM friendbook_cf_documents l WHERE l.collection=?1
-     AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents f WHERE f.path=l.path)) AS legacy_only,
-  (SELECT COUNT(*) FROM friendbook_cf_firestore_documents WHERE parent_path=?1) AS canonical_rows'''
+# One scan of the legacy table: a per-collection count and how many of those
+# paths have no canonical row yet.
+LEGACY_SQL = '''SELECT l.collection AS collection, COUNT(*) AS legacy_rows,
+  SUM(CASE WHEN f.path IS NULL THEN 1 ELSE 0 END) AS legacy_only
+FROM friendbook_cf_documents l
+LEFT JOIN friendbook_cf_firestore_documents f ON f.path=l.path
+GROUP BY l.collection'''
+
+CANONICAL_SQL = '''SELECT parent_path AS collection, COUNT(*) AS canonical_rows
+FROM friendbook_cf_firestore_documents GROUP BY parent_path'''
 
 
 def main():
-    rows = []
+    try:
+        legacy_rows, _ = remote_query(LEGACY_SQL, ())
+        canonical_rows, _ = remote_query(CANONICAL_SQL, ())
+    except Exception as error:  # noqa: BLE001 - never echo provider text
+        print('::error:: Coverage query failed: ' + type(error).__name__ + ' (no changes made).')
+        return 2
+    legacy = {row.get('collection'): row for row in legacy_rows if isinstance(row, dict)}
+    canonical = {row.get('collection'): row.get('canonical_rows', 0) for row in canonical_rows if isinstance(row, dict)}
+    checked = []
     for collection in COLLECTIONS:
-        result, meta = remote_query(SQL, (collection,))
-        if not result:
-            raise SystemExit('inventory unavailable')
-        row = result[0]
-        read = meta.get('rows_read')
-        rows.append({
+        row = legacy.get(collection, {})
+        checked.append({
             'collection': collection,
-            'legacy_rows': row.get('legacy_rows'),
-            'legacy_only': row.get('legacy_only'),
-            'canonical_rows': row.get('canonical_rows'),
-            'rows_read': read,
+            'legacy_rows': int(row.get('legacy_rows') or 0),
+            'legacy_only': int(row.get('legacy_only') or 0),
+            'canonical_rows': int(canonical.get(collection) or 0),
         })
-    table = ' | '.join(f"{r['collection']} {r['legacy_rows']}/{r['legacy_only']}/{r['canonical_rows']}"
-                       for r in rows)
+    table = ', '.join(f"{r['collection']} {r['legacy_rows']}/{r['legacy_only']}/{r['canonical_rows']}" for r in checked)
     print('::notice:: Coverage (legacy rows / legacy-only / canonical rows): ' + table)
-    remaining = [r for r in rows if r['legacy_only']]
-    remaining_total = sum(r['legacy_only'] for r in rows)
-    print('::notice:: ' + json.dumps({'collections_checked': len(rows),
-                                      'legacy_only_total': remaining_total,
-                                      'collections_with_fallback': [r['collection'] for r in remaining]}))
-    if remaining_total:
+    remaining = [r for r in checked if r['legacy_only']]
+    other_legacy = [{'collection': name, 'legacy_only': int(row.get('legacy_only') or 0)}
+                    for name, row in legacy.items() if name and name not in COLLECTIONS and row.get('legacy_only')]
+    print('::notice:: ' + json.dumps({'collections_checked': len(checked),
+                                      'legacy_only_total': sum(r['legacy_only'] for r in checked),
+                                      'collections_with_fallback': [r['collection'] for r in remaining],
+                                      'other_collections_with_legacy_only': other_legacy}))
+    if remaining:
         print('::warning:: Legacy fallback is still needed for at least one checked collection.')
         return 1
     print('::notice:: All checked collections have zero legacy-only root rows.')
