@@ -58,6 +58,8 @@ public class D1DocumentStore {
     private final ScheduledExecutorService poller = Executors.newSingleThreadScheduledExecutor();
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final PendingPushActors pendingNotificationPushes = new PendingPushActors();
+    private final ChatPushRefresh chatPushRefresh = new ChatPushRefresh(
+            D1DocumentStore::authenticatedUid, this::notifyCollectionListeners, mainHandler::postDelayed);
     private static final long NOTIFICATION_PUSH_COALESCE_MS = 750L;
     private final Map<String, DocumentSnapshot> docCache = java.util.Collections.synchronizedMap(
             new java.util.LinkedHashMap<String, DocumentSnapshot>(256, 0.75f, true) {
@@ -423,9 +425,9 @@ public class D1DocumentStore {
     }
 
     public void refreshChatFromPush(String chatId) {
-        if (chatId == null || !chatId.matches("[A-Za-z0-9_-]{1,128}")) return;
-        notifyCollectionListeners("chats/" + chatId + "/messages");
-        notifyCollectionListeners("chats");
+        // Only the global badge hint is coalesced. Messages and call signaling
+        // remain immediate; each account has an independent fixed window.
+        chatPushRefresh.hint(chatId);
     }
 
     public void refreshInboxFromPush(String type) {
