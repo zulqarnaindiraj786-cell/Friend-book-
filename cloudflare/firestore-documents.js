@@ -684,13 +684,14 @@ async function readCollectionRows(db, parent, uid, filters, spec, env) {
         AND json_extract(document_json,'$.participants[0]') IS NOT ?`).bind(uid,uid,uid).all(),
       db.prepare(`SELECT a.path,a.collection,a.doc_id,a.owner_uid,a.document_json,a.updated_at FROM friendbook_cf_documents a
       WHERE a.collection='friends' AND (CASE WHEN json_type(a.document_json,'$.fields')='object' THEN json_extract(a.document_json,'$.fields.participants.arrayValue.values[0].stringValue') ELSE json_extract(a.document_json,'$.participants[0]') END)=?
-      AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents f WHERE f.path=a.path)
       UNION ALL SELECT a.path,a.collection,a.doc_id,a.owner_uid,a.document_json,a.updated_at FROM friendbook_cf_documents a
       WHERE a.collection='friends' AND (CASE WHEN json_type(a.document_json,'$.fields')='object' THEN json_extract(a.document_json,'$.fields.participants.arrayValue.values[1].stringValue') ELSE json_extract(a.document_json,'$.participants[1]') END)=?
-      AND (CASE WHEN json_type(a.document_json,'$.fields')='object' THEN json_extract(a.document_json,'$.fields.participants.arrayValue.values[0].stringValue') ELSE json_extract(a.document_json,'$.participants[0]') END) IS NOT ?
-      AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents f WHERE f.path=a.path)`).bind(uid,uid,uid).all(),
+      AND (CASE WHEN json_type(a.document_json,'$.fields')='object' THEN json_extract(a.document_json,'$.fields.participants.arrayValue.values[0].stringValue') ELSE json_extract(a.document_json,'$.participants[0]') END) IS NOT ?`).bind(uid,uid,uid).all(),
     ]);
-    return [...(canonical?.results || []), ...(legacy?.results || []).map(appDocumentToFirestoreRow).filter(Boolean)];
+    // Reuse canonical participant results to shadow their usual mirrors; a
+    // nonmatching canonical row can still shadow a stale matching mirror.
+    await markWindowShadows(db,canonical,legacy);
+    return [...(canonical?.results || []), ...(legacy?.results || []).filter(row=>!row.shadowed).map(appDocumentToFirestoreRow).filter(Boolean)];
   }
   if (parent === 'friend_requests') {
     const filtered=await filteredRequestRows(db,uid,filters);

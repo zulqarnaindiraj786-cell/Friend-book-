@@ -1637,6 +1637,24 @@ test('friendship reads use participant indexes without leaking or reviving stale
  sql.close();
 });
 
+test('friend list reuses mirrored paths and batches unknown shadows without changing visibility', async () => {
+ const sql=new DatabaseSync(':memory:');sql.exec(resourcesSchema);sql.exec(appSchema);sql.exec(schema);sql.exec(readFileSync(new URL('../migrations/0027_friend_participant_indexes.sql',import.meta.url),'utf8'));
+ const a=sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)'),f=sql.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)');
+ const legacy=(id,data)=>a.run(`friends/${id}`,'friends',id,'',JSON.stringify(data),1);
+ const canonical=(id,data)=>f.run(`friends/${id}`,'friends','friends',id,'',JSON.stringify(data),1,1);
+ for(let i=0;i<110;i++){const id=`m${i}`,data={participants:['alice',`u${i}`]};canonical(id,data);legacy(id,data);}
+ for(let i=0;i<95;i++)legacy(`l${i}`,{participants:[`u${i}`,'alice']});
+ canonical('stale',{participants:['bob','carol']});legacy('stale',{participants:['alice','bob']});
+ let probes=[],failProbe=false;
+ const db={prepare(q){const stmt=sql.prepare(q);return{bind(...args){return{all:async()=>{if(q.startsWith('SELECT path FROM friendbook_cf_firestore_documents WHERE path IN (')){probes.push(args);if(failProbe)throw Error('lookup unavailable');}return {results:stmt.all(...args)};},first:async()=>stmt.get(...args)||null};}};}};
+ const app=createWorker(async t=>t),env={DB:db,FIREBASE_PROJECT_ID:'friendbook-test'};
+ const query=()=>app.fetch(new Request('https://example.test/v1/firestore/query',{method:'POST',headers:{authorization:'Bearer alice','content-type':'application/json'},body:JSON.stringify({parent:'friends'})}),env);
+ let r=await query();assert.equal(r.status,200);const ids=(await r.json()).documents.map(x=>x.id);assert.equal(ids.length,205);assert.equal(new Set(ids).size,205);assert.ok(!ids.includes('stale'));assert.ok(ids.includes('l94'));assert.ok(ids.includes('m109'));
+ assert.deepEqual(probes.map(x=>x.length),[90,6]);assert.ok(probes.flat().includes('friends/stale'));assert.ok(!probes.flat().includes('friends/m0'));
+ failProbe=true;r=await query();assert.notEqual(r.status,200);
+ sql.close();
+});
+
 test('profile bootstrap combines first page with ordinary projection and post privacy', async () => {
  const sql=new DatabaseSync(':memory:');sql.exec(resourcesSchema);sql.exec(appSchema);sql.exec(schema);
  const insert=sql.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)');
