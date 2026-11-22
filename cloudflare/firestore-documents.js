@@ -3445,9 +3445,12 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0, ct
         if (!canCreateFriendRequest(uid, next)) return json({error:'Forbidden'},403);
         if (typeof db.batch !== 'function') return json({error:'Atomic storage unavailable'},503);
         const serialized=JSON.stringify(next);
-        // The existence check and writes must share a D1 transaction. A client-side
-        // read-before-create alone allows two devices to create the same request.
-        const guard=db.prepare(`INSERT INTO friendbook_cf_social_guards(ok) SELECT CASE WHEN
+        // Check both stores inside the canonical insert in the same transaction
+        // as the mirror. A duplicate forces path NULL and rolls the batch back;
+        // no temporary guard row is needed. Canonical rows still shadow legacy.
+        const create=db.prepare(`INSERT INTO friendbook_cf_firestore_documents
+          (path,parent_path,collection_id,doc_id,owner_uid,document_json,create_time,update_time)
+          VALUES (CASE WHEN
           NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents WHERE parent_path='friend_requests'
             AND COALESCE(json_extract(document_json,'$.fromUid'),json_extract(document_json,'$.fields.fromUid.stringValue'))=?
             AND COALESCE(json_extract(document_json,'$.toUid'),json_extract(document_json,'$.fields.toUid.stringValue'))=?
@@ -3457,16 +3460,15 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0, ct
             AND COALESCE(json_extract(a.document_json,'$.toUid'),json_extract(a.document_json,'$.fields.toUid.stringValue'))=?
             AND COALESCE(json_extract(a.document_json,'$.status'),json_extract(a.document_json,'$.fields.status.stringValue'))='pending'
             AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents f WHERE f.path=a.path))
-          THEN 1 ELSE 0 END`).bind(uid,next.toUid,uid,next.toUid);
+          THEN ? ELSE NULL END,?,?,?,?,?,?,?)`)
+          .bind(uid,next.toUid,uid,next.toUid,docPath,parent,parent,id,uid,serialized,now,now);
         try {
           await db.batch([
-            guard,
-            db.prepare('INSERT INTO friendbook_cf_firestore_documents(path,parent_path,collection_id,doc_id,owner_uid,document_json,create_time,update_time) VALUES (?,?,?,?,?,?,?,?)').bind(docPath,parent,parent,id,uid,serialized,now,now),
+            create,
             db.prepare('INSERT INTO friendbook_cf_documents(path,collection,doc_id,owner_uid,document_json,updated_at) VALUES (?,?,?,?,?,?)').bind(docPath,parent,id,uid,JSON.stringify({...next,id}),now),
-            db.prepare('DELETE FROM friendbook_cf_social_guards').bind(),
           ]);
         } catch (error) {
-          if (/CHECK constraint failed: ok\s*=\s*1/i.test(String(error?.message||''))) return json({error:'ALREADY_EXISTS'},409);
+          if (/NOT NULL constraint failed: friendbook_cf_firestore_documents\.path/i.test(String(error?.message||''))) return json({error:'ALREADY_EXISTS'},409);
           throw error;
         }
         return json({exists:true,id,path:docPath,parent,collection:parent,data:next,createTime:now,updateTime:now},201);

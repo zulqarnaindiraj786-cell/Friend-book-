@@ -297,6 +297,17 @@ await measure('unfriend',friendshipPairs,()=>wave(friendshipPairs,async i=>{
     ...[a,b].map(uid=>({op:'update',path:`users/${uid}`,updates:{friendsCount:{__fieldValue:'increment',value:-1}}}))]);
 }));
 assert.equal(sql.prepare("SELECT count(*) n FROM friendbook_cf_trusted_friendships WHERE friend_path LIKE 'friends/quota%'").get().n,0);
+const requestBody=i=>({data:{fromUid:`user${2*i}`,toUid:`user${2*i+1}`,status:'pending'}});
+await measure('firstFriendRequest',friendshipPairs,()=>wave(friendshipPairs,async i=>{
+  const result=await call(`user${2*i}`,'/v1/firestore/document?parent=friend_requests','POST',requestBody(i));
+  assert.equal(result.data.status,'pending');
+}));
+await measure('duplicateFriendRequest',friendshipPairs,()=>wave(friendshipPairs,async i=>{
+  const result=await app.fetch(new Request('https://offline.invalid/v1/firestore/document?parent=friend_requests',{
+    method:'POST',headers:{authorization:`Bearer user${2*i}`,'content-type':'application/json'},body:JSON.stringify(requestBody(i))}),env);
+  assert.equal(result.status,409);
+}));
+assert.equal(report.workloads.duplicateFriendRequest.changedRowsIncludingTriggers,0);
 sql.prepare("INSERT INTO friendbook_cf_interaction_resources(resource,state) VALUES ('posts/item39','verified') ON CONFLICT(resource) DO NOTHING").run();
 const engagement='/v1/engagement/posts/item39';
 // A busy synthetic legacy post with a small mix of exception encodings.
