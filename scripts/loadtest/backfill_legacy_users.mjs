@@ -26,9 +26,14 @@ export function planCandidate(source) {
     throw Error('unsafe normalized metadata');
   // Check both legacy APIs: the Firestore-compatible normalized row and the
   // older document/authorization projection must retain their exact semantics.
-  if (!isDeepStrictEqual(toFirestoreFields(source.document_json), toFirestoreFields(row.document_json))
-      || !isDeepStrictEqual(toPlainDocument(source.document_json, source.doc_id), toPlainDocument(row.document_json, source.doc_id)))
-    throw Error('source representations differ');
+  const oldFields=toFirestoreFields(source.document_json), newFields=toFirestoreFields(row.document_json);
+  const plainEqual=isDeepStrictEqual(toPlainDocument(source.document_json, source.doc_id), toPlainDocument(row.document_json, source.doc_id));
+  if (!isDeepStrictEqual(oldFields, newFields) || !plainEqual) {
+    const oldWithoutId={...oldFields}; delete oldWithoutId.id;
+    if (plainEqual && oldFields?.id?.stringValue===source.doc_id && isDeepStrictEqual(oldWithoutId,newFields))
+      throw Error('legacy id projection differs');
+    throw Error(plainEqual ? 'typed field projection differs' : 'plain document projection differs');
+  }
   const data=JSON.parse(row.document_json);
   for (const key of ['followers','following'])
     if (Array.isArray(data[key]) && data[key].length > 20) throw Error('follow-index fanout cap');
@@ -100,7 +105,7 @@ if (process.argv[1] && import.meta.url===new URL(`file://${process.argv[1]}`).hr
     } else console.log('::notice:: Read-only preview; no documents changed.');
   } catch (error) {
     // Do not include raw database/provider errors: they may contain profile data.
-    console.error(`::error:: Safe backfill stopped: ${['unsafe source shape','unsafe normalized metadata','source representations differ','follow-index fanout cap','user inventory unsafe','inventory changed','atomic guard changed; verification required','post-insert verification failed','coverage changed during verification'].includes(error.message) ? error.message : 'preflight unavailable'}`);
+    console.error(`::error:: Safe backfill stopped: ${['unsafe source shape','unsafe normalized metadata','legacy id projection differs','typed field projection differs','plain document projection differs','follow-index fanout cap','user inventory unsafe','inventory changed','atomic guard changed; verification required','post-insert verification failed','coverage changed during verification'].includes(error.message) ? error.message : 'preflight unavailable'}`);
     process.exitCode=1;
   }
 }
