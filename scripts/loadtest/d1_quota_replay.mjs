@@ -246,6 +246,12 @@ await measure('changedSavedPost',users-1,()=>wave(users-1,async i=>{
   const result=await call(`user${i+1}`,`/v1/firestore/document?path=posts/saved${i+1}`,'PATCH',{fields:{savedBy:{__fieldValue:'arrayRemove',values:[`user${i+1}`]}}});
   assert.deepEqual(result.data.savedBy,[]);
 }));
+await measure('firstFollow',users/2,()=>wave(users/2,async i=>{
+  const actor=`user${2*i}`,target=`user${2*i+1}`;
+  const operations=[{op:'set',path:`users/${actor}`,merge:true,data:{following:{__fieldValue:'arrayUnion',values:[target]}}},
+    {op:'set',path:`users/${target}`,merge:true,data:{followers:{__fieldValue:'arrayUnion',values:[actor]}}}];
+  assert.equal((await batch(actor,operations)).ok,true);
+}));
 sql.prepare("INSERT INTO friendbook_cf_interaction_resources(resource,state) VALUES ('posts/item39','verified') ON CONFLICT(resource) DO NOTHING").run();
 const engagement='/v1/engagement/posts/item39';
 // A busy synthetic legacy post with a small mix of exception encodings.

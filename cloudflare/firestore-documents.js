@@ -2207,6 +2207,27 @@ async function followBatch(db,uid,ops,now) {
     if (follow) next.push(value);
     docs[i]={...docs[i],[key]:next};
   }
+  if (rows.every(row=>row[canonicalRootSnapshot])) {
+    // Both profiles were read and authorized above. Check both exact snapshots
+    // inside the first write, so a conflict rolls back both profiles and mirrors
+    // without inserting and deleting temporary social-guard rows.
+    const stmts=[];
+    for(let i=0;i<2;i++) {
+      const row=rows[i],id=docIdOf(row.path),doc=docs[i],owner=row.owner_uid||id;
+      stmts.push(i===0 ? db.prepare(`INSERT INTO friendbook_cf_firestore_documents(path,parent_path,collection_id,doc_id,owner_uid,document_json,create_time,update_time)
+        VALUES (CASE WHEN (SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?1)=?2
+          AND (SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?3)=?4 THEN ?1 ELSE NULL END,
+          'users','users',?5,?6,?7,?8,?9)
+        ON CONFLICT(path) DO UPDATE SET owner_uid=excluded.owner_uid,document_json=excluded.document_json,update_time=excluded.update_time`)
+        .bind(row.path,row.document_json,rows[1].path,rows[1].document_json,id,owner,JSON.stringify(doc),row.create_time||now,now)
+        : db.prepare(`INSERT INTO friendbook_cf_firestore_documents(path,parent_path,collection_id,doc_id,owner_uid,document_json,create_time,update_time)
+        VALUES (?,'users','users',?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET owner_uid=excluded.owner_uid,document_json=excluded.document_json,update_time=excluded.update_time`)
+        .bind(row.path,id,owner,JSON.stringify(doc),row.create_time||now,now));
+      stmts.push(db.prepare(`INSERT INTO friendbook_cf_documents(path,collection,doc_id,owner_uid,document_json,updated_at) VALUES (?,?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET owner_uid=excluded.owner_uid,document_json=excluded.document_json,updated_at=excluded.updated_at`).bind(row.path,'users',id,owner,JSON.stringify({...doc,id}),now));
+    }
+    await db.batch(stmts);
+    return json({ok:true,operations:2});
+  }
   const stmts=[];
   for (const row of rows) {
     const canonical=await db.prepare('SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?').bind(row.path).first();

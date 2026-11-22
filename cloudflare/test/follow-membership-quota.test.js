@@ -39,6 +39,10 @@ test('follow membership candidate matches full scan and maintains changes withou
   const original=sql.prepare('SELECT * FROM friendbook_cf_user_follow_membership ORDER BY member,kind,source,path').all();
   sql.exec(candidate);
   assert.deepEqual(sql.prepare('SELECT * FROM friendbook_cf_user_follow_membership ORDER BY member,kind,source,path').all(),original,'migration rebackfills exact edges');
+  const conflictFix=migration('0082_follow_trigger_conflict.sql');
+  sql.exec(conflictFix);sql.exec(conflictFix);
+  assert.deepEqual(sql.prepare('SELECT * FROM friendbook_cf_user_follow_membership ORDER BY member,kind,source,path').all(),original,'trigger replacement never rebuilds or loses membership');
+  assert.equal(sql.prepare('SELECT ready FROM friendbook_cf_user_follow_index_state WHERE id=1').get().ready,1);
   let force=false,scanned=0,indexed=0,plans=[];
   const db={prepare(q){
     if(force && q.includes('friendbook_cf_user_follow_'))throw Error('no such table: friendbook_cf_user_follow_membership');
@@ -85,6 +89,17 @@ test('follow membership candidate matches full scan and maintains changes withou
   before=sql.prepare('SELECT total_changes() n').get().n;
   sql.prepare('UPDATE friendbook_cf_firestore_documents SET document_json=? WHERE path=?').run(JSON.stringify({uid:'user0002',followers:[...members,'viewer']}),'users/user0002');
   assert.equal(sql.prepare('SELECT total_changes() n').get().n-before,2,'one document plus one index edge');
+  // Outer upserts override INSERT OR IGNORE inside triggers in SQLite. The
+  // explicit trigger UPSERT must preserve existing edges and duplicate values.
+  const withDuplicates=JSON.stringify({uid:'user0002',followers:[...members,'viewer','viewer','new']});
+  sql.prepare(`INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET document_json=excluded.document_json`)
+    .run('users/user0002','users','users','user0002','user0002',withDuplicates,1,2);
+  sql.prepare(`INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET document_json=excluded.document_json`)
+    .run('users/user0002','users','user0002','user0002',withDuplicates,2);
+  for(const source of [0,1]) {
+    assert.equal(sql.prepare("SELECT count(*) n FROM friendbook_cf_user_follow_membership WHERE path='users/user0002' AND source=? AND kind='followers'").get(source).n,302);
+  }
+  await compare('viewer',{filters:[{field:'followers',op:'array-contains',value:'viewer'}]});
   // A real relationship change updates only affected memberships and is immediately visible.
   sql.prepare("UPDATE friendbook_cf_firestore_documents SET document_json=json_set(document_json,'$.followers',json('[\"viewer\"]')) WHERE path='users/user0001'").run();
   await compare('viewer',{filters:[{field:'followers',op:'array-contains',value:'viewer'}]});
