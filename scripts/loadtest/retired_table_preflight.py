@@ -13,7 +13,9 @@ TABLES = ('friendbook_cf_presence', 'friendbook_cf_presence_sessions',
           'friendbook_cf_presence_sessions_fullcopy', 'friendbook_cf_presence_sessions_copy',
           'friendbook_cf_typing', 'friendbook_cf_typing_sessions', 'friendbook_cf_typing_sessions_fullcopy')
 CAP = 5001
-MAX_TOTAL = 5000
+MAX_TOTAL = 5010
+# Conservative proxy for row/index maintenance; D1 DROP billing is not known.
+MAX_WEIGHT = 30_000
 
 
 class SampleLimit(ValueError):
@@ -45,9 +47,32 @@ def inspect(query):
             raise ValueError('D1 read accounting unavailable')
         reads += cost['rows_read']
         counts[name] = rows[0]['n']
-    if sum(counts.values()) > MAX_TOTAL:
+    if any(count == CAP for count in counts.values()) or sum(counts.values()) > MAX_TOTAL:
         raise SampleLimit(counts, reads)
-    return {'table_counts': counts, 'rows_read': reads, 'cap': MAX_TOTAL}
+    placeholders = ','.join('?' for _ in TABLES)
+    objects, cost = query(f"SELECT type,tbl_name,COUNT(*) AS n FROM sqlite_master WHERE type IN ('index','trigger') AND tbl_name IN ({placeholders}) GROUP BY type,tbl_name", TABLES)
+    if type(cost.get('rows_read')) is not int or cost['rows_read'] < 0:
+        raise ValueError('D1 read accounting unavailable')
+    reads += cost['rows_read']
+    index_counts = dict.fromkeys(TABLES, 0)
+    for item in objects:
+        name, kind, number = item.get('tbl_name'), item.get('type'), item.get('n')
+        if name not in TABLES or kind not in ('index', 'trigger') or type(number) is not int or not 0 <= number <= 20:
+            raise ValueError('Invalid schema response')
+        if kind == 'trigger' and number:
+            raise ValueError('Unexpected retired-table trigger')
+        if kind == 'index': index_counts[name] = number
+    references, cost = query(f"SELECT COUNT(*) AS n FROM sqlite_master WHERE type='table' AND name NOT IN ({placeholders}) AND (" +
+        ' OR '.join('instr(lower(sql), ?) > 0' for _ in TABLES) + ')', (*TABLES, *TABLES))
+    if (type(cost.get('rows_read')) is not int or cost['rows_read'] < 0 or len(references) != 1
+            or references[0].get('n') != 0):
+        raise ValueError('Unexpected referencing schema')
+    reads += cost['rows_read']
+    weight = sum(counts[name] * (1 + index_counts[name]) for name in TABLES)
+    if weight > MAX_WEIGHT:
+        raise ValueError('Retired-table index weight exceeds the removal cap')
+    return {'table_counts': counts, 'index_counts': index_counts, 'weighted_rows': weight,
+            'rows_read': reads, 'cap': MAX_TOTAL}
 
 
 def remote_query(sql, params):
@@ -77,6 +102,8 @@ def main():
         raise SystemExit('Retired-table preflight failed; no migration attempted.')
     except (ValueError, KeyError, TypeError, urllib.error.URLError, TimeoutError) as exc:
         allowed = {'Invalid schema response', 'D1 read accounting unavailable', 'Invalid bounded count',
+                   'Unexpected retired-table trigger', 'Unexpected referencing schema',
+                   'Retired-table index weight exceeds the removal cap',
                    'Cloudflare token unavailable', 'D1 request failed', 'Incomplete D1 response'}
         detail = str(exc) if str(exc) in allowed else 'request unavailable'
         print('::error:: Retired-table preflight: ' + detail)

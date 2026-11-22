@@ -34,6 +34,12 @@ class AccountUsageTests(unittest.TestCase):
         self.assertFalse(p.within_user_backfill_budget({'rowsRead': 0, 'rowsWritten': 60_001}))
         self.assertFalse(p.within_preflight_budget({'rowsRead': 0, 'rowsWritten': 50_001}))
 
+    def test_retired_drop_has_a_separate_bounded_reserve(self):
+        self.assertTrue(p.within_retired_drop_budget({'rowsRead': 3_000_000, 'rowsWritten': 60_000}))
+        self.assertFalse(p.within_retired_drop_budget({'rowsRead': 3_000_001, 'rowsWritten': 0}))
+        self.assertFalse(p.within_retired_drop_budget({'rowsRead': 0, 'rowsWritten': 60_001}))
+        self.assertFalse(p.within_preflight_budget({'rowsRead': 0, 'rowsWritten': 50_001}))
+
     def test_notification_read_only_inspection_has_separate_reserve(self):
         self.assertTrue(p.within_notification_inspection_budget({'rowsRead': 3_000_000, 'rowsWritten': 75_000}))
         self.assertFalse(p.within_notification_inspection_budget({'rowsRead': 3_000_001, 'rowsWritten': 0}))
