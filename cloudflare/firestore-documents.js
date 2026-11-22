@@ -1795,6 +1795,27 @@ async function boundedNotificationPage(db,uid,spec) {
   async function readWindow(legacy) {
     if(!delta) {
       const bound=cursor?` AND (${rank},${time},a.doc_id)<(?,?,?)`:'';
+      if (cursor?.[0]===2) {
+        // Numeric is the lowest supported rank, so an older numeric cursor
+        // cannot cross into another rank. Expose the time bound to the index;
+        // timestamp cursors keep the original single-query merge unchanged.
+        const index=legacy ? (unread.length?'idx_cf_legacy_notif_unread':'idx_cf_legacy_notif_page')
+          : (unread.length?'idx_cf_notif_unread':'idx_cf_notif_page');
+        const columns=legacy?'a.path,a.collection,a.doc_id,a.owner_uid,a.document_json,a.updated_at'
+          :'a.path,a.parent_path,a.collection_id,a.doc_id,a.owner_uid,a.document_json,a.create_time,a.update_time';
+        const table=legacy?'friendbook_cf_documents':'friendbook_cf_firestore_documents';
+        const condition=legacy?`a.collection='notifications'${byLegacyRecipient}${unreadOnly}`
+          :`a.parent_path='notifications'${byRecipient}${unreadOnly}`;
+        try {
+          return await db.prepare(`SELECT ${columns} FROM ${table} a INDEXED BY ${index} WHERE ${condition}
+            AND (${rank})=2 AND (${time})<=? AND (${time},a.doc_id)<(?,?)
+            ORDER BY ${time} DESC,a.doc_id DESC LIMIT ?`)
+            .bind(uid,cursor[1],cursor[1],cursor[2],chunk).all();
+        } catch(error) {
+          if (!String(error).includes(`no such index: ${index}`)) throw error;
+          // Safe with older schemas: retain the original unhinted query.
+        }
+      }
       return readStore(legacy,bound,[...recipientArgs,...(cursor||[]),chunk]);
     }
     // The cache requests the first page after its anchor, not the newest

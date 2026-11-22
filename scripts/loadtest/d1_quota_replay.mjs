@@ -181,6 +181,18 @@ await measure('profileDetail',users,()=>wave(users,async i=>{
   assert.equal(profile.document.email,undefined);
 }));
 for(const root of ['posts','reels','stories','lives','notifications']) assert.equal(report.workloads[`page-${root}`].changedRowsIncludingTriggers,0);
+// Historical numeric notification cursors must preserve order and unread scope.
+for(let i=0;i<users;i++)for(const time of [10,20,30]) add('notifications',`numeric${i}_${time}`,'user0',{
+  fromUserId:'user0',toUserId:`user${i}`,isRead:false,createdAt:time,
+});
+for(const unread of [false,true]) await measure(`numericNotificationPage${unread?'Unread':'All'}`,users,()=>wave(users,async i=>{
+  const filters=[{field:'toUserId',op:'==',value:`user${i}`},...(unread?[{field:'isRead',op:'==',value:false}]:[])];
+  const page=await call(`user${i}`,'/v1/firestore/query','POST',{parent:'notifications',filters,
+    orderBy:[{field:'createdAt',direction:'DESCENDING'}],limit:2,startAfter:[30,`numeric${i}_30`]});
+  assert.deepEqual(page.documents.map(d=>d.id),[`numeric${i}_20`,`numeric${i}_10`]);
+}));
+assert.equal(report.workloads.numericNotificationPageAll.changedRowsIncludingTriggers,0);
+assert.equal(report.workloads.numericNotificationPageUnread.changedRowsIncludingTriggers,0);
 // A quiet live host sends the same audience every eight seconds. One fresh
 // canonical fixture per host avoids conflating independent concurrent sockets.
 for(let i=0;i<users;i++) add('lives',`quiet${i}`,`user${i}`,{hostId:`user${i}`,privacy:'public',status:'live',lastHeartbeatMs:Date.now()-8000,viewerIds:[],peakViewers:1});
@@ -318,6 +330,16 @@ await measure('duplicateNotificationCreate',users-1,()=>wave(users-1,async i=>{
   assert.equal(res.status,409);
 }));
 assert.equal(report.workloads.duplicateNotificationCreate.changedRowsIncludingTriggers,0,'duplicate notification creation');
+// Exercise all reaction types and both reacting and non-reacting viewers.
+add('posts','multi_reactions','user0',{authorId:'user0',privacy:'Public',createdAt:timestamp(now)});
+sql.prepare("INSERT INTO friendbook_cf_interaction_resources VALUES('posts/multi_reactions','verified')").run();
+const multiTypes=['like','love','haha','wow','sad','angry'];
+for(const [i,type] of multiTypes.entries()) sql.prepare('INSERT INTO friendbook_cf_reactions VALUES (?,?,?,?)').run('posts/multi_reactions',`user${i}`,type,now);
+await measure('multiTypeReactionSummary',users,()=>wave(users,async i=>{
+  const result=await call(`user${i}`,'/v1/engagement/posts/multi_reactions/reactions');
+  assert.deepEqual(result.types,[...multiTypes].sort().map(type=>({type,count:1,mine:multiTypes[i]===type?1:0})));
+}));
+assert.equal(report.workloads.multiTypeReactionSummary.changedRowsIncludingTriggers,0);
 assert.equal(sql.prepare("SELECT total FROM friendbook_cf_reaction_totals WHERE resource='posts/item39' AND type='like'").get().total,users);
 assert.equal(report.workloads.unchangedProfileHeartbeat.changedRowsIncludingTriggers,0);
 assert.equal(report.workloads.duplicateReceiptAndUnreadReset.changedRowsIncludingTriggers,0);

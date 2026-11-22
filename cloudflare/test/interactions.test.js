@@ -628,3 +628,28 @@ test('engagement subtracts blocked comments using author seeks without double co
   f.sql.exec('DROP INDEX idx_cf_comment_resource_author');
   assert.equal((await summarize()).comments,1998,'old schemas retain the compatible path');
 });
+
+test('multi-type reaction summaries retain viewer, ordering and compact acknowledgement', async t => {
+  const f=fixture();t.after(f.close);
+  const insert=f.sql.prepare('INSERT INTO friendbook_cf_reactions VALUES(?,?,?,?)');
+  for(const [i,type] of ['like','love','haha','wow','sad','angry'].entries()) insert.run('posts/p1',i===0?'user1':`actor${i}`,type,1);
+  f.sql.exec("INSERT INTO friendbook_cf_interaction_resources VALUES ('posts/other','verified')");
+  insert.run('posts/other','viewerWithoutReaction','like',1);
+  insert.run('posts/p1','nullActor',null,1);
+  const expected=['angry','haha','like','love','sad','wow'].map(type=>({type,count:1,mine:type==='like'?1:0}));
+  const full=await (await call(f.env,'reactions')).json();assert.deepEqual(full.types,expected);
+  const commentPage=await (await call(f.env,'comments','GET',undefined,{query:'?includeReactions=1'})).json();assert.deepEqual(commentPage.reactions,expected);
+  const compact=await (await call(f.env,'reactions','PUT',{type:'like'},{query:'?response=reaction'})).json();assert.deepEqual(compact.types,expected);
+  const batched=await batchEngagementReads(f.env.DB,['posts/p1','posts/other'],'user1',[]);
+  assert.deepEqual((await engagementSummary(f.env.DB,'posts/p1','user1','owner',[],batched.get('posts/p1'))).types,expected);
+  assert.deepEqual((await engagementSummary(f.env.DB,'posts/other','user1','owner',[],batched.get('posts/other'))).types,[{type:'like',count:1,mine:0}]);
+  for(const uid of ['viewerWithoutReaction','nullActor']){
+    const result=await (await call(f.env,'reactions','GET',undefined,{identity:{...identity,uid}})).json();
+    assert.deepEqual(result.types,expected.map(x=>({...x,mine:0})),uid);
+  }
+  // Changing/removing an actor keeps counts and mine flags in one transaction.
+  const love=await (await call(f.env,'reactions','PUT',{type:'love'},{query:'?response=reaction'})).json();
+  assert.deepEqual(love.types,expected.filter(x=>x.type!=='like').map(x=>x.type==='love'?{type:'love',count:2,mine:1}:x));
+  const removed=await (await call(f.env,'reactions','PUT',{type:null},{query:'?response=reaction'})).json();
+  assert.deepEqual(removed.types,expected.filter(x=>x.type!=='like').map(x=>({...x,mine:0})));
+});

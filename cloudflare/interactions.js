@@ -28,9 +28,12 @@ async function body(request) {
   if (!data || Array.isArray(data) || typeof data !== 'object') throw Error();
   return data;
 }
-const reactionTypesSql = `COALESCE((SELECT json_group_array(json_object('type', s.type, 'count', s.total, 'mine', CASE WHEN r.type = s.type THEN 1 ELSE 0 END))
-      FROM (SELECT resource, type, total FROM friendbook_cf_reaction_totals WHERE resource = ?2 AND total > 0 ORDER BY type) s
-      LEFT JOIN friendbook_cf_reactions r ON r.resource = s.resource AND r.uid = ?1), '[]')`;
+// The actor has at most one reaction per resource. An uncorrelated scalar
+// lookup is evaluated once per statement, rather than joining the same actor
+// row once for each nonzero type. Both reads stay in the same D1 snapshot.
+const reactionTypesSql = `COALESCE((SELECT json_group_array(json_object('type', s.type, 'count', s.total, 'mine', CASE WHEN
+      (SELECT type FROM friendbook_cf_reactions WHERE resource=?2 AND uid=?1) = s.type THEN 1 ELSE 0 END))
+      FROM (SELECT type, total FROM friendbook_cf_reaction_totals WHERE resource = ?2 AND total > 0 ORDER BY type) s), '[]')`;
 
 // Shared by explicit post details and the bounded Home response; no writes here.
 function engagementStatement(db, resource, uid, blocked, useTotals = true) {
