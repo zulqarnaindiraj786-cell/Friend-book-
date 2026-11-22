@@ -1,4 +1,4 @@
-# Analytics only: never issues D1 SQL or generates application traffic; 06:37 dashboard follow-up.
+# Analytics only: never issues D1 SQL or generates application traffic; current normal-use quota investigation.
 name: Read-only D1 quota audit
 on:
   workflow_dispatch:
