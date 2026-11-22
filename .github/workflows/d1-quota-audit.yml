@@ -64,6 +64,7 @@ jobs:
                       scan=re.search(r'\b([0-8])\s+AS\s+quota_scan_class\b',sql,re.I)
                       alias=re.search(r'\bquota_root_([a-z_]+)\b',sql,re.I)
                       if alias: flags.append('scan='+alias.group(1))
+                      if re.match(r'\s*SELECT\b',sql,re.I) and re.search(r'\bfriendbook_cf_user_follow_membership\b',sql,re.I): flags.append('bounded-follow-membership')
                       if re.search(r'\bidx_cf_(?:legacy_)?people_default_page\b',sql,re.I): flags.append('bounded-users')
                       if re.search(r'\bquota_people_head\b',sql,re.I): flags.append('bounded-users-head')
                       if re.search(r"\bGLOB\s+'chats/\*/messages'",sql,re.I): flags.append('chat-message-page')
