@@ -23,36 +23,49 @@ jobs:
           python3 - <<'PY'
           import subprocess,select,time,json,urllib.parse,collections,os,signal
           p=subprocess.Popen(['npx','--yes','wrangler@4.157.0','tail','rough-firefly-dd7b','--format','json'],stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,start_new_session=True)
-          counts=collections.Counter();deadline=time.monotonic()+75
+          counts=collections.Counter();deadline=time.monotonic()+75;buffer='';decoder=json.JSONDecoder();objects=0
+          def handle(event):
+            global objects
+            if isinstance(event,list):
+              for item in event: handle(item)
+              return
+            if not isinstance(event,dict): return
+            objects+=1
+            details=event.get('event') or {}
+            if not isinstance(details,dict): return
+            request=details.get('request') or {}
+            if not isinstance(request,dict) or not isinstance(request.get('url',''),str): return
+            path=urllib.parse.urlsplit(request.get('url','')).path
+            if path.startswith('/v1/engagement/'):
+              parts=path.split('/'); route='engagement/'+(parts[3] if len(parts)>3 and parts[3] in ('posts','reels') else 'other')+'/'+(parts[5] if len(parts)>5 and parts[5] in ('reactions','comments','reactors') else 'other')
+            elif path.startswith('/v1/firestore/'):
+              parts=path.split('/'); route='firestore/'+(parts[3] if len(parts)>3 and parts[3] in ('document','query','batch','count','profile-bootstrap') else 'other')
+            elif path.startswith('/v1/presence/'): route='presence'
+            elif path.startswith('/v1/'): route='other-api'
+            else: route='other'
+            response=details.get('response') or {}
+            status=response.get('status') if isinstance(response,dict) else 0
+            if type(status) is not int: status=0
+            counts[(route,status)]+=1
           try:
             while time.monotonic()<deadline:
               readable,_,_=select.select([p.stdout],[],[],min(1,max(0,deadline-time.monotonic())))
               if not readable:
                 if p.poll() is not None: break
                 continue
-              line=p.stdout.readline()
-              if not line:
-                if p.poll() is not None: break
-                continue
-              try: event=json.loads(line)
-              except (ValueError,UnicodeDecodeError): continue
-              if not isinstance(event,dict): continue
-              details=event.get('event') or {}
-              if not isinstance(details,dict): continue
-              request=details.get('request') or {}
-              if not isinstance(request,dict) or not isinstance(request.get('url',''),str): continue
-              path=urllib.parse.urlsplit(request.get('url','')).path
-              if path.startswith('/v1/engagement/'):
-                parts=path.split('/'); route='engagement/'+(parts[3] if len(parts)>3 and parts[3] in ('posts','reels') else 'other')+'/'+(parts[5] if len(parts)>5 and parts[5] in ('reactions','comments','reactors') else 'other')
-              elif path.startswith('/v1/firestore/'):
-                parts=path.split('/'); route='firestore/'+(parts[3] if len(parts)>3 and parts[3] in ('document','query','batch','count','profile-bootstrap') else 'other')
-              elif path.startswith('/v1/presence/'): route='presence'
-              elif path.startswith('/v1/'): route='other-api'
-              else: route='other'
-              response=details.get('response') or {}
-              status=response.get('status') if isinstance(response,dict) else 0
-              if type(status) is not int: status=0
-              counts[(route,status)]+=1
+              chunk=os.read(p.stdout.fileno(),65536)
+              if not chunk: break
+              buffer+=chunk.decode('utf-8','replace')
+              while buffer:
+                starts=[i for i in (buffer.find('{'),buffer.find('[')) if i>=0]
+                if not starts: buffer='';break
+                buffer=buffer[min(starts):]
+                try: event,end=decoder.raw_decode(buffer)
+                except ValueError:
+                  if len(buffer)>1048576: buffer=''
+                  break
+                buffer=buffer[end:];handle(event)
+
           finally:
             try: os.killpg(p.pid,signal.SIGTERM)
             except ProcessLookupError: pass
@@ -60,5 +73,5 @@ jobs:
             except subprocess.TimeoutExpired:
               os.killpg(p.pid,signal.SIGKILL);p.wait()
           print('::notice::Aggregate live sample; no URLs, identities or bodies: '+json.dumps([{'route':k[0],'status':k[1],'count':v} for k,v in sorted(counts.items())]))
-          if not counts: print('::warning::No parseable live events; do not infer absence of errors.')
+          if not counts: print('::warning::No parseable live HTTP events; decoded objects:',objects,'; do not infer absence of errors.')
           PY
