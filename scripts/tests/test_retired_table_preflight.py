@@ -37,6 +37,13 @@ class RetiredTablePreflightTest(unittest.TestCase):
         self.db.execute('DROP TRIGGER unexpected')
         self.db.execute(f'CREATE TABLE related(value INTEGER REFERENCES {TABLES[0]}(value))')
         with self.assertRaisesRegex(ValueError, 'referencing'): inspect(self.query)
+        self.db.execute('DROP TABLE related')
+        self.db.execute(f'CREATE VIEW related_view AS SELECT * FROM {TABLES[0]}')
+        with self.assertRaisesRegex(ValueError, 'referencing'): inspect(self.query)
+        self.db.execute('DROP VIEW related_view')
+        self.db.execute('CREATE TABLE other(value INTEGER)')
+        self.db.execute(f'CREATE TRIGGER related_trigger AFTER INSERT ON other BEGIN DELETE FROM {TABLES[0]}; END')
+        with self.assertRaisesRegex(ValueError, 'referencing'): inspect(self.query)
 
     def test_index_weight_is_bounded(self):
         self.db.execute(f'CREATE TABLE {TABLES[0]}(value INTEGER)')
@@ -57,5 +64,10 @@ class RetiredTablePreflightTest(unittest.TestCase):
         section = source[gate:branch]
         self.assertIn('[drop-retired-status]', section)
         self.assertIn('retired_table_preflight.py', section)
+        self.assertIn('retired_migration_gate.py', section)
         self.assertEqual(section.count('d1_account_usage_analytics.py --retired-drop-budget'), 2)
         self.assertLess(branch, apply)
+        verification = source[source.index('migration_status=${PIPESTATUS[0]}', apply):]
+        self.assertIn("migration_status='retired-schema-check-failed'", verification)
+        self.assertIn('if [ "$migration_status" = 0 ]; then', verification)
+        self.assertIn('test "$MIGRATION_STATUS" = 0', verification)

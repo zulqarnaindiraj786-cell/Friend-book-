@@ -63,7 +63,7 @@ jobs:
           python3 cloudflare/test/schema_test.py
           python3 cloudflare/test/migration_test.py
           python3 cloudflare/test/index_plan_test.py
-          python3 -m unittest scripts.tests.test_fcm_claim_migration_gate scripts.tests.test_d1_account_usage_analytics scripts.tests.test_retired_table_preflight scripts.tests.test_verify_retired_drop
+          python3 -m unittest scripts.tests.test_fcm_claim_migration_gate scripts.tests.test_d1_account_usage_analytics scripts.tests.test_retired_table_preflight scripts.tests.test_verify_retired_drop scripts.tests.test_retired_migration_gate
       - name: Verify Save Forever R2 configuration (no R2 object deletion)
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -164,7 +164,8 @@ jobs:
           fi
           # Never let destructive table removal ride along on any branch's deployment.
           if printf '%s\n' "$pending" | grep -q '0086_remove_unused_status_tables.sql'; then
-            if [[ "$HEAD_COMMIT_MESSAGE" != *'[drop-retired-status]'* ]] || ! python3 scripts/loadtest/d1_account_usage_analytics.py --retired-drop-budget || ! python3 scripts/loadtest/retired_table_preflight.py || ! python3 scripts/loadtest/d1_account_usage_analytics.py --retired-drop-budget; then
+            printf '%s\n' "$pending" > "$RUNNER_TEMP/retired-pending.txt"
+            if [[ "$HEAD_COMMIT_MESSAGE" != *'[drop-retired-status]'* ]] || ! python3 scripts/loadtest/retired_migration_gate.py "$RUNNER_TEMP/retired-pending.txt" || ! python3 scripts/loadtest/d1_account_usage_analytics.py --retired-drop-budget || ! python3 scripts/loadtest/retired_table_preflight.py || ! python3 scripts/loadtest/d1_account_usage_analytics.py --retired-drop-budget; then
               echo 'Retired-table removal preflight failed; no migration attempted.' | tee -a "$log"
               echo "whoami_status=$whoami_status" >> "$GITHUB_OUTPUT"
               echo "d1_list_status=$d1_list_status" >> "$GITHUB_OUTPUT"

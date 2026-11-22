@@ -62,7 +62,9 @@ def inspect(query):
         if kind == 'trigger' and number:
             raise ValueError('Unexpected retired-table trigger')
         if kind == 'index': index_counts[name] = number
-    references, cost = query(f"SELECT COUNT(*) AS n FROM sqlite_master WHERE type='table' AND name NOT IN ({placeholders}) AND (" +
+    # Views and triggers on other tables can depend on these tables too. Ignore
+    # only objects owned by a retired table; those disappear with the table.
+    references, cost = query(f"SELECT COUNT(*) AS n FROM sqlite_master WHERE type IN ('table','view','trigger','index') AND tbl_name NOT IN ({placeholders}) AND (" +
         ' OR '.join('instr(lower(sql), ?) > 0' for _ in TABLES) + ')', (*TABLES, *TABLES))
     if (type(cost.get('rows_read')) is not int or cost['rows_read'] < 0 or len(references) != 1
             or references[0].get('n') != 0):
