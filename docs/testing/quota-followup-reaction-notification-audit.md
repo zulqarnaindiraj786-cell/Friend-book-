@@ -6,4 +6,4 @@ The indexed friendship candidate remains disabled and outside the production mig
 
 A finite daily allowance cannot support unbounded usage permanently. Use actual account-wide billed D1 usage and limits (not this analytics sample) to forecast peak demand, configure provider usage notifications and plan capacity, and test quota-exhaustion/recovery on staging. Other services have separate limits. For an offline estimate using billed dashboard values see `scripts/loadtest/d1_budget_forecast.py`; it is not an alert, cap or guarantee.
 
-The Worker and Android code did not change in this audit. Android compile/unit workflow 44994077662 encountered a Robolectric Maven download IOException; a retry of unchanged code is required. The previously deployed code passed Android run 44993622751.
+The Worker and Android code did not change in this audit. Android compile/unit workflow 44994077662 encountered a Robolectric Maven download IOException; unchanged code passed retry 44994172601. The previously deployed code also passed Android run 44993622751; Worker validation passed in 44994172589.
