@@ -747,9 +747,21 @@ async function readCollectionRows(db, parent, uid, filters, spec, env) {
     const legacyUnread = unread ? " AND (CASE WHEN json_type(a.document_json,'$.fields')='object' THEN json_type(a.document_json,'$.fields.isRead.booleanValue') ELSE json_type(a.document_json,'$.isRead') END)='false'" : '';
     // Authorization itself narrows the inbox before loading rows. Keep canonical
     // path precedence even when its recipient differs from a stale legacy mirror.
+    // The ordered unread index has the same recipient/unread prefix as the
+    // older badge index. Pin this unbounded compatibility query to it: without
+    // the hint SQLite can choose the recipient-only index and scan read items.
+    // Older schemas without the page index retain their original plan.
+    const canonicalQuery=index=>db.prepare(`SELECT path, parent_path, collection_id, doc_id, owner_uid, document_json, create_time, update_time
+      FROM friendbook_cf_firestore_documents ${index} WHERE parent_path='notifications' AND json_extract(document_json,'$.toUserId')=?${canonicalUnread}`).bind(uid).all();
+    const canonicalRead=unread ? (async()=>{
+      try { return await canonicalQuery('INDEXED BY idx_cf_notif_unread'); }
+      catch(error) {
+        if(!/no such index: idx_cf_notif_unread/i.test(String(error)))throw error;
+        return canonicalQuery('');
+      }
+    })() : canonicalQuery('');
     const [canonical,legacy] = await Promise.all([
-      db.prepare(`SELECT path, parent_path, collection_id, doc_id, owner_uid, document_json, create_time, update_time
-      FROM friendbook_cf_firestore_documents WHERE parent_path='notifications' AND json_extract(document_json,'$.toUserId')=?${canonicalUnread}`).bind(uid).all(),
+      canonicalRead,
       db.prepare(`SELECT a.path, a.collection, a.doc_id, a.owner_uid, a.document_json, a.updated_at
       FROM friendbook_cf_documents a WHERE a.collection='notifications'
         AND (CASE WHEN json_type(a.document_json,'$.fields')='object'
