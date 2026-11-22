@@ -24,16 +24,12 @@ jobs:
           curl -sS -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" "$base" | tee before.json
           echo
           echo '--- empty the schedule list (no code upload, no migration)'
+          # The documented shape is a bare array of {cron} objects; an empty
+          # array removes every trigger without uploading code or migrations.
           put=$(curl -sS -o put.json -w '%{http_code}' -X PUT "$base" \
             -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" -H 'content-type: application/json' \
-            --data '{"schedules":[]}')
-          echo "PUT status: $put"; cat put.json; echo
-          if [ "$put" != "200" ]; then
-            echo '--- PUT rejected, trying DELETE'
-            del=$(curl -sS -o del.json -w '%{http_code}' -X DELETE "$base" \
-              -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN")
-            echo "DELETE status: $del"; cat del.json; echo
-          fi
+            --data '[]')
+          echo "::notice::PUT empty schedule list status: $put"; cat put.json; echo
           echo '--- schedules after'
           curl -sS -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" "$base" | tee after.json
           echo
@@ -47,6 +43,7 @@ jobs:
                                           'after_expressions': [s.get('cron') for s in a]}))
           if a:
               print('::error::Cron schedules are still attached to the deployed Worker.')
+              print('::notice::response bodies: ' + open('put.json').read()[:400])
               raise SystemExit(1)
           print('::notice::Deployed Worker now has no cron schedule; no scheduled invocation can run.')
           PY
