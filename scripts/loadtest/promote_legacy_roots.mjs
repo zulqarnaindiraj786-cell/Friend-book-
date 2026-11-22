@@ -188,7 +188,9 @@ async function remote(sql, params) {
     const detail = { http: response.status, success: payload?.success === true,
       results: Array.isArray(payload?.result) ? payload.result.length : 0,
       statement: payload?.result?.[0]?.success === true,
-      code: payload?.errors?.[0]?.code ?? payload?.result?.[0]?.error?.code ?? 'none' };
+      code: payload?.errors?.[0]?.code ?? payload?.result?.[0]?.error?.code ?? 'none',
+      // SQLite/SQL API messages name a column, index or token; they never carry row values.
+      message: String(payload?.errors?.[0]?.message ?? '').slice(0, 120) };
     throw Error('database request failed ' + JSON.stringify(detail));
   }
   return { results: payload.result[0].results, meta: payload.result[0].meta };
