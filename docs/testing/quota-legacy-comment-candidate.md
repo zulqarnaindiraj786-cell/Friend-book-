@@ -6,7 +6,9 @@ The read-only Analytics sample in run 44977477454 classified the historical comm
 
 Production aggregate-only preflight 44978284846 sampled all 422 root comments (cap 5,001, not truncated): 268 met the numeric plain-document safe-time predicate. The maximum exception count grouped across route fields was an upper bound of 12. D1 reported 3,109 rows read by the preflight; no records, IDs or user values were printed. This is a snapshot, not a forecast. The deployment repeats the capped preflight and refuses migration if the sample truncates or an exception group reaches 65. It is **not** a guarantee or estimate of billed migration writes or of the full database scan cost.
 
-Production deployment 44978688476 passed its repeated preflight, applied 0076 and published the Worker; the deployment's read-only connectivity check passed. The Android signed-build job was skipped. This establishes deployment, not measured quota savings.
+Production deployment 44978688476 passed its repeated preflight, applied 0076 and published the Worker; the deployment's read-only connectivity check passed. Worker validation 44978688554 and Android candidate checks 44978688550 succeeded; the Android signed-build job was skipped. This establishes deployment, not measured quota savings.
+
+Read-only follow-up 44978798374 reported UTC-day adaptive analytics of 310,804 rows read and 18,864 rows written at its sampling time. Its latest five-minute sample was quiet, and the prior legacy scan appeared in the longer window, which overlaps deployment. The optimized shape was not clearly identified in the short window. Traffic, windows and sampling differ, so this is not a before/after saving or an account-wide billing total; continued observation under real usage is needed.
 
 ## Implementation
 
