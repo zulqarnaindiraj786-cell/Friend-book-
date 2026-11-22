@@ -190,3 +190,5 @@ jobs:
           PY
 
 # Re-run marker: aggregate-only proof job.
+
+# Proof re-run after the deployed schedule list was emptied.
