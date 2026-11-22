@@ -1,6 +1,8 @@
-# Read-only friendship index preflight: migration not authorized
+# Read-only friendship index preflight: initial migration abort
 
-The candidate remains disabled and its two partial-index definitions remain outside the production migration directory. This investigation did not create or drop an index, deploy the experimental Worker, generate synthetic production app traffic or write app data. The previously deployed acceptance-guard coalescing remains live.
+This document describes the initial aborted check; later guarded deployment is recorded in `quota-friend-index-guarded.md`.
+
+At this initial stage, the candidate was disabled and its two partial-index definitions were outside the production migration directory. This investigation did not create or drop an index, deploy the experimental Worker, generate synthetic production app traffic or write app data. The previously deployed acceptance-guard coalescing remained live.
 
 Run 44997262746 first scanned at most 2,001 rows from each source table. D1 reported 4,003 reads and zero intended writes; both source samples hit their limit. Account-wide D1 GraphQL analytics run 44997426358 then reported 902,037 rows read and 40,506 rows written for the UTC day at 2026-11-22 07:15:50 UTC. These dashboard-source adaptive analytics can lag and are not a transactional live quota balance.
 
