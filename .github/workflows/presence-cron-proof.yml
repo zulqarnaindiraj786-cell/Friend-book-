@@ -48,19 +48,43 @@ jobs:
             app/build/outputs/apk/debug/app-debug.apk
             presence-strings.txt
           if-no-files-found: warn
-      - name: Assert the deployable Worker config has no cron schedule
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      - name: Assert the candidate config has no cron schedule
         run: |
           set -euo pipefail
-          npx --yes wrangler@4.157.0 deploy --dry-run --outdir dist-worker > dry-run.log 2>&1
-          cat dry-run.log
-          # Wrangler prints "No cron triggers" when the uploaded config has none.
-          if grep -qi 'cron' dry-run.log && ! grep -qi 'no cron triggers' dry-run.log; then
-            echo '::error::dry run reports a cron trigger'; exit 1
-          fi
-          ! grep -q '\[triggers\]' wrangler.toml
-          ! grep -qE '^[[:space:]]*crons[[:space:]]*=' wrangler.toml
+          node --input-type=module - <<'JS'
+          import { readFileSync } from 'node:fs';
+          import worker from './worker.js';
+          const config = readFileSync('wrangler.toml', 'utf8');
+          if (/^\s*\[triggers\]/m.test(config)) throw Error('[triggers] block present');
+          if (/^\s*crons\s*=/m.test(config)) throw Error('crons= present');
+          if ('scheduled' in worker) throw Error('scheduled handler exported');
+          console.log('::notice::Candidate config: no triggers block, no crons, no scheduled export.');
+          JS
+      - name: Show the cron schedules still attached to the deployed Worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          ACCOUNT: 92f3d04598822de2e49e14561218d090
+          SCRIPT: rough-firefly-dd7b
+        run: |
+          set -uo pipefail
+          code=$(curl -sS -o schedules.json -w '%{http_code}' \
+            -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            "https://api.cloudflare.com/client/v4/accounts/$ACCOUNT/workers/scripts/$SCRIPT/schedules")
+          echo "schedules endpoint status: $code"
+          python3 - <<'PY'
+          import json
+          try:
+              data = json.load(open('schedules.json'))
+          except Exception:
+              print('::warning::Could not read deployed schedules; do not infer absence.')
+              raise SystemExit(0)
+          result = data.get('result') or {}
+          schedules = result.get('schedules') or []
+          print('::notice::' + json.dumps({'deployed_worker_cron_schedules': len(schedules),
+              'expressions': [s.get('cron') for s in schedules]}))
+          if schedules:
+              print('::warning::The deployed Worker still runs crons; it changes only after an upload of this config.')
+          PY
   logs:
     if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[presence-cron-proof]')
     runs-on: ubuntu-latest
