@@ -5,6 +5,9 @@ import urllib.error
 from scripts.loadtest.retired_table_preflight import remote_query
 
 CAP = 5001
+# A single statement gives a consistent coverage snapshot. If this cap is
+# reached the result is explicitly incomplete; do not use it for cutover.
+FULL_CAP = 25001
 SQL = '''WITH sample AS MATERIALIZED (
   SELECT path, collection FROM friendbook_cf_documents ORDER BY path LIMIT ?
 )
@@ -14,28 +17,32 @@ FROM sample LEFT JOIN friendbook_cf_firestore_documents f ON f.path=sample.path
 GROUP BY sample.collection'''
 ALLOWED = {'users', 'posts', 'reels', 'stories', 'chats', 'messages', 'friends',
            'friend_requests', 'follows', 'groups', 'pages', 'notifications',
-           'official_broadcasts', 'lives', 'pokes', 'payments'}
+           'official_broadcasts', 'officialBroadcasts', 'lives', 'pokes', 'payments',
+           'pushDevices', 'reports', 'feedback', 'config', 'events', 'gifts',
+           'referrals', 'subscriptions', 'comments', 'likes', 'followers', 'following', 'saves'}
 
 
-def inspect(query):
-    rows, meta = query(SQL, (CAP,))
+def inspect(query, cap=CAP):
+    if type(cap) is not int or not 1 <= cap <= FULL_CAP:
+        raise ValueError('Invalid inventory cap')
+    rows, meta = query(SQL, (cap,))
     read = meta.get('rows_read')
     if type(read) is not int or read < 0:
         raise ValueError('D1 read accounting unavailable')
     collections = {}
     for row in rows:
         sampled, missing = row.get('sampled'), row.get('legacy_only')
-        if type(sampled) is not int or type(missing) is not int or not 0 <= missing <= sampled <= CAP:
+        if type(sampled) is not int or type(missing) is not int or not 0 <= missing <= sampled <= cap:
             raise ValueError('Invalid inventory')
         name = row.get('collection') if row.get('collection') in ALLOWED else 'other'
         entry = collections.setdefault(name, {'sampled': 0, 'legacy_only': 0})
         entry['sampled'] += sampled
         entry['legacy_only'] += missing
     total = sum(x['sampled'] for x in collections.values())
-    if total > CAP:
+    if total > cap:
         raise ValueError('Invalid inventory size')
-    return {'collections': collections, 'sampled': total, 'truncated': total == CAP,
-            'rows_read': read}
+    return {'collections': collections, 'sampled': total, 'truncated': total == cap,
+            'rows_read': read, 'cap': cap}
 
 
 def inspect_users(query):
@@ -58,7 +65,7 @@ def main():
     import sys
     users_only = '--users' in sys.argv
     try:
-        result = inspect_users(remote_query) if users_only else inspect(remote_query)
+        result = inspect_users(remote_query) if users_only else inspect(remote_query, FULL_CAP if '--full' in sys.argv else CAP)
     except (ValueError, KeyError, TypeError, urllib.error.URLError, TimeoutError):
         raise SystemExit('Inventory unavailable; no changes made.')
     print('::notice:: Bounded ' + ('user' if users_only else 'document') + ' inventory ' + json.dumps(result, sort_keys=True))

@@ -1,6 +1,6 @@
 import sqlite3
 import unittest
-from scripts.loadtest.canonical_inventory import inspect, inspect_users, CAP
+from scripts.loadtest.canonical_inventory import inspect, inspect_users, CAP, FULL_CAP
 
 
 class CanonicalInventoryTest(unittest.TestCase):
@@ -33,4 +33,9 @@ class CanonicalInventoryTest(unittest.TestCase):
         result = inspect(self.query)
         self.assertEqual(result['sampled'], CAP)
         self.assertTrue(result['truncated'])
+        complete = inspect(self.query, FULL_CAP)
+        self.assertFalse(complete['truncated'])
+        self.assertEqual(complete['sampled'], CAP + 1)
+        self.assertEqual(complete['collections']['users']['legacy_only'], CAP + 1)
+        with self.assertRaises(ValueError): inspect(self.query, FULL_CAP + 1)
         with self.assertRaises(ValueError): inspect(lambda *args: ([], {}))
