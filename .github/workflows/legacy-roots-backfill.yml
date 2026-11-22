@@ -1,0 +1,49 @@
+# Bulk promotion of legacy-only root documents that are provably equivalent.
+# Rows whose projection would change real values or authorization are skipped
+# and stay on the legacy fallback; the workflow prints the per-collection table.
+name: Legacy root backfill
+on:
+  workflow_dispatch:
+  push:
+    branches: ['arena/7c7ddb7b-friend-book']
+    paths:
+      - '.github/workflows/legacy-roots-backfill.yml'
+      - 'scripts/loadtest/promote_legacy_roots.mjs'
+      - 'cloudflare/test/legacy-root-backfill.test.js'
+permissions:
+  contents: read
+concurrency:
+  group: friendbook-cloudflare-production
+  cancel-in-progress: false
+jobs:
+  promote:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[legacy-roots-backfill]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci --ignore-scripts
+      - name: Unit tests for the bulk promoter
+        run: node --test cloudflare/test/legacy-root-backfill.test.js
+      - name: Account reserve before writing
+        run: python3 scripts/loadtest/d1_account_usage_analytics.py --root-backfill-budget
+      - name: Promote each requested collection and print the verification table
+        run: |
+          set -uo pipefail
+          status=0
+          for collection in chats messages notifications posts comments; do
+            node scripts/loadtest/promote_legacy_roots.mjs --collection=$collection || status=1
+          done
+          python3 scripts/loadtest/d1_account_usage_analytics.py --root-backfill-budget || true
+          exit $status
+      - name: Read-only coverage inventory after the writes
+        if: always()
+        run: python3 scripts/loadtest/canonical_inventory.py --full
+      - name: Account reserve after writing
+        if: always()
+        run: python3 scripts/loadtest/d1_account_usage_analytics.py --root-backfill-budget
