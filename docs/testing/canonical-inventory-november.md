@@ -8,14 +8,14 @@ Account-wide adaptive analytics reported 1,314,352 reads and 56,795 writes aroun
 
 ## Full bounded inventory and projection preview
 
-Read-only run 45021996256 scanned 10,473 rows (cap 25,001; not truncated) in a single D1 statement and reported 37,224 rows read. These are root-path shadow counts at that instant, not a long-term coverage guarantee. Since the user-only promotion, no further production rows have been backfilled by this work.
+Read-only run 45021996256 scanned 10,473 rows (cap 25,001; not truncated) in a single D1 statement and reported 37,224 rows read. These are root-path shadow counts at that instant, not a long-term coverage guarantee. Subsequently the two friend requests were promoted and verified by run 45022557828; no other collections were promoted after the user-only promotion.
 
 | Collection | Legacy-only at inventory | Backfilled since user promotion | Legacy-only after |
 |---|---:|---:|---:|
 | users | 0 | 0 (2 in prior promotion) | 0 at inventory |
 | chats | 318 | 0 | not yet rechecked |
 | comments | 422 | 0 | not yet rechecked |
-| friend_requests | 2 | 0 | not yet rechecked |
+| friend_requests | 2 | 2 | 0 (run 45022557828) |
 | friends | 1 | 0 | not yet rechecked |
 | groups | 10 | 0 | not yet rechecked |
 | lives | 1 | 0 | not yet rechecked |
@@ -27,6 +27,6 @@ Read-only run 45021996256 scanned 10,473 rows (cap 25,001; not truncated) in a s
 | other (unknown collection names grouped to avoid disclosing arbitrary data) | 9 | 0 | not yet rechecked |
 | config, gifts, officialBroadcasts, pages, payments, reports | 0 each | 0 | not yet rechecked |
 
-Read-only moving scan 45022108993 evaluated 4,668 unshadowed root records without storing or logging their data; it reported 16,278 D1 rows read. This is a paginated moving scan rather than an atomic snapshot. Of those, 4,531 preserve the old plain and authorization projections with a matching redundant `id` preserved, but would add that `id` to the old Firestore facade projection. Another 101 comments failed authorization-field projection equivalence; 34 comments and 2 reels failed the old plain projection comparison. These categories do not establish trigger fanout safety, and no bulk write was authorized by the preview. Exactly reproducing all projections and testing dependent authorization/query paths remain prerequisites to safely promote them.
+Read-only moving scan 45022108993 evaluated 4,668 unshadowed root records without storing or logging their data; it reported 16,278 D1 rows read. Friend-request preview 45022529063 confirmed both candidates passed the bounded source and projection checks; promotion 45022557828 inserted both atomically and verified all canonical columns and zero remaining. As with the user promotion, a redundant matching `id` is retained, so the Firestore facade now exposes that field where it previously stripped it. Read/delete authorization on representative requests is covered by local tests. This is a paginated moving scan rather than an atomic snapshot. Of those, 4,531 preserve the old plain and authorization projections with a matching redundant `id` preserved, but would add that `id` to the old Firestore facade projection. Another 101 comments failed authorization-field projection equivalence; 34 comments and 2 reels failed the old plain projection comparison. These categories do not establish trigger fanout safety, and no bulk write was authorized by the preview. Exactly reproducing all projections and testing dependent authorization/query paths remain prerequisites to safely promote them.
 
 Root-path coverage is not enough for messages: the live code also synthesizes nested `chats/{chatId}/messages/{messageId}` from legacy root messages using an ID prefix or `chatId`. It keeps any existing nested message in preference to the legacy one. A promotion must model that separate alias mapping, potential prefix ambiguity and conflicts, and concurrent changes; simply copying the root `messages/…` path or observing zero root-only paths does not justify deleting the chat bridge. Retain the fallback.
