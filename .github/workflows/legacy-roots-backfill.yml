@@ -13,7 +13,9 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: friendbook-cloudflare-production
+  # A database-write job, but not a deployment: it stays out of the deploy
+  # group so a queued deploy can never cancel a partially-applied promotion.
+  group: friendbook-legacy-backfill
   cancel-in-progress: false
 jobs:
   promote:
