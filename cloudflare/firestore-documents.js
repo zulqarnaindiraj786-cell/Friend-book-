@@ -2543,15 +2543,32 @@ async function storyEngagement(request,env,uid,now) {
       // two indexed documents and temporary guards. Authorization and expiry
       // checks above still run, and legacy-only rows still promote normally.
       if(row[canonicalRootSnapshot] && encoded===row.document_json)return json({ok:true});
-      const guards=await Promise.all([chatDocumentGuard(db,path,row),chatDocumentGuard(db,`users/${uid}`,viewer),chatDocumentGuard(db,`users/${owner}`,author)]);
-      guards.push(db.prepare('INSERT INTO friendbook_cf_social_guards(ok) SELECT CASE WHEN COALESCE((SELECT friend_path FROM friendbook_cf_trusted_friendships WHERE uid_low=? AND uid_high=?),\'\') = ? THEN 1 ELSE 0 END').bind(low,high,friend?.friend_path||''));
-      await db.batch([...guards,
-        db.prepare(`INSERT INTO friendbook_cf_firestore_documents(path,parent_path,collection_id,doc_id,owner_uid,document_json,create_time,update_time) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET owner_uid=excluded.owner_uid,document_json=excluded.document_json,update_time=excluded.update_time`).bind(path,'stories','stories',input.id,owner,encoded,row.create_time||now,now),
-        db.prepare(`INSERT INTO friendbook_cf_documents(path,collection,doc_id,owner_uid,document_json,updated_at) VALUES (?,?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET owner_uid=excluded.owner_uid,document_json=excluded.document_json,updated_at=excluded.updated_at`).bind(path,'stories',input.id,owner,JSON.stringify({...next,id:input.id}),now),
-        db.prepare('DELETE FROM friendbook_cf_social_guards').bind()]);
+      const mirror=db.prepare(`INSERT INTO friendbook_cf_documents(path,collection,doc_id,owner_uid,document_json,updated_at) VALUES (?,?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET owner_uid=excluded.owner_uid,document_json=excluded.document_json,updated_at=excluded.updated_at`).bind(path,'stories',input.id,owner,JSON.stringify({...next,id:input.id}),now);
+      if(row[canonicalRootSnapshot] && viewer[canonicalRootSnapshot] && author[canonicalRootSnapshot]) {
+        // The canonical upsert checks the exact story, profiles and friendship
+        // snapshot inside the transaction. A conflict forces a NOT NULL error,
+        // rolling back both stores and retrying the full authorization without
+        // writing four temporary guards and deleting them again.
+        const canonical=db.prepare(`INSERT INTO friendbook_cf_firestore_documents(path,parent_path,collection_id,doc_id,owner_uid,document_json,create_time,update_time)
+          VALUES (CASE WHEN (SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?1)=?2
+            AND (SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?3)=?4
+            AND (SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?5)=?6
+            AND COALESCE((SELECT friend_path FROM friendbook_cf_trusted_friendships WHERE uid_low=?7 AND uid_high=?8),'')=?9
+            THEN ?1 ELSE NULL END,'stories','stories',?10,?11,?12,?13,?14)
+          ON CONFLICT(path) DO UPDATE SET owner_uid=excluded.owner_uid,document_json=excluded.document_json,update_time=excluded.update_time`)
+          .bind(path,row.document_json,`users/${uid}`,viewer.document_json,`users/${owner}`,author.document_json,low,high,friend?.friend_path||'',input.id,owner,encoded,row.create_time||now,now);
+        await db.batch([canonical,mirror]);
+      } else {
+        // Historical-only records still require the original conversion guards.
+        const guards=await Promise.all([chatDocumentGuard(db,path,row),chatDocumentGuard(db,`users/${uid}`,viewer),chatDocumentGuard(db,`users/${owner}`,author)]);
+        guards.push(db.prepare('INSERT INTO friendbook_cf_social_guards(ok) SELECT CASE WHEN COALESCE((SELECT friend_path FROM friendbook_cf_trusted_friendships WHERE uid_low=? AND uid_high=?),\'\') = ? THEN 1 ELSE 0 END').bind(low,high,friend?.friend_path||''));
+        await db.batch([...guards,
+          db.prepare(`INSERT INTO friendbook_cf_firestore_documents(path,parent_path,collection_id,doc_id,owner_uid,document_json,create_time,update_time) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET owner_uid=excluded.owner_uid,document_json=excluded.document_json,update_time=excluded.update_time`).bind(path,'stories','stories',input.id,owner,encoded,row.create_time||now,now),
+          mirror,db.prepare('DELETE FROM friendbook_cf_social_guards').bind()]);
+      }
       return json({ok:true});
     } catch(error) {
-      if(/Document changed|CHECK constraint failed: ok\s*=\s*1/i.test(String(error?.message||''))){if(attempt<2)continue;return json({error:'Story changed. Please retry.'},409);}
+      if(/Document changed|CHECK constraint failed: ok\s*=\s*1|NOT NULL constraint failed: friendbook_cf_firestore_documents\.path/i.test(String(error?.message||''))){if(attempt<2)continue;return json({error:'Story changed. Please retry.'},409);}
       return json({error:'Story engagement unavailable'},503);
     }
   }

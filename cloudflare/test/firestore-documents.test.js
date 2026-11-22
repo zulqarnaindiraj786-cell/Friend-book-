@@ -2037,11 +2037,12 @@ test('story engagement records only authorized actor, retries races, and mirrors
  const put=(coll,id,obj)=>sql.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)').run(`${coll}/${id}`,coll,coll,id,id,JSON.stringify(obj),1,1);
  put('users','alice',{uid:'alice'});put('users','bob',{uid:'bob'});put('users','carol',{uid:'carol'});
  put('stories','s1',{authorId:'alice',privacy:'Public',expiresAt:Date.now()+60000,viewedBy:[],reactions:{}});
- let race=true,blockRace=false,friendRace=false,preferredAccounts=[];
+ let race=true,blockRace=false,friendRace=false,viewerRace=false,preferredAccounts=[];
  const db={prepare(q){const s=sql.prepare(q);return{bind(...args){return{run:async()=>s.run(...args),all:async()=>({results:s.all(...args)}),first:async()=>{if(q.includes('SELECT document_json FROM friendbook_cf_firestore_documents WHERE path = ?1') && String(args[0]).startsWith('users/'))preferredAccounts.push(args[0]);return s.get(...args)||null;}};}};},async batch(stmts){
   if(race){race=false;const row=JSON.parse(sql.prepare("SELECT document_json FROM friendbook_cf_firestore_documents WHERE path='stories/s1'").get().document_json);row.viewedBy=['carol'];sql.prepare("UPDATE friendbook_cf_firestore_documents SET document_json=? WHERE path='stories/s1'").run(JSON.stringify(row));}
   if(blockRace){blockRace=false;sql.prepare("UPDATE friendbook_cf_firestore_documents SET document_json=? WHERE path='users/alice'").run(JSON.stringify({uid:'alice',blocked:['bob']}));}
   if(friendRace){friendRace=false;sql.prepare("DELETE FROM friendbook_cf_trusted_friendships WHERE uid_low='alice' AND uid_high='bob'").run();}
+  if(viewerRace){viewerRace=false;sql.prepare("UPDATE friendbook_cf_firestore_documents SET document_json=? WHERE path='users/bob'").run(JSON.stringify({uid:'bob',banned:true}));}
   sql.exec('BEGIN');try{for(const s of stmts)await s.run();sql.exec('COMMIT');}catch(e){sql.exec('ROLLBACK');throw e;}
  }};
  const app=createWorker(async t=>t),env={DB:db,FIREBASE_PROJECT_ID:'friendbook-test'};
@@ -2085,6 +2086,23 @@ test('story engagement records only authorized actor, retries races, and mirrors
  assert.equal((await call('bob',{id:'s1',op:'react',emoji:'x'})).status,403);
  story=JSON.parse(sql.prepare("SELECT document_json FROM friendbook_cf_firestore_documents WHERE path='stories/s1'").get().document_json);
  assert.equal(story.reactions.bob,'❤️','friendship removal racing the batch prevents the write');
+ put('stories','s3',{authorId:'alice',privacy:'Public',expiresAt:Date.now()+60000,viewedBy:[],reactions:{}});
+ viewerRace=true;assert.equal((await call('bob',{id:'s3',op:'view'})).status,403);
+ assert.deepEqual(JSON.parse(sql.prepare("SELECT document_json FROM friendbook_cf_firestore_documents WHERE path='stories/s3'").get().document_json).viewedBy,[],'a racing viewer ban must abort');
+ sql.prepare("UPDATE friendbook_cf_firestore_documents SET document_json=? WHERE path='users/bob'").run(JSON.stringify({uid:'bob'}));
+ sql.exec("CREATE TRIGGER fail_story_mirror BEFORE INSERT ON friendbook_cf_documents WHEN NEW.path='stories/s3' BEGIN SELECT RAISE(ABORT,'injected failure'); END");
+ assert.notEqual((await call('bob',{id:'s3',op:'view'})).status,200);
+ assert.deepEqual(JSON.parse(sql.prepare("SELECT document_json FROM friendbook_cf_firestore_documents WHERE path='stories/s3'").get().document_json).viewedBy,[],'mirror failure must roll back the view');
+ sql.exec('DROP TRIGGER fail_story_mirror');
+ assert.equal((await call('bob',{id:'s3',op:'view'})).status,200);
+ const legacy={authorId:'alice',privacy:'Public',expiresAt:Date.now()+60000,viewedBy:[],reactions:{},id:'old'};
+ sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)').run('stories/old','stories','old','alice',JSON.stringify(legacy),1);
+ assert.equal((await call('bob',{id:'old',op:'view'})).status,200);
+ assert.deepEqual(JSON.parse(sql.prepare("SELECT document_json FROM friendbook_cf_firestore_documents WHERE path='stories/old'").get().document_json).viewedBy,['bob']);
+ sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)').run('users/dana','users','dana','dana',JSON.stringify({uid:'dana',id:'dana'}),1);
+ put('stories','s4',{authorId:'alice',privacy:'Public',expiresAt:Date.now()+60000,viewedBy:[],reactions:{}});
+ assert.equal((await call('dana',{id:'s4',op:'view'})).status,200);
+ assert.deepEqual(JSON.parse(sql.prepare("SELECT document_json FROM friendbook_cf_firestore_documents WHERE path='stories/s4'").get().document_json).viewedBy,['dana']);
  sql.close();
 });
 
