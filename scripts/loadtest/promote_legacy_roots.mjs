@@ -183,7 +183,14 @@ async function remote(sql, params) {
   });
   const payload = await response.json();
   if (!response.ok || !payload?.success || payload.result?.length !== 1 || payload.result[0]?.success !== true
-      || !Array.isArray(payload.result[0].results)) throw Error('database request failed');
+      || !Array.isArray(payload.result[0].results)) {
+    // Diagnostics never include SQL text, parameters or row values.
+    const detail = { http: response.status, success: payload?.success === true,
+      results: Array.isArray(payload?.result) ? payload.result.length : 0,
+      statement: payload?.result?.[0]?.success === true,
+      code: payload?.errors?.[0]?.code ?? payload?.result?.[0]?.error?.code ?? 'none' };
+    throw Error('database request failed ' + JSON.stringify(detail));
+  }
   return { results: payload.result[0].results, meta: payload.result[0].meta };
 }
 
@@ -196,9 +203,11 @@ if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).
     if (result.after !== 0 || Object.keys(result.skipped).length)
       console.log('::warning:: Rows remain in the legacy fallback for this collection; the fallback stays.')
   } catch (error) {
-    console.error(`::error:: Safe root backfill stopped: ${['unsupported collection', 'invalid batch size', 'inventory unavailable',
-      'read cap exceeded', 'post-insert verification failed', 'unsafe plan length',
-      'missing credential', 'database request failed'].includes(error.message) ? error.message : 'preflight unavailable'}`);
+    const known = ['unsupported collection', 'invalid batch size', 'inventory unavailable', 'read cap exceeded',
+      'post-insert verification failed', 'unsafe plan length', 'missing credential'];
+    const message = known.includes(error.message) ? error.message
+      : error.message.startsWith('database request failed') ? error.message : 'preflight unavailable';
+    console.error(`::error:: Safe root backfill stopped: ${message}`);
     process.exitCode = 1;
   }
 }
