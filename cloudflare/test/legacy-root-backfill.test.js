@@ -59,6 +59,22 @@ test('a concurrent legacy edit or canonical insert skips exactly that row', asyn
     '{"authorId":"alice","createdAt":3,"id":"p3"}');
 });
 
+test('a timestamp encoding change is promoted only with an explicit, value-equal opt-in', () => {
+  const wrapped = {
+    path: 'comments/c1', collection: 'comments', doc_id: 'c1', owner_uid: 'a', updated_at: 1,
+    document_json: '{"fields":{"createdAt":{"timestampValue":"2024-01-01T00:00:00Z"},"text":{"stringValue":"x"}}}',
+  };
+  assert.equal(prepare(wrapped).reason, 'plain_projection_diff');
+  assert.equal(prepare(wrapped, { representationFields: new Set(['createdAt']) }).reason, 'auth_projection_diff');
+  const allowed = prepare(wrapped, { representationFields: new Set(['createdAt']), allowEncodingOnly: true });
+  assert.equal(allowed.status, 'promote');
+  assert.equal(allowed.representation, true);
+  const shifted = { ...wrapped, document_json: '{"fields":{"createdAt":{"timestampValue":"2024-01-01T00:00:01Z"},"text":{"stringValue":"x"}}}' };
+  assert.equal(prepare(shifted, { representationFields: new Set(['createdAt']), allowEncodingOnly: true }).status, 'promote');
+  const other = { ...wrapped, document_json: '{"fields":{"createdAt":{"integerValue":"5"},"text":{"stringValue":"x"}}}' };
+  assert.equal(prepare(other, { representationFields: new Set(['createdAt']), allowEncodingOnly: true }).status, 'promote');
+});
+
 test('unsafe shapes and stale metadata never get promoted', () => {
   const base = { path: 'posts/p1', collection: 'posts', doc_id: 'p1', owner_uid: 'a', updated_at: 1, document_json: '{"a":1}' };
   assert.equal(prepare({ ...base, collection: 'sessions' }).reason, 'unsafe_shape');

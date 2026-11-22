@@ -56,12 +56,14 @@ function representationOnly(fromJson, toJson, docId, allowed) {
   return paths.every(([path, a, b]) => {
     if (!allowed.has(path)) return false;
     const numeric = value => (typeof value === 'number' ? value
-      : typeof value === 'string' && /^-?\d+(\.\d+)?$/.test(value) ? Number(value) : NaN);
+      : typeof value === 'string' && /^-?\d+(\.\d+)?$/.test(value) ? Number(value)
+        : value && typeof value === 'object' && value.__type === 'timestamp' && Number.isFinite(value.millis) ? value.millis
+          : NaN);
     return Number.isFinite(numeric(a)) && Number.isFinite(numeric(b)) && numeric(a) === numeric(b);
   });
 }
 
-export function prepare(source, { representationFields = new Set() } = {}) {
+export function prepare(source, { representationFields = new Set(), allowEncodingOnly = false } = {}) {
   if (!source || typeof source.collection !== 'string' || !BULK_COLLECTIONS.has(source.collection)
       || typeof source.path !== 'string' || source.path !== `${source.collection}/${source.doc_id}`
       || typeof source.doc_id !== 'string' || !source.doc_id || source.doc_id.includes('/')
@@ -86,8 +88,14 @@ export function prepare(source, { representationFields = new Set() } = {}) {
   if (!isDeepStrictEqual(oldFields, toFirestoreFields(saved))) {
     const withoutId = { ...oldFields };
     delete withoutId.id;
-    if (!(oldFields?.id?.stringValue === source.doc_id && isDeepStrictEqual(withoutId, toFirestoreFields(saved))))
-      return { status: 'skip', reason: 'auth_projection_diff', fields: differingFields(source.document_json, saved) };
+    if (!(oldFields?.id?.stringValue === source.doc_id && isDeepStrictEqual(withoutId, toFirestoreFields(saved)))) {
+      // The plain document is unchanged (checked above when plainEqual), so
+      // this difference is only how the value is encoded. New writes already
+      // use the canonical encoding, so promoting is explicitly opt-in.
+      if (!((plainEqual || representation) && allowEncodingOnly))
+        return { status: 'skip', reason: 'auth_projection_diff', fields: differingFields(source.document_json, saved) };
+      representation = true;
+    }
   }
   if (source.collection === 'users' && ['followers', 'following'].some(key => Array.isArray(candidate[key]) && candidate[key].length > 20))
     return { status: 'skip', reason: 'fanout_limit' };
@@ -176,6 +184,7 @@ async function runPool(tasks, concurrency) {
  */
 export async function promoteCollection(query, collection, {
   batch = 100, maxRows = 6000, maxReads = 400000, maxBatches = 200, representationFields = [], write = true,
+  allowEncodingOnly = false,
 } = {}) {
   const representationSet = new Set(representationFields);
   if (!BULK_COLLECTIONS.has(collection)) throw Error('unsupported collection');
@@ -192,7 +201,7 @@ export async function promoteCollection(query, collection, {
     const rows = page.results || [];
     if (!rows.length) break;
     batches++;
-    const prepared = rows.map(row => prepare(row, { representationFields: representationSet }));
+    const prepared = rows.map(row => prepare(row, { representationFields: representationSet, allowEncodingOnly }));
     rows.forEach((row, index) => {
       scanned++;
       lastUpdated = row.updated_at;
@@ -258,7 +267,8 @@ if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).
     const representations = (process.argv.find(arg => arg.startsWith('--representation='))?.split('=')[1] || '')
       .split(',').filter(Boolean);
     const result = await promoteCollection(remote, collection, { batch: 100, maxRows: 6000, maxReads: 400000,
-      representationFields: representations, write: !process.argv.includes('--dry-run') });
+      representationFields: representations, write: !process.argv.includes('--dry-run'),
+      allowEncodingOnly: process.argv.includes('--allow-encoding-only') });
     console.log('::notice:: Root backfill ' + JSON.stringify(result));
     if (!process.argv.includes('--dry-run') && (result.after !== 0 || Object.keys(result.skipped).length))
       console.log('::warning:: Rows remain in the legacy fallback for this collection; the fallback stays.')
