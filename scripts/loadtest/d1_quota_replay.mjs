@@ -231,6 +231,10 @@ await measure('followListMembership',users,()=>wave(users,async()=>{
 assert.equal(report.workloads.followListMembership.changedRowsIncludingTriggers,0);
 await measure('identicalProfileMerge',users,()=>wave(users,i=>call(`user${i}`,`/v1/firestore/document?path=users/user${i}`,'PUT',{data:{displayName:`user${i}`},merge:true})));
 assert.equal(report.workloads.identicalProfileMerge.changedRowsIncludingTriggers,0,'identical profile merge');
+await measure('changedProfileMerge',users,()=>wave(users,async i=>{
+  const result=await call(`user${i}`,`/v1/firestore/document?path=users/user${i}`,'PUT',{data:{bio:'changed profile'},merge:true});
+  assert.equal(result.data.bio,'changed profile');
+}));
 for(let i=1;i<users;i++) {
   const id=`saved${i}`,uid=`user${i}`,doc={authorId:'user0',privacy:'Public',savedBy:[uid]};
   add('posts',id,'user0',doc);
@@ -238,6 +242,10 @@ for(let i=1;i<users;i++) {
 }
 await measure('repeatSavedPost',users-1,()=>wave(users-1,i=>call(`user${i+1}`,`/v1/firestore/document?path=posts/saved${i+1}`,'PATCH',{fields:{savedBy:{__fieldValue:'arrayUnion',values:[`user${i+1}`]}}})));
 assert.equal(report.workloads.repeatSavedPost.changedRowsIncludingTriggers,0,'already saved posts');
+await measure('changedSavedPost',users-1,()=>wave(users-1,async i=>{
+  const result=await call(`user${i+1}`,`/v1/firestore/document?path=posts/saved${i+1}`,'PATCH',{fields:{savedBy:{__fieldValue:'arrayRemove',values:[`user${i+1}`]}}});
+  assert.deepEqual(result.data.savedBy,[]);
+}));
 sql.prepare("INSERT INTO friendbook_cf_interaction_resources(resource,state) VALUES ('posts/item39','verified') ON CONFLICT(resource) DO NOTHING").run();
 const engagement='/v1/engagement/posts/item39';
 // A busy synthetic legacy post with a small mix of exception encodings.

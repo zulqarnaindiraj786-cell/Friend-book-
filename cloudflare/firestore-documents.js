@@ -888,7 +888,7 @@ function quietLiveHeartbeat(before,fields,now) {
     && JSON.stringify(fields.viewerIds)===JSON.stringify(before.viewerIds);
 }
 
-async function writeRow(db, path, doc, now, existing, guarded = false) {
+async function writeRow(db, path, doc, now, existing, guarded = false, inlineGuard = false) {
   const parent = parentPath(path);
   const coll = collectionIdOf(path);
   const id = docIdOf(path);
@@ -896,7 +896,15 @@ async function writeRow(db, path, doc, now, existing, guarded = false) {
   const createTime = existing?.create_time || now;
   const serialized = JSON.stringify(doc);
   if (serialized.length > 1_800_000) throw new Error('Document too large');
-  const writes = [db.prepare(
+  const inline=guarded && inlineGuard && existing?.[canonicalRootSnapshot] && isRootDocument(path);
+  // The exact authorized root snapshot can be checked by the upsert itself.
+  // A changed snapshot makes path NULL and aborts the whole mirror transaction.
+  // Legacy/missing documents retain the original absence/conversion guards.
+  const writes = [inline ? db.prepare(
+    `INSERT INTO friendbook_cf_firestore_documents(path, parent_path, collection_id, doc_id, owner_uid, document_json, create_time, update_time)
+     VALUES (CASE WHEN (SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?1)=?2 THEN ?1 ELSE NULL END,?3,?4,?5,?6,?7,?8,?9)
+     ON CONFLICT(path) DO UPDATE SET owner_uid = excluded.owner_uid, document_json = excluded.document_json, update_time = excluded.update_time`
+  ).bind(path,existing.document_json,parent,coll,id,owner,serialized,createTime,now) : db.prepare(
     `INSERT INTO friendbook_cf_firestore_documents(path, parent_path, collection_id, doc_id, owner_uid, document_json, create_time, update_time)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(path) DO UPDATE SET owner_uid = excluded.owner_uid, document_json = excluded.document_json, update_time = excluded.update_time`
@@ -913,7 +921,7 @@ async function writeRow(db, path, doc, now, existing, guarded = false) {
        ON CONFLICT(path) DO UPDATE SET owner_uid=excluded.owner_uid, document_json=excluded.document_json, updated_at=excluded.updated_at`
     ).bind(path, coll, id, appOwner, appDoc, now));
   }
-  if (guarded) {
+  if (guarded && !inline) {
     writes.unshift(await chatDocumentGuard(db,path,existing));
     writes.push(db.prepare('DELETE FROM friendbook_cf_social_guards').bind());
   }
@@ -1019,11 +1027,11 @@ async function mutateProfile(db, uid, path, body, method, now, profileRow) {
         if (!updated) throw new Error('Document changed');
         return json(rowToDocument({...existing,document_json:serialized,update_time:now}));
       }
-      return json(rowToDocument(await writeRow(db,path,next,now,existing,true)));
+      return json(rowToDocument(await writeRow(db,path,next,now,existing,true,true)));
     } catch (error) {
       const message=String(error?.message || '');
       if (message==='Document too large') return json({error:message},413);
-      if (/Document changed|CHECK constraint failed: ok\s*=\s*1/i.test(message)) {
+      if (/Document changed|CHECK constraint failed: ok\s*=\s*1|NOT NULL constraint failed: friendbook_cf_firestore_documents\.path/i.test(message)) {
         if (attempt<3) continue;
         return json({error:'Profile changed. Please retry.'},409);
       }
@@ -1064,7 +1072,7 @@ async function mutatePost(db,uid,path,body,method,now) {
         if(!state.current)throw new Error('Document changed');
         if(state.mirror)return json(rowToDocument(existing));
       }
-      return json(rowToDocument(await writeRow(db,path,next,now,existing,true)));
+      return json(rowToDocument(await writeRow(db,path,next,now,existing,true,true)));
     } catch (error) {
       const message=String(error?.message || '');
       if (message==='Document too large') return json({error:message},413);

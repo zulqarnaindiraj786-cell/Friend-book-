@@ -1822,6 +1822,9 @@ test('profile merges retry concurrent friendship updates without erasing them', 
  assert.equal((await call('alice',{data:{friendsCount:99},merge:true})).status,403);
  const mirrored=JSON.parse(sql.prepare('SELECT document_json FROM friendbook_cf_documents WHERE path=?').get('users/alice').document_json);
  assert.equal(mirrored.friendsCount,1);assert.equal(mirrored.displayName,'After');
+ sql.exec("CREATE TRIGGER fail_existing_profile_mirror BEFORE INSERT ON friendbook_cf_documents WHEN NEW.path='users/alice' BEGIN SELECT RAISE(ABORT,'mirror failure'); END");
+ assert.equal((await call('alice',{data:{displayName:'Failed'},merge:true})).status,503);
+ assert.equal(JSON.parse(sql.prepare("SELECT document_json FROM friendbook_cf_firestore_documents WHERE path='users/alice'").get().document_json).displayName,'After');
  sql.close();
 });
 
@@ -1870,7 +1873,7 @@ test('saving visible posts is actor-scoped and survives concurrent owner edits',
  for(const uid of ['alice','bob','mallory']) f.run(`users/${uid}`,'users','users',uid,uid,JSON.stringify({uid}),1,1);
  const initial={authorId:'alice',privacy:'Public',content:'original',savedBy:[]};
  f.run('posts/p','posts','posts','p','alice',JSON.stringify(initial),1,1);
- let injected=false,noopRace=false;
+ let injected=false,noopRace=false,privacyRace=false;
  const db={prepare(q){const s=sql.prepare(q);return{bind(...args){return{run:async()=>s.run(...args),all:async()=>({results:s.all(...args)}),first:async()=>{
   if(noopRace && q.includes('AS current,') && q.includes('AS mirror')){
    noopRace=false;sql.prepare("UPDATE friendbook_cf_firestore_documents SET document_json=?,update_time=2 WHERE path='posts/p'").run(JSON.stringify({...initial,content:'edited'}));
@@ -1878,6 +1881,7 @@ test('saving visible posts is actor-scoped and survives concurrent owner edits',
   return s.get(...args)||null;
  }};}};},async batch(stmts){
   if(!injected){injected=true;sql.prepare("UPDATE friendbook_cf_firestore_documents SET document_json=? WHERE path='posts/p'").run(JSON.stringify({...initial,content:'edited'}));}
+  if(privacyRace){privacyRace=false;sql.prepare("UPDATE friendbook_cf_firestore_documents SET document_json=? WHERE path='posts/p2'").run(JSON.stringify({...initial,privacy:'Only me'}));}
   sql.exec('BEGIN');try{for(const s of stmts)await s.run();sql.exec('COMMIT');}catch(e){sql.exec('ROLLBACK');throw e;}
  }};
  const app=createWorker(async t=>t),env={DB:db,FIREBASE_PROJECT_ID:'friendbook-test'};
@@ -1904,6 +1908,13 @@ test('saving visible posts is actor-scoped and survives concurrent owner edits',
  const removed=JSON.parse(sql.prepare("SELECT document_json FROM friendbook_cf_firestore_documents WHERE path='posts/p'").get().document_json);assert.deepEqual(removed.savedBy,[]);
  sql.prepare("UPDATE friendbook_cf_firestore_documents SET document_json=? WHERE path='posts/p'").run(JSON.stringify({...initial,privacy:'Only me',savedBy:['bob']}));
  assert.equal((await patch('bob','posts/p',{savedBy:transform('arrayUnion','bob')})).status,403,'an identical save still checks current privacy');
+ f.run('posts/p2','posts','posts','p2','alice',JSON.stringify(initial),1,1);
+ privacyRace=true;
+ assert.equal((await patch('bob','posts/p2',{savedBy:transform('arrayUnion','bob')})).status,403,'privacy change racing the batch is reauthorized');
+ assert.deepEqual(JSON.parse(sql.prepare("SELECT document_json FROM friendbook_cf_firestore_documents WHERE path='posts/p2'").get().document_json).savedBy,[]);
+ sql.exec("CREATE TRIGGER fail_post_mirror BEFORE INSERT ON friendbook_cf_documents WHEN NEW.path='posts/p2' BEGIN SELECT RAISE(ABORT,'mirror failure'); END");
+ assert.notEqual((await patch('alice','posts/p2',{content:'failure'})).status,200);
+ assert.equal(JSON.parse(sql.prepare("SELECT document_json FROM friendbook_cf_firestore_documents WHERE path='posts/p2'").get().document_json).content,'original');
  sql.close();
 });
 
@@ -3205,9 +3216,9 @@ test('healthy socket saves redundant profile writes without suppressing fallback
  sql.prepare('UPDATE friendbook_cf_presence_sessions SET last_seen=?').run(now-1000);
  const offline={isOnline:false,isActive:false,showActiveStatus:false};
  assert.equal((await patch(offline)).status,200);
- assert.equal(batches,1);assert.equal(changes,4);
+ assert.equal(batches,1);assert.equal(changes,2,'canonical and mirror change without temporary guards');
  assert.equal((await patch(offline)).status,200);
- assert.equal(batches,1);assert.equal(changes,4);
+ assert.equal(batches,1);assert.equal(changes,2);
  const row=sql.prepare("SELECT document_json FROM friendbook_cf_documents WHERE path='users/alice'").get();
  assert.equal(JSON.parse(row.document_json).showActiveStatus,false);
 });
