@@ -1,4 +1,4 @@
-# Analytics only: never issues D1 SQL or generates application traffic; empty-mention deployment follow-up.
+# Analytics only: never issues D1 SQL or generates application traffic; multilingual people-search deployment follow-up.
 name: Read-only D1 quota audit
 on:
   workflow_dispatch:
