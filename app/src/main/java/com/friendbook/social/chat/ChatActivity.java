@@ -1303,59 +1303,70 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         }
     }
 
+    private final Set<String> pendingReactions = new HashSet<>();
+
     private void reactPicker(Models.Message m) {
         String[] emoj = {"👍 Like", "❤️ Love", "😂 Haha", "😮 Wow", "😢 Sad", "🙏 Thanks", "😡 Angry", "🚫 Remove reaction"};
         Ui.choose(this, "React to this message", emoj, w -> {
             String me = Fb.uid();
-            if (me == null) return;
+            if (me == null || m.id == null) return;
+            if (!pendingReactions.add(m.id)) { Ui.toast(this, "Please wait for your reaction"); return; }
             String myName = Fb.myName();
             String myPhoto = Fb.myPhoto();
-            java.util.Map<String, Object> upd = new HashMap<>();
-            if (w == emoj.length - 1) {
+            boolean remove = w == emoj.length - 1;
+            String emoji = remove ? null : emoj[w].split(" ")[0];
+            Map<String, Object> upd = new HashMap<>();
+            if (remove) {
                 upd.put("reactions." + me, FieldValue.delete());
                 upd.put("reactorNames." + me, FieldValue.delete());
                 upd.put("reactorPhotos." + me, FieldValue.delete());
-                if (m.reactions != null) m.reactions.remove(me);
-                if (m.reactorNames != null) m.reactorNames.remove(me);
-                if (m.reactorPhotos != null) m.reactorPhotos.remove(me);
             } else {
-                String e = emoj[w].split(" ")[0];
-                upd.put("reactions." + me, e);
+                upd.put("reactions." + me, emoji);
                 if (myName != null && !myName.isEmpty()) upd.put("reactorNames." + me, myName);
                 if (myPhoto != null && !myPhoto.isEmpty()) upd.put("reactorPhotos." + me, myPhoto);
-                if (m.reactions == null) m.reactions = new HashMap<>();
-                if (m.reactorNames == null) m.reactorNames = new HashMap<>();
-                if (m.reactorPhotos == null) m.reactorPhotos = new HashMap<>();
-                m.reactions.put(me, e);
-                if (myName != null && !myName.isEmpty()) m.reactorNames.put(me, myName);
-                if (myPhoto != null && !myPhoto.isEmpty()) m.reactorPhotos.put(me, myPhoto);
             }
-            adapter.notifyDataSetChanged();
             Fb.db().collection("chats").document(chatId)
-                    .collection("messages").document(m.id)
-                    .update(upd)
-                    .addOnFailureListener(err -> Ui.toast(this, "Reaction failed"));
-            if (isTeamChat || Ui.TEAM_USER_ID.equals(m.senderId)) {
-                String sharedDocId = m.sharedTeamReactionDocId();
-                com.friendbook.social.d1.documents.DocumentReference sharedRef =
-                        Fb.db().collection("chats").document("team_shared_reactions")
-                                .collection("messages").document(sharedDocId);
-                if (w == emoj.length - 1) {
-                    sharedRef.update(upd);
-                } else {
-                    String e = emoj[w].split(" ")[0];
-                    Map<String, Object> rx = java.util.Collections.singletonMap(me, e);
-                    Map<String, Object> mergeDoc = new HashMap<>();
-                    mergeDoc.put("reactions", rx);
-                    if (myName != null && !myName.isEmpty()) {
-                        mergeDoc.put("reactorNames", java.util.Collections.singletonMap(me, myName));
-                    }
-                    if (myPhoto != null && !myPhoto.isEmpty()) {
-                        mergeDoc.put("reactorPhotos", java.util.Collections.singletonMap(me, myPhoto));
-                    }
-                    sharedRef.set(mergeDoc, SetOptions.merge());
-                }
-            }
+                    .collection("messages").document(m.id).update(upd)
+                    .addOnSuccessListener(ignored -> {
+                        pendingReactions.remove(m.id);
+                        if (!me.equals(Fb.uid()) || isFinishing() || isDestroyed()) return;
+                        // The listener may have replaced the object while the request was in flight.
+                        for (Models.Message current : adapter.all()) {
+                            if (!m.id.equals(current.id)) continue;
+                            if (remove) {
+                                if (current.reactions != null) current.reactions.remove(me);
+                                if (current.reactorNames != null) current.reactorNames.remove(me);
+                                if (current.reactorPhotos != null) current.reactorPhotos.remove(me);
+                            } else {
+                                if (current.reactions == null) current.reactions = new HashMap<>();
+                                if (current.reactorNames == null) current.reactorNames = new HashMap<>();
+                                if (current.reactorPhotos == null) current.reactorPhotos = new HashMap<>();
+                                current.reactions.put(me, emoji);
+                                if (myName != null && !myName.isEmpty()) current.reactorNames.put(me, myName);
+                                if (myPhoto != null && !myPhoto.isEmpty()) current.reactorPhotos.put(me, myPhoto);
+                            }
+                            adapter.notifyDataSetChanged();
+                            break;
+                        }
+                        if (isTeamChat || Ui.TEAM_USER_ID.equals(m.senderId)) {
+                            String sharedDocId = m.sharedTeamReactionDocId();
+                            com.friendbook.social.d1.documents.DocumentReference sharedRef =
+                                    Fb.db().collection("chats").document("team_shared_reactions")
+                                            .collection("messages").document(sharedDocId);
+                            if (remove) sharedRef.update(upd);
+                            else {
+                                Map<String, Object> mergeDoc = new HashMap<>();
+                                mergeDoc.put("reactions", java.util.Collections.singletonMap(me, emoji));
+                                if (myName != null && !myName.isEmpty()) mergeDoc.put("reactorNames", java.util.Collections.singletonMap(me, myName));
+                                if (myPhoto != null && !myPhoto.isEmpty()) mergeDoc.put("reactorPhotos", java.util.Collections.singletonMap(me, myPhoto));
+                                sharedRef.set(mergeDoc, SetOptions.merge());
+                            }
+                        }
+                    })
+                    .addOnFailureListener(err -> {
+                        pendingReactions.remove(m.id);
+                        if (!isFinishing() && !isDestroyed()) Ui.toast(this, "Reaction failed. Please try again.");
+                    });
         });
     }
 

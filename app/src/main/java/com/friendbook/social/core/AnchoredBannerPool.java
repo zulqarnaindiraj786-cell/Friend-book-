@@ -254,10 +254,13 @@ public final class AnchoredBannerPool {
         pump();
     }
 
+    // Use a real 320 × 50 dp banner request, not a cropped 100 dp creative.
+    static AdSize bannerSize() { return AdSize.BANNER; }
+
     private void load() {
         AdView ad = new AdView(activity);
         ad.setAdUnitId(placement.unit);
-        ad.setAdSize(AdSize.BANNER); // standard 320dp × 50dp; never crop or scale the creative
+        ad.setAdSize(bannerSize());
         Runnable timeout = () -> failPending(ad, "No SDK callback within 15 seconds");
         loading.put(ad, timeout);
         diagnostic.requested++;

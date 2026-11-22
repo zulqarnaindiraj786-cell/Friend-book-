@@ -21,15 +21,29 @@ import java.util.concurrent.atomic.AtomicReference;
 
 /** Encodes both files locally; the original URI is never uploaded by this path. */
 final class PhoneVideoEncoder {
+    interface Attempt { void run(String mime, boolean compatible) throws Exception; }
+
     static void encode(Context context, Uri source, File output, boolean preview) throws Exception {
-        try { export(context, source, output, preview, MimeTypes.VIDEO_H265); }
-        catch (IOException unsupported) {
-            if (output.exists() && !output.delete()) throw unsupported;
-            export(context, source, output, preview, MimeTypes.VIDEO_H264);
+        encodeWithFallback(output, (mime, compatible) -> export(context, source, output, preview, mime, compatible));
+    }
+
+    // Retry only completed export errors. A timeout/interruption can still have
+    // a running codec; it must never race a second export to the same file.
+    static void encodeWithFallback(File output, Attempt attempt) throws Exception {
+        IOException first = null;
+        String[] mimes = { MimeTypes.VIDEO_H265, MimeTypes.VIDEO_H264, MimeTypes.VIDEO_H264 };
+        for (int i = 0; i < mimes.length; i++) {
+            try { attempt.run(mimes[i], i == 2); return; }
+            catch (IOException failure) {
+                if (first == null) first = failure; else failure.addSuppressed(first);
+                first = failure;
+                if (output.exists() && !output.delete()) throw failure;
+                if (i == mimes.length - 1) throw failure;
+            }
         }
     }
 
-    private static void export(Context context, Uri source, File output, boolean preview, String mime) throws Exception {
+    private static void export(Context context, Uri source, File output, boolean preview, String mime, boolean compatible) throws Exception {
         Handler main = new Handler(Looper.getMainLooper());
         CountDownLatch done = new CountDownLatch(1);
         AtomicReference<Exception> error = new AtomicReference<>();
@@ -41,13 +55,16 @@ final class PhoneVideoEncoder {
                 mono.putChannelMixingMatrix(ChannelMixingMatrix.create(2, 1));
                 int fps = preview ? 24 : 30;
                 EditedMediaItem item = new EditedMediaItem.Builder(MediaItem.fromUri(source))
-                        .setEffects(new Effects(preview ? Collections.singletonList(mono) : Collections.emptyList(),
-                                Arrays.asList(Presentation.createForHeight(preview ? 360 : 720),
-                                        FrameDropEffect.createDefaultFrameDropEffect(fps)))).build();
-                DefaultEncoderFactory encoder = new DefaultEncoderFactory.Builder(context)
-                        .setEnableFallback(false)
-                        .setRequestedVideoEncoderSettings(new VideoEncoderSettings.Builder().setBitrate(preview ? 150_000 : 800_000).build())
-                        .setRequestedAudioEncoderSettings(new AudioEncoderSettings.Builder().setBitrate(preview ? 32_000 : 64_000).build()).build();
+                        .setEffects(new Effects(preview && !compatible ? Collections.singletonList(mono) : Collections.emptyList(),
+                                compatible ? Collections.singletonList(Presentation.createForHeight(preview ? 360 : 720))
+                                        : Arrays.asList(Presentation.createForHeight(preview ? 360 : 720),
+                                                FrameDropEffect.createDefaultFrameDropEffect(fps)))).build();
+                DefaultEncoderFactory.Builder factory = new DefaultEncoderFactory.Builder(context).setEnableFallback(true);
+                if (!compatible) {
+                    factory.setRequestedVideoEncoderSettings(new VideoEncoderSettings.Builder().setBitrate(preview ? 150_000 : 800_000).build())
+                            .setRequestedAudioEncoderSettings(new AudioEncoderSettings.Builder().setBitrate(preview ? 32_000 : 64_000).build());
+                }
+                DefaultEncoderFactory encoder = factory.build();
                 Transformer transformer = new Transformer.Builder(context).setEncoderFactory(encoder)
                         .setVideoMimeType(mime).setAudioMimeType(MimeTypes.AUDIO_AAC)
                         .addListener(new Transformer.Listener() {
