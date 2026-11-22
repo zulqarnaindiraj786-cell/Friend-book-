@@ -2103,6 +2103,15 @@ test('story engagement records only authorized actor, retries races, and mirrors
  put('stories','s4',{authorId:'alice',privacy:'Public',expiresAt:Date.now()+60000,viewedBy:[],reactions:{}});
  assert.equal((await call('dana',{id:'s4',op:'view'})).status,200);
  assert.deepEqual(JSON.parse(sql.prepare("SELECT document_json FROM friendbook_cf_firestore_documents WHERE path='stories/s4'").get().document_json).viewedBy,['dana']);
+ assert.equal((await call('alice',{id:'s4',op:'view'})).status,403,'authors cannot engage with their own story');
+ put('stories','missing-author',{authorId:'absent',privacy:'Public',expiresAt:Date.now()+60000});
+ assert.equal((await call('bob',{id:'missing-author',op:'view'})).status,403);
+ put('stories','invalid-state',{authorId:'alice',privacy:'Public',expiresAt:Date.now()+60000,viewedBy:'invalid'});
+ assert.equal((await call('bob',{id:'invalid-state',op:'view'})).status,409);
+ sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)').run('users/legacy-author','users','legacy-author','legacy-author',JSON.stringify({uid:'legacy-author',id:'legacy-author'}),1);
+ put('stories','legacy-author-story',{authorId:'legacy-author',privacy:'Public',expiresAt:Date.now()+60000,viewedBy:[],reactions:{}});
+ assert.equal((await call('bob',{id:'legacy-author-story',op:'view'})).status,200);
+ assert.deepEqual(JSON.parse(sql.prepare("SELECT document_json FROM friendbook_cf_firestore_documents WHERE path='stories/legacy-author-story'").get().document_json).viewedBy,['bob']);
  sql.close();
 });
 
