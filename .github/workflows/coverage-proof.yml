@@ -1,0 +1,20 @@
+# One read-only line of proof, isolated so the annotation is never truncated.
+name: Legacy coverage proof
+on:
+  workflow_dispatch:
+  push:
+    branches: ['arena/7c7ddb7b-friend-book']
+    paths: ['.github/workflows/coverage-proof.yml']
+permissions:
+  contents: read
+jobs:
+  coverage:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[coverage-proof]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Per-collection legacy-only coverage
+        run: python3 scripts/loadtest/verify_root_backfill.py
