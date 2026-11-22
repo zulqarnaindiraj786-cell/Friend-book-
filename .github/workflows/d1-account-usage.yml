@@ -1,5 +1,5 @@
 # Read-only account-wide analytics only. No D1 SQL, mutations, or app traffic.
-# Compare whole-account totals during the continuing whole-app quota investigation.
+# Compare whole-account totals after the bounded maintenance deployment.
 name: Read-only account D1 usage
 on:
   push:
