@@ -1068,7 +1068,7 @@ async function mutatePost(db,uid,path,body,method,now) {
     } catch (error) {
       const message=String(error?.message || '');
       if (message==='Document too large') return json({error:message},413);
-      if (/Document changed|CHECK constraint failed: ok\s*=\s*1/i.test(message)) {
+      if (/Document changed|CHECK constraint failed: ok\s*=\s*1|NOT NULL constraint failed: friendbook_cf_firestore_documents\.path/i.test(message)) {
         if (attempt<3) continue;
         return json({error:'Post changed. Please retry.'},409);
       }
@@ -2120,6 +2120,25 @@ async function writeGroupPost(db,uid,path,beforeRow,after,now) {
     } else if (before.authorId!==uid || JSON.stringify(before.groupApprovalStatus)!==JSON.stringify(after.groupApprovalStatus)) return forbidden();
   }
   if (after && JSON.stringify(after).length>1_800_000) return json({error:'Document too large'},413);
+  if (after && beforeRow?.[canonicalRootSnapshot] && groupRow[canonicalRootSnapshot]) {
+    // For existing canonical posts, check all authorization snapshots in the
+    // upsert itself. NULL path aborts the entire batch and triggers a retry.
+    // Creates, deletes and historical rows keep the original guards below.
+    const coll=collectionIdOf(path),id=docIdOf(path),data=JSON.stringify(after);
+    await db.batch([
+      db.prepare(`INSERT INTO friendbook_cf_firestore_documents(path,parent_path,collection_id,doc_id,owner_uid,document_json,create_time,update_time)
+        VALUES (CASE WHEN (SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?1)=?2
+          AND (SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?3)=?4
+          AND (SELECT owner_uid FROM friendbook_cf_trusted_groups WHERE group_path=?3)=?5
+          THEN ?1 ELSE NULL END,?6,?6,?7,?8,?9,?10,?11)
+        ON CONFLICT(path) DO UPDATE SET owner_uid=excluded.owner_uid,document_json=excluded.document_json,update_time=excluded.update_time`)
+        .bind(path,beforeRow.document_json,groupPath,groupRow.document_json,owner,coll,id,after.authorId,data,beforeRow.create_time||now,now),
+      db.prepare(`INSERT INTO friendbook_cf_documents(path,collection,doc_id,owner_uid,document_json,updated_at) VALUES (?,?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET owner_uid=excluded.owner_uid,document_json=excluded.document_json,updated_at=excluded.updated_at`)
+        .bind(path,coll,id,after.authorId,JSON.stringify({...after,id}),now),
+      db.prepare("INSERT INTO friendbook_cf_interaction_resources(resource,state) VALUES (?, 'verified') ON CONFLICT(resource) DO UPDATE SET state='verified' WHERE friendbook_cf_interaction_resources.state IS NOT 'verified'").bind(path),
+    ]);
+    return json({exists:true,id,path,parent:coll,collection:coll,data:after,createTime:beforeRow.create_time||now,updateTime:now});
+  }
   const guards=[];
   for (const row of [groupRow,...(beforeRow?[beforeRow]:[])]) {
     // readRow already identified canonical snapshots. The transaction below

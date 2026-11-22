@@ -907,7 +907,10 @@ test('trusted groups enforce role and membership changes on both document APIs',
     if(query==='SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?') redundantReads++;
     return prepared.call(this,query);
   };
+  let canonicalBatchSize=0;
+  db.batch=async stmts=>{canonicalBatchSize=stmts.length;return actualBatch(stmts);};
   assert.equal((await call('bob',post,'PATCH',{fields:{content:'edited once'}})).status,200);
+  assert.equal(canonicalBatchSize,3,'canonical group edit needs no temporary guard writes');
   assert.equal(redundantReads,0,'canonical group and post snapshots do not get redundant point reads');
   assert.equal(sql.prepare('SELECT n FROM marker_updates').get().n,0,'verified marker is not rewritten');
   sql.prepare("UPDATE friendbook_cf_interaction_resources SET state='staging' WHERE resource='posts/gpost'").run();
@@ -940,6 +943,26 @@ test('trusted groups enforce role and membership changes on both document APIs',
   const afterRace=JSON.parse(sql.prepare("SELECT document_json FROM friendbook_cf_firestore_documents WHERE path='posts/gpost'").get().document_json);
   assert.equal(afterRace.content,'after race'); assert.equal(afterRace.otherEdit,'preserved');
   db.batch=actualBatch;
+  // Revocation of the trusted owner must also abort and reauthorize.
+  raced=false;
+  db.batch=async stmts=>{
+    if(!raced){raced=true;sql.prepare("UPDATE friendbook_cf_trusted_groups SET owner_uid='mallory' WHERE group_path=?").run(groupPath);}
+    return actualBatch(stmts);
+  };
+  assert.equal((await call('bob',post,'PATCH',{fields:{content:'owner race'}})).status,403);
+  assert.equal(JSON.parse(sql.prepare("SELECT document_json FROM friendbook_cf_firestore_documents WHERE path='posts/gpost'").get().document_json).content,'after race');
+  db.batch=actualBatch;
+  sql.prepare("UPDATE friendbook_cf_trusted_groups SET owner_uid='alice' WHERE group_path=?").run(groupPath);
+  sql.exec("CREATE TRIGGER fail_group_mirror BEFORE INSERT ON friendbook_cf_documents WHEN NEW.path='posts/gpost' BEGIN SELECT RAISE(ABORT,'mirror failure'); END");
+  assert.notEqual((await call('bob',post,'PATCH',{fields:{content:'must roll back'}})).status,200);
+  assert.equal(JSON.parse(sql.prepare("SELECT document_json FROM friendbook_cf_firestore_documents WHERE path='posts/gpost'").get().document_json).content,'after race');
+  sql.exec('DROP TRIGGER fail_group_mirror');
+  const oldMirror=sql.prepare("SELECT document_json FROM friendbook_cf_documents WHERE path='posts/gpost'").get().document_json;
+  sql.exec("CREATE TRIGGER fail_group_marker BEFORE INSERT ON friendbook_cf_interaction_resources WHEN NEW.resource='posts/gpost' BEGIN SELECT RAISE(ABORT,'marker failure'); END");
+  assert.notEqual((await call('bob',post,'PATCH',{fields:{content:'marker rollback'}})).status,200);
+  assert.equal(JSON.parse(sql.prepare("SELECT document_json FROM friendbook_cf_firestore_documents WHERE path='posts/gpost'").get().document_json).content,'after race');
+  assert.equal(sql.prepare("SELECT document_json FROM friendbook_cf_documents WHERE path='posts/gpost'").get().document_json,oldMirror);
+  sql.exec('DROP TRIGGER fail_group_marker');
   // Historical group rows still take the checked legacy path, rather than
   // treating an unverified mirror as a canonical snapshot.
   const storedGroup=sql.prepare('SELECT * FROM friendbook_cf_firestore_documents WHERE path=?').get(groupPath);
@@ -948,6 +971,9 @@ test('trusted groups enforce role and membership changes on both document APIs',
   sql.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)').run(
     storedGroup.path,storedGroup.parent_path,storedGroup.collection_id,storedGroup.doc_id,storedGroup.owner_uid,
     storedGroup.document_json,storedGroup.create_time,storedGroup.update_time);
+  sql.prepare("DELETE FROM friendbook_cf_firestore_documents WHERE path='posts/gpost'").run();
+  assert.equal((await call('bob',post,'PATCH',{fields:{content:'legacy post'}})).status,200);
+  assert.equal(JSON.parse(sql.prepare("SELECT document_json FROM friendbook_cf_firestore_documents WHERE path='posts/gpost'").get().document_json).content,'legacy post');
   assert.equal((await call('charlie',post,'DELETE')).status,403);
   assert.equal((await call('alice',post,'DELETE')).status,200);
   assert.equal((await call('bob','/v1/firestore/batch','POST',{operations:[{op:'delete',path:`groups/${id}`}]})).status,403);
