@@ -50,7 +50,9 @@ jobs:
               parts=path.split('/'); route='engagement/'+(parts[3] if len(parts)>3 and parts[3] in ('posts','reels') else 'other')+'/'+(parts[5] if len(parts)>5 and parts[5] in ('reactions','comments','reactors') else 'other')
             elif path.startswith('/v1/firestore/'):
               parts=path.split('/'); route='firestore/'+(parts[3] if len(parts)>3 and parts[3] in ('document','query','batch','count','profile-bootstrap') else 'other')
-            elif path.startswith('/v1/presence/'): route='presence'
+            elif path.startswith('/v1/presence/'):
+              part=path.split('/')[3] if len(path.split('/'))>3 else ''
+              route='presence/'+(part if part in ('typing','contact','socket','me') else 'other')
             elif path.startswith('/v1/'): route='other-api'
             else: route='other'
             response=details.get('response') or {}
