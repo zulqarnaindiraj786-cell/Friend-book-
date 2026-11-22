@@ -33,9 +33,10 @@ test('racing legacy edit or canonical create aborts the entire statement',async 
  assert.equal(db.prepare('SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?').get('users/alice').document_json,'{"uid":"alice","bio":"new"}');
 });
 
-test('reject changed representation, unsafe identity, and high-fanout records',()=>{
+test('preserves matching redundant id and rejects conflicting ids and unsafe records',()=>{
  const row={path:'users/alice',collection:'users',doc_id:'alice',owner_uid:'alice',updated_at:1,document_json:'{"uid":"alice","id":"alice"}'};
- assert.throws(()=>planCandidate(row),/legacy id projection differs/);
+ assert.equal(JSON.parse(planCandidate(row).row.document_json).id,'alice');
+ assert.throws(()=>planCandidate({...row,document_json:'{"id":"other"}'}),/projection differs/);
  assert.throws(()=>planCandidate({...row,path:'users/other'}),/unsafe source/);
  assert.throws(()=>planCandidate({...row,document_json:JSON.stringify({uid:'alice',followers:Array(21).fill('x')})}),/fanout/);
 });

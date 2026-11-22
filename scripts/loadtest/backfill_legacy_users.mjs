@@ -24,9 +24,17 @@ export function planCandidate(source) {
   const row = appDocumentToFirestoreRow(source);
   if (!row || !Number.isSafeInteger(row.create_time) || !Number.isSafeInteger(row.update_time))
     throw Error('unsafe normalized metadata');
-  // Check both legacy APIs: the Firestore-compatible normalized row and the
-  // older document/authorization projection must retain their exact semantics.
-  const oldFields=toFirestoreFields(source.document_json), newFields=toFirestoreFields(row.document_json);
+  // The legacy document API can expose a redundant id field matching the path.
+  // Preserve it in canonical storage instead of silently deleting source data.
+  // The Firestore facade previously stripped this redundant field for legacy
+  // rows, so callers may now see it in data in addition to the document ID.
+  const oldFields=toFirestoreFields(source.document_json);
+  if (oldFields?.id?.stringValue === source.doc_id) {
+    const data=JSON.parse(row.document_json); data.id=source.doc_id;
+    row.document_json=JSON.stringify(data);
+  }
+  // Require equivalent values for the old document and authorization APIs.
+  const newFields=toFirestoreFields(row.document_json);
   const plainEqual=isDeepStrictEqual(toPlainDocument(source.document_json, source.doc_id), toPlainDocument(row.document_json, source.doc_id));
   if (!isDeepStrictEqual(oldFields, newFields) || !plainEqual) {
     const oldWithoutId={...oldFields}; delete oldWithoutId.id;
