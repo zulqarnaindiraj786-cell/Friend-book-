@@ -48,6 +48,18 @@ function validGroupRoom(room) {
 function sameExcept(a,b,keys) {
   return [...new Set([...Object.keys(a),...Object.keys(b)])].every(k=>keys.has(k) || equal(a[k],b[k]));
 }
+// A participant can only change their own entries, not forge or remove anyone
+// else's reaction. Missing maps are equivalent to empty maps for old messages.
+function ownReactionChanges(before, after, uid) {
+  for (const [key, max] of [['reactions',32],['reactorNames',256],['reactorPhotos',2048]]) {
+    if (equal(before[key],after[key])) continue;
+    const a=before[key] == null ? {} : before[key], b=after[key] == null ? {} : after[key];
+    if (typeof a!=='object' || Array.isArray(a) || typeof b!=='object' || Array.isArray(b)
+        || !sameExcept(a,b,new Set([uid]))) return false;
+    if (Object.hasOwn(b,uid) && (typeof b[uid]!=='string' || !b[uid].length || b[uid].length>max)) return false;
+  }
+  return true;
+}
 export async function chatWriteAllowed(db,path,uid,before,after,pendingRooms = new Map(), roomSnapshot = undefined) {
   const parts=path.split('/');
   const id=chatIdFor(path,before || after);
@@ -118,8 +130,9 @@ export async function chatWriteAllowed(db,path,uid,before,after,pendingRooms = n
   if (!before) return !!after && after.senderId === uid && (parts[0] !== 'messages' || after.chatId === id);
   if (!after) return before.senderId === uid;
   if (before.senderId !== after.senderId || (parts[0] === 'messages' && before.chatId !== after.chatId)) return false;
+  if (!ownReactionChanges(before,after,uid)) return false;
   if (before.senderId === uid) return true;
-  const allowed=new Set(['isSeen','isDelivered','seenBy','deliveredTo']);
+  const allowed=new Set(['isSeen','isDelivered','seenBy','deliveredTo','reactions','reactorNames','reactorPhotos']);
   return [...new Set([...Object.keys(before),...Object.keys(after)])]
     .every(k=>allowed.has(k) || JSON.stringify(before[k])===JSON.stringify(after[k]));
 }
