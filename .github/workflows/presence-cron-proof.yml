@@ -48,6 +48,11 @@ jobs:
             app/build/outputs/apk/debug/app-debug.apk
             presence-strings.txt
           if-no-files-found: warn
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install Worker test dependencies
+        run: npm ci --ignore-scripts
       - name: Assert the candidate config has no cron schedule
         run: |
           set -euo pipefail
