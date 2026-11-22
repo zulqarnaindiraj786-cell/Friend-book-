@@ -1459,10 +1459,12 @@ async function boundedNotificationPage(db,uid,spec) {
     if(!legacy)return db.prepare(`SELECT a.path,a.parent_path,a.collection_id,a.doc_id,a.owner_uid,a.document_json,a.create_time,a.update_time
       FROM friendbook_cf_firestore_documents a WHERE a.parent_path='notifications'${byRecipient}${unreadOnly}${bound}
       ${ordered}`).bind(...args).all();
-    return db.prepare(`SELECT a.*, EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents f WHERE f.path=a.path) AS shadowed
-      FROM (SELECT a.path,a.collection,a.doc_id,a.owner_uid,a.document_json,a.updated_at
+    // Defer canonical-shadow checks until both bounded windows are known.
+    // Most legacy rows are mirrors already present in the canonical window;
+    // probing each one again would spend a D1 read per notification.
+    return db.prepare(`SELECT a.path,a.collection,a.doc_id,a.owner_uid,a.document_json,a.updated_at
         FROM friendbook_cf_documents a WHERE a.collection='notifications'${byLegacyRecipient}${unreadOnly}${bound}
-        ${ordered}) a`).bind(...args).all();
+        ${ordered}`).bind(...args).all();
   }
   async function readWindow(legacy) {
     if(!delta) {
@@ -1483,6 +1485,18 @@ async function boundedNotificationPage(db,uid,spec) {
   }
   for (;;) {
     const [canonical,legacy]=await Promise.all([readWindow(false),readWindow(true)]);
+    const canonicalPaths=new Set((canonical.results||[]).map(row=>row.path));
+    const legacyRows=legacy.results||[];
+    const unknown=[...new Set(legacyRows.map(row=>row.path).filter(path=>!canonicalPaths.has(path)))];
+    // A canonical copy outside the current window can still shadow an older,
+    // differently ordered, unread or differently owned legacy copy. Check only
+    // those unknown paths, in one bounded primary-key query, before merging.
+    if (unknown.length) {
+      const result=await db.prepare(`SELECT path FROM friendbook_cf_firestore_documents WHERE path IN (${unknown.map(()=>'?').join(',')})`)
+        .bind(...unknown).all();
+      for (const row of result.results||[]) canonicalPaths.add(row.path);
+    }
+    for (const row of legacyRows) row.shadowed=canonicalPaths.has(row.path);
     const docs=mergeMirroredWindow(canonical,legacy,seekSpec,chunk);
     if (!docs.length) break;
     const allowed=docs.filter(doc=>!doc.shadowed && canReadNotification(doc.path,uid,doc.data));

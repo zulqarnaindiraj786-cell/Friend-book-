@@ -2395,9 +2395,9 @@ test('notification pages use bounded per-store reads and do not expose stale mir
   f.run(path,'notifications','notifications',id,'sender',data('alice',-i),1,1);
   a.run(path,'notifications',id,'sender',data('alice',-i),1);
  }
- let rows=0,probes=0;const deltaPlans=[];
+ let rows=0,probes=0,shadowChecks=0,shadowCandidates=0;const deltaPlans=[];
  sql.function('quota_probe',path=>{probes++;return path;});
- const db={prepare(q){const stmt=sql.prepare(q.includes("ORDER BY CASE WHEN json_type(a.document_json")?q.replace("f.path=a.path","f.path=quota_probe(a.path)"):q);return{bind(...args){return{all:async()=>{const results=stmt.all(...args);if(q.includes(' ASC') && q.includes('>=?'))deltaPlans.push(...sql.prepare('EXPLAIN QUERY PLAN '+q).all(...args).map(row=>row.detail));rows+=results.length;return{results};},first:async()=>stmt.get(...args)||null};}};}};
+ const db={prepare(q){const stmt=sql.prepare(q.includes("ORDER BY CASE WHEN json_type(a.document_json")?q.replace("f.path=a.path","f.path=quota_probe(a.path)"):q);return{bind(...args){return{all:async()=>{const results=stmt.all(...args);if(q.includes('SELECT path FROM friendbook_cf_firestore_documents WHERE path IN (')){shadowChecks++;shadowCandidates+=args.length;}if(q.includes(' ASC') && q.includes('>=?'))deltaPlans.push(...sql.prepare('EXPLAIN QUERY PLAN '+q).all(...args).map(row=>row.detail));rows+=results.length;return{results};},first:async()=>stmt.get(...args)||null};}};}};
  const app=createWorker(async t=>t),env={DB:db,FIREBASE_PROJECT_ID:'friendbook-test'};
  const filters=[{field:'toUserId',op:'==',value:'alice'},{field:'isRead',op:'==',value:false}];
  const query=async extra=>{const res=await app.fetch(new Request('https://example.test/v1/firestore/query',{method:'POST',headers:{authorization:'Bearer alice','content-type':'application/json'},body:JSON.stringify({parent:'notifications',filters,orderBy:[{field:'createdAt',direction:'DESCENDING'}],limit:10,...extra})}),env);assert.equal(res.status,200,await res.clone().text());return await res.json();};
@@ -2410,9 +2410,10 @@ test('notification pages use bounded per-store reads and do not expose stale mir
  const removed=initial.order[0];sql.prepare('DELETE FROM friendbook_cf_documents WHERE doc_id=?').run(removed);
  const delta=await query({knownRevisions:initial.revisions});
  assert.ok(!delta.order.includes(removed));assert.equal(delta.documents.length,1);
- probes=0;
+ probes=0;shadowChecks=0;shadowCandidates=0;
  const mirrorOnly=(await query({startAfter:[{__type:'timestamp',millis:0},'n0']})).documents;
  assert.deepEqual(mirrorOnly.map(d=>d.id),Array.from({length:16},(_,i)=>i+1).filter(i=>i%3!==0).slice(0,10).map(i=>`old${i}`));
+ assert.equal(shadowChecks,0,'a fully mirrored window needs no extra canonical lookups');
  assert.ok(probes<=10,`older copies probed: ${probes}`);
  rows=0;probes=0;
  const anchor=[{__type:'timestamp',millis:165},'n165'];
@@ -2422,6 +2423,23 @@ test('notification pages use bounded per-store reads and do not expose stale mir
  assert.equal(rows,20,'head refresh must not return old inbox history from SQLite');
  assert.match(deltaPlans.join('\n'),/SEARCH.*idx_cf_notif_unread.*<expr>>/);
  assert.match(deltaPlans.join('\n'),/SEARCH.*idx_cf_legacy_notif_unread.*<expr>>/);
+ // Canonical copies outside the current window still take precedence, even
+ // when read state, recipient or ordering differ from a stale legacy mirror.
+ for(const [id,canonicalData] of [
+   ['staleRead',data('alice',501)],
+   ['staleOwner',data('bob',502)],
+   ['staleOrder',data('alice',-5000)],
+ ]) {
+   const path='notifications/'+id;
+   f.run(path,'notifications','notifications',id,'sender',canonicalData,1,1);
+   a.run(path,'notifications',id,'sender',data('alice',503),1);
+ }
+ a.run('notifications/legacyOnly','notifications','legacyOnly','sender',data('alice',505),1);
+ shadowChecks=0;shadowCandidates=0;
+ const newest=(await query({})).documents.map(d=>d.id);
+ assert.ok(newest.includes('legacyOnly'));
+ for(const id of ['staleRead','staleOwner','staleOrder']) assert.ok(!newest.includes(id),`stale ${id} leaked`);
+ assert.ok(shadowChecks>=1 && shadowCandidates>=3,'unknown mirrors must be checked against canonical paths');
  sql.close();
 });
 
