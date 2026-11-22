@@ -34,6 +34,11 @@ class PresenceBadgeTest(unittest.TestCase):
         # D1-backed document heartbeat persists profile presence.
         self.assertIn('FIRESTORE_HEARTBEAT', source)
         self.assertIn('writeFirestore(uid, true)', source)
+        # Hidden-status startup relies on goOffline for the current user; an
+        # additional write is only required after switching bound accounts.
+        init=method(source,'public static void init()')
+        self.assertIn('boolean oldAccountBound = boundUid != null && !uid.equals(boundUid)',init)
+        self.assertIn('if (oldAccountBound) writeOfflineInternal(uid)',init)
         # Call signaling is also stored in the D1-backed chat document; RTDB is absent.
         self.assertNotIn('.info/serverTimeOffset', source)
         self.assertIn('D1-backed chats document', source)
@@ -45,6 +50,21 @@ class PresenceBadgeTest(unittest.TestCase):
         self.assertNotIn('statusRef', source)
         self.assertNotIn('connListener', source)
         self.assertNotIn('m.put("lastSeen", ServerValue.TIMESTAMP)', source)
+    def test_background_process_does_not_start_presence_or_profile_listener(self):
+        source=(JAVA/'App.java').read_text()
+        on_create=method(source,'public void onCreate()')
+        before_lifecycle=on_create.split('registerActivityLifecycleCallbacks',1)[0]
+        self.assertNotIn('Presence.init()',before_lifecycle)
+        self.assertNotIn('Fb.startMeListener()',before_lifecycle)
+        self.assertNotIn('Fb.ensureMeFresh()',before_lifecycle)
+        started=method(source,'public void onActivityStarted(Activity a)')
+        self.assertIn('startedCount == 0 && Fb.uid() != null',started)
+        self.assertIn('Presence.init()',started)
+        self.assertIn('Fb.ensureMeFresh()',started)
+        stopped=method(source,'public void onActivityStopped(Activity a)')
+        self.assertIn('timeHandler.postDelayed(deferredOffline, 500L)',stopped)
+        self.assertIn('Presence.goOffline()',source.split('private final Runnable deferredOffline',1)[1].split('private final Runnable timeTick',1)[0])
+        self.assertIn('PushManager.init(this)',before_lifecycle)
     def test_manual_inbox_has_no_background_presence_reads(self):
         source=(JAVA/'chat/ConversationsActivity.java').read_text()
         self.assertNotIn('Presence.watch(',source)

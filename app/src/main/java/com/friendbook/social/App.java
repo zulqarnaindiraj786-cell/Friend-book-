@@ -67,12 +67,9 @@ public class App extends Application implements SensorEventListener {
         com.friendbook.social.push.PushManager.init(this);
         com.friendbook.social.core.ConsentManager.ensureInitialized(this);
         installCrashReporter();
-        // Defer non-critical presence & me network sync to idle handler so cold-launch frame #1 paints in 0ms
-        Looper.myQueue().addIdleHandler(() -> {
-            Presence.init();
-            Fb.startMeListener();
-            return false;
-        });
+        // A push or background worker can create the Application without an
+        // Activity. Do not start online presence or profile listeners here;
+        // the first started Activity below owns foreground startup.
 
         // Track real foreground time + apply friendbook zero-lag screen transitions
         registerActivityLifecycleCallbacks(new ActivityLifecycleCallbacks() {
@@ -110,6 +107,7 @@ public class App extends Application implements SensorEventListener {
                 timeHandler.removeCallbacks(deferredOffline);
                 if (startedCount == 0 && Fb.uid() != null) {
                     Presence.init();
+                    Fb.ensureMeFresh();
                 }
                 startedCount++;
                 com.friendbook.social.core.ActivityInsets.apply(a);

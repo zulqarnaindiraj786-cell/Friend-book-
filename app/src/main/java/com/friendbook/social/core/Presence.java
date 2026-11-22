@@ -87,7 +87,12 @@ public class Presence {
         Context c = com.friendbook.social.App.instance;
         if (c != null && !Prefs.activeStatus(c)) {
             if (cloudSocket != null) cloudSocket.activeStatus(false);
-            goOffline(); writeOfflineInternal(uid); return;
+            // goOffline already writes this user's offline state. Only write a
+            // second time when it had to close a different user's old session.
+            boolean oldAccountBound = boundUid != null && !uid.equals(boundUid);
+            goOffline();
+            if (oldAccountBound) writeOfflineInternal(uid);
+            return;
         }
         if (boundUid != null && !uid.equals(boundUid)) goOffline();
 
