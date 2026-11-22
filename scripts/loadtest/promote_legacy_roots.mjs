@@ -35,7 +35,33 @@ export const INVENTORY = `SELECT COUNT(*) AS sampled,
        WHERE collection=? LIMIT 25001) s
  LEFT JOIN friendbook_cf_firestore_documents f ON f.path=s.path`;
 
-export function prepare(source) {
+// A representation-only difference keeps the same value and changes only how it
+// is encoded (for example a numeric string versus the number the canonical
+// write path stores). It is promotable when every differing field is in the
+// caller's explicit allowlist and both sides are numerically equal.
+function representationOnly(fromJson, toJson, docId, allowed) {
+  const left = toPlainDocument(fromJson, docId);
+  const right = toPlainDocument(toJson, docId);
+  const paths = [];
+  const walk = (a, b, prefix) => {
+    if (isDeepStrictEqual(a, b)) return;
+    if (a && b && typeof a === 'object' && typeof b === 'object' && Array.isArray(a) === Array.isArray(b)) {
+      for (const key of new Set([...Object.keys(a), ...Object.keys(b)])) walk(a[key], b[key], prefix ? `${prefix}.${key}` : key);
+      return;
+    }
+    paths.push([prefix || '(document)', a, b]);
+  };
+  walk(left, right, '');
+  if (!paths.length) return false;
+  return paths.every(([path, a, b]) => {
+    if (!allowed.has(path)) return false;
+    const numeric = value => (typeof value === 'number' ? value
+      : typeof value === 'string' && /^-?\d+(\.\d+)?$/.test(value) ? Number(value) : NaN);
+    return Number.isFinite(numeric(a)) && Number.isFinite(numeric(b)) && numeric(a) === numeric(b);
+  });
+}
+
+export function prepare(source, { representationFields = new Set() } = {}) {
   if (!source || typeof source.collection !== 'string' || !BULK_COLLECTIONS.has(source.collection)
       || typeof source.path !== 'string' || source.path !== `${source.collection}/${source.doc_id}`
       || typeof source.doc_id !== 'string' || !source.doc_id || source.doc_id.includes('/')
@@ -50,8 +76,13 @@ export function prepare(source) {
   const candidate = JSON.parse(normalized.document_json);
   if (oldFields?.id?.stringValue === source.doc_id) candidate.id = source.doc_id;
   const saved = JSON.stringify(candidate);
-  if (!isDeepStrictEqual(toPlainDocument(source.document_json, source.doc_id), toPlainDocument(saved, source.doc_id)))
-    return { status: 'skip', reason: 'plain_projection_diff', fields: differingFields(source.document_json, saved) };
+  const plainEqual = isDeepStrictEqual(toPlainDocument(source.document_json, source.doc_id), toPlainDocument(saved, source.doc_id));
+  let representation = false;
+  if (!plainEqual) {
+    if (!representationOnly(source.document_json, saved, source.doc_id, representationFields))
+      return { status: 'skip', reason: 'plain_projection_diff', fields: differingFields(source.document_json, saved) };
+    representation = true;
+  }
   if (!isDeepStrictEqual(oldFields, toFirestoreFields(saved))) {
     const withoutId = { ...oldFields };
     delete withoutId.id;
@@ -67,24 +98,32 @@ export function prepare(source) {
     row: { ...normalized, document_json: saved },
     source,
     facadeChanged: !isDeepStrictEqual(JSON.parse(normalized.document_json), candidate),
+    representation,
   };
 }
 
-// Field names only: enough to explain a skip without exposing a value.
+// Field names and JSON type labels only: enough to explain a skip without
+// exposing any value.
+function typeLabel(value) {
+  if (value === null) return 'null';
+  if (Array.isArray(value)) return 'array';
+  if (typeof value === 'object') return typeof value.__type === 'string' ? `typed:${value.__type}` : 'object';
+  return typeof value;
+}
 function differingFields(fromJson, toJson) {
   const plain = value => {
     try { return JSON.parse(JSON.stringify(value ?? null)); } catch { return null; }
   };
   const left = plain(toPlainDocument(fromJson, ''));
   const right = plain(toPlainDocument(toJson, ''));
-  const names = new Set();
+  const names = new Map();
   const walk = (a, b, prefix) => {
     if (isDeepStrictEqual(a, b)) return;
     if (a && b && typeof a === 'object' && typeof b === 'object' && Array.isArray(a) === Array.isArray(b)) {
       for (const key of new Set([...Object.keys(a), ...Object.keys(b)])) walk(a[key], b[key], prefix ? `${prefix}.${key}` : key);
       return;
     }
-    names.add(prefix || '(document)');
+    names.set(prefix || '(document)', `${typeLabel(a)}->${typeLabel(b)}`);
   };
   walk(left, right, '');
   return [...names].slice(0, 8);
@@ -136,15 +175,16 @@ async function runPool(tasks, concurrency) {
  * Returns counts and the categories of rows that were deliberately skipped.
  */
 export async function promoteCollection(query, collection, {
-  batch = 100, maxRows = 6000, maxReads = 400000, maxBatches = 200,
+  batch = 100, maxRows = 6000, maxReads = 400000, maxBatches = 200, representationFields = [], write = true,
 } = {}) {
+  const representationSet = new Set(representationFields);
   if (!BULK_COLLECTIONS.has(collection)) throw Error('unsupported collection');
   if (!Number.isInteger(batch) || batch < 1 || batch > 100) throw Error('invalid batch size');
   const before = await legacyOnly(query, collection);
   let lastUpdated = -1, lastPath = "";
   let scanned = 0, inserted = 0, reads = 0, batches = 0;
   const skipped = {};
-  let facades = 0;
+  let facades = 0, representations = 0;
   while (batches < maxBatches && scanned < maxRows) {
     const page = await query(PAGE, [collection, lastUpdated, lastUpdated, lastPath, Math.min(batch, maxRows - scanned)]);
     reads += Number.isSafeInteger(page.meta?.rows_read) ? page.meta.rows_read : 0;
@@ -152,17 +192,20 @@ export async function promoteCollection(query, collection, {
     const rows = page.results || [];
     if (!rows.length) break;
     batches++;
-    const prepared = rows.map(prepare);
+    const prepared = rows.map(row => prepare(row, { representationFields: representationSet }));
     rows.forEach((row, index) => {
       scanned++;
       lastUpdated = row.updated_at;
       lastPath = row.path;
       if (prepared[index].status !== 'promote') {
-        const key = `${prepared[index].reason}${prepared[index].fields?.length ? ':' + prepared[index].fields.join(',') : ''}`;
+        const key = `${prepared[index].reason}${prepared[index].fields?.length
+          ? ':' + prepared[index].fields.map(([path, types]) => `${path}[${types}]`).join(',') : ''}`;
         skipped[key] = (skipped[key] || 0) + 1;
       } else if (prepared[index].facadeChanged) facades++;
+      if (prepared[index].representation) representations++;
     });
     const planned = prepared.filter(entry => entry.status === 'promote');
+    if (!write) { inserted += planned.length; continue; }
     const written = await runPool(planned.map(entry => async () => {
       const action = rowStatement(entry);
       const done = (await query(action.sql, action.params)).results || [];
@@ -174,7 +217,7 @@ export async function promoteCollection(query, collection, {
     if (rows.length < batch) break;
   }
   const after = await legacyOnly(query, collection);
-  return { collection, before, inserted, after, scanned, skipped, facades, reads, truncated: scanned >= maxRows };
+  return { collection, before, inserted, after, scanned, skipped, facades, representations, reads, truncated: scanned >= maxRows };
 }
 
 export async function legacyOnly(query, collection) {
@@ -212,9 +255,12 @@ if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).
   const collection = process.argv.find(arg => arg.startsWith('--collection='))?.split('=')[1];
   try {
     if (!collection || !BULK_COLLECTIONS.has(collection)) throw Error('unsupported collection');
-    const result = await promoteCollection(remote, collection, { batch: 100, maxRows: 6000, maxReads: 400000 });
+    const representations = (process.argv.find(arg => arg.startsWith('--representation='))?.split('=')[1] || '')
+      .split(',').filter(Boolean);
+    const result = await promoteCollection(remote, collection, { batch: 100, maxRows: 6000, maxReads: 400000,
+      representationFields: representations, write: !process.argv.includes('--dry-run') });
     console.log('::notice:: Root backfill ' + JSON.stringify(result));
-    if (result.after !== 0 || Object.keys(result.skipped).length)
+    if (!process.argv.includes('--dry-run') && (result.after !== 0 || Object.keys(result.skipped).length))
       console.log('::warning:: Rows remain in the legacy fallback for this collection; the fallback stays.')
   } catch (error) {
     const known = ['unsupported collection', 'invalid batch size', 'inventory unavailable', 'read cap exceeded',

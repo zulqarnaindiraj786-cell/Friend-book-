@@ -19,7 +19,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   promote:
-    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[legacy-roots-backfill]')
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[legacy-roots-backfill]') || contains(github.event.head_commit.message, '[legacy-roots-diagnose]')
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
@@ -34,7 +34,11 @@ jobs:
         run: node --test cloudflare/test/legacy-root-backfill.test.js
       - name: Account reserve before writing
         run: python3 scripts/loadtest/d1_account_usage_analytics.py --root-backfill-budget
+      - name: Classify the remaining rows without writing (diagnose only)
+        if: contains(github.event.head_commit.message, '[legacy-roots-diagnose]')
+        run: node scripts/loadtest/promote_legacy_roots.mjs --collection=comments --dry-run
       - name: Promote each requested collection and print the verification table
+        if: contains(github.event.head_commit.message, '[legacy-roots-backfill]')
         run: |
           set -uo pipefail
           status=0
@@ -44,7 +48,7 @@ jobs:
           python3 scripts/loadtest/d1_account_usage_analytics.py --root-backfill-budget || true
           exit $status
       - name: Read-only coverage inventory after the writes
-        if: always()
+        if: always() && contains(github.event.head_commit.message, '[legacy-roots-backfill]')
         run: python3 scripts/loadtest/canonical_inventory.py --full
       - name: Account reserve after writing
         if: always()
