@@ -865,6 +865,16 @@ function isLiveHeartbeatPatch(path,row,before,fields) {
     && Array.isArray(fields.viewerIds) && fields.viewerIds.every(id=>typeof id==='string')
     && Number.isSafeInteger(fields.peakViewers) && fields.peakViewers>=0;
 }
+// The app's live-discovery expiry is 150 seconds. Limit quiet heartbeats to a
+// 24-second persisted age, leaving more than five intervals of safety. Never
+// coalesce changed telemetry, unusual clocks, or backwards client timestamps.
+function quietLiveHeartbeat(before,fields,now) {
+  const previous=before.lastHeartbeatMs, age=now-previous;
+  return Number.isSafeInteger(previous) && previous>0 && age>=0 && age<24_000
+    && fields.lastHeartbeatMs>=previous && fields.lastHeartbeatMs<=now+30_000
+    && fields.peakViewers===before.peakViewers && Array.isArray(before.viewerIds)
+    && JSON.stringify(fields.viewerIds)===JSON.stringify(before.viewerIds);
+}
 
 async function writeRow(db, path, doc, now, existing, guarded = false) {
   const parent = parentPath(path);
@@ -3140,8 +3150,15 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0, ct
         return await writeChatRoot(db,docPath,next,now,existing,uid,{canonicalOnly});
       }
       // Active hosts send this exact telemetry patch every eight seconds.
-      // Persist current stats once; status/privacy edits still mirror and guard.
+      // Changed telemetry still persists immediately. A quiet renewal can skip
+      // the write only while its authorized canonical snapshot remains current.
       if (isLiveHeartbeatPatch(docPath,existing,existingDoc,receiptFields)) {
+        if (quietLiveHeartbeat(existingDoc,receiptFields,now)) {
+          const current=await db.prepare(`SELECT 1 AS current FROM friendbook_cf_firestore_documents
+            WHERE path=? AND document_json=? AND update_time=?`).bind(docPath,existing.document_json,existing.update_time).first();
+          if (current?.current===1) return json(rowToDocument(existing));
+          return json({error:'Update unavailable'},503);
+        }
         const serialized=JSON.stringify(next);
         if (serialized.length>1_800_000) return json({error:'Document too large'},413);
         const updated=await db.prepare(`UPDATE friendbook_cf_firestore_documents

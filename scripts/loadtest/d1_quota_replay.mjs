@@ -164,6 +164,15 @@ await measure('profileDetail',users,()=>wave(users,async i=>{
   assert.equal(profile.document.email,undefined);
 }));
 for(const root of ['posts','reels','stories','lives','notifications']) assert.equal(report.workloads[`page-${root}`].changedRowsIncludingTriggers,0);
+// A quiet live host sends the same audience every eight seconds. One fresh
+// canonical fixture per host avoids conflating independent concurrent sockets.
+for(let i=0;i<users;i++) add('lives',`quiet${i}`,`user${i}`,{hostId:`user${i}`,privacy:'public',status:'live',lastHeartbeatMs:Date.now()-8000,viewerIds:[],peakViewers:1});
+await measure('quietLiveHeartbeat',users,()=>wave(users,async i=>{
+  const response=await call(`user${i}`,`/v1/firestore/document?path=lives/quiet${i}`,'PATCH',
+    {fields:{lastHeartbeatMs:Date.now(),viewerIds:[],peakViewers:1}});
+  assert.equal(response.data.status,'live');assert.equal(response.data.peakViewers,1);
+}));
+assert.equal(report.workloads.quietLiveHeartbeat.changedRowsIncludingTriggers,process.env.QUOTA_EXPECT_LIVE_WRITE==='1'?users:0);
 // Exercise private group projections and indexed tag search with synthetic data.
 add('groups','private','user0',{name:'fixture',privacy:'Private',adminId:'user0',adminIds:['user0'],moderatorIds:[],members:['user0'],pendingMemberIds:['user1'],invitedUids:['user1'],bannedMemberIds:[]});
 sql.prepare("INSERT INTO friendbook_cf_trusted_groups(group_path,owner_uid) VALUES ('groups/private','user0')").run();
