@@ -1266,7 +1266,8 @@ public class ReelsFragment extends Fragment {
                                 applyVideoTransform(width, height);
                             } catch (Throwable ignored) {}
                         } else if (reel != null) {
-                            prepareMediaPlayerAsync();
+                            if (wantPlay) prepareMediaPlayerAsync();
+                            else prepareCachedNext();
                         }
                     }
 
@@ -1569,12 +1570,13 @@ public class ReelsFragment extends Fragment {
                 }
 
                 pausedBadge.setVisibility(View.GONE);
-                // Never prepare or download unrequested/offscreen videos.
+                // The immediate next page may prepare only an already cached file.
                 if (textureView.isAvailable()) {
                     if (videoSurface == null && textureView.getSurfaceTexture() != null) {
                         videoSurface = new Surface(textureView.getSurfaceTexture());
                     }
-                    prepareMediaPlayerAsync();
+                    if (wantPlay) prepareMediaPlayerAsync();
+                    else prepareCachedNext();
                 }
             }
 
@@ -1670,12 +1672,19 @@ public class ReelsFragment extends Fragment {
             private boolean handlePlaybackInfo(MediaPlayer player, int what, Context context) {
                 if (player != activeMp) return false;
                 if (what == MediaPlayer.MEDIA_INFO_VIDEO_RENDERING_START) {
+                    if (!wantPlay || userPaused || getBindingAdapterPosition() != playingPos) return false;
                     cancelStartupWatchdog();
                     posterView.setVisibility(View.GONE);
                     bufferingSpinner.setVisibility(View.GONE);
-                    if (!renderedFirstFrame && wantPlay && !userPaused && getBindingAdapterPosition() == playingPos) {
+                    if (!renderedFirstFrame) {
                         renderedFirstFrame = true;
-                        ReelVideoCache.warmUpcomingAfterPlay(context, data, reelIndexForPos(getBindingAdapterPosition()));
+                        final int position = getBindingAdapterPosition();
+                        prepareNextHolder(position);
+                        java.lang.ref.WeakReference<VH> weak = new java.lang.ref.WeakReference<>(this);
+                        ReelVideoCache.warmUpcomingAfterPlay(context, data, reelIndexForPos(position), () -> {
+                            VH holder = weak.get();
+                            if (holder != null) holder.prepareNextHolder(position);
+                        });
                     }
                 } else if (what == MediaPlayer.MEDIA_INFO_BUFFERING_START && wantPlay && !userPaused) {
                     ReelVideoCache.cancelUpcomingWarm();
@@ -1691,6 +1700,59 @@ public class ReelsFragment extends Fragment {
             private void cancelStartupWatchdog() {
                 if (startupWatchdog!=null) uiHandler.removeCallbacks(startupWatchdog);
                 startupWatchdog=null;
+            }
+
+            // Prepare only an already complete local file for the immediate next
+            // holder. This adds no offscreen network request and is cancelled by
+            // the ordinary pause/recycle lifecycle if the user scrolls away.
+            private void prepareNextHolder(int position) {
+                if (!visible.getAsBoolean() || !wantPlay || getBindingAdapterPosition()!=position || playingPos!=position
+                        || !(itemView.getParent() instanceof RecyclerView)) return;
+                RecyclerView.ViewHolder next = ((RecyclerView) itemView.getParent()).findViewHolderForAdapterPosition(position+1);
+                if (next instanceof VH) ((VH) next).prepareCachedNext();
+            }
+
+            private void prepareCachedNext() {
+                if (reel==null || reel.videoUrl==null || !visible.getAsBoolean() || playingPos<0
+                        || getBindingAdapterPosition()!=playingPos+1 || wantPlay || activeMp!=null || videoSurface==null) return;
+                Context ctx = itemView.getContext();
+                File cached = ReelVideoCache.getCachedFile(ctx, reel.videoUrl);
+                if (!ReelPreloadPolicy.canPrepare(visible.getAsBoolean(),playingPos,getBindingAdapterPosition(),
+                        wantPlay,activeMp!=null,videoSurface!=null,cached!=null)) return;
+                String targetUrl = reel.videoUrl;
+                MediaPlayer mp = new MediaPlayer();
+                activeMp = mp;
+                try {
+                    mp.setAudioAttributes(new AudioAttributes.Builder().setContentType(AudioAttributes.CONTENT_TYPE_MOVIE)
+                            .setUsage(AudioAttributes.USAGE_MEDIA).build());
+                    mp.setLooping(true);
+                    mp.setVolume(0f,0f);
+                    mp.setSurface(videoSurface);
+                    mp.setOnVideoSizeChangedListener((player,width,height) -> {
+                        if (player != activeMp) return;
+                        videoW=width; videoH=height; applyVideoTransform(textureView.getWidth(),textureView.getHeight());
+                    });
+                    mp.setOnInfoListener((player,what,extra) -> handlePlaybackInfo(player,what,ctx));
+                    mp.setOnPreparedListener(player -> {
+                        if (player!=activeMp) return;
+                        mpPrepared=true;
+                        videoW=player.getVideoWidth();videoH=player.getVideoHeight();
+                        applyVideoTransform(textureView.getWidth(),textureView.getHeight());
+                        if (wantPlay && !userPaused && getBindingAdapterPosition()==playingPos) startPreparedPlayer();
+                    });
+                    mp.setOnErrorListener((player,what,extra) -> {
+                        if (player!=activeMp) return true;
+                        boolean selected=wantPlay && getBindingAdapterPosition()==playingPos;
+                        releasePlayerOnly();
+                        if (selected && reel!=null && java.util.Objects.equals(targetUrl,reel.videoUrl)) {
+                            triedRawFallback=true;
+                            prepareWithRawUrlFallback(ctx,targetUrl);
+                        }
+                        return true;
+                    });
+                    try (FileInputStream in = new FileInputStream(cached)) { mp.setDataSource(in.getFD()); }
+                    mp.prepareAsync();
+                } catch (Throwable error) { if (mp==activeMp) releasePlayerOnly(); }
             }
 
             private void prepareMediaPlayerAsync() {
@@ -1842,7 +1904,13 @@ public class ReelsFragment extends Fragment {
                     boolean hasAttachedSound = reel != null && reel.audioUrl != null && !reel.audioUrl.trim().isEmpty();
                     float vol = (muted || hasAttachedSound) ? 0f : 1f;
                     activeMp.setVolume(vol, vol);
-                    if (!activeMp.isPlaying()) activeMp.start();
+                    if (!activeMp.isPlaying()) {
+                        if (speed != 1f) {
+                            try { activeMp.setPlaybackParams(activeMp.getPlaybackParams().setSpeed(speed)); }
+                            catch (Throwable ignored) { }
+                        }
+                        activeMp.start();
+                    }
                     // Starting from (near) the beginning re-arms the one-second check. Whether the
                     // user watches one second or the whole Reel, at most ONE view is ever counted
                     // for them - countRealView() and the Worker both refuse a second one.
@@ -1949,6 +2017,8 @@ public class ReelsFragment extends Fragment {
                     prepareMediaPlayerAsync();
                 } else {
                     bufferingSpinner.setVisibility(View.VISIBLE);
+                    if (activeMp != null && startupWatchdog == null && reel != null)
+                        watchStartup(activeMp,itemView.getContext(),reel.videoUrl,false);
                 }
             }
 

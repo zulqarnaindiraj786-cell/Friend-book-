@@ -18,6 +18,23 @@ public class ReelVideoCacheTest {
         assertTrue(ReelVideoCache.upgrade720Url(raw).endsWith("/v42/reel.mp4"));
     }
 
+    @Test public void cacheKeepsRenditionsAndLegacySeededFilesSeparate() {
+        String raw="https://res.cloudinary.com/friendbook/video/upload/v42/reel.mp4";
+        String lite=ReelVideoCache.lowBandwidthUrl(raw), standard=ReelVideoCache.startup480Url(raw);
+        assertNotEquals(ReelVideoCache.cacheKey(raw), ReelVideoCache.cacheKey(lite));
+        assertNotEquals(ReelVideoCache.cacheKey(lite), ReelVideoCache.cacheKey(standard));
+        assertTrue(ReelVideoCache.cacheKey(raw).startsWith("v2-"));
+        assertEquals(ReelVideoCache.cacheKey(standard), ReelVideoCache.cacheKey(standard));
+    }
+
+    @Test public void partialUnknownOrOversizedDownloadsAreNeverPreparedFromCache() {
+        assertTrue(ReelVideoCache.completeDownload(2048,2048));
+        assertFalse(ReelVideoCache.completeDownload(-1,2048));
+        assertFalse(ReelVideoCache.completeDownload(2048,1500));
+        assertFalse(ReelVideoCache.completeDownload(1024,1024));
+        assertFalse(ReelVideoCache.completeDownload(46L*1024*1024,46L*1024*1024));
+    }
+
     @Test public void nonCloudinaryAlreadyTransformedAndSignedUrlsAreUnchanged() {
         for (String url : new String[]{"https://example.com/movie.mp4", "content://videos/123",
                 "https://res.cloudinary.com/friendbook/video/upload/v100/movie.mp4?token=test",

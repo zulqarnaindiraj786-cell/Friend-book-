@@ -285,10 +285,6 @@ public final class ReelUploadManager {
                 emit(false,0,0L,0L,"",false,"Account changed. Reel was not published.");
                 return;
             }
-            // Seed local SSD cache immediately under the remote videoUrl so playback is 0.0ms!
-            if (videoUrl.equals(com.friendbook.social.core.R2VideoClient.fullPlaybackUrl(videoUrl)))
-                ReelVideoCache.seedLocalUriToCache(appCtx, stagedUri, videoUrl);
-
             String thumbUrl = posterUpload.isSuccessful() ? posterUpload.getResult() : "";
             if (thumbUrl == null || thumbUrl.isEmpty()) {
                 thumbUrl = ReelVideoCache.deriveThumbUrl(videoUrl, "");
