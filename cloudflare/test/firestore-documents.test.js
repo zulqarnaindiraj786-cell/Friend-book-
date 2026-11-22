@@ -1149,9 +1149,9 @@ test('chat membership windows reuse canonical rooms and still hide stale legacy 
   for(let i=0;i<91;i++)addOld(`old${i}`,['alice','bob']);
   // A bad derived-membership row cannot authorize a caller.
   sql.exec("INSERT INTO friendbook_cf_chat_participants VALUES ('eve','chats/mirror0',1)");
-  const checked=[];
+  const checked=[],membershipPlans=[];
   const db={prepare(q){const stmt=sql.prepare(q);return{bind(...args){return{
-    all:async()=>{if(q.includes('SELECT path FROM friendbook_cf_firestore_documents WHERE path IN ('))checked.push(args);return {results:stmt.all(...args)};},
+    all:async()=>{if(q.includes('SELECT path FROM friendbook_cf_firestore_documents WHERE path IN ('))checked.push(args);if(q.includes('INDEXED BY idx_cf_chat_participant_source'))membershipPlans.push(...sql.prepare('EXPLAIN QUERY PLAN '+q).all(...args).map(row=>row.detail));return {results:stmt.all(...args)};},
     first:async()=>stmt.get(...args)||null,run:async()=>stmt.run(...args)
   };}};}};
   const app=createWorker(async t=>t),env={DB:db,FIREBASE_PROJECT_ID:'test'};
@@ -1166,6 +1166,13 @@ test('chat membership windows reuse canonical rooms and still hide stale legacy 
   assert.deepEqual(new Set(checked.flat()),new Set(['chats/historical','chats/removed',...Array.from({length:91},(_,i)=>`chats/old${i}`)]));
   assert.equal(checked.length,2);
   assert.ok(checked.every(args=>args.length<=90));
+  assert.deepEqual(await list('eve'),[]);
+  // Existing deployments without the new index have just used the fallback.
+  // With migration 0073, both joins seek the caller AND the selected store.
+  sql.exec(readFileSync(new URL('../migrations/0073_chat_membership_source_seek.sql',import.meta.url),'utf8'));
+  const indexed=await list('bob');
+  assert.deepEqual(indexed.map(d=>d.id).sort(),rooms.map(d=>d.id).sort());
+  assert.equal(membershipPlans.filter(p=>/SEARCH m USING COVERING INDEX idx_cf_chat_participant_source \(participant_uid=\? AND source=\?\)/.test(p)).length,2);
   assert.deepEqual(await list('eve'),[]);
   sql.close();
 });

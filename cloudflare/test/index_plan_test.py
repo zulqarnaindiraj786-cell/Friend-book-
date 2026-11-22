@@ -42,7 +42,7 @@ class IndexPlans(unittest.TestCase):
                 ('friendbook_cf_comments_page', 'SELECT id FROM friendbook_cf_comments WHERE resource=? ORDER BY created_at DESC,id DESC LIMIT 20', ('posts/p',)),
                 ('sqlite_autoindex_friendbook_cf_reactions_1', 'SELECT type FROM friendbook_cf_reactions WHERE resource=? AND uid=?', ('posts/p', 'u')),
                 ('idx_cf_friend_participant_0', f"SELECT path FROM {table} WHERE parent_path='friends' AND json_extract(document_json,'$.participants[0]')=?", ('u',)),
-                ('PRIMARY KEY', 'SELECT chat_path FROM friendbook_cf_chat_participants WHERE participant_uid=?', ('u',)),
+                ('idx_cf_chat_participant_source', 'SELECT chat_path FROM friendbook_cf_chat_participants WHERE participant_uid=? AND source=1', ('u',)),
                 ('idx_cf_firestore_inbox_recipient', f"SELECT path FROM {table} WHERE parent_path='notifications' AND json_extract(document_json,'$.toUserId')=?", ('u',)),
                 ('sqlite_autoindex_friendbook_cf_view_counters_1', 'SELECT views FROM friendbook_cf_view_counters WHERE resource=?', ('posts/p',)),
             ]
@@ -55,6 +55,44 @@ class IndexPlans(unittest.TestCase):
                 with self.subTest(index=index):
                     plan = db.execute('EXPLAIN QUERY PLAN ' + sql, args).fetchall()
                     self.assertTrue(any(index in row[-1] for row in plan), plan)
+
+    def test_chat_membership_source_index_reduces_local_work_without_changing_results(self):
+        with sqlite3.connect(':memory:') as db:
+            for migration in sorted(MIGRATIONS.glob('*.sql')):
+                if migration.name != '0073_chat_membership_source_seek.sql':
+                    db.executescript(migration.read_text())
+            for n in range(500):
+                path = f'chats/room{n}'
+                doc = '{"participants":["alice","bob"]}'
+                db.execute('INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)',
+                           (path, 'chats', 'chats', str(n), 'alice', doc, 1, 1))
+                db.execute('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)',
+                           (path, 'chats', str(n), 'alice', doc, 1))
+            sql = ('SELECT f.path FROM friendbook_cf_chat_participants m '
+                   'JOIN friendbook_cf_firestore_documents f ON f.path=m.chat_path '
+                   'WHERE m.participant_uid=? AND m.source=1')
+            def run(query):
+                steps = [0]
+                def tick():
+                    steps[0] += 1
+                    return 0
+                db.set_progress_handler(tick, 1)
+                try:
+                    rows = db.execute(query, ('bob',)).fetchall()
+                finally:
+                    db.set_progress_handler(None, 0)
+                return sorted(rows), steps[0]
+            old_rows, old_steps = run(sql)
+            db.executescript((MIGRATIONS / '0073_chat_membership_source_seek.sql').read_text())
+            db.executescript((MIGRATIONS / '0073_chat_membership_source_seek.sql').read_text())
+            indexed_sql = sql.replace('m JOIN', 'm INDEXED BY idx_cf_chat_participant_source JOIN')
+            plan = db.execute('EXPLAIN QUERY PLAN ' + indexed_sql, ('bob',)).fetchall()
+            self.assertTrue(any('idx_cf_chat_participant_source' in x[-1] and 'source=?' in x[-1] for x in plan), plan)
+            new_rows, new_steps = run(indexed_sql)
+            self.assertEqual(old_rows, new_rows)
+            self.assertEqual(len(new_rows), 500)
+            self.assertLess(new_steps, old_steps)
+            # SQLite VM instructions are not Cloudflare D1 rows read.
 
     def test_root_message_guards_seek_all_representations(self):
         with sqlite3.connect(':memory:') as db:

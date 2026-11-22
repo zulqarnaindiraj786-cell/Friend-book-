@@ -162,6 +162,22 @@ jobs:
               echo 'migration_status=baseline-not-ready' >> "$GITHUB_OUTPUT"
               exit 0
             fi
+            if printf '%s\n' "$pending" | grep -q '0073_chat_membership_source_seek.sql'; then
+              # Limit the one-off index build rather than unexpectedly consuming
+              # a large fraction of the free daily quota. Aggregate only; no IDs.
+              count_file="$RUNNER_TEMP/chat-membership-count.json"
+              npx wrangler d1 execute friendbook-db --remote --json --command 'SELECT COUNT(*) AS n FROM (SELECT 1 FROM friendbook_cf_chat_participants LIMIT 5001)' > "$count_file" 2>> "$log"
+              count_status=$?
+              count=$(python3 -c 'import json,sys; x=json.load(open(sys.argv[1])); assert x[0]["success"]; print(int(x[0]["results"][0]["n"]))' "$count_file" 2>/dev/null)
+              if [ "$count_status" -ne 0 ] || ! [[ "$count" =~ ^[0-9]+$ ]] || [ "$count" -gt 5000 ]; then
+                echo 'Chat index build preflight failed or exceeds 5000 membership entries; no migration attempted.' | tee -a "$log"
+                echo "whoami_status=$whoami_status" >> "$GITHUB_OUTPUT"
+                echo "d1_list_status=$d1_list_status" >> "$GITHUB_OUTPUT"
+                echo 'migration_status=chat-index-preflight-failed' >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
+              echo "Chat index preflight: $count membership entries (bounded count only)." | tee -a "$log"
+            fi
           fi
           npx wrangler d1 migrations apply friendbook-db --remote 2>&1 | tee -a "$log"
           migration_status=${PIPESTATUS[0]}

@@ -531,14 +531,22 @@ async function readCollectionRows(db, parent, uid, filters, spec) {
     // Canonical membership wins over stale legacy mirrors. The normal document
     // ACL still runs before results are returned to the caller.
     try {
-      const [canonical,legacy]=await Promise.all([
-        db.prepare(`SELECT f.* FROM friendbook_cf_chat_participants m
+      const fetchMembership=hint=>Promise.all([
+        db.prepare(`SELECT f.* FROM friendbook_cf_chat_participants m ${hint}
         JOIN friendbook_cf_firestore_documents f ON f.path=m.chat_path
         WHERE m.participant_uid=? AND m.source=1`).bind(uid).all(),
-        db.prepare(`SELECT a.* FROM friendbook_cf_chat_participants m
+        db.prepare(`SELECT a.* FROM friendbook_cf_chat_participants m ${hint}
         JOIN friendbook_cf_documents a ON a.path=m.chat_path
         WHERE m.participant_uid=? AND m.source=0`).bind(uid).all(),
       ]);
+      let canonical,legacy;
+      try { [canonical,legacy]=await fetchMembership('INDEXED BY idx_cf_chat_participant_source'); }
+      catch(error) {
+        // Safe rolling deployment or old local fixtures: retain the same ACL
+        // and complete results if the additive index is not present yet.
+        if (!String(error).includes('no such index: idx_cf_chat_participant_source')) throw error;
+        [canonical,legacy]=await fetchMembership('');
+      }
       // Most rooms exist in both stores. Reuse the canonical membership window
       // rather than probing each mirror. Unknown paths still need checking:
       // a canonical room may have removed this user and must shadow the mirror.
