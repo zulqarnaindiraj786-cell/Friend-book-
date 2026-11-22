@@ -231,6 +231,14 @@ test('unknown historical reaction time is null, not a fabricated epoch date; fre
   assert.ok(page.reactors[0].createdAt > 0);
   assert.equal(page.reactors[0].timestampKnown, 1);
 });
+test('same reaction without provenance keeps its already-known timestamp', async t => {
+  const f=fixture();t.after(f.close);
+  f.sql.exec("INSERT INTO friendbook_cf_reactions VALUES ('posts/p1','user1','like',123)");
+  assert.equal((await call(f.env,'reactions','PUT',{type:'like'},{query:'?response=reaction'})).status,200);
+  assert.equal(f.sql.prepare("SELECT updated_at FROM friendbook_cf_reactions WHERE resource='posts/p1' AND uid='user1'").get().updated_at,123);
+  const page=await (await call(f.env,'reactors')).json();
+  assert.equal(page.reactors[0].createdAt,123);assert.equal(page.reactors[0].timestampKnown,1);
+});
 test('known epoch zero is distinct from unknown, and schema upgrade retains existing rows', async t => {
   const f = fixture(); t.after(f.close);
   f.sql.exec("INSERT INTO friendbook_cf_reactions VALUES ('posts/p1','user1','like',0)");
