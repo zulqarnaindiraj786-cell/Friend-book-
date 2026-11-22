@@ -2568,6 +2568,59 @@ test('indexed display-name prefix keeps canonical precedence and supports legacy
 
 });
 
+test('Unicode mention-prefix index is a superset of the UTF-16 cursor and preserves visibility', async () => {
+  const sql=new DatabaseSync(':memory:');
+  for(const ddl of [resourcesSchema,appSchema,schema,readFileSync(new URL('../migrations/0053_people_name_prefix.sql',import.meta.url),'utf8'),readFileSync(new URL('../migrations/0061_legacy_people_cursor_prefix.sql',import.meta.url),'utf8')])sql.exec(ddl);
+  const f=sql.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)');
+  const a=sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)');
+  f.run('users/actor','users','users','actor','actor','{"displayName":"Viewer"}',1,1);
+  for(let i=0;i<1200;i++)f.run(`users/filler${i}`,'users','users',`filler${i}`,'',JSON.stringify({displayName:`Other ${i}`}),1,1);
+  const names=['آمنہ','آمر','آ😀','آ\ue000','आम','अक्षय','你好','你好😀','école','e\u0301clair','😀','😀 suffix','😀\uf900','\ud7fftest','\ud7ff😀','\u{10ffff}only','Z\u{10ffff}tail'];
+  names.forEach((name,i)=>{
+    const id=`n${i}`;
+    f.run(`users/${id}`,'users','users',id,'',JSON.stringify({displayName:name,email:'private'}),1,1);
+  });
+  // Both JSON-envelope variants and a coerced stringValue share the same evaluator.
+  a.run('users/envelope','users','envelope','',JSON.stringify({fields:{displayName:{stringValue:'آئینہ'}}}),1);
+  a.run('users/coerced','users','coerced','',JSON.stringify({fields:{displayName:{stringValue:['آبت']}}}),1);
+  a.run('users/shadow','users','shadow','',JSON.stringify({displayName:'آئندہ'}),1);
+  f.run('users/shadow','users','users','shadow','',JSON.stringify({displayName:'Moved'}),1,1);
+  f.run('users/hidden','users','users','hidden','',JSON.stringify({displayName:'آباد',banned:true}),1,1);
+  let force=false,scans=0,indexed=0,plans=[];
+  const db={prepare(q){
+    if(force && q.includes('INDEXED BY idx_cf_users_display_name'))throw Error('no such index: idx_cf_users_display_name');
+    if(q.includes('quota_root_users_name'))scans++;
+    const stmt=sql.prepare(q);return {bind(...args){return {first:async()=>stmt.get(...args)||null,all:async()=>{
+      if(q.includes('INDEXED BY idx_cf_users_display_name') || q.includes('INDEXED BY idx_cf_legacy_people_cursor_prefix')) {
+        indexed++;plans.push(...sql.prepare('EXPLAIN QUERY PLAN '+q).all(...args).map(row=>row.detail));
+      }
+      return {results:stmt.all(...args)};
+    }};}};
+  }};
+  const worker=createWorker(async token=>token),env={DB:db,FIREBASE_PROJECT_ID:'test'};
+  const query=async(term,extra={})=>{
+    const response=await worker.fetch(new Request('https://example.test/v1/firestore/query',{method:'POST',headers:{authorization:'Bearer actor','content-type':'application/json'},body:JSON.stringify({parent:'users',limit:10,orderBy:[{field:'displayName',direction:'ASCENDING'}],startAt:[term],endAt:[term+'\uf8ff'],...extra})}),env);
+    assert.equal(response.status,200,await response.clone().text());return (await response.json()).documents;
+  };
+  for(const term of ['آ','आ','你好','é','e\u0301','😀','\ud7ff','Z\u{10ffff}']) {
+    force=false;scans=0;indexed=0;const actual=await query(term),fastScans=scans;
+    force=true;const expected=await query(term);force=false;
+    assert.deepEqual(actual,expected,`UTF-16 boundary for ${term}`);
+    assert.equal(fastScans,0,`indexed prefix ${term}`);assert.ok(indexed>=2);
+    assert.ok(actual.every(doc=>doc.data.email===undefined && doc.id!=='hidden' && doc.id!=='shadow'));
+  }
+  // The UTF-16 U+F8FF bound excludes BMP U+F900, but includes a supplementary suffix.
+  const arabic=await query('آ');assert.ok(arabic.some(doc=>doc.data.displayName==='آ😀'));
+  const emoji=await query('😀');assert.ok(!emoji.some(doc=>doc.data.displayName==='😀\uf900'));
+  const constrained={startAfter:['آبت','coerced'],endBefore:['آ😀','n2'],limit:2};
+  force=false;const page=await query('آ',constrained);force=true;assert.deepEqual(page,await query('آ',constrained));
+  force=false;scans=0;await query('\u{10ffff}');assert.ok(scans>0,'no successor uses compatibility path');
+  force=false;scans=0;await query('\ud83d');assert.ok(scans>0,'unpaired cursor surrogate uses compatibility path');
+  assert.match(plans.join('\n'),/SEARCH .*idx_cf_users_display_name/);
+  assert.match(plans.join('\n'),/SEARCH .*idx_cf_legacy_people_cursor_prefix/);
+  sql.close();
+});
+
 test('empty mention prefix uses bounded heads only when exact results are provable', async () => {
  const sql=new DatabaseSync(':memory:');
  for(const ddl of [resourcesSchema,appSchema,schema,readFileSync(new URL('../migrations/0053_people_name_prefix.sql',import.meta.url),'utf8'),readFileSync(new URL('../migrations/0061_legacy_people_cursor_prefix.sql',import.meta.url),'utf8')])sql.exec(ddl);
@@ -2609,6 +2662,9 @@ test('empty mention prefix uses bounded heads only when exact results are provab
  assert.equal(result.actual.length,10);assert.ok(result.actual.every(doc=>doc.data.email===undefined),'private profile fields stay hidden');
  assert.match(plans.join('\n'),/SEARCH .*idx_cf_users_display_name/);
  assert.match(plans.join('\n'),/SEARCH .*idx_cf_legacy_people_cursor_prefix/);
+ result=await compare({startAt:['Name'],endAt:['Name\uf8ff']});
+ assert.equal(result.fastScans,0);assert.ok(result.fastHeads<=20,'ASCII prefix stops at bounded indexed heads');
+ assert.equal(result.actual.length,10);
  // A stale early legacy name must not reappear when canonical has moved.
  sql.prepare("UPDATE friendbook_cf_firestore_documents SET document_json=? WHERE path='users/p0000'").run('{"displayName":"Zulu"}');
  result=await compare();assert.equal(result.fastScans,0);assert.ok(!result.actual.some(doc=>doc.id==='p0000'));

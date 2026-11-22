@@ -428,6 +428,24 @@ async function boundedLiveChatRows(db,parent,spec) {
   }
 }
 
+// SQLite's binary UTF-8 order and JS's UTF-16 order differ for supplementary
+// characters. Do not use a Unicode upper cursor directly in SQL. Instead seek
+// the entire exact-prefix range in UTF-8, then let the JS evaluator apply all
+// cursors, including the original prefix + U+F8FF boundary. A well-formed
+// prefix has the same UTF-8 byte prefix for every matching stored string.
+function unicodePrefixUpper(prefix) {
+  if (typeof prefix!=='string' || !prefix.length || prefix.length>60) return null;
+  const points=Array.from(prefix,part=>part.codePointAt(0));
+  if (points.some(cp=>cp<0x20 || (cp>=0xd800 && cp<=0xdfff))) return null;
+  for(let i=points.length-1;i>=0;i--) {
+    if(points[i]>=0x10ffff)continue;
+    let next=points[i]+1;
+    if(next===0xd800)next=0xe000;
+    return String.fromCodePoint(...points.slice(0,i),next);
+  }
+  return null;
+}
+
 async function readCollectionRows(db, parent, uid, filters, spec) {
   const bounded=spec ? await boundedChatRows(db,parent,spec) ?? await boundedLiveChatRows(db,parent,spec) : null;
   if (bounded!==null) return bounded;
@@ -457,12 +475,11 @@ async function readCollectionRows(db, parent, uid, filters, spec) {
     }
     const order=Array.isArray(spec?.orderBy) && spec.orderBy.length===1 ? spec.orderBy[0] : null;
     const lower=Array.isArray(spec?.startAt) && spec.startAt.length===1 ? spec.startAt[0] : null;
+    const upper=unicodePrefixUpper(lower);
     // Additional cursor bounds can only narrow this prefix. The common query
     // evaluator still applies them after profile projection and shadow handling.
     if (order?.field==='displayName' && order.direction!=='DESCENDING'
-        && typeof lower==='string' && /^[ -~]{1,60}$/.test(lower)
-        && Array.isArray(spec.endAt) && spec.endAt.length===1 && spec.endAt[0]===lower+'\uf8ff') {
-      const upper=lower.slice(0,-1)+String.fromCharCode(lower.charCodeAt(lower.length-1)+1);
+        && upper!==null && Array.isArray(spec.endAt) && spec.endAt.length===1 && spec.endAt[0]===lower+'\uf8ff') {
       const legacyName=`CASE WHEN json_type(document_json,'$.fields')='object' THEN CASE
     WHEN json_type(document_json,'$.fields.displayName')='text' THEN json_extract(document_json,'$.fields.displayName')
     WHEN json_type(document_json,'$.fields.displayName.stringValue')='text' THEN json_extract(document_json,'$.fields.displayName.stringValue')
@@ -1184,17 +1201,19 @@ async function feedEngagement(db, env, uid, body, docs, requestUserReads) {
   } catch { return docs; }
 }
 
-// Empty @-mention prefix: find the same first visible names without scanning
-// every profile when a full ASCII page can be proven from bounded index heads.
-// Unusual encodings and incomplete/ambiguous pages fall back to the generic
-// evaluator, which remains authoritative for every other name query.
-async function boundedEmptyNamePage(db,env,uid,spec) {
+// Mention-prefix pages can stop at bounded index heads when a full ASCII page
+// is provably equivalent to the complete JS evaluator. Empty and printable
+// ASCII prefixes share this proof; ambiguous pages use the compatibility path.
+async function boundedNamePage(db,env,uid,spec) {
+  const prefix=Array.isArray(spec.startAt) && spec.startAt.length===1 ? spec.startAt[0] : null;
   if (spec.parent!=='users' || spec.filters?.length || spec.orderBy?.length!==1
       || spec.orderBy[0].field!=='displayName' || spec.orderBy[0].direction==='DESCENDING'
-      || !Array.isArray(spec.startAt) || spec.startAt.length!==1 || spec.startAt[0]!==''
-      || !Array.isArray(spec.endAt) || spec.endAt.length!==1 || spec.endAt[0]!=='\uf8ff'
+      || typeof prefix!=='string' || !/^[\x20-\x7e]{0,60}$/.test(prefix)
+      || !Array.isArray(spec.endAt) || spec.endAt.length!==1 || spec.endAt[0]!==prefix+'\uf8ff'
       || spec.startAfter || spec.endBefore || spec.limitToLast
       || !Number.isInteger(spec.limit) || spec.limit<1 || spec.limit>50) return null;
+  const upper=prefix ? unicodePrefixUpper(prefix) : null;
+  const bound=upper===null?'':' AND %NAME%<?';
   const legacyName=`CASE WHEN json_type(document_json,'$.fields')='object' THEN CASE
     WHEN json_type(document_json,'$.fields.displayName')='text' THEN json_extract(document_json,'$.fields.displayName')
     WHEN json_type(document_json,'$.fields.displayName.stringValue')='text' THEN json_extract(document_json,'$.fields.displayName.stringValue')
@@ -1203,10 +1222,11 @@ async function boundedEmptyNamePage(db,env,uid,spec) {
   try {
     const [canonical,legacy,unusual]=await Promise.all([
       db.prepare(`SELECT * FROM friendbook_cf_firestore_documents INDEXED BY idx_cf_users_display_name
-        WHERE parent_path='users' AND json_extract(document_json,'$.displayName')>=? AND json_type(document_json,'$.displayName')='text'
-        ORDER BY json_extract(document_json,'$.displayName'),doc_id LIMIT ?`).bind('',spec.limit).all(),
+        WHERE parent_path='users' AND json_extract(document_json,'$.displayName')>=?${bound.replace('%NAME%',"json_extract(document_json,'$.displayName')")}
+          AND json_type(document_json,'$.displayName')='text'
+        ORDER BY json_extract(document_json,'$.displayName'),doc_id LIMIT ?`).bind(prefix,...(upper===null?[]:[upper]),spec.limit).all(),
       db.prepare(`SELECT * FROM friendbook_cf_documents INDEXED BY idx_cf_legacy_people_cursor_prefix
-        WHERE collection='users' AND (${legacyName})>=? ORDER BY (${legacyName}),doc_id LIMIT ?`).bind('',spec.limit).all(),
+        WHERE collection='users' AND (${legacyName})>=?${bound.replace('%NAME%',`(${legacyName})`)} ORDER BY (${legacyName}),doc_id LIMIT ?`).bind(prefix,...(upper===null?[]:[upper]),spec.limit).all(),
       db.prepare(`SELECT * FROM friendbook_cf_documents INDEXED BY idx_cf_legacy_people_cursor_prefix
         WHERE collection='users' AND (${legacyName})=1 LIMIT 65`).bind().all(),
     ]);
@@ -3215,7 +3235,7 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0, ct
         ]);
         rows=[...(canonical.results || []), ...(legacy.results || []).map(appDocumentToFirestoreRow).filter(Boolean)];
       } else {
-        const people=await boundedEmptyNamePage(db,env,uid,body) ?? await boundedPeoplePage(db,env,uid,body) ?? await boundedRecentPeoplePage(db,env,uid,body);
+        const people=await boundedNamePage(db,env,uid,body) ?? await boundedPeoplePage(db,env,uid,body) ?? await boundedRecentPeoplePage(db,env,uid,body);
         if (people!==null) return queryResponse(parent,people,body.knownRevisions);
         const page=parent==='notifications'?await boundedNotificationPage(db,uid,body):await boundedFeedPage(db,uid,body,requestUserReads);
         if (page!==null) return queryResponse(parent,await feedEngagement(db,env,uid,body,page,requestUserReads),body.knownRevisions);

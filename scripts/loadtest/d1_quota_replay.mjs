@@ -76,6 +76,19 @@ await measure('emptyMentionPrefix',users,()=>wave(users,async i=>{
   });
   assert.equal(result.documents.length,Math.min(users,10));
 }));
+await measure('asciiMentionPrefix',users,()=>wave(users,async i=>{
+  const result=await call(`user${i}`,'/v1/firestore/query','POST',{
+    parent:'users',orderBy:[{field:'displayName',direction:'ASCENDING'}],startAt:['user'],endAt:['user\uf8ff'],limit:10,
+  });
+  assert.equal(result.documents.length,Math.min(users,10));
+}));
+add('users','unicode-name','unicode-name',{displayName:'آمنہ',uid:'unicode-name'});
+await measure('unicodeMentionPrefix',users,()=>wave(users,async i=>{
+  const result=await call(`user${i}`,'/v1/firestore/query','POST',{
+    parent:'users',orderBy:[{field:'displayName',direction:'ASCENDING'}],startAt:['آ'],endAt:['آ\uf8ff'],limit:10,
+  });
+  assert.deepEqual(result.documents.map(doc=>doc.id),['unicode-name']);
+}));
 await measure('unchangedProfileHeartbeat',users,()=>wave(users,i=>heartbeat(`user${i}`)));
 await measure('sendMessageAndUpdateRoom',users/2,()=>wave(users/2,slot=>{
   const i=slot*2;
