@@ -13,7 +13,7 @@ function fixture() {
   const message=(id)=>insert.run(`chats/${id}/messages/m` ,`chats/${id}/messages`,'messages','m','alice',JSON.stringify({senderId:'alice',text:'hello',reactions:{alice:'👍'},reactorNames:{alice:'Alice'}}),1,1);
   room('direct',['alice','bob']);message('direct');room('team_bob',['team','bob']);message('team_bob');
   let race;
-  const db={prepare(q){const s=sql.prepare(q);return{bind(...args){return{run:async()=>s.run(...args),first:async()=>{if(race && q.includes('RETURNING path')){const f=race;race=null;f();}return s.get(...args)||null;},all:async()=>({results:s.all(...args)})};}}},
+  const db={prepare(q){const s=sql.prepare(q);return{bind(...args){return{run:async()=>s.run(...args),first:async()=>{if(race && (q.includes('RETURNING path') || q.includes('reaction_noop_snapshot'))){const f=race;race=null;f();}return s.get(...args)||null;},all:async()=>({results:s.all(...args)})};}}},
     async batch(stmts){if(race){const f=race;race=null;f();}sql.exec('BEGIN');try{for(const s of stmts)await s.run();sql.exec('COMMIT');}catch(e){sql.exec('ROLLBACK');throw e;}}};
   const app=createWorker(async token=>token), env={DB:db,FIREBASE_PROJECT_ID:'test'};
   const patch=(uid,id,fields)=>app.fetch(new Request(`https://example.test/v1/firestore/document?path=chats/${id}/messages/m`,{method:'PATCH',headers:{authorization:`Bearer ${uid}`,'content-type':'application/json'},body:JSON.stringify({fields})}),env);
@@ -56,6 +56,32 @@ test('membership and message races roll back a reaction',async()=>{
     assert.equal(f.sql.prepare('SELECT count(*) AS n FROM friendbook_cf_social_guards').get().n,0);
     f.sql.close();
   }
+});
+
+test('repeated own message reactions skip writes only after checking fresh authorization',async()=>{
+  const f=fixture();
+  const fields={'reactions.bob':'❤️','reactorNames.bob':'Bob'};
+  assert.equal((await f.patch('bob','direct',fields)).status,200);
+  const messagePath='chats/direct/messages/m';
+  const readRow=()=>f.sql.prepare('SELECT document_json,update_time FROM friendbook_cf_firestore_documents WHERE path=?').get(messagePath);
+  const row=readRow(),before=f.sql.prepare('SELECT total_changes() AS n').get().n;
+  assert.equal((await f.patch('bob','direct',fields)).status,200);
+  assert.equal(f.sql.prepare('SELECT total_changes() AS n').get().n,before);
+  assert.deepEqual(readRow(),row,'no-op preserves persisted update time');
+  assert.equal((await f.patch('eve','direct',fields)).status,403);
+  assert.equal((await f.patch('bob','direct',{'reactions.alice':'😡'})).status,403);
+  f.race(()=>f.sql.prepare("UPDATE friendbook_cf_firestore_documents SET document_json=? WHERE path='chats/direct'").run(JSON.stringify({participants:['alice','eve']})));
+  assert.equal((await f.patch('bob','direct',fields)).status,503);
+  f.sql.prepare("UPDATE friendbook_cf_firestore_documents SET document_json=? WHERE path='chats/direct'").run(JSON.stringify({participants:['alice','bob']}));
+  f.race(()=>f.sql.prepare("UPDATE friendbook_cf_firestore_documents SET document_json=json_set(document_json,'$.reactions.bob','changed') WHERE path=?").run(messagePath));
+  assert.equal((await f.patch('bob','direct',fields)).status,503);
+  assert.equal(f.doc('direct').reactions.bob,'changed');
+  const del={__fieldValue:'delete'};
+  assert.equal((await f.patch('bob','direct',{'reactions.bob':del,'reactorNames.bob':del})).status,200);
+  const afterRemoval=f.sql.prepare('SELECT total_changes() AS n').get().n;
+  assert.equal((await f.patch('bob','direct',{'reactions.bob':del,'reactorNames.bob':del})).status,200);
+  assert.equal(f.sql.prepare('SELECT total_changes() AS n').get().n,afterRemoval);
+  f.sql.close();
 });
 
 test('legacy-only chat rooms retain the guarded message update path',async()=>{

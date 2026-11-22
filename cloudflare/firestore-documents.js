@@ -3298,6 +3298,20 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0, ct
           || unchangedChatReceipt(docPath,uid,existing,next,body.fields||body.data||body.updates)) return json(rowToDocument(existing));
       const receiptFields=body.fields||body.data||body.updates||{};
       const receiptKeys=Object.keys(receiptFields);
+      const ownReactionKeys=['reactions','reactorNames','reactorPhotos'].map(key=>`${key}.${uid}`);
+      if (chatAuth.room?.[canonicalRootSnapshot] && /^chats\/[^/]+\/messages\/[^/]+$/.test(docPath)
+          && receiptKeys.length && receiptKeys.every(key=>ownReactionKeys.includes(key))
+          && existing.document_json===JSON.stringify(next)) {
+        // Only an already-applied own reaction can skip the write. Recheck both
+        // authorized snapshots together; a concurrent removal or membership
+        // change must never be acknowledged as a successful stale operation.
+        const current=await db.prepare(`SELECT 1 AS reaction_noop_snapshot FROM friendbook_cf_firestore_documents
+          WHERE path=? AND document_json=? AND update_time=?
+          AND EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents WHERE path=? AND document_json=?)`)
+          .bind(docPath,existing.document_json,existing.update_time,chatAuth.roomPath,chatAuth.room.document_json).first();
+        if (!current) return json({error:'Update unavailable'},503);
+        return json(rowToDocument(existing));
+      }
       if (chatAuth.room?.[canonicalRootSnapshot] && /^chats\/[^/]+\/messages\/[^/]+$/.test(docPath)
           && receiptKeys.length && receiptKeys.every(key=>['isSeen','isDelivered'].includes(key) && receiptFields[key]===true)) {
         // A single UPDATE can enforce both authorized snapshots without
