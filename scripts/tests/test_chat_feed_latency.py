@@ -46,6 +46,17 @@ class ChatFeedLatencyTest(unittest.TestCase):
         batch = (ROOT / 'd1/documents/WriteBatch.java').read_text()
         self.assertIn('firestore.runChatSend(path, task)', batch)
 
+    def test_committed_batches_refresh_each_collection_once(self):
+        store = (ROOT / 'd1/documents/D1DocumentStore.java').read_text()
+        committed = store.split('void notifyCommittedPaths(', 1)[1].split('public Task<org.json.JSONObject> signalCall', 1)[0]
+        self.assertIn('for (String path : committed.documents()) invalidateDoc(path)', committed)
+        self.assertIn('for (String path : committed.documents()) notifyOnlyDocListeners(path)', committed)
+        self.assertIn('for (String parent : committed.collections()) notifyCollectionListeners(parent)', committed)
+        for name, transport in [('WriteBatch.java', 'D1DocumentTransport.batch(ops,chatSend)'),
+                                ('Transaction.java', 'D1DocumentTransport.transaction(ops)')]:
+            code = (ROOT / 'd1/documents' / name).read_text()
+            self.assertLess(code.index(transport), code.index('firestore.notifyCommittedPaths(ops)'))
+
     def test_slow_feed_prioritizes_visible_cards_and_keeps_tail_pagination(self):
         home = (ROOT / 'main/HomeFragment.java').read_text()
         section = home.split('FastCache.NetTier tier = FastCache.netTier(a);', 1)[1].split('rv.setBackgroundColor', 1)[0]

@@ -216,8 +216,8 @@ public class D1DocumentStore {
             if (!actor.equals(authenticatedUid())) throw new D1DocumentStoreException(
                     D1DocumentStoreException.Code.CANCELLED, "Account changed during moderation");
             invalidateDoc(collection + "/" + id);
+            // notifyDocListeners also invalidates its parent collection.
             notifyDocListeners(collection + "/" + id);
-            notifyCollectionListeners(collection);
             return null;
         });
     }
@@ -384,15 +384,33 @@ public class D1DocumentStore {
         };
     }
 
-    void notifyDocListeners(String path) {
+    private void notifyOnlyDocListeners(String path) {
         CopyOnWriteArrayList<DocListenerEntry> list = docListeners.get(path);
         if (list != null) {
             for (DocListenerEntry e : list) {
                 scheduleDocRead(e);
             }
         }
+    }
+
+    void notifyDocListeners(String path) {
+        notifyOnlyDocListeners(path);
         int idx = path.lastIndexOf('/');
         if (idx > 0) notifyCollectionListeners(path.substring(0, idx));
+    }
+
+    /** One server-committed batch may update many documents in the same collection. */
+    void notifyCommittedPaths(org.json.JSONArray operations) {
+        CommittedInvalidations committed = new CommittedInvalidations();
+        for (int i = 0; i < operations.length(); i++) {
+            org.json.JSONObject op = operations.optJSONObject(i);
+            if (op != null) committed.add(op.optString("path", ""));
+        }
+        // Invalidate every document before any listener can fetch the final,
+        // already-committed state. Do not combine separate commits or pushes.
+        for (String path : committed.documents()) invalidateDoc(path);
+        for (String path : committed.documents()) notifyOnlyDocListeners(path);
+        for (String parent : committed.collections()) notifyCollectionListeners(parent);
     }
 
     /** FCM is only an invalidation hint; the authenticated D1 query stays authoritative. */

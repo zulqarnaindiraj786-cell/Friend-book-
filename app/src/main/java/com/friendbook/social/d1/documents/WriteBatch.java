@@ -105,16 +105,9 @@ public class WriteBatch {
 
     private boolean send(JSONArray ops,boolean chatSend) throws Exception {
         boolean pushScheduled=D1DocumentTransport.batch(ops,chatSend);
-        for (int i = 0; i < ops.length(); i++) {
-            JSONObject o = ops.optJSONObject(i);
-            if (o != null) {
-                String p = o.optString("path", "");
-                if (!p.isEmpty()) {
-                    firestore.invalidateDoc(p);
-                    firestore.notifyDocListeners(p);
-                }
-            }
-        }
+        // The server committed all operations atomically. Refresh each touched
+        // document and collection once, not once per operation in the batch.
+        firestore.notifyCommittedPaths(ops);
         return pushScheduled;
     }
 }

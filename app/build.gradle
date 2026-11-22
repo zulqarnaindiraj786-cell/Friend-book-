@@ -19,8 +19,8 @@ android {
         buildConfigField 'String', 'CLOUDFLARE_API_URL', '"https://rough-firefly-dd7b.zulqarnaindiraj786.workers.dev"'
         minSdk 24
         targetSdk 36
-        versionCode 165
-        versionName '2.10.23'
+        versionCode 166
+        versionName '2.10.24'
         ndk {
             debugSymbolLevel 'FULL'
         }
