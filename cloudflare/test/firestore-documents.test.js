@@ -398,6 +398,9 @@ test('profiles and chats: private fields, membership and write bypasses across A
   const saved=profileChanges();
   assert.equal((await call('alice','/v1/firestore/document?path=users/alice','PATCH',{fields:{displayName:'Alice'}})).status,200);
   assert.equal(profileChanges(),saved,'unchanged literal profile edit uses no writes');
+  assert.equal((await call('alice','/v1/firestore/document?path=users/alice','PUT',{data:{displayName:'Alice'},merge:true})).status,200);
+  assert.equal(profileChanges(),saved,'unchanged literal profile merge uses no writes');
+  assert.equal((await call('bob','/v1/firestore/document?path=users/alice','PUT',{data:{displayName:'Alice'},merge:true})).status,403);
   assert.equal((await call('alice','/v1/firestore/document?path=users/alice','PATCH',{fields:{bio:'new'}})).status,200);
   assert.ok(profileChanges()>saved,'a changed profile still commits');
   const profileHeartbeat={isOnline:true,isActive:true,showActiveStatus:true,lastSeenMs:Date.now(),lastSeen:{__fieldValue:'serverTimestamp'}};
@@ -1636,14 +1639,58 @@ test('profile merges retry concurrent friendship updates without erasing them', 
  sql.close();
 });
 
+test('no-op profile merges recheck snapshots and preserve legacy promotion', async () => {
+ const sql=new DatabaseSync(':memory:');for(const s of [resourcesSchema,appSchema,schema,socialGuardSchema])sql.exec(s);
+ const f=sql.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)');
+ const a=sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)');
+ const profile={uid:'alice',displayName:'Alice',bio:'original'};
+ f.run('users/alice','users','users','alice','alice',JSON.stringify(profile),1,1);
+ a.run('users/alice','users','alice','alice',JSON.stringify({...profile,id:'alice'}),1);
+ a.run('users/old','users','old','old',JSON.stringify({uid:'old',displayName:'Old'}),1);
+ let race=false;
+ const db={prepare(q){const stmt=sql.prepare(q);return{bind(...args){return{
+   run:async()=>stmt.run(...args),all:async()=>({results:stmt.all(...args)}),first:async()=>{
+    if(race && q.includes('AS current,') && q.includes('AS mirror')){
+      race=false;sql.prepare("UPDATE friendbook_cf_firestore_documents SET document_json=?,update_time=2 WHERE path='users/alice'")
+        .run(JSON.stringify({...profile,displayName:'Concurrent',bio:'external'}));
+    }
+    return stmt.get(...args)||null;
+   }
+ };}};},async batch(stmts){sql.exec('BEGIN');try{for(const s of stmts)await s.run();sql.exec('COMMIT');}catch(e){sql.exec('ROLLBACK');throw e;}}};
+ const app=createWorker(async t=>t),env={DB:db,FIREBASE_PROJECT_ID:'test'};
+ const merge=(uid,data)=>app.fetch(new Request(`https://example.test/v1/firestore/document?path=users/${uid}`,{method:'PUT',headers:{authorization:`Bearer ${uid}`,'content-type':'application/json'},body:JSON.stringify({data,merge:true})}),env);
+ const before=sql.prepare('SELECT total_changes() n').get().n;
+ assert.equal((await merge('alice',{displayName:'Alice'})).status,200);
+ assert.equal(sql.prepare('SELECT total_changes() n').get().n,before);
+ sql.prepare("UPDATE friendbook_cf_documents SET document_json=? WHERE path='users/alice'").run(JSON.stringify({...profile,id:'alice',displayName:'Stale'}));
+ const staleChanges=sql.prepare('SELECT total_changes() n').get().n;
+ assert.equal((await merge('alice',{displayName:'Alice'})).status,200);
+ assert.ok(sql.prepare('SELECT total_changes() n').get().n>staleChanges,'a stale mirror is repaired');
+ assert.equal(JSON.parse(sql.prepare("SELECT document_json FROM friendbook_cf_documents WHERE path='users/alice'").get().document_json).displayName,'Alice');
+ sql.prepare("DELETE FROM friendbook_cf_documents WHERE path='users/alice'").run();
+ assert.equal((await merge('alice',{displayName:'Alice'})).status,200);
+ assert.ok(sql.prepare("SELECT 1 FROM friendbook_cf_documents WHERE path='users/alice'").get(),'a missing mirror is restored');
+ race=true;const response=await merge('alice',{displayName:'Alice'});assert.equal(response.status,200);
+ const saved=(await response.json()).data;
+ assert.equal(saved.displayName,'Alice');assert.equal(saved.bio,'external','retry keeps the concurrent unrelated edit');
+ assert.equal((await merge('old',{displayName:'Old'})).status,200);
+ assert.ok(sql.prepare("SELECT 1 FROM friendbook_cf_firestore_documents WHERE path='users/old'").get(),'legacy-only profiles still promote');
+ sql.close();
+});
+
 test('saving visible posts is actor-scoped and survives concurrent owner edits', async () => {
  const sql=new DatabaseSync(':memory:');sql.exec(resourcesSchema);sql.exec(appSchema);sql.exec(schema);sql.exec(socialGuardSchema);
  const f=sql.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)');
  for(const uid of ['alice','bob','mallory']) f.run(`users/${uid}`,'users','users',uid,uid,JSON.stringify({uid}),1,1);
  const initial={authorId:'alice',privacy:'Public',content:'original',savedBy:[]};
  f.run('posts/p','posts','posts','p','alice',JSON.stringify(initial),1,1);
- let injected=false;
- const db={prepare(q){const s=sql.prepare(q);return{bind(...args){return{run:async()=>s.run(...args),all:async()=>({results:s.all(...args)}),first:async()=>s.get(...args)||null};}};},async batch(stmts){
+ let injected=false,noopRace=false;
+ const db={prepare(q){const s=sql.prepare(q);return{bind(...args){return{run:async()=>s.run(...args),all:async()=>({results:s.all(...args)}),first:async()=>{
+  if(noopRace && q.includes('AS current,') && q.includes('AS mirror')){
+   noopRace=false;sql.prepare("UPDATE friendbook_cf_firestore_documents SET document_json=?,update_time=2 WHERE path='posts/p'").run(JSON.stringify({...initial,content:'edited'}));
+  }
+  return s.get(...args)||null;
+ }};}};},async batch(stmts){
   if(!injected){injected=true;sql.prepare("UPDATE friendbook_cf_firestore_documents SET document_json=? WHERE path='posts/p'").run(JSON.stringify({...initial,content:'edited'}));}
   sql.exec('BEGIN');try{for(const s of stmts)await s.run();sql.exec('COMMIT');}catch(e){sql.exec('ROLLBACK');throw e;}
  }};
@@ -1652,14 +1699,25 @@ test('saving visible posts is actor-scoped and survives concurrent owner edits',
  const transform=(kind,who)=>({__fieldValue:kind,values:[who]});
  const saved=await patch('bob','posts/p',{savedBy:transform('arrayUnion','bob')});assert.equal(saved.status,200,await saved.clone().text());
  assert.equal((await saved.json()).data.content,'edited');
+ const changes=()=>sql.prepare('SELECT total_changes() AS n').get().n, beforeRepeat=changes();
+ assert.equal((await patch('bob','posts/p',{savedBy:transform('arrayUnion','bob')})).status,200);
+ assert.equal(changes(),beforeRepeat,'an already-saved post needs no mirror or guard writes');
+ assert.equal((await patch('alice','posts/p',{content:'edited'})).status,200);
+ assert.equal(changes(),beforeRepeat,'an unchanged literal edit needs no writes');
+ sql.prepare("UPDATE friendbook_cf_documents SET document_json=? WHERE path='posts/p'").run(JSON.stringify({...initial,id:'p',content:'edited'}));
+ assert.equal((await patch('bob','posts/p',{savedBy:transform('arrayUnion','bob')})).status,200);
+ assert.deepEqual(JSON.parse(sql.prepare("SELECT document_json FROM friendbook_cf_documents WHERE path='posts/p'").get().document_json).savedBy,['bob'],'stale mirror is repaired');
+ noopRace=true;
+ assert.equal((await patch('bob','posts/p',{savedBy:transform('arrayUnion','bob')})).status,200);
+ assert.deepEqual(JSON.parse(sql.prepare("SELECT document_json FROM friendbook_cf_firestore_documents WHERE path='posts/p'").get().document_json).savedBy,['bob'],'a racing removal is retried');
  assert.equal((await patch('mallory','posts/p',{savedBy:transform('arrayUnion','bob')})).status,403);
  assert.equal((await patch('mallory','posts/p',{savedBy:transform('arrayUnion','mallory'),content:'forged'})).status,403);
  const doc=JSON.parse(sql.prepare("SELECT document_json FROM friendbook_cf_firestore_documents WHERE path='posts/p'").get().document_json);
  assert.deepEqual(doc.savedBy,['bob']);assert.equal(doc.content,'edited');
  assert.equal((await patch('bob','posts/p',{savedBy:transform('arrayRemove','bob')})).status,200);
  const removed=JSON.parse(sql.prepare("SELECT document_json FROM friendbook_cf_firestore_documents WHERE path='posts/p'").get().document_json);assert.deepEqual(removed.savedBy,[]);
- sql.prepare("UPDATE friendbook_cf_firestore_documents SET document_json=? WHERE path='posts/p'").run(JSON.stringify({...initial,privacy:'Only me'}));
- assert.equal((await patch('bob','posts/p',{savedBy:transform('arrayUnion','bob')})).status,403);
+ sql.prepare("UPDATE friendbook_cf_firestore_documents SET document_json=? WHERE path='posts/p'").run(JSON.stringify({...initial,privacy:'Only me',savedBy:['bob']}));
+ assert.equal((await patch('bob','posts/p',{savedBy:transform('arrayUnion','bob')})).status,403,'an identical save still checks current privacy');
  sql.close();
 });
 

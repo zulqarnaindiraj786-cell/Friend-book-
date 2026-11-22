@@ -729,6 +729,24 @@ async function canReadChatMessages(db, chatId, uid) {
   return Array.isArray(data?.participants) && data.participants.includes(uid);
 }
 
+// An identical operation may skip writing only if the authorized canonical
+// snapshot is current AND the historical mirror already has the exact data and
+// owner that writeRow would write. A stale/missing mirror must still be repaired.
+async function unchangedRootState(db,path,row,doc) {
+  const coll=collectionIdOf(path),id=docIdOf(path);
+  const owner=ownerOf(doc,row.owner_uid || (coll==='users'?id:''));
+  const appOwner=owner || (coll==='users'?id:'');
+  return db.prepare(`SELECT
+    EXISTS(SELECT 1 FROM friendbook_cf_firestore_documents WHERE path=?1 AND document_json=?2 AND update_time=?3 AND owner_uid IS ?4) AS current,
+    EXISTS(SELECT 1 FROM friendbook_cf_documents WHERE path=?1 AND document_json=?5 AND owner_uid IS ?6) AS mirror`)
+    .bind(path,row.document_json,row.update_time,row.owner_uid??null,JSON.stringify({...doc,id}),appOwner).first()
+    .then(result=>({current:result?.current===1,mirror:result?.mirror===1 && row.owner_uid===owner}));
+}
+function literalFields(fields) {
+  return !!fields && typeof fields==='object' && !Array.isArray(fields) && Object.keys(fields).length>0
+    && Object.values(fields).every(value=>value===null || ['boolean','number','string'].includes(typeof value));
+}
+
 function unchangedNotificationRead(path,row,fields) {
   if (splitPath(path)?.[0]!=='notifications' || !row?.[canonicalRootSnapshot]
       || !fields || Object.keys(fields).length!==1 || fields.isRead!==true) return false;
@@ -860,9 +878,17 @@ async function mutateProfile(db, uid, path, body, method, now, profileRow) {
           || await liveSocketCoversProfileHeartbeat(db,uid,before,next,fields,now)))return json(rowToDocument(existing));
       // A literal, unchanged PATCH does not need to rewrite canonical, mirror,
       // and guard rows. Keep transforms and legacy promotion on the write path.
-      if(method==='PATCH' && existing?.[canonicalRootSnapshot] && Object.keys(fields).length>0
-          && Object.values(fields).every(value=>value===null || ['boolean','number','string'].includes(typeof value))
+      if(method==='PATCH' && existing?.[canonicalRootSnapshot] && literalFields(fields)
           && existing.document_json===JSON.stringify(next)) return json(rowToDocument(existing));
+      // Login/settings often repeat the same literal merge. Check the snapshot
+      // again before acknowledging so a racing profile edit is retried rather
+      // than overwritten or reported as if the old value still held.
+      if(method==='PUT' && body.merge===true && body.mergeFields==null && existing?.[canonicalRootSnapshot]
+          && literalFields(body.data) && existing.document_json===JSON.stringify(next)) {
+        const state=await unchangedRootState(db,path,existing,next);
+        if(!state.current)throw new Error('Document changed');
+        if(state.mirror)return json(rowToDocument(existing));
+      }
       // A quiet fallback heartbeat only renews timestamps. Keep visibility
       // transitions and legacy profile promotion on the dual-write path.
       if (method==='PATCH' && existing?.[canonicalRootSnapshot] && unchangedHeartbeatFlags(before,next,fields)
@@ -914,6 +940,13 @@ async function mutatePost(db,uid,path,body,method,now) {
         && Array.isArray(transform.values) && transform.values.length===1 && transform.values[0]===uid;
       if (!allowed && ownSave) allowed=await contentReadAllowed(db,uid,path);
       if (!allowed) return json({error:'Forbidden'},403);
+      const literalEdit=(method==='PATCH' && literalFields(fields)) ||
+        (method==='PUT' && body.merge===true && body.mergeFields==null && literalFields(body.data));
+      if(existing?.[canonicalRootSnapshot] && (literalEdit || ownSave) && existing.document_json===JSON.stringify(next)) {
+        const state=await unchangedRootState(db,path,existing,next);
+        if(!state.current)throw new Error('Document changed');
+        if(state.mirror)return json(rowToDocument(existing));
+      }
       return json(rowToDocument(await writeRow(db,path,next,now,existing,true)));
     } catch (error) {
       const message=String(error?.message || '');

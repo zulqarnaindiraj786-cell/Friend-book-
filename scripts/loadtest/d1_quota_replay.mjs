@@ -136,6 +136,23 @@ await measure('repeatStoryView',users-1,()=>wave(users-1,storyView));
 assert.equal(report.workloads.repeatStoryView.changedRowsIncludingTriggers,0,'repeat story views');
 assert.equal(report.workloads.privateGroupProjection.changedRowsIncludingTriggers,0);
 assert.equal(report.workloads.tagSearch.changedRowsIncludingTriggers,0);
+// Mirror-backed, identical profile merges and actor-scoped saves are retries,
+// not new user actions. The Worker must still authorize and verify both stores.
+const addMirror=sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)');
+const canonicalDoc=sql.prepare('SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?');
+for(let i=0;i<users;i++) {
+  const uid=`user${i}`,data=JSON.parse(canonicalDoc.get(`users/${uid}`).document_json);
+  addMirror.run(`users/${uid}`,'users',uid,uid,JSON.stringify({...data,id:uid}),now);
+}
+await measure('identicalProfileMerge',users,()=>wave(users,i=>call(`user${i}`,`/v1/firestore/document?path=users/user${i}`,'PUT',{data:{displayName:`user${i}`},merge:true})));
+assert.equal(report.workloads.identicalProfileMerge.changedRowsIncludingTriggers,0,'identical profile merge');
+for(let i=1;i<users;i++) {
+  const id=`saved${i}`,uid=`user${i}`,doc={authorId:'user0',privacy:'Public',savedBy:[uid]};
+  add('posts',id,'user0',doc);
+  addMirror.run(`posts/${id}`,'posts',id,'user0',JSON.stringify({...doc,id}),now);
+}
+await measure('repeatSavedPost',users-1,()=>wave(users-1,i=>call(`user${i+1}`,`/v1/firestore/document?path=posts/saved${i+1}`,'PATCH',{fields:{savedBy:{__fieldValue:'arrayUnion',values:[`user${i+1}`]}}})));
+assert.equal(report.workloads.repeatSavedPost.changedRowsIncludingTriggers,0,'already saved posts');
 sql.prepare("INSERT INTO friendbook_cf_interaction_resources(resource,state) VALUES ('posts/item39','verified') ON CONFLICT(resource) DO NOTHING").run();
 const engagement='/v1/engagement/posts/item39';
 const like=i=>call(`user${i}`,`${engagement}/reactions?response=reaction`,'PUT',{type:'like'});
