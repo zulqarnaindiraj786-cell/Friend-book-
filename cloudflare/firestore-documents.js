@@ -1184,6 +1184,55 @@ async function feedEngagement(db, env, uid, body, docs, requestUserReads) {
   } catch { return docs; }
 }
 
+// Empty @-mention prefix: find the same first visible names without scanning
+// every profile when a full ASCII page can be proven from bounded index heads.
+// Unusual encodings and incomplete/ambiguous pages fall back to the generic
+// evaluator, which remains authoritative for every other name query.
+async function boundedEmptyNamePage(db,env,uid,spec) {
+  if (spec.parent!=='users' || spec.filters?.length || spec.orderBy?.length!==1
+      || spec.orderBy[0].field!=='displayName' || spec.orderBy[0].direction==='DESCENDING'
+      || !Array.isArray(spec.startAt) || spec.startAt.length!==1 || spec.startAt[0]!==''
+      || !Array.isArray(spec.endAt) || spec.endAt.length!==1 || spec.endAt[0]!=='\uf8ff'
+      || spec.startAfter || spec.endBefore || spec.limitToLast
+      || !Number.isInteger(spec.limit) || spec.limit<1 || spec.limit>50) return null;
+  const legacyName=`CASE WHEN json_type(document_json,'$.fields')='object' THEN CASE
+    WHEN json_type(document_json,'$.fields.displayName')='text' THEN json_extract(document_json,'$.fields.displayName')
+    WHEN json_type(document_json,'$.fields.displayName.stringValue')='text' THEN json_extract(document_json,'$.fields.displayName.stringValue')
+    WHEN json_type(document_json,'$.fields.displayName.stringValue') IS NOT NULL THEN 1 END
+    ELSE json_extract(document_json,'$.displayName') END`;
+  try {
+    const [canonical,legacy,unusual]=await Promise.all([
+      db.prepare(`SELECT * FROM friendbook_cf_firestore_documents INDEXED BY idx_cf_users_display_name
+        WHERE parent_path='users' AND json_extract(document_json,'$.displayName')>=? AND json_type(document_json,'$.displayName')='text'
+        ORDER BY json_extract(document_json,'$.displayName'),doc_id LIMIT ?`).bind('',spec.limit).all(),
+      db.prepare(`SELECT * FROM friendbook_cf_documents INDEXED BY idx_cf_legacy_people_cursor_prefix
+        WHERE collection='users' AND (${legacyName})>=? ORDER BY (${legacyName}),doc_id LIMIT ?`).bind('',spec.limit).all(),
+      db.prepare(`SELECT * FROM friendbook_cf_documents INDEXED BY idx_cf_legacy_people_cursor_prefix
+        WHERE collection='users' AND (${legacyName})=1 LIMIT 65`).bind().all(),
+    ]);
+    if ((unusual.results||[]).length>=65) return null;
+    const old={results:[...(legacy.results||[]),...(unusual.results||[])]};
+    const all=[...(canonical.results||[]),...old.results];
+    if (all.some(row=>row.path!==`users/${row.doc_id}`)) return null;
+    await markWindowShadows(db,canonical,old,'users');
+    const rows=[...(canonical.results||[]),...old.results.filter(row=>!row.shadowed).map(appDocumentToFirestoreRow).filter(Boolean)];
+    if(new Set(rows.map(row=>row.doc_id)).size!==rows.length)return null;
+    const admin=isPaymentAdmin(env,uid), moderator=!admin && await verifiedModerator(db,uid);
+    const docs=rows.map(rowToDocument).filter(Boolean).map(doc=>({...doc,
+      data:profileReadView(doc.path,uid,doc.data,admin,moderator)})).filter(doc=>doc.data!==null);
+    const page=applyQuery(docs,spec);
+    // ASCII strings and IDs compare identically in SQLite and the JS query
+    // engine against every other Unicode string. If a full result isn't ASCII,
+    // or hidden/shadowed rows exhaust the heads, use the complete fallback.
+    if(page.length!==spec.limit || page.some(doc=>typeof doc.data.displayName!=='string'
+        || !/^[\x20-\x7e]*$/.test(doc.data.displayName) || !/^[-_a-zA-Z0-9]+$/.test(doc.id)))return null;
+    return page;
+  } catch(error) {
+    if (/no such index: idx_cf_(?:users_display_name|legacy_people_cursor_prefix)/.test(String(error))) return null;
+    throw error;
+  }
+}
+
 // Feed fast path: fetch small indexed batches from each store, then authorize each
 // candidate before filling the visible page. Never LIMIT before privacy filtering.
 // Anything not provably equivalent falls back to the compatibility query engine.
@@ -3166,7 +3215,7 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0, ct
         ]);
         rows=[...(canonical.results || []), ...(legacy.results || []).map(appDocumentToFirestoreRow).filter(Boolean)];
       } else {
-        const people=await boundedPeoplePage(db,env,uid,body) ?? await boundedRecentPeoplePage(db,env,uid,body);
+        const people=await boundedEmptyNamePage(db,env,uid,body) ?? await boundedPeoplePage(db,env,uid,body) ?? await boundedRecentPeoplePage(db,env,uid,body);
         if (people!==null) return queryResponse(parent,people,body.knownRevisions);
         const page=parent==='notifications'?await boundedNotificationPage(db,uid,body):await boundedFeedPage(db,uid,body,requestUserReads);
         if (page!==null) return queryResponse(parent,await feedEngagement(db,env,uid,body,page,requestUserReads),body.knownRevisions);

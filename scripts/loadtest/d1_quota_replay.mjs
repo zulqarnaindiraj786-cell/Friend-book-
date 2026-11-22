@@ -10,7 +10,7 @@ const migrations = new URL('../../cloudflare/migrations/', import.meta.url);
 for (const file of readdirSync(migrations).filter(f=>f.endsWith('.sql')).sort()) {
   sql.exec(readFileSync(new URL(file,migrations),'utf8'));
 }
-let statements=0;
+let statements=0, returnedRows=0;
 // Optional offline-only plan inventory of actual replayed SELECT statements. SQLite
 // EXPLAIN does not execute the query or measure D1 rows; a SCAN may be an index scan,
 // a tiny temporary/virtual table, or a legitimate full traversal. Inspect manually.
@@ -27,10 +27,10 @@ const executeWrite=Symbol('executeWrite');
 const db={
   withSession(){return db;},
   prepare(query){const stmt=sql.prepare(query);return {bind(...args){recordPlan(query,args);const write=()=>{statements++;const result=stmt.run(...args);return {success:true,meta:{changes:Number(result.changes)}};};return {
-    first:async()=>{statements++;return stmt.get(...args)||null;},
-    all:async()=>{statements++;return {results:stmt.all(...args)};},
+    first:async()=>{statements++;const row=stmt.get(...args)||null;if(row)returnedRows++;return row;},
+    all:async()=>{statements++;const results=stmt.all(...args);returnedRows+=results.length;return {results};},
     run:async()=>write(), [executeWrite]:()=>/^\s*(SELECT|WITH)\b/i.test(query)||/\bRETURNING\b/i.test(query)
-      ? (statements++,{success:true,results:stmt.all(...args)}) : write(),
+      ? (()=>{statements++;const results=stmt.all(...args);returnedRows+=results.length;return {success:true,results};})() : write(),
   };}};},
   async batch(writes){sql.exec('BEGIN');try{const results=writes.map(write=>write[executeWrite]());sql.exec('COMMIT');return results;}catch(error){sql.exec('ROLLBACK');throw error;}},
 };
@@ -57,9 +57,9 @@ async function call(uid,path,method='GET',body){
 const changes=()=>sql.prepare('SELECT total_changes() AS n').get().n;
 const report={environment:'Local SQLite + real Worker handlers; not Cloudflare billing or capacity data',users,concurrency,workloads:{}};
 async function measure(name,requests,run){
-  const before=changes(), start=statements;
+  const before=changes(), start=statements, startRows=returnedRows;
   await run();
-  report.workloads[name]={requests,sqliteStatements:statements-start,changedRowsIncludingTriggers:changes()-before};
+  report.workloads[name]={requests,sqliteStatements:statements-start,sqliteReturnedRows:returnedRows-startRows,changedRowsIncludingTriggers:changes()-before};
 }
 const heartbeat=uid=>call(uid,`/v1/firestore/document?path=users/${uid}`,'PATCH',{fields:{isOnline:true,isActive:true,showActiveStatus:true,lastSeenMs:Date.now(),lastSeen:{__fieldValue:'serverTimestamp'}}});
 const messages=i=>`chats/room${i}/messages/message0`;
@@ -70,6 +70,12 @@ async function wave(count, operation) {
     await Promise.all(Array.from({length:Math.min(concurrency,count-start)},(_,offset)=>operation(start+offset)));
   }
 }
+await measure('emptyMentionPrefix',users,()=>wave(users,async i=>{
+  const result=await call(`user${i}`,'/v1/firestore/query','POST',{
+    parent:'users',orderBy:[{field:'displayName',direction:'ASCENDING'}],startAt:[''],endAt:['\uf8ff'],limit:10,
+  });
+  assert.equal(result.documents.length,Math.min(users,10));
+}));
 await measure('unchangedProfileHeartbeat',users,()=>wave(users,i=>heartbeat(`user${i}`)));
 await measure('sendMessageAndUpdateRoom',users/2,()=>wave(users/2,slot=>{
   const i=slot*2;

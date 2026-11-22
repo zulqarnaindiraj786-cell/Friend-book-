@@ -2568,6 +2568,69 @@ test('indexed display-name prefix keeps canonical precedence and supports legacy
 
 });
 
+test('empty mention prefix uses bounded heads only when exact results are provable', async () => {
+ const sql=new DatabaseSync(':memory:');
+ for(const ddl of [resourcesSchema,appSchema,schema,readFileSync(new URL('../migrations/0053_people_name_prefix.sql',import.meta.url),'utf8'),readFileSync(new URL('../migrations/0061_legacy_people_cursor_prefix.sql',import.meta.url),'utf8')])sql.exec(ddl);
+ const f=sql.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)');
+ const a=sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)');
+ for(let i=0;i<1200;i++){
+   const id=`p${String(i).padStart(4,'0')}`,data=JSON.stringify({displayName:`Name ${String(i).padStart(4,'0')}`,email:'private@example.invalid'});
+   f.run(`users/${id}`,'users','users',id,id,data,1,1);a.run(`users/${id}`,'users',id,id,data,1);
+ }
+ f.run('users/actor','users','users','actor','actor','{"displayName":"Viewer"}',1,1);
+ let fallback=false,scans=0,heads=0;const plans=[];
+ const db={prepare(q){
+   if(fallback && q.includes('INDEXED BY idx_cf_users_display_name'))throw Error('no such index: idx_cf_users_display_name');
+   if(q.includes('quota_root_users_name'))scans++;
+   const stmt=sql.prepare(q);
+   return {bind(...args){return {first:async()=>stmt.get(...args)||null,all:async()=>{
+     const rows=stmt.all(...args);
+     if(q.includes('INDEXED BY idx_cf_users_display_name') || q.includes('INDEXED BY idx_cf_legacy_people_cursor_prefix')){
+       heads+=rows.length;plans.push(...sql.prepare('EXPLAIN QUERY PLAN '+q).all(...args).map(row=>row.detail));
+     }
+     return {results:rows};
+   }};}};
+ }};
+ const worker=createWorker(async token=>token),env={DB:db,FIREBASE_PROJECT_ID:'test'};
+ const get=async extra=>{
+   const response=await worker.fetch(new Request('https://example.test/v1/firestore/query',{method:'POST',
+     headers:{authorization:'Bearer actor','content-type':'application/json'},body:JSON.stringify({
+       parent:'users',limit:10,orderBy:[{field:'displayName',direction:'ASCENDING'}],startAt:[''],endAt:['\uf8ff'],...extra,
+     })}),env);
+   assert.equal(response.status,200,await response.clone().text());return (await response.json()).documents;
+ };
+ async function compare(extra={}){
+   scans=0;heads=0;fallback=false;const actual=await get(extra), fastScans=scans, fastHeads=heads;
+   fallback=true;const expected=await get(extra);fallback=false;
+   assert.deepEqual(actual,expected);return {actual,fastScans,fastHeads};
+ }
+ let result=await compare();
+ assert.equal(result.fastScans,0);assert.ok(result.fastHeads<=20,'only bounded canonical and legacy heads were returned');
+ assert.equal(result.actual.length,10);assert.ok(result.actual.every(doc=>doc.data.email===undefined),'private profile fields stay hidden');
+ assert.match(plans.join('\n'),/SEARCH .*idx_cf_users_display_name/);
+ assert.match(plans.join('\n'),/SEARCH .*idx_cf_legacy_people_cursor_prefix/);
+ // A stale early legacy name must not reappear when canonical has moved.
+ sql.prepare("UPDATE friendbook_cf_firestore_documents SET document_json=? WHERE path='users/p0000'").run('{"displayName":"Zulu"}');
+ result=await compare();assert.equal(result.fastScans,0);assert.ok(!result.actual.some(doc=>doc.id==='p0000'));
+ // Coerced Firestore stringValue encodings remain sorted with ordinary names.
+ a.run('users/odd','users','odd','odd',JSON.stringify({fields:{displayName:{stringValue:['!','A']}}}),1);
+ result=await compare();assert.equal(result.fastScans,0);assert.equal(result.actual[0].id,'odd');
+ // An oversized unusual-value bucket must not silently omit a competing name.
+ for(let i=0;i<65;i++)a.run(`users/strange${i}`,'users',`strange${i}`,`strange${i}`,JSON.stringify({fields:{displayName:{stringValue:[`Odd${i}`]}}}),1);
+ result=await compare();assert.ok(result.fastScans>0);assert.equal(result.actual.length,10);
+ sql.prepare("DELETE FROM friendbook_cf_documents WHERE doc_id LIKE 'strange%'").run();
+ // Complex Unicode ordering must use the complete compatibility evaluator.
+ f.run('users/unicode','users','users','unicode','unicode',JSON.stringify({displayName:'!\ud83d\ude00'}),1,1);
+ result=await compare();assert.ok(result.fastScans>0);assert.equal(result.actual[1].id,'unicode');
+ sql.prepare("DELETE FROM friendbook_cf_firestore_documents WHERE path='users/unicode'").run();
+ // Too many hidden names in the heads cannot shrink the requested page.
+ for(let i=1;i<12;i++)sql.prepare('UPDATE friendbook_cf_firestore_documents SET document_json=? WHERE path=?').run(JSON.stringify({displayName:`Name ${String(i).padStart(4,'0')}`,banned:true}),`users/p${String(i).padStart(4,'0')}`);
+ result=await compare();assert.ok(result.fastScans>0);assert.equal(result.actual.length,10);
+ // Additional pagination bounds deliberately stay on the established path.
+ result=await compare({startAfter:['Name 0100','p0100']});assert.ok(result.fastScans>0);
+ sql.close();
+});
+
 test('notification pages use bounded per-store reads and do not expose stale mirrors', async () => {
  const sql=new DatabaseSync(':memory:');sql.exec(resourcesSchema);sql.exec(appSchema);sql.exec(schema);
  sql.exec(readFileSync(new URL('../migrations/0055_notification_page_indexes.sql',import.meta.url),'utf8'));
