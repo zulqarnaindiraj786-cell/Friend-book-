@@ -910,6 +910,22 @@ test('chat atomic guards reject concurrent room and message changes and orphan a
   const insert=(path,parent,coll,id,doc)=>sql.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)').run(path,parent,coll,id,'alice',JSON.stringify(doc),1,1);
   insert('chats/orphan/messages/old','chats/orphan/messages','messages','old',{senderId:'alice',text:'private'});
   assert.notEqual((await put('eve','chats/orphan',{participants:['eve']})).status,200);
+  // Every historical representation in each store must still block adoption.
+  for (const store of ['canonical','legacy']) {
+    for (const kind of ['prefix','plain','typed']) {
+      const room=`${store}_${kind}`;
+      const id=kind==='prefix'?`${room}_old`:`other_${room}`;
+      const doc=kind==='plain'?{chatId:room}:kind==='typed'?{fields:{chatId:{stringValue:room}}}:{};
+      if(store==='canonical') insert(`messages/${id}`,'messages','messages',id,doc);
+      else sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)').run(`messages/${id}`,'messages',id,'alice',JSON.stringify(doc),1);
+      assert.notEqual((await put('eve',`chats/${room}`,{participants:['eve','bob']})).status,200,`${store} ${kind} orphan`);
+      sql.prepare(`DELETE FROM ${store==='canonical'?'friendbook_cf_firestore_documents':'friendbook_cf_documents'} WHERE path=?`).run(`messages/${id}`);
+      assert.equal((await put('eve',`chats/${room}`,{participants:['eve','bob']})).status,200,`${store} ${kind} control`);
+    }
+  }
+  // An adjacent ID must not be mistaken for the requested room's prefix.
+  insert('messages/neighborX_old','messages','messages','neighborX_old',{});
+  assert.equal((await put('alice','chats/neighbor',{participants:['alice','bob']})).status,200);
   assert.equal((await put('alice','chats/room',{participants:['alice','bob']})).status,200);
   assert.equal((await call('alice','/v1/docs/chats/room','PUT',{participants:['alice']})).status,403);
   assert.equal((await call('alice','/v1/docs/messages/room_m','PUT',{chatId:'room',senderId:'alice'})).status,403);

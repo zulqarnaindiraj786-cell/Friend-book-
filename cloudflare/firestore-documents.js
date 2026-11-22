@@ -2330,11 +2330,17 @@ async function chatRootGuards(db,path,row) {
       SELECT CASE WHEN NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents WHERE path=?)
       AND NOT EXISTS (SELECT 1 FROM friendbook_cf_documents WHERE path=?)
       AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents WHERE parent_path=?)
-      AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents WHERE parent_path='messages' AND
-        (substr(doc_id,1,?)=? OR json_extract(document_json,'$.chatId')=? OR json_extract(document_json,'$.fields.chatId.stringValue')=?))
-      AND NOT EXISTS (SELECT 1 FROM friendbook_cf_documents WHERE collection='messages' AND
-        (substr(doc_id,1,?)=? OR json_extract(document_json,'$.chatId')=? OR json_extract(document_json,'$.fields.chatId.stringValue')=?))
-      THEN 1 ELSE 0 END`).bind(path,path,`${path}/messages`,id.length+1,id+'_',id,id,id.length+1,id+'_',id,id));
+      AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents WHERE parent_path='messages'
+        AND doc_id>=? AND doc_id<? AND substr(doc_id,1,?)=?)
+      AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents WHERE parent_path='messages' AND json_extract(document_json,'$.chatId')=?)
+      AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents WHERE parent_path='messages' AND json_extract(document_json,'$.fields.chatId.stringValue')=?)
+      AND NOT EXISTS (SELECT 1 FROM friendbook_cf_documents WHERE collection='messages'
+        AND doc_id>=? AND doc_id<? AND substr(doc_id,1,?)=?)
+      AND NOT EXISTS (SELECT 1 FROM friendbook_cf_documents WHERE collection='messages' AND json_extract(document_json,'$.chatId')=?)
+      AND NOT EXISTS (SELECT 1 FROM friendbook_cf_documents WHERE collection='messages' AND json_extract(document_json,'$.fields.chatId.stringValue')=?)
+      THEN 1 ELSE 0 END`).bind(path,path,`${path}/messages`,
+        id+'_',id+'`',id.length+1,id+'_',id,id,
+        id+'_',id+'`',id.length+1,id+'_',id,id));
     return statements;
   }
   if (row[canonicalRootSnapshot]) return [chatSnapshotGroupGuard(db,[JSON.stringify([path,row.document_json])])];

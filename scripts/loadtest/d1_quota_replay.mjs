@@ -11,10 +11,22 @@ for (const file of readdirSync(migrations).filter(f=>f.endsWith('.sql')).sort())
   sql.exec(readFileSync(new URL(file,migrations),'utf8'));
 }
 let statements=0;
+// Optional offline-only plan inventory of actual replayed SELECT statements. SQLite
+// EXPLAIN does not execute the query or measure D1 rows; a SCAN may be an index scan,
+// a tiny temporary/virtual table, or a legitimate full traversal. Inspect manually.
+const collectPlans=process.env.QUOTA_QUERY_PLANS==='1';
+const queryPlans=new Map();
+function recordPlan(query,args) {
+  if (!collectPlans || !/^\s*(SELECT|WITH)\b/i.test(query) || queryPlans.has(query)) return;
+  try {
+    const plan=sql.prepare('EXPLAIN QUERY PLAN '+query).all(...args).map(row=>row.detail);
+    queryPlans.set(query,{query,plan});
+  } catch(error) { queryPlans.set(query,{query,error:String(error)}); }
+}
 const executeWrite=Symbol('executeWrite');
 const db={
   withSession(){return db;},
-  prepare(query){const stmt=sql.prepare(query);return {bind(...args){const write=()=>{statements++;const result=stmt.run(...args);return {success:true,meta:{changes:Number(result.changes)}};};return {
+  prepare(query){const stmt=sql.prepare(query);return {bind(...args){recordPlan(query,args);const write=()=>{statements++;const result=stmt.run(...args);return {success:true,meta:{changes:Number(result.changes)}};};return {
     first:async()=>{statements++;return stmt.get(...args)||null;},
     all:async()=>{statements++;return {results:stmt.all(...args)};},
     run:async()=>write(), [executeWrite]:()=>/^\s*(SELECT|WITH)\b/i.test(query)||/\bRETURNING\b/i.test(query)
@@ -118,5 +130,6 @@ for(const [label,operation] of [['PostReaction',like],['Comment',comment],['Devi
 assert.equal(sql.prepare("SELECT total FROM friendbook_cf_reaction_totals WHERE resource='posts/item39' AND type='like'").get().total,users);
 assert.equal(report.workloads.unchangedProfileHeartbeat.changedRowsIncludingTriggers,0);
 assert.equal(report.workloads.duplicateReceiptAndUnreadReset.changedRowsIncludingTriggers,0);
+if (collectPlans) report.queryPlans=[...queryPlans.values()];
 console.log(JSON.stringify(report,null,2));
 sql.close();

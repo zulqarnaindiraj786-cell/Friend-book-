@@ -34,6 +34,18 @@ class IndexPlans(unittest.TestCase):
                 ('idx_cf_people_default_page', f"SELECT doc_id FROM {table} INDEXED BY idx_cf_people_default_page WHERE parent_path='users' AND doc_id>? ORDER BY doc_id LIMIT 7", ('cursor',)),
                 ('idx_cf_legacy_people_default_page', f"SELECT doc_id FROM {archive} INDEXED BY idx_cf_legacy_people_default_page WHERE collection='users' AND doc_id>? ORDER BY doc_id LIMIT 7", ('cursor',)),
             ]
+            # Representative user-requested app areas mapped to the real schema;
+            # these checks do not establish that every dynamic query is indexed.
+            checks += [
+                ('idx_cf_profile_email', f"SELECT path FROM {table} WHERE parent_path='users' AND json_extract(document_json,'$.email')=?", ('a',)),
+                ('idx_cf_profile_username', f"SELECT path FROM {table} WHERE parent_path='users' AND json_extract(document_json,'$.username')=?", ('a',)),
+                ('friendbook_cf_comments_page', 'SELECT id FROM friendbook_cf_comments WHERE resource=? ORDER BY created_at DESC,id DESC LIMIT 20', ('posts/p',)),
+                ('sqlite_autoindex_friendbook_cf_reactions_1', 'SELECT type FROM friendbook_cf_reactions WHERE resource=? AND uid=?', ('posts/p', 'u')),
+                ('idx_cf_friend_participant_0', f"SELECT path FROM {table} WHERE parent_path='friends' AND json_extract(document_json,'$.participants[0]')=?", ('u',)),
+                ('PRIMARY KEY', 'SELECT chat_path FROM friendbook_cf_chat_participants WHERE participant_uid=?', ('u',)),
+                ('idx_cf_firestore_inbox_recipient', f"SELECT path FROM {table} WHERE parent_path='notifications' AND json_extract(document_json,'$.toUserId')=?", ('u',)),
+                ('sqlite_autoindex_friendbook_cf_view_counters_1', 'SELECT views FROM friendbook_cf_view_counters WHERE resource=?', ('posts/p',)),
+            ]
             for obsolete in ('idx_cf_broadcast_users', 'idx_cf_legacy_broadcast_users', 'idx_cf_posts_author',
                              'idx_cf_legacy_posts_author', 'idx_cf_reels_author', 'idx_cf_posts_feed_nonstandard',
                              'idx_cf_legacy_posts_feed_nonstandard', 'idx_cf_chat_nonstandard_order',
@@ -43,6 +55,25 @@ class IndexPlans(unittest.TestCase):
                 with self.subTest(index=index):
                     plan = db.execute('EXPLAIN QUERY PLAN ' + sql, args).fetchall()
                     self.assertTrue(any(index in row[-1] for row in plan), plan)
+
+    def test_root_message_guards_seek_all_representations(self):
+        with sqlite3.connect(':memory:') as db:
+            for migration in sorted(MIGRATIONS.glob('*.sql')):
+                db.executescript(migration.read_text())
+            # Migrations are safe to rerun, including the new partial indexes.
+            db.executescript((MIGRATIONS / '0072_root_message_guard_indexes.sql').read_text())
+            checks = [
+                ('friendbook_cf_firestore_documents', "parent_path='messages'", 'idx_cf_root_message_doc_id', 'doc_id>=? AND doc_id<? AND substr(doc_id,1,?)=?', ('room_', 'room`', 5, 'room_')),
+                ('friendbook_cf_firestore_documents', "parent_path='messages'", 'idx_cf_root_message_chat_id', "json_extract(document_json,'$.chatId')=?", ('room',)),
+                ('friendbook_cf_firestore_documents', "parent_path='messages'", 'idx_cf_root_message_typed_chat_id', "json_extract(document_json,'$.fields.chatId.stringValue')=?", ('room',)),
+                ('friendbook_cf_documents', "collection='messages'", 'idx_cf_legacy_root_message_doc_id', 'doc_id>=? AND doc_id<? AND substr(doc_id,1,?)=?', ('room_', 'room`', 5, 'room_')),
+                ('friendbook_cf_documents', "collection='messages'", 'idx_friendbook_cf_documents_message_chat_id', "json_extract(document_json,'$.chatId')=?", ('room',)),
+                ('friendbook_cf_documents', "collection='messages'", 'idx_cf_legacy_message_typed_chat_id', "json_extract(document_json,'$.fields.chatId.stringValue')=?", ('room',)),
+            ]
+            for table, root, index, predicate, args in checks:
+                with self.subTest(index=index):
+                    plan = db.execute(f'EXPLAIN QUERY PLAN SELECT 1 FROM {table} WHERE {root} AND {predicate} LIMIT 1', args).fetchall()
+                    self.assertTrue(any(index in row[-1] and 'SEARCH' in row[-1] for row in plan), plan)
 
 
 if __name__ == '__main__':
