@@ -48,6 +48,7 @@ jobs:
           set -e
           python3 scripts/loadtest/d1_account_usage_analytics.py --notification-inspection-budget
           node scripts/loadtest/backfill_legacy_users.mjs --friend-requests
+      # Preview 45022529063 checked the two current candidates without mutation.
       - name: Execute bounded friend-request promotion
         if: contains(github.event.head_commit.message, '[legacy-request-backfill]')
         env:
