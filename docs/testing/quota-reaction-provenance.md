@@ -12,6 +12,8 @@ The write batch first upserts the reaction and then updates an existing unknown 
 
 ## Rollout and rollback
 
+Second-step production deployment 44984939207 and Worker validation 44984939217 succeeded, with read-only connectivity and no production test likes. Android compile/unit run 44984939206 encountered a Robolectric Maven download IOException; Android source was not changed, and a fresh verification is needed.
+
 Compatibility Worker `b19cdc1` was deployed first (44984730032). It still inserts known markers, but changes the old `NOT EXISTS known` condition so missing markers are treated as known. Worker validation 44984730075 and Android compile/unit 44984730045 passed. The second step stops creating new known markers. There is no schema migration and no data backfill.
 
 Roll back the second step to **b19cdc1 or a later compatible Worker**, not a pre-compatibility version: a prior Worker can treat a markerless known reaction as unknown and refresh its timestamp on an identical retry. Although the compatible version was deployed and verified before the second step, a pre-compatibility request already in flight during rollout is not formally bounded by these tests; it could still apply that older behavior. A compatible rollback may create missing known markers on subsequent writes, so it loses the write saving but does not require a costly backfill. Do not delete existing markers, fabricate traffic or test rollback on production.
