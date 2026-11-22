@@ -77,6 +77,7 @@ jobs:
                       if re.search(r'\bidx_cf_(?:legacy_)?lives_status\b',sql,re.I): flags.append('bounded-live-discovery')
                       if re.search(r'\bidx_cf_presence_visible(?:_online)?_seen\b',sql,re.I): flags.append('bounded-presence')
                       if re.search(r'\bON\s+CONFLICT\b',sql,re.I): flags.append('upsert')
+                      if re.search(r'\bINSERT\s+INTO\s+friendbook_cf_documents\s*\(',sql,re.I) and re.search(r'\bON\s+CONFLICT\s*\(\s*path\s*\)',sql,re.I): flags.append('shared-mirror-upsert')
                       if re.search(r'\bRETURNING\b',sql,re.I): flags.append('returning')
                       if re.search(r'\bfriendbook_cf_social_guards\b',sql,re.I): flags.append('guard')
                       if re.search(r'\bfriendbook_cf_chat_participants\b',sql,re.I): flags.append('chat-members')
@@ -86,7 +87,7 @@ jobs:
                       if printed<8:
                           print('::notice::',*parts)
                           printed+=1
-                      elif any(f.startswith(('bounded-','scan=')) for f in flags):
+                      elif any(f.startswith(('bounded-','scan=','shared-mirror-')) for f in flags):
                           focus.append(' '.join(map(str,parts)))
                   if focus: print('::notice:: Focus patterns %0A'+'%0A'.join(focus))
           if os.environ['AUDIT_METRIC']=='rowsRead' and os.environ['AUDIT_WINDOW']=='latest-15m':
