@@ -2877,6 +2877,50 @@ test('default people picker uses both ordered indexes and fills its page after p
   sql.close();
 });
 
+test('mirrored people heads reuse canonical shadow checks without losing hidden or legacy profiles', async () => {
+  const sql=new DatabaseSync(':memory:');
+  for(const ddl of [resourcesSchema,appSchema,schema,readFileSync(new URL('../migrations/0059_people_default_page_indexes.sql',import.meta.url),'utf8')])sql.exec(ddl);
+  const f=sql.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)');
+  const a=sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)');
+  for(let i=0;i<1000;i++) {
+    const id=`p${String(i).padStart(4,'0')}`,data=JSON.stringify({uid:id,displayName:`Person ${i}`,email:'private'});
+    f.run(`users/${id}`,'users','users',id,id,data,1,1);a.run(`users/${id}`,'users',id,id,data,1);
+  }
+  let force=false,probes=0,heads=0,oldQueries=0;
+  sql.function('quota_probe',path=>{probes++;return path;});
+  const db={prepare(q){
+    if(force && q.includes('quota_people_head'))throw Error('no such index: idx_cf_people_default_page');
+    const stmt=sql.prepare(q.replace('f.path=c.path','f.path=quota_probe(c.path)'));
+    return{bind(...args){return{first:async()=>stmt.get(...args)||null,all:async()=>{
+      const results=stmt.all(...args);if(q.includes('quota_people_head'))heads+=results.length;
+      if(q.includes('WITH candidates'))oldQueries++;return{results};
+    }};}};
+  }};
+  const worker=createWorker(async token=>token),env={DB:db,FIREBASE_PROJECT_ID:'test'};
+  const query=async(extra={})=>{
+    const r=await worker.fetch(new Request('https://example.test/v1/firestore/query',{method:'POST',headers:{authorization:'Bearer viewer','content-type':'application/json'},body:JSON.stringify({parent:'users',limit:30,...extra})}),env);
+    assert.equal(r.status,200,await r.clone().text());return (await r.json()).documents;
+  };
+  const compare=async()=>{
+    force=false;probes=0;heads=0;oldQueries=0;const actual=await query(),fast={probes,heads,oldQueries};
+    force=true;probes=0;oldQueries=0;const expected=await query(),slow={probes,oldQueries};force=false;
+    assert.deepEqual(actual,expected);assert.deepEqual(actual,await query({startAt:[]}));return{actual,fast,slow};
+  };
+  let result=await compare();
+  assert.equal(result.actual.length,30);assert.equal(result.fast.heads,62);assert.equal(result.fast.probes,0);
+  assert.equal(result.fast.oldQueries,0);assert.ok(result.slow.probes>=30);
+  assert.ok(result.actual.every(doc=>doc.data.email===undefined));
+  // The head cannot prove an exact page with many hidden early accounts.
+  for(let i=0;i<30;i++)sql.prepare('UPDATE friendbook_cf_firestore_documents SET document_json=? WHERE path=?').run(JSON.stringify({banned:true}),`users/p${String(i).padStart(4,'0')}`);
+  result=await compare();assert.ok(result.fast.oldQueries>0);assert.equal(result.actual[0].id,'p0030');
+  // Legacy-only records and a canonical shadow outside the first window must
+  // remain visible or hidden exactly as the complete previous implementation.
+  sql.prepare("DELETE FROM friendbook_cf_firestore_documents WHERE path='users/p0031'").run();
+  result=await compare();assert.ok(result.actual.some(doc=>doc.id==='p0031'));
+  assert.ok(!result.actual.some(doc=>doc.id==='p0000'));
+  sql.close();
+});
+
 test('Home story expiry uses indexed candidate seeks and preserves legacy and privacy behavior', async () => {
   const sql=new DatabaseSync(':memory:');sql.exec(resourcesSchema);sql.exec(appSchema);sql.exec(schema);
   sql.exec(readFileSync(new URL('../migrations/0062_story_timestamp_expiry_lookup.sql',import.meta.url),'utf8'));

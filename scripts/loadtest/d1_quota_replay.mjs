@@ -10,7 +10,11 @@ const migrations = new URL('../../cloudflare/migrations/', import.meta.url);
 for (const file of readdirSync(migrations).filter(f=>f.endsWith('.sql')).sort()) {
   sql.exec(readFileSync(new URL(file,migrations),'utf8'));
 }
-let statements=0, returnedRows=0;
+let statements=0, returnedRows=0, shadowProbes=0;
+// Instrument only the old people-page correlated shadow predicate. This counts
+// logical callback invocations in SQLite, not Cloudflare billed row reads.
+const countShadowProbes=process.env.QUOTA_SHADOW_PROBES==='1';
+if(countShadowProbes) sql.function('quota_probe',path=>{shadowProbes++;return path;});
 // Optional offline-only plan inventory of actual replayed SELECT statements. SQLite
 // EXPLAIN does not execute the query or measure D1 rows; a SCAN may be an index scan,
 // a tiny temporary/virtual table, or a legitimate full traversal. Inspect manually.
@@ -26,7 +30,7 @@ function recordPlan(query,args) {
 const executeWrite=Symbol('executeWrite');
 const db={
   withSession(){return db;},
-  prepare(query){const stmt=sql.prepare(query);return {bind(...args){recordPlan(query,args);const write=()=>{statements++;const result=stmt.run(...args);return {success:true,meta:{changes:Number(result.changes)}};};return {
+  prepare(query){const stmt=sql.prepare(countShadowProbes?query.replace('f.path=c.path','f.path=quota_probe(c.path)'):query);return {bind(...args){recordPlan(query,args);const write=()=>{statements++;const result=stmt.run(...args);return {success:true,meta:{changes:Number(result.changes)}};};return {
     first:async()=>{statements++;const row=stmt.get(...args)||null;if(row)returnedRows++;return row;},
     all:async()=>{statements++;const results=stmt.all(...args);returnedRows+=results.length;return {results};},
     run:async()=>write(), [executeWrite]:()=>/^\s*(SELECT|WITH)\b/i.test(query)||/\bRETURNING\b/i.test(query)
@@ -57,9 +61,10 @@ async function call(uid,path,method='GET',body){
 const changes=()=>sql.prepare('SELECT total_changes() AS n').get().n;
 const report={environment:'Local SQLite + real Worker handlers; not Cloudflare billing or capacity data',users,concurrency,workloads:{}};
 async function measure(name,requests,run){
-  const before=changes(), start=statements, startRows=returnedRows;
+  const before=changes(), start=statements, startRows=returnedRows, startProbes=shadowProbes;
   await run();
-  report.workloads[name]={requests,sqliteStatements:statements-start,sqliteReturnedRows:returnedRows-startRows,changedRowsIncludingTriggers:changes()-before};
+  report.workloads[name]={requests,sqliteStatements:statements-start,sqliteReturnedRows:returnedRows-startRows,changedRowsIncludingTriggers:changes()-before,
+    ...(countShadowProbes?{sqliteShadowProbes:shadowProbes-startProbes}:{})};
 }
 const heartbeat=uid=>call(uid,`/v1/firestore/document?path=users/${uid}`,'PATCH',{fields:{isOnline:true,isActive:true,showActiveStatus:true,lastSeenMs:Date.now(),lastSeen:{__fieldValue:'serverTimestamp'}}});
 const messages=i=>`chats/room${i}/messages/message0`;
@@ -190,6 +195,10 @@ for(let i=0;i<users;i++) {
   const uid=`user${i}`,data=JSON.parse(canonicalDoc.get(`users/${uid}`).document_json);
   addMirror.run(`users/${uid}`,'users',uid,uid,JSON.stringify({...data,id:uid}),now);
 }
+await measure('mirroredPeoplePage',users,()=>wave(users,async i=>{
+  const page=await call(`user${i}`,'/v1/firestore/query','POST',{parent:'users',limit:30});
+  assert.equal(page.documents.length,Math.min(users+1,30));
+}));
 await measure('identicalProfileMerge',users,()=>wave(users,i=>call(`user${i}`,`/v1/firestore/document?path=users/user${i}`,'PUT',{data:{displayName:`user${i}`},merge:true})));
 assert.equal(report.workloads.identicalProfileMerge.changedRowsIncludingTriggers,0,'identical profile merge');
 for(let i=1;i<users;i++) {

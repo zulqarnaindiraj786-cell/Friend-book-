@@ -1295,6 +1295,39 @@ async function boundedNamePage(db,env,uid,spec) {
   }
 }
 
+// A mirrored first page need not probe canonical storage once per legacy row.
+// Read bounded heads, reuse canonical paths for shadow checks, and only return
+// when both source boundaries prove no omitted ID can enter the visible page.
+async function boundedPeopleHead(db,uid,spec,admin,moderator) {
+  const size=spec.limit+1;
+  try {
+    const [canonical,legacy]=await Promise.all([
+      db.prepare(`SELECT * FROM friendbook_cf_firestore_documents AS quota_people_head INDEXED BY idx_cf_people_default_page
+        WHERE parent_path='users' ORDER BY doc_id,path LIMIT ?`).bind(size).all(),
+      db.prepare(`SELECT * FROM friendbook_cf_documents AS quota_people_head INDEXED BY idx_cf_legacy_people_default_page
+        WHERE collection='users' ORDER BY doc_id,path LIMIT ?`).bind(size).all(),
+    ]);
+    const groups=[canonical.results||[],legacy.results||[]];
+    if(groups.some(rows=>rows.some(row=>!/^[-_a-zA-Z0-9]+$/.test(row.doc_id) || row.path!==`users/${row.doc_id}`)
+        || new Set(rows.map(row=>row.doc_id)).size!==rows.length)) return null;
+    await markWindowShadows(db,canonical,legacy,'users');
+    const rows=[...groups[0],...groups[1].filter(row=>!row.shadowed).map(appDocumentToFirestoreRow).filter(Boolean)];
+    if(new Set(rows.map(row=>row.doc_id)).size!==rows.length)return null;
+    const docs=rows.map(rowToDocument).filter(Boolean).map(doc=>({...doc,
+      data:profileReadView(doc.path,uid,doc.data,admin,moderator)})).filter(doc=>doc.data!==null);
+    const page=applyQuery(docs,spec);
+    if(page.length!==spec.limit)return null;
+    const last=page.at(-1).id;
+    // The extra boundary row proves every omitted row sorts strictly later.
+    // ASCII IDs compare identically against all Unicode strings in JS/SQLite.
+    if(groups.some(rows=>rows.length===size && rows.at(-1).doc_id<=last))return null;
+    return page;
+  } catch(error) {
+    if(/no such index: idx_cf_(?:legacy_)?people_default_page/.test(String(error)))return null;
+    throw error;
+  }
+}
+
 // Feed fast path: fetch small indexed batches from each store, then authorize each
 // candidate before filling the visible page. Never LIMIT before privacy filtering.
 // Anything not provably equivalent falls back to the compatibility query engine.
@@ -1305,6 +1338,8 @@ async function boundedPeoplePage(db,env,uid,spec) {
       || spec.limitToLast || spec.startAfter || spec.startAt || spec.endBefore || spec.endAt
       || !Number.isInteger(spec.limit) || spec.limit<1 || spec.limit>50) return null;
   const admin=isPaymentAdmin(env,uid), moderator=!admin && await verifiedModerator(db,uid);
+  const head=await boundedPeopleHead(db,uid,spec,admin,moderator);
+  if(head!==null)return head;
   const page=[];
   let after=null;
   for (let batch=0;batch<4;batch++) {
