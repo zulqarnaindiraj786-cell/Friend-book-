@@ -3843,7 +3843,37 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0, ct
         && !messageEntry?.existingRow && !messageEntry?.deleted
         && roomEntry?.existingRow?.[canonicalRootSnapshot] && !roomEntry.deleted
         && roomBefore?.isGroup!==true && roomEntry.doc?.isGroup!==true;
-      if (fastDirectSend) {
+      const receiptOp=ops.find(op=>op.path===messagePath), resetOp=ops.find(op=>op.path===roomPath);
+      const receiptFields=receiptOp?.fields||receiptOp?.updates||receiptOp?.data||{};
+      const resetFields=resetOp?.fields||resetOp?.updates||resetOp?.data||{};
+      const fastDirectReceipt=path==='/v1/firestore/batch' && ops.length===2 && order.length===2
+        && roomPaths.length===1 && messagePaths.length===1 && /^chats\/[^/]+\/messages\/[^/]+$/.test(messagePath)
+        && chatAuths.get(messagePath)?.roomPath===roomPath
+        && (receiptOp?.op||receiptOp?.type)==='update' && (resetOp?.op||resetOp?.type)==='update'
+        && Object.keys(receiptFields).length>0 && Object.keys(receiptFields).every(key=>
+          ['isSeen','isDelivered'].includes(key) && receiptFields[key]===true)
+        && Object.keys(resetFields).length===1 && resetFields[`unreadCount.${uid}`]===0
+        && messageEntry?.existingRow && !messageEntry.deleted && roomEntry?.existingRow?.[canonicalRootSnapshot]
+        && !roomEntry.deleted && roomBefore?.isGroup!==true && roomEntry.doc?.isGroup!==true
+        && !unchangedBatchRows.has(messagePath) && !unchangedBatchRows.has(roomPath);
+      if (fastDirectReceipt) {
+        const messageJson=JSON.stringify(messageEntry.doc),roomJson=JSON.stringify(roomEntry.doc);
+        if (messageJson.length>1_800_000 || roomJson.length>1_800_000) return json({error:'Document too large'},413);
+        // The first write checks both authorized snapshots inside the same D1
+        // transaction. A missing/changed message or room forces a constraint
+        // failure and rolls back the whole batch, including the unread reset.
+        statements.push(db.prepare(`INSERT INTO friendbook_cf_firestore_documents
+          (path,parent_path,collection_id,doc_id,owner_uid,document_json,create_time,update_time)
+          VALUES (CASE WHEN EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents WHERE path=?1 AND document_json=?2)
+            AND EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents WHERE path=?3 AND document_json=?4)
+            THEN ?3 ELSE NULL END,?5,?6,?7,?8,?9,?10,?11)
+          ON CONFLICT(path) DO UPDATE SET owner_uid=excluded.owner_uid,document_json=excluded.document_json,update_time=excluded.update_time`)
+          .bind(roomPath,roomEntry.existingRow.document_json,messagePath,messageEntry.existingRow.document_json,
+            parentPath(messagePath),collectionIdOf(messagePath),docIdOf(messagePath),
+            ownerOf(messageEntry.doc,messageEntry.existingRow.owner_uid||uid),messageJson,messageEntry.existingRow.create_time||now,now));
+        statements.push(db.prepare(`UPDATE friendbook_cf_firestore_documents SET owner_uid=?,document_json=?,update_time=? WHERE path=?`)
+          .bind(ownerOf(roomEntry.doc,roomEntry.existingRow.owner_uid||uid),roomJson,now,roomPath));
+      } else if (fastDirectSend) {
         const messageJson=JSON.stringify(messageEntry.doc),roomJson=JSON.stringify(roomEntry.doc);
         if (messageJson.length>1_800_000 || roomJson.length>1_800_000) return json({error:'Document too large'},413);
         // The insert itself checks the exact authorized room and both message
