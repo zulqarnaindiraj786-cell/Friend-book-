@@ -246,7 +246,7 @@ function ownerOf(doc, fallback) {
 }
 
 // ---------- D1 helpers ----------
-function appDocumentToFirestoreRow(row) {
+export function appDocumentToFirestoreRow(row) {
   if (!row) return null;
   let doc;
   try { doc = JSON.parse(row.document_json); } catch { return null; }

@@ -50,6 +50,13 @@ def within_fcm_metadata_budget(result):
     return result['rowsRead'] <= 3_000_000 and result['rowsWritten'] <= 75_000
 
 
+def within_user_backfill_budget(result):
+    # Only for the separately tested, atomic at-most-two-user promotion, with
+    # strict follower/following fanout caps. Delayed analytics are not a live
+    # quota balance and do not predict index/trigger billing.
+    return result['rowsRead'] <= 3_000_000 and result['rowsWritten'] <= 60_000
+
+
 def within_notification_inspection_budget(result):
     # Read-only, capped notification index inspection, never a migration or an
     # index build. Keep the independent 50k write limit for those operations.
@@ -80,6 +87,8 @@ def main():
         raise SystemExit('FCM metadata-only rollout reserve exceeded; no migration attempted.')
     if '--notification-inspection-budget' in sys.argv and not within_notification_inspection_budget(result):
         raise SystemExit('Read-only notification inspection reserve exceeded; no D1 inspection attempted.')
+    if '--user-backfill-budget' in sys.argv and not within_user_backfill_budget(result):
+        raise SystemExit('Two-user backfill reserve exceeded; no further backfill work attempted.')
 
 
 if __name__ == '__main__':
