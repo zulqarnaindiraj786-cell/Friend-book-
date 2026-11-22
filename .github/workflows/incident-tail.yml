@@ -36,7 +36,11 @@ jobs:
                 continue
               try: event=json.loads(line)
               except (ValueError,UnicodeDecodeError): continue
-              request=event.get('event',{}).get('request',{}) or {}
+              if not isinstance(event,dict): continue
+              details=event.get('event') or {}
+              if not isinstance(details,dict): continue
+              request=details.get('request') or {}
+              if not isinstance(request,dict) or not isinstance(request.get('url',''),str): continue
               path=urllib.parse.urlsplit(request.get('url','')).path
               if path.startswith('/v1/engagement/'):
                 parts=path.split('/'); route='engagement/'+(parts[3] if len(parts)>3 and parts[3] in ('posts','reels') else 'other')+'/'+(parts[5] if len(parts)>5 and parts[5] in ('reactions','comments','reactors') else 'other')
@@ -45,7 +49,8 @@ jobs:
               elif path.startswith('/v1/presence/'): route='presence'
               elif path.startswith('/v1/'): route='other-api'
               else: route='other'
-              status=event.get('event',{}).get('response',{}).get('status')
+              response=details.get('response') or {}
+              status=response.get('status') if isinstance(response,dict) else 0
               if type(status) is not int: status=0
               counts[(route,status)]+=1
           finally:
