@@ -12,7 +12,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        window: [latest-15m, latest-60m]
+        window: [latest-5m, latest-15m, latest-60m]
         metric: [rowsRead, rowsWritten]
     runs-on: ubuntu-latest
     timeout-minutes: 3
@@ -62,6 +62,11 @@ jobs:
                       if re.search(r'\bidx_cf_(?:legacy_)?posts_feed_page\b',sql,re.I): flags.append('bounded-feed')
                       if re.search(r'\bidx_cf_(?:legacy_)?lives_status\b',sql,re.I): flags.append('bounded-live-discovery')
                       if re.search(r'\bidx_cf_presence_visible(?:_online)?_seen\b',sql,re.I): flags.append('bounded-presence')
+                      if re.search(r'\bON\s+CONFLICT\b',sql,re.I): flags.append('upsert')
+                      if re.search(r'\bRETURNING\b',sql,re.I): flags.append('returning')
+                      if re.search(r'\bfriendbook_cf_social_guards\b',sql,re.I): flags.append('guard')
+                      if re.search(r'\bfriendbook_cf_chat_participants\b',sql,re.I): flags.append('chat-members')
+                      if re.search(r'\bfriendbook_cf_firestore_documents\b',sql,re.I) and re.search(r'\bfriendbook_cf_documents\b',sql,re.I): flags.append('both-stores')
                       if scan: flags.append('scan='+['other','users','posts','reels','stories','pages','groups','chats','friend_requests'][int(scan.group(1))])
                       parts=(label,metric,op.group(1).upper() if op else 'OTHER', ','.join(tables), row['sum'], 'executions',row['count'],'shape',','.join(flags))
                       if printed<8:
