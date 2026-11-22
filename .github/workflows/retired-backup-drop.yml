@@ -61,7 +61,7 @@ jobs:
         run: |
           set -uo pipefail
           test -f retired-backup/manifest.json || { echo '::error::Backup manifest missing; no DROP attempted.'; exit 1; }
-          npx --yes wrangler@4.157.0 d1 migrations apply friendbook-db --remote --yes 2>&1 | tee drop.log
+          npx --yes wrangler@4.157.0 d1 migrations apply friendbook-db --remote 2>&1 | tee drop.log
           status=${PIPESTATUS[0]}
           echo "::notice::migrations apply exit: $status"
           exit $status
