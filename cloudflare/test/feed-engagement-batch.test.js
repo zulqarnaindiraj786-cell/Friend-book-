@@ -2,20 +2,20 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {batchEngagementReads, engagementSummary} from '../interactions.js';
 
-const resources=Array.from({length:10},(_,i)=>`posts/p${i}`);
+const resources=Array.from({length:20},(_,i)=>`posts/p${i}`);
 
-test('ten Home cards share one batch and reuse the returned counts and viewer reaction',async()=>{
+test('twenty Home cards share one batch and reuse the returned counts and viewer reaction',async()=>{
   let calls=0;
   const db={
     prepare(sql){return {bind(...args){return {sql,args,first(){throw Error('unexpected individual read');}};}};},
     async batch(statements){
       calls++;
-      assert.equal(statements.length,11);
+      assert.equal(statements.length,21);
       return statements.map(({args,sql},i)=>{
-        if(i===10) {
-          assert.equal(args.length,21);
+        if(i===20) {
+          assert.equal(args.length,41);
           assert.equal(args[0],'["blocked"]');
-          assert.equal((sql.match(/COUNT\(\*\)/g)||[]).length,10);
+          assert.equal((sql.match(/COUNT\(\*\)/g)||[]).length,20);
           // Do not depend on a database preserving compound-result ordering.
           return {results:resources.map((_,slot)=>({slot,n:0})).reverse()};
         }
