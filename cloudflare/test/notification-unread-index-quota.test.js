@@ -6,8 +6,8 @@ import {createWorker} from '../../worker.js';
 
 test('unread page index handles compatibility fallback without reading another inbox',async t=>{
  const sql=new DatabaseSync(':memory:');t.after(()=>sql.close());
- const dir=new URL('../migrations/',import.meta.url);
- for(const file of readdirSync(dir).filter(f=>f.endsWith('.sql')).sort())sql.exec(readFileSync(new URL(file,dir),'utf8'));
+ const dir=new URL('../migrations/',import.meta.url),removal='0081_remove_redundant_unread_index.sql';
+ for(const file of readdirSync(dir).filter(f=>f.endsWith('.sql')&&f!==removal).sort())sql.exec(readFileSync(new URL(file,dir),'utf8'));
  const c=sql.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES(?,?,?,?,?,?,?,?)');
  const a=sql.prepare('INSERT INTO friendbook_cf_documents VALUES(?,?,?,?,?,?)');
  for(const uid of ['alice','bob'])c.run('users/'+uid,'users','users',uid,uid,JSON.stringify({uid}),1,1);
@@ -46,7 +46,9 @@ test('unread page index handles compatibility fallback without reading another i
  assert.ok(forced().length>=3);assert.ok(forced().every(x=>x.plan.some(p=>p.includes('idx_cf_notif_unread')&&p.includes('<expr>=?'))));
  sql.exec("DELETE FROM friendbook_cf_documents WHERE path='notifications/wrapped'");
  const standard=await suite();assert.deepEqual(standard.map(x=>x.body.documents?.length??x.body.count),[600,20,20,20,20,0,600,66]);
- sql.exec('DROP INDEX idx_cf_inbox_unread');assert.deepEqual(await suite(),standard);
+ const migration=readFileSync(new URL(removal,dir),'utf8');sql.exec(migration);sql.exec(migration);
+ assert.equal(sql.prepare("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_cf_inbox_unread'").get(),undefined);
+ assert.deepEqual(await suite(),standard);
  assert.ok(forced().every(x=>x.plan.some(p=>p.includes('idx_cf_notif_unread')&&p.includes('<expr>=?'))));
  assert.ok(plans.some(x=>x.plan.some(p=>p.includes('idx_cf_notif_unread')&&p.includes('<expr>'))));
  a.run('notifications/wrapped','notifications','wrapped','alice',JSON.stringify({fields:{fromUserId:{stringValue:'alice'},toUserId:{stringValue:'bob'},isRead:{booleanValue:false},createdAt:{integerValue:'9'}}}),1);

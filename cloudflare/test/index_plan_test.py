@@ -53,7 +53,7 @@ class IndexPlans(unittest.TestCase):
                              'idx_cf_legacy_posts_author', 'idx_cf_reels_author', 'idx_cf_posts_feed_nonstandard',
                              'idx_cf_legacy_posts_feed_nonstandard', 'idx_cf_chat_nonstandard_order',
                              'idx_cf_chat_nonstandard_order_v2', 'idx_cf_legacy_users_display_name',
-                             'idx_cf_message_sender', 'idx_cf_comment_author'):
+                             'idx_cf_message_sender', 'idx_cf_comment_author', 'idx_cf_inbox_unread'):
                 self.assertIsNone(db.execute("SELECT name FROM sqlite_master WHERE type='index' AND name=?", (obsolete,)).fetchone())
             for index, sql, args in checks:
                 with self.subTest(index=index):
