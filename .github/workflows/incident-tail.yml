@@ -23,7 +23,7 @@ jobs:
           python3 - <<'PY'
           import subprocess,select,time,json,urllib.parse,collections,os,signal
           p=subprocess.Popen(['npx','--yes','wrangler@4.157.0','tail','rough-firefly-dd7b','--format','json'],stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,start_new_session=True)
-          counts=collections.Counter();deadline=time.monotonic()+75;buffer='';decoder=json.JSONDecoder();objects=0
+          counts=collections.Counter();write_roots=collections.Counter();deadline=time.monotonic()+75;buffer='';decoder=json.JSONDecoder();objects=0
           def handle(event):
             global objects
             if isinstance(event,list):
@@ -35,7 +35,17 @@ jobs:
             if not isinstance(details,dict): return
             request=details.get('request') or {}
             if not isinstance(request,dict) or not isinstance(request.get('url',''),str): return
-            path=urllib.parse.urlsplit(request.get('url','')).path
+            parsed=urllib.parse.urlsplit(request.get('url',''));path=parsed.path
+            # Only aggregate fixed root categories; never emit the URL, ID, query
+            # string, body or a rare single-category count. These are requests,
+            # not a measurement of D1 rows or proof that a write committed.
+            method=request.get('method','')
+            if path=='/v1/firestore/document' and method in ('PUT','PATCH','DELETE','POST'):
+              query=urllib.parse.parse_qs(parsed.query)
+              doc=(query.get('path') or [''])[0]
+              root=doc.split('/',1)[0]
+              if root not in ('users','posts','reels','stories','notifications','chats','friend_requests','friends','groups','lives'): root='other'
+              write_roots[(method,root)]+=1
             if path.startswith('/v1/engagement/'):
               parts=path.split('/'); route='engagement/'+(parts[3] if len(parts)>3 and parts[3] in ('posts','reels') else 'other')+'/'+(parts[5] if len(parts)>5 and parts[5] in ('reactions','comments','reactors') else 'other')
             elif path.startswith('/v1/firestore/'):
@@ -73,5 +83,8 @@ jobs:
             except subprocess.TimeoutExpired:
               os.killpg(p.pid,signal.SIGKILL);p.wait()
           print('::notice::Aggregate live sample; no URLs, identities or bodies: '+json.dumps([{'route':k[0],'status':k[1],'count':v} for k,v in sorted(counts.items())]))
+          common=[{'method':k[0],'root':k[1],'count':v} for k,v in sorted(write_roots.items()) if v>=3]
+          rare=sum(v for v in write_roots.values() if v<3)
+          print('::notice::Document mutation requests by allowlisted root (rare categories suppressed; not database writes): '+json.dumps({'categories':common,'suppressed_requests':rare}))
           if not counts: print('::warning::No parseable live HTTP events; decoded objects:',objects,'; do not infer absence of errors.')
           PY
