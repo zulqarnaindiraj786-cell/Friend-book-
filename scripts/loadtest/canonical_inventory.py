@@ -19,7 +19,8 @@ ALLOWED = {'users', 'posts', 'reels', 'stories', 'chats', 'messages', 'friends',
            'friend_requests', 'follows', 'groups', 'pages', 'notifications',
            'official_broadcasts', 'officialBroadcasts', 'lives', 'pokes', 'payments',
            'pushDevices', 'reports', 'feedback', 'config', 'events', 'gifts',
-           'referrals', 'subscriptions', 'comments', 'likes', 'followers', 'following', 'saves'}
+           'referrals', 'subscriptions', 'comments', 'likes', 'followers', 'following', 'saves',
+           'reactions', 'crashReports', 'sessions', 'chat'}
 
 
 def inspect(query, cap=CAP):

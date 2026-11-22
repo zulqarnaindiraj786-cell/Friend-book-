@@ -98,7 +98,7 @@ export async function promote(query, plan) {
 const ROOT_NAMES = new Set(['users','posts','reels','stories','chats','messages','friends','friend_requests',
   'follows','groups','pages','notifications','official_broadcasts','officialBroadcasts','lives','pokes',
   'payments','pushDevices','reports','feedback','config','events','gifts','referrals','subscriptions',
-  'comments','likes','followers','following','saves']);
+  'comments','likes','followers','following','saves','reactions','crashReports','sessions','chat']);
 const PREVIEW_SQL = `SELECT l.path,l.collection,l.doc_id,l.owner_uid,l.document_json,l.updated_at
  FROM friendbook_cf_documents l WHERE l.path>? AND NOT EXISTS
  (SELECT 1 FROM friendbook_cf_firestore_documents f WHERE f.path=l.path)
@@ -119,9 +119,11 @@ export function classifyRoot(source) {
   const saved=JSON.stringify(candidate);
   if (!isDeepStrictEqual(toPlainDocument(source.document_json,source.doc_id),toPlainDocument(saved,source.doc_id))) return 'plain_projection_diff';
   if (!isDeepStrictEqual(oldFields,toFirestoreFields(saved))) return 'auth_projection_diff';
-  if (!isDeepStrictEqual(JSON.parse(normalized.document_json),candidate)) return 'facade_projection_diff';
+  // Check fanout before facade differences so an id field cannot mask a risky
+  // membership trigger. These limits are risk controls, not billing estimates.
   if (source.collection==='users' && ['followers','following'].some(key=>Array.isArray(candidate[key]) && candidate[key].length>20)) return 'fanout_limit';
   if (source.collection==='chats' && Array.isArray(candidate.participants) && candidate.participants.length>20) return 'fanout_limit';
+  if (!isDeepStrictEqual(JSON.parse(normalized.document_json),candidate)) return 'facade_projection_diff';
   return 'equivalent_root_only';
 }
 

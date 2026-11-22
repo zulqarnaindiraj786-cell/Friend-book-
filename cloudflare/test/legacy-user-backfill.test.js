@@ -54,6 +54,7 @@ test('root preview distinguishes facade, authorization, and plain projection dif
  assert.equal(classifyRoot({...base,document_json:'{"id":"wrong"}'}),'plain_projection_diff');
  assert.equal(classifyRoot({...base,path:'chats/a/nested/b'}),'unsafe_shape');
  assert.equal(classifyRoot({...base,document_json:JSON.stringify({participants:Array(21).fill('x')})}),'fanout_limit');
+ assert.equal(classifyRoot({...base,document_json:JSON.stringify({id:'a',participants:Array(21).fill('x')})}),'fanout_limit');
 });
 
 test('moving preview scans only unshadowed rows, buckets unknown collections, and detects limits',async t=>{
