@@ -2737,6 +2737,19 @@ async function writeChatMessage(db,path,doc,now,existing,auth,uid,deleted=false)
     if (!inserted) throw new Error('Document changed');
     return json({exists:true,id,path,parent,collection:coll,data:doc,createTime:now,updateTime:now});
   }
+  if (existing && !deleted && auth.room[canonicalRootSnapshot] && /^chats\/[^/]+\/messages\/[^/]+$/.test(path)) {
+    const serialized=JSON.stringify(doc),owner=ownerOf(doc,existing.owner_uid||uid);
+    if (serialized.length>1_800_000) return json({error:'Document too large'},413);
+    // A single conditional update replaces the temporary guard row only for a
+    // canonical nested message and its canonical authorized room. Both JSON
+    // snapshots must still match at commit, including membership and reactions.
+    const updated=await db.prepare(`UPDATE friendbook_cf_firestore_documents
+      SET owner_uid=?,document_json=?,update_time=? WHERE path=? AND document_json=?
+      AND EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents WHERE path=? AND document_json=?) RETURNING path`)
+      .bind(owner,serialized,now,path,existing.document_json,auth.roomPath,auth.room.document_json).first();
+    if (!updated) throw new Error('Document changed');
+    return json({exists:true,id,path,parent,collection:coll,data:doc,createTime:existing.create_time||now,updateTime:now});
+  }
   if (typeof db.batch!=='function') return json({error:'Atomic storage unavailable'},503);
   // The nested message and canonical room were both read for authorization.
   // Compare both snapshots at commit time using one guard row, not two writes

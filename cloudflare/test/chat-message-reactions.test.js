@@ -13,7 +13,7 @@ function fixture() {
   const message=(id)=>insert.run(`chats/${id}/messages/m` ,`chats/${id}/messages`,'messages','m','alice',JSON.stringify({senderId:'alice',text:'hello',reactions:{alice:'👍'},reactorNames:{alice:'Alice'}}),1,1);
   room('direct',['alice','bob']);message('direct');room('team_bob',['team','bob']);message('team_bob');
   let race;
-  const db={prepare(q){const s=sql.prepare(q);return{bind(...args){return{run:async()=>s.run(...args),first:async()=>s.get(...args)||null,all:async()=>({results:s.all(...args)})};}}},
+  const db={prepare(q){const s=sql.prepare(q);return{bind(...args){return{run:async()=>s.run(...args),first:async()=>{if(race && q.includes('RETURNING path')){const f=race;race=null;f();}return s.get(...args)||null;},all:async()=>({results:s.all(...args)})};}}},
     async batch(stmts){if(race){const f=race;race=null;f();}sql.exec('BEGIN');try{for(const s of stmts)await s.run();sql.exec('COMMIT');}catch(e){sql.exec('ROLLBACK');throw e;}}};
   const app=createWorker(async token=>token), env={DB:db,FIREBASE_PROJECT_ID:'test'};
   const patch=(uid,id,fields)=>app.fetch(new Request(`https://example.test/v1/firestore/document?path=chats/${id}/messages/m`,{method:'PATCH',headers:{authorization:`Bearer ${uid}`,'content-type':'application/json'},body:JSON.stringify({fields})}),env);
@@ -24,7 +24,9 @@ function fixture() {
 
 test('members add, change and remove only their own message reactions',async()=>{
   const f=fixture();
+  const before=f.sql.prepare('SELECT total_changes() AS n').get().n;
   assert.equal((await f.patch('bob','direct',{'reactions.bob':'❤️','reactorNames.bob':'Bob','reactorPhotos.bob':'https://example.test/bob'})).status,200);
+  assert.equal(f.sql.prepare('SELECT total_changes() AS n').get().n-before,1,'canonical message update does not write temporary guard rows');
   assert.deepEqual(f.doc('direct').reactions,{alice:'👍',bob:'❤️'});
   assert.equal((await f.batch('bob','direct',{'reactions.bob':'😂'})).status,200);
   assert.equal(f.doc('direct').reactions.bob,'😂');
@@ -42,14 +44,27 @@ test('members add, change and remove only their own message reactions',async()=>
 });
 
 test('membership and message races roll back a reaction',async()=>{
-  for(const kind of ['membership','message']){
+  for(const kind of ['membership','message','deleted']){
     const f=fixture();f.race(()=>{
       if(kind==='membership')f.sql.prepare("UPDATE friendbook_cf_firestore_documents SET document_json=? WHERE path='chats/direct'").run(JSON.stringify({participants:['alice','eve']}));
-      else f.sql.prepare("UPDATE friendbook_cf_firestore_documents SET document_json=json_set(document_json,'$.text','changed') WHERE path='chats/direct/messages/m'").run();
+      else if(kind==='message')f.sql.prepare("UPDATE friendbook_cf_firestore_documents SET document_json=json_set(document_json,'$.text','changed') WHERE path='chats/direct/messages/m'").run();
+      else f.sql.prepare("DELETE FROM friendbook_cf_firestore_documents WHERE path='chats/direct/messages/m'").run();
     });
     assert.notEqual((await f.patch('bob','direct',{'reactions.bob':'👍'})).status,200);
-    assert.equal(f.doc('direct').reactions.bob,undefined);
+    if(kind==='deleted')assert.equal(f.sql.prepare("SELECT path FROM friendbook_cf_firestore_documents WHERE path='chats/direct/messages/m'").get(),undefined);
+    else assert.equal(f.doc('direct').reactions.bob,undefined);
     assert.equal(f.sql.prepare('SELECT count(*) AS n FROM friendbook_cf_social_guards').get().n,0);
     f.sql.close();
   }
+});
+
+test('legacy-only chat rooms retain the guarded message update path',async()=>{
+  const f=fixture();
+  f.sql.prepare("DELETE FROM friendbook_cf_firestore_documents WHERE path='chats/direct'").run();
+  f.sql.prepare('INSERT INTO friendbook_cf_documents VALUES(?,?,?,?,?,?)').run('chats/direct','chats','direct','alice',JSON.stringify({participants:['alice','bob']}),1);
+  const before=f.sql.prepare('SELECT total_changes() AS n').get().n;
+  assert.equal((await f.patch('bob','direct',{'reactions.bob':'❤️'})).status,200);
+  assert.equal(f.doc('direct').reactions.bob,'❤️');
+  assert.ok(f.sql.prepare('SELECT total_changes() AS n').get().n-before>1,'legacy guard path remains active');
+  f.sql.close();
 });
