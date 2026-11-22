@@ -113,11 +113,13 @@ jobs:
           events=http=0
           presence_route=collections.Counter()   # (http status) -> count
           presence_text_other=0
-          non_http=0
+          cron_events=0
+          other_non_http=0
+          non_http_keys=collections.Counter()
           cron_minutes=set()
           roots=collections.Counter()
           def handle(obj):
-            global events,http,presence_text_other,non_http
+            global events,http,presence_text_other,cron_events,other_non_http
             if isinstance(obj,list):
               for item in obj: handle(item)
               return
@@ -140,9 +142,14 @@ jobs:
                 presence_text_other+=1
               roots[path.split('/')[1] if path.startswith('/v1/') and len(path.split('/'))>1 else 'other']+=1
             else:
-              non_http+=1
-              stamp=str(obj.get('eventTimestamp') or details.get('eventTimestamp') or '')[:16]
-              if stamp: cron_minutes.add(stamp)
+              is_cron = bool(details.get('cron') or obj.get('cron') or details.get('scheduledTime'))
+              if is_cron:
+                cron_events+=1
+                stamp=str(obj.get('eventTimestamp') or details.get('eventTimestamp') or '')[:16]
+                if stamp: cron_minutes.add(stamp)
+              else:
+                other_non_http+=1
+                non_http_keys[','.join(sorted(k for k in details if k in ('outcome','scriptName','dispatchNamespace','durableObjectId','waitUntil','queue')))]+=1
           try:
             while time.monotonic()<deadline:
               r,_,_=select.select([p.stdout],[],[],min(1,max(0,deadline-time.monotonic())))
@@ -171,12 +178,15 @@ jobs:
               'presence_route_requests':sum(presence_route.values()),
               'presence_route_by_route_and_status':[{'route':k[0],'status':k[1],'count':v} for k,v in sorted(presence_route.items())],
               'presence_text_without_presence_route':presence_text_other,
-              'non_http_cron_invocations':non_http,'cron_minutes':len(cron_minutes),
+              'cron_invocations':cron_events,'cron_minutes':len(cron_minutes),
+              'other_non_http_events':other_non_http,
+              'other_non_http_shapes':[{'shape':k,'count':v} for k,v in non_http_keys.most_common(5)],
               'http_roots':[{'root':k,'count':v} for k,v in sorted(roots.items()) if v>=3]}))
           if not events: print('::warning::No parseable tail events; do not infer absence of traffic.')
           if sum(presence_route.values()): print('::warning::A client still calls a presence route; the deployed Worker or an installed old APK still produces these lines.')
           if presence_text_other: print('::warning::Non-route log text matched presence; inspect manually.')
-          if non_http: print('::warning::Cron invocations still appear until the Worker is uploaded without [triggers].')
+          if cron_events: print('::error::Scheduled cron invocations are still running in production.')
+          elif other_non_http: print('::warning::Non-HTTP log entries without a cron field were seen; they are not cron invocations (see shapes).')
           PY
 
 # Re-run marker: aggregate-only proof job.
