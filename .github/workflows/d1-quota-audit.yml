@@ -86,7 +86,9 @@ jobs:
                       if re.search(r'\bfriendbook_cf_firestore_documents\b',sql,re.I) and re.search(r'\bfriendbook_cf_documents\b',sql,re.I): flags.append('both-stores')
                       if scan: flags.append('scan='+['other','users','posts','reels','stories','pages','groups','chats','friend_requests'][int(scan.group(1))])
                       parts=(label,metric,op.group(1).upper() if op else 'OTHER', ','.join(tables), row['sum'], 'executions',row['count'],'shape',','.join(flags))
-                      if printed<8:
+                      # More top shapes help distinguish small-user bursts from
+                      # background maintenance; values and raw SQL stay private.
+                      if printed<16:
                           print('::notice::',*parts)
                           printed+=1
                       elif any(f.startswith(('bounded-','scan=','shared-mirror-')) for f in flags):
