@@ -1,0 +1,180 @@
+# Guarded Worker-only upload. It NEVER applies a D1 migration and never touches
+# migration 0086 (the seven retired tables stay exactly as they are).
+name: Deploy Worker code only (no migrations, no drops)
+on:
+  workflow_dispatch:
+  push:
+    branches: ['arena/7c7ddb7b-friend-book']
+    paths:
+      - '.github/workflows/worker-only-deploy.yml'
+      - 'worker.js'
+      - 'wrangler.toml'
+      - 'cloudflare/**'
+permissions:
+  contents: read
+concurrency:
+  group: friendbook-cloudflare-production
+  cancel-in-progress: false
+jobs:
+  worker-only:
+    if: github.event_name == 'workflow_dispatch' || (contains(github.event.head_commit.message, '[worker-only-deploy]') && !contains(github.event.head_commit.message, '[no-deploy]'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: '92f3d04598822de2e49e14561218d090'
+      WRANGLER_SEND_METRICS: 'false'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install dependencies and run the Worker suite
+        run: |
+          npm ci --ignore-scripts
+          npm test
+      - name: Refuse to deploy if the candidate still schedules anything
+        run: |
+          node --input-type=module - <<'JS'
+          import { readFileSync } from 'node:fs';
+          import worker from './worker.js';
+          const config = readFileSync('wrangler.toml', 'utf8');
+          if (/^\s*\[triggers\]/m.test(config) || /^\s*crons\s*=/m.test(config))
+            throw Error('wrangler.toml still configures cron triggers');
+          if ('scheduled' in worker) throw Error('worker still exports scheduled()');
+          console.log('::notice::Candidate has no cron trigger and no scheduled handler.');
+          JS
+      - name: Fail closed unless 0086 is the only pending migration
+        run: |
+          set -uo pipefail
+          if [ -z "${CLOUDFLARE_API_TOKEN:-}" ]; then
+            echo '::error::CLOUDFLARE_API_TOKEN is unavailable to this workflow.'
+            exit 1
+          fi
+          npx --yes wrangler@4.157.0 d1 migrations list friendbook-db --remote > pending-migrations.log 2>&1
+          status=$?
+          cat pending-migrations.log
+          echo "migrations_list_exit=$status" >> "$GITHUB_ENV"
+          python3 - <<'PY'
+          import os, re, sys
+          text = open('pending-migrations.log', encoding='utf-8', errors='replace').read()
+          status = int(os.environ.get('migrations_list_exit', '1'))
+          names = sorted(set(re.findall(r'(\d{4}_[A-Za-z0-9_]+\.sql)', text)))
+          allowed = {'0086_remove_unused_status_tables.sql'}
+          print('::notice::pending migrations seen: ' + str(names or 'none reported'))
+          if status != 0:
+              print('::error::Could not read the pending migration list; refusing to deploy.')
+              sys.exit(1)
+          if not names and 'No migrations to apply' not in text:
+              print('::error::Ambiguous migration output; refusing to deploy.')
+              sys.exit(1)
+          extra = [name for name in names if name not in allowed]
+          if extra:
+              print('::error::Migrations other than 0086 are pending: ' + ', '.join(extra))
+              print('::error::Deploying code without its schema would be unsafe; nothing was uploaded.')
+              sys.exit(1)
+          print('::notice::Only 0086 is pending and this workflow never applies it. No DROP can run here.')
+          PY
+      - name: Record the deployed version before the upload (rollback reference)
+        run: |
+          npx --yes wrangler@4.157.0 deployments list --name rough-firefly-dd7b > deployments-before.log 2>&1 || true
+          grep -Eo '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' deployments-before.log | head -1 > previous-version.txt || true
+          echo "::notice::previous version id: $(cat previous-version.txt 2>/dev/null || echo unknown)"
+      - name: Prepare the same bindings the production workflow prepares
+        run: |
+          node cloudflare/ensure-views-kv.mjs || true
+          node cloudflare/ensure-views-ae.mjs || true
+          grep -E '^(binding|dataset|id|database_id|bucket_name|name|main) ' wrangler.toml || true
+      - name: Upload the Worker (no wrangler d1 commands at all)
+        run: |
+          set -uo pipefail
+          npm run deploy -- --var D1_INTERACTIONS_ENABLED:true --var VIDEO_R2_ENABLED:true --var VIDEO_R2_RETENTION_VERIFIED:true 2>&1 | tee deploy.log
+          status=${PIPESTATUS[0]}
+          echo "::notice::wrangler deploy exit: $status"
+          exit $status
+      - name: Verify schedules are gone, presence routes are 404, and no cron runs
+        run: |
+          python3 - <<'PY'
+          import collections, json, os, select, signal, subprocess, time, urllib.parse, urllib.request
+          token = os.environ['CLOUDFLARE_API_TOKEN']
+          account = os.environ['CLOUDFLARE_ACCOUNT_ID']
+          base = f'https://api.cloudflare.com/client/v4/accounts/{account}/workers/scripts/rough-firefly-dd7b'
+
+          def get(path):
+              req = urllib.request.Request(base + path, headers={'Authorization': f'Bearer {token}'})
+              with urllib.request.urlopen(req, timeout=30) as response:
+                  return json.loads(response.read() or b'{}')
+
+          schedules = ((get('/schedules').get('result') or {}).get('schedules') or [])
+          print('::notice::deployed schedules after upload: ' + json.dumps({'count': len(schedules)}))
+          if schedules:
+              raise SystemExit('Cron schedules were re-attached by the upload.')
+
+          p = subprocess.Popen(['npx', '--yes', 'wrangler@4.157.0', 'tail', 'rough-firefly-dd7b', '--format', 'json'],
+                               stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, start_new_session=True)
+          deadline = time.monotonic() + 95
+          buffer, decoder = '', json.JSONDecoder()
+          counters = {'presence': collections.Counter(), 'cron': 0, 'http': 0}
+
+          def handle(obj):
+              if isinstance(obj, list):
+                  for item in obj:
+                      handle(item)
+                  return
+              if not isinstance(obj, dict):
+                  return
+              details = obj.get('event') or {}
+              request = details.get('request') if isinstance(details, dict) else None
+              if isinstance(request, dict) and isinstance(request.get('url'), str):
+                  counters['http'] += 1
+                  path = urllib.parse.urlsplit(request['url']).path
+                  if path.startswith('/v1/presence/'):
+                      status = str((details.get('response') or {}).get('status'))
+                      counters['presence'][status] += 1
+              elif details.get('cron') or obj.get('cron'):
+                  counters['cron'] += 1
+
+          try:
+              while time.monotonic() < deadline:
+                  ready, _, _ = select.select([p.stdout], [], [], 1)
+                  if not ready:
+                      if p.poll() is not None:
+                          break
+                      continue
+                  chunk = os.read(p.stdout.fileno(), 65536)
+                  if not chunk:
+                      break
+                  buffer += chunk.decode('utf-8', 'replace')
+                  while buffer:
+                      starts = [i for i in (buffer.find('{'), buffer.find('[')) if i >= 0]
+                      if not starts:
+                          buffer = ''
+                          break
+                      buffer = buffer[min(starts):]
+                      try:
+                          obj, end = decoder.raw_decode(buffer)
+                      except ValueError:
+                          if len(buffer) > 1048576:
+                              buffer = ''
+                          break
+                      buffer = buffer[end:]
+                      handle(obj)
+          finally:
+              try:
+                  os.killpg(p.pid, signal.SIGTERM)
+              except ProcessLookupError:
+                  pass
+              try:
+                  p.wait(timeout=5)
+              except subprocess.TimeoutExpired:
+                  os.killpg(p.pid, signal.SIGKILL)
+                  p.wait()
+          print('::notice::post-deploy tail: ' + json.dumps({'http_events': counters['http'],
+              'presence_route_statuses': dict(counters['presence']), 'cron_invocations': counters['cron']}))
+          serving = [s for s in counters['presence'] if s not in ('404', 'None')]
+          if serving:
+              raise SystemExit('Presence routes still answer with statuses: ' + ','.join(sorted(serving)))
+          if counters['cron']:
+              raise SystemExit('Scheduled invocations are still running.')
+          print('::notice::Presence routes answer 404 only and no cron invocation was observed.')
+          PY
