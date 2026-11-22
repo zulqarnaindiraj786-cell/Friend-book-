@@ -1562,9 +1562,13 @@ async function markWindowShadows(db,canonical,legacy,parent=null) {
   // Stay below D1's bound-variable limit even for a 100-item page.
   for (let offset=0;offset<unknown.length;offset+=90) {
     const slice=unknown.slice(offset,offset+90);
-    const result=await db.prepare(`SELECT path FROM friendbook_cf_firestore_documents WHERE path IN (${slice.map(()=>'?').join(',')})${parent ? ' AND parent_path=?' : ''}`)
-      .bind(...slice,...(parent?[parent]:[])).all();
-    for (const row of result.results||[]) canonicalPaths.add(row.path);
+    // Filtering parent_path in SQL can make SQLite choose the parent index and
+    // scan every post instead of seeking the handful of primary-key paths.
+    // Read the parent with each bounded point lookup and apply the same exact
+    // parent test here; notification lookups intentionally accept any parent.
+    const result=await db.prepare(`SELECT path${parent ? ',parent_path' : ''} FROM friendbook_cf_firestore_documents WHERE path IN (${slice.map(()=>'?').join(',')})`)
+      .bind(...slice).all();
+    for (const row of result.results||[]) if (!parent || row.parent_path===parent) canonicalPaths.add(row.path);
   }
   for (const row of legacyRows) row.shadowed=canonicalPaths.has(row.path);
 }
@@ -1644,15 +1648,40 @@ async function boundedFeedPage(db,uid,spec,requestUserReads) {
     const bound=cursor?` AND (${rank},${time},a.doc_id)<(?,?,?)`:'';
     const args=[...authorArgs,...(cursor||[]),chunk];
     let batches;
-    try { batches=await Promise.all([
-      db.prepare(`SELECT a.path,a.parent_path,a.collection_id,a.doc_id,a.owner_uid,a.document_json,a.create_time,a.update_time
-        FROM friendbook_cf_firestore_documents a ${author===null?`INDEXED BY idx_cf_${root}_feed_page`:''} WHERE a.parent_path='${root}'${byAuthor}${bound} AND NOT ${canonicalException}
-        ORDER BY ${rank} DESC,${time} DESC,a.doc_id DESC LIMIT ?`).bind(...args).all(),
-      db.prepare(`SELECT a.path,a.collection,a.doc_id,a.owner_uid,a.document_json,a.updated_at
-          FROM friendbook_cf_documents a ${author===null?`INDEXED BY idx_cf_legacy_${root}_feed_page`:''}
-          WHERE a.collection='${root}'${byLegacyAuthor}${bound} AND NOT COALESCE(${legacyException},0)
-          ORDER BY ${rank} DESC,${time} DESC,a.doc_id DESC LIMIT ?`).bind(...args).all(),
-    ]); } catch(error) {
+    try {
+      // SQLite's tuple comparison on the expression index can scan from the
+      // newest row on every subsequent page. Seek the cursor's rank and time
+      // explicitly, then include the lower numeric rank when a timestamp
+      // cursor crosses that boundary. Each bounded branch keeps index ordering;
+      // the outer merge is limited to at most two page-sized windows.
+      const seekWindow=(columns,table,index,condition)=>{
+        const base=`SELECT ${columns},${rank} AS quota_feed_rank,${time} AS quota_feed_time FROM ${table} a INDEXED BY ${index} WHERE ${condition}`;
+        const same=`${base} AND ${rank}=? AND ${time}<=? AND (${time},a.doc_id)<(?,?) ORDER BY ${time} DESC,a.doc_id DESC LIMIT ?`;
+        if(cursor[0]===2) return db.prepare(same).bind(2,cursor[1],cursor[1],cursor[2],chunk).all();
+        const lower=`${base} AND ${rank}=? ORDER BY ${time} DESC,a.doc_id DESC LIMIT ?`;
+        return db.prepare(`SELECT * FROM (${same}) UNION ALL SELECT * FROM (${lower})
+          ORDER BY quota_feed_rank DESC,quota_feed_time DESC,doc_id DESC LIMIT ?`)
+          .bind(4,cursor[1],cursor[1],cursor[2],chunk,2,chunk,chunk).all();
+      };
+      if (cursor && author===null) {
+        batches=await Promise.all([
+          seekWindow('a.path,a.parent_path,a.collection_id,a.doc_id,a.owner_uid,a.document_json,a.create_time,a.update_time',
+            'friendbook_cf_firestore_documents',`idx_cf_${root}_feed_page`,`a.parent_path='${root}' AND NOT ${canonicalException}`),
+          seekWindow('a.path,a.collection,a.doc_id,a.owner_uid,a.document_json,a.updated_at',
+            'friendbook_cf_documents',`idx_cf_legacy_${root}_feed_page`,`a.collection='${root}' AND NOT COALESCE(${legacyException},0)`),
+        ]);
+      } else {
+        batches=await Promise.all([
+          db.prepare(`SELECT a.path,a.parent_path,a.collection_id,a.doc_id,a.owner_uid,a.document_json,a.create_time,a.update_time
+            FROM friendbook_cf_firestore_documents a ${author===null?`INDEXED BY idx_cf_${root}_feed_page`:''} WHERE a.parent_path='${root}'${byAuthor}${bound} AND NOT ${canonicalException}
+            ORDER BY ${rank} DESC,${time} DESC,a.doc_id DESC LIMIT ?`).bind(...args).all(),
+          db.prepare(`SELECT a.path,a.collection,a.doc_id,a.owner_uid,a.document_json,a.updated_at
+              FROM friendbook_cf_documents a ${author===null?`INDEXED BY idx_cf_legacy_${root}_feed_page`:''}
+              WHERE a.collection='${root}'${byLegacyAuthor}${bound} AND NOT COALESCE(${legacyException},0)
+              ORDER BY ${rank} DESC,${time} DESC,a.doc_id DESC LIMIT ?`).bind(...args).all(),
+        ]);
+      }
+    } catch(error) {
       if (/no such index: idx_cf_(?:legacy_)?(?:posts|reels)_feed_page/.test(String(error))) return null;
       throw error;
     }
