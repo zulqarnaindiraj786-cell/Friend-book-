@@ -257,3 +257,9 @@ class TrafficReport(unittest.TestCase):
         views=p.safe_shape('SELECT resource, views FROM friendbook_cf_view_counters ORDER BY views DESC LIMIT ?')
         self.assertEqual(views['tables'],['view_counters'])
         self.assertIn('views desc limit ?',views['redacted_unmapped_select_structure'])
+
+
+    def test_retired_table_quoted_identifiers_are_fixed_vocabulary_only(self):
+        grammar=p.redacted_inventory_structure('SELECT * FROM "friendbook_cf_presence" ORDER BY "rowid" LIMIT 250 OFFSET 500')
+        self.assertEqual(grammar,'select * from friendbook_cf_presence order by rowid limit ? offset ?')
+        self.assertNotIn('SECRET',p.redacted_inventory_structure('SELECT * FROM "SECRET" ORDER BY "SECRET" LIMIT 250'))

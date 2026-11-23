@@ -145,10 +145,16 @@ def redacted_inventory_structure(sql):
     # arbitrary identifiers, numeric values and comments never pass through.
     vocabulary=set("resource views friendbook_cf_view_counters event_key created_at friendbook_cf_fcm_device_claims friendbook_cf_chat_participants chat_path uid friendbook_cf_trusted_friendships uid_low uid_high friend_path select count sum coalesce case when then else end as from where and or not is null left join on indexed by limit order group having asc desc with materialized exists distinct in sampled legacy_only path collection parent_path doc_id document_json owner_uid updated_at update_time sample l f s a friendbook_cf_documents friendbook_cf_firestore_documents idx_friendbook_cf_documents_collection_updated idx_friendbook_cf_firestore_parent".split())
     pattern=r"'(?:''|[^'])*'|\"(?:\"\"|[^\"])*\"|`[^`]*`|\[[^\]]*\]|--[^\n]*|/\*[\s\S]*?\*/|\?[0-9]*|[A-Za-z_][A-Za-z0-9_]*|[0-9]+(?:\.[0-9]+)?|<>|!=|<=|>=|[^\s]"
+    vocabulary.update(('rowid','_rowid_','offset','friendbook_cf_presence','friendbook_cf_presence_sessions',
+        'friendbook_cf_presence_sessions_fullcopy','friendbook_cf_presence_sessions_copy',
+        'friendbook_cf_typing','friendbook_cf_typing_sessions','friendbook_cf_typing_sessions_fullcopy'))
     result=[]
     for token in re.findall(pattern,sql):
         if token.startswith(('--','/*')):continue
         lower=token.lower()
+        # Quoted identifiers may expose only this same reviewed vocabulary.
+        if token[:1] in ('\"','`','[') and token[-1:] in ('\"','`',']'):
+            lower=token[1:-1].lower()
         if lower in vocabulary:result.append(lower)
         elif token in ('(',')',',','.','=','<','>','<>','!=','<=','>=','*','+','-','/'):result.append(token)
         else:result.append('?')
