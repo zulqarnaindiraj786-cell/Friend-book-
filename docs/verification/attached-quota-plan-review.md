@@ -49,3 +49,15 @@ E. Local evidence: 3,000 empty-preview row visits to zero; 100 overlapping defau
 F. Next verification: compile/JVM suite for the new measurement code; later an authorized device trace with explicit window and scenario, then investigate the dominant category's actual callers. The unavailable external package was not fabricated or executed.
 
 G. Daily target **UNVERIFIED**. Account-wide diagnostic/deploy traffic counts, source-only Android fixes are not installed, and no representative completed post-change UTC day has been established. Preserve the user's stricter 100k reads/5k writes goal separately from provider plan limits. No paid upgrade, schema migration, presence/typing feature, cron change or packaging requested/performed.
+
+## Validation completed for this patch
+
+- Worker: **292 passed** locally.
+- Python: **416 passed** locally, including opt-in/privacy/interceptor wiring.
+- Real Worker/local SQLite replay: **100 users / 5 concurrent / 48 workloads passed**.
+- Android compile/JVM suite: [45218306666](https://github.com/zulqarnaindiraj786-cell/Friend-book-/actions/runs/45218306666), **success**, exact source `2c83588b058b04b9f6be12a7bfdc4151022dcccc`. Four new pure-JVM counter tests cover opt-in/window boundaries, recreation/no reset, fixed privacy-safe categories and 8,000 concurrent attempts counted without loss.
+- Packaging workflow 45218307840: **skipped**. No APK/AAB built.
+- Worker validation workflows 45218317620 and 45218307111: **success**.
+- Diff whitespace check: passed.
+
+This resolves the compile/JVM prerequisite in section F; the later authorized **device trace remains pending**. No new Worker deployment or production per-open measurement was performed in this patch. Measurement is not itself a quota reduction.
