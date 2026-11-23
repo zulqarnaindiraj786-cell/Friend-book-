@@ -125,3 +125,25 @@ the error contract changed:
 So the 13 need per-test judgement: mirror the rows that stand for "already
 backfilled history", keep stale-shadow rows unmirrored, and rewrite the
 `403 → 404` assertions to the new contract.
+
+## Batch 3 (firestore-documents): 13 → 9 families
+
+Fixed and verified in isolation:
+
+* `Firestore collection queries and counts…` — `mirrorAllLegacy` after the historical seeds.
+* `Firestore-style query cursors…` — same, plus the deletion fixture now clears both stores.
+* `existing friendships are read-only…` and `stories load with owner and privacy…` —
+  history mirrored, so the participants' reads resolve canonically.
+
+Still red, with the reason each one needs its *own* rewrite (blanket mirroring is
+not the answer, it regresses 9 shadow tests):
+
+| Test | Why it still fails |
+| --- | --- |
+| `bounded posts/reels pages …` | premise is now obsolete: it asserts `shadowChecks === 2` for "100 unknown paths", but with history backfilled there are **no** unknown paths, so the correct expectation is 0 probes |
+| `indexed profile and request reads …` | asserts canonical precedence over a legacy copy; precedence is now unreachable |
+| `comments and reactions authorize parent …` | parent authorization is canonical-only, so legacy parents answer 404 |
+| `story engagement …`, `live room creation …`, `indexed tag search …`, `copied D1 timestamps …`, `Home story expiry …` | same class: legacy-only rows used as authorization sources, plus plan-level counters (`legacyProbes`, `shadowChecks`, `fastCalls`) that assumed the fallback query shape |
+
+Only `app-documents.js` is changed in this pass; everything else stays at the
+current green baseline until all nine are converted.
