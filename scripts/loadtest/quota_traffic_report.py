@@ -23,7 +23,7 @@ def query_text(start,end,metric=None):
     dimensions='' if metric is None else 'dimensions { query }'
     return '''{ viewer { accounts(filter:{accountTag:"%s"}) {
       d1QueriesAdaptiveGroups(limit:%d%s, filter:{databaseId:"%s",datetime_geq:"%s",datetime_leq:"%s"}) {
-        %s sum { rowsRead rowsWritten } count
+        %s sum { rowsRead rowsWritten rowsReturned } count
       }
     } } }'''%(ACCOUNT,1 if metric is None else 60,ordering,DATABASE,start,end,dimensions)
 
@@ -39,7 +39,11 @@ def parse_groups(payload,shapes=False):
             raise ValueError('Invalid aggregate totals')
         if type(row.get('count')) is not int or row['count']<0: raise ValueError('Invalid execution count')
         if shapes and not isinstance(row.get('dimensions',{}).get('query'),str): raise ValueError('Missing query shape')
-    return [{'sum':{k:r['sum'][k] for k in ('rowsRead','rowsWritten')},'count':r['count'],
+    for row in groups:
+        if 'rowsReturned' in row['sum'] and (type(row['sum']['rowsReturned']) is not int or row['sum']['rowsReturned']<0):
+            raise ValueError('Invalid returned-row count')
+    return [{'sum':{**{k:r['sum'][k] for k in ('rowsRead','rowsWritten')},
+                     **({'rowsReturned':r['sum']['rowsReturned']} if shapes and 'rowsReturned' in r['sum'] else {})},'count':r['count'],
              **({'dimensions':{'query':r['dimensions']['query']}} if shapes else {})} for r in groups]
 
 
@@ -67,7 +71,9 @@ def safe_shape(sql):
         ('idx_cf_friend_participant_0','indexed_friend_guard'),('where path','path_lookup'),('as preview_json','engagement_preview'),
         ('as total_comments','engagement_comment_total'),('as types_json','reaction_totals'),
         ('idx_cf_canonical_comment_page_','historical_comment_page'),
-        ('count(*) as n from friendbook_cf_firestore_documents','historical_comment_count')]
+        ('count(*) as n from friendbook_cf_firestore_documents','historical_comment_count'),
+        ('on conflict','upsert'),('do nothing','conflict_do_nothing'),
+        ('values (case when','snapshot_guarded_insert')]
         if token in q]
     tables=[label for table,label in (
         ('friendbook_cf_firestore_documents','canonical_documents'),
@@ -90,7 +96,8 @@ def summarize_shapes(groups,metric):
     return {'observed_top_shape_subtotals':buckets,'shape_count':len(groups),
             'may_be_truncated':len(groups)>=60,
             'largest_shapes':[{'category':category(r['dimensions']['query']),**safe_shape(r['dimensions']['query']),
-                               'rowsRead':r['sum']['rowsRead'],'rowsWritten':r['sum']['rowsWritten'],'executions':r['count']}
+                               'rowsRead':r['sum']['rowsRead'],'rowsWritten':r['sum']['rowsWritten'],
+                               'rowsReturned':r['sum'].get('rowsReturned'),'executions':r['count']}
                               for r in top]}
 
 

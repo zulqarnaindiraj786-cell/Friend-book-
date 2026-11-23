@@ -77,3 +77,14 @@ class TrafficReport(unittest.TestCase):
         result=p.summarize_shapes(rows,'rowsRead')
         self.assertEqual(len(result['largest_shapes']),10)
         self.assertNotIn('private_table',json.dumps(result))
+
+    def test_rows_returned_distinguishes_legitimate_result_volume_from_amplification(self):
+        row={'sum':{'rowsRead':185,'rowsWritten':0,'rowsReturned':92},'count':1,
+             'dimensions':{'query':'SELECT f.* FROM friendbook_cf_chat_participants m JOIN friendbook_cf_firestore_documents f ON f.path=m.chat_path'}}
+        parsed=p.parse_groups(payload([row]),True)
+        self.assertEqual(p.summarize_shapes(parsed,'rowsRead')['largest_shapes'][0]['rowsReturned'],92)
+        del row['sum']['rowsReturned']
+        self.assertIsNone(p.summarize_shapes(p.parse_groups(payload([row]),True),'rowsRead')['largest_shapes'][0]['rowsReturned'])
+        for bad in (True,-1,'92'):
+            row['sum']['rowsReturned']=bad
+            with self.assertRaises(ValueError):p.parse_groups(payload([row]),True)
