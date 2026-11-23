@@ -52,12 +52,27 @@ jobs:
             --representation=createdAt --allow-encoding-only || status=1
           python3 scripts/loadtest/d1_account_usage_analytics.py --root-backfill-budget || true
           exit $status
+      - name: Finish every remaining collection (users, groups, lives, reels, stories, live_chat)
+        if: contains(github.event.head_commit.message, '[legacy-roots-finish]')
+        run: |
+          set -uo pipefail
+          status=0
+          for collection in users groups lives reels stories live_chat; do
+            echo "== $collection =="
+            node scripts/loadtest/promote_legacy_roots.mjs --collection=$collection --dry-run || status=1
+          done
+          for collection in users groups lives reels stories live_chat; do
+            echo "== promote $collection =="
+            node scripts/loadtest/promote_legacy_roots.mjs --collection=$collection || status=1
+          done
+          python3 scripts/loadtest/d1_account_usage_analytics.py --root-backfill-budget || true
+          exit $status
       - name: Read-only per-collection coverage check
-        if: always() && contains(github.event.head_commit.message, '[legacy-roots-backfill]')
+        if: always() && (contains(github.event.head_commit.message, '[legacy-roots-backfill]') || contains(github.event.head_commit.message, '[legacy-roots-finish]'))
         run: python3 -m scripts.loadtest.verify_root_backfill
       - name: Whole-table read-only inventory (reporting only)
         continue-on-error: true
-        if: always() && contains(github.event.head_commit.message, '[legacy-roots-backfill]')
+        if: always() && (contains(github.event.head_commit.message, '[legacy-roots-backfill]') || contains(github.event.head_commit.message, '[legacy-roots-finish]'))
         run: python3 -m scripts.loadtest.canonical_inventory --full
       - name: Account reserve after writing
         if: always()

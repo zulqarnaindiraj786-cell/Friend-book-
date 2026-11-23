@@ -10,7 +10,8 @@ import sys
 from scripts.loadtest.retired_table_preflight import remote_query
 
 COLLECTIONS = ('chats', 'messages', 'notifications', 'posts', 'comments',
-               'users', 'friends', 'friend_requests')
+               'users', 'friends', 'friend_requests',
+               'groups', 'lives', 'reels', 'stories', 'live_chat')
 
 # One scan of the legacy table: a per-collection count and how many of those
 # paths have no canonical row yet.

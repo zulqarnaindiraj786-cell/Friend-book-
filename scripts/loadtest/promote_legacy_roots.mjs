@@ -12,7 +12,7 @@ import { appDocumentToFirestoreRow } from '../../cloudflare/firestore-documents.
 import { toFirestoreFields, toPlainDocument } from '../../cloudflare/app-documents.js';
 
 export const BULK_COLLECTIONS = new Set(['chats', 'messages', 'notifications', 'posts', 'comments',
-  'friends', 'friend_requests', 'users']);
+  'friends', 'friend_requests', 'users', 'groups', 'lives', 'reels', 'stories', 'live_chat']);
 
 const FIELDS = ['path', 'parent_path', 'collection_id', 'doc_id', 'owner_uid', 'document_json', 'create_time', 'update_time'];
 const SAFE = new Set(['equivalent_root_only', 'facade_projection_diff']);
