@@ -16,7 +16,7 @@ USERS = 5
 # ---------------------------------------------------------------- activity per user per day
 ACTIVITY = {
     'app_opens': 20,             # cold/warm opens that paint Home + the bottom-tab badges
-    'feed_pages': 20,            # further pages after the first (HomeFragment PAGE = 20)
+    'feed_pages': 20,            # further pages after the first (HomeFragment PAGE = 10)
     'story_viewer_opens': 10,
     'notification_opens': 5,
     'chat_list_opens': 10,
@@ -32,17 +32,17 @@ ACTIVITY = {
 }
 
 # ---------------------------------------------------------------- reads per action (code limits)
-# HomeFragment: posts limit(20), stories limit(10), lives limit(25), notes/users limit(30), me doc 1
+# HomeFragment: posts 10, visible story metadata 3, live cards 3, auth allowance 1.
+# Discovery candidates 3 are charged separately only once scrolled into view.
 # MainActivity badges: notifications BADGE_WINDOW(32), chats CHAT_BADGE_LIMIT(20), friend_requests
 #   BADGE_WINDOW(32), reels limit(16) — all one-shot now, so a change re-reads nothing.
 HOME_READS = 10 + 3 + 3 + 1
 BADGE_READS = 32 + 20 + 32 + 16
-FRIEND_GRAPH_TTL_REFRESHES = 4          # cached 15 minutes
 
 READ_COST = {
-    'app_open_home_and_badges': HOME_READS + BADGE_READS,   # 118
-    'feed_listener_redeliveries': 0,                   # the feed listener still re-reads its page
-    'friend_graph_refresh': 60,                             # cached 15 min; ~4 reads of a 60-friend graph
+    'app_open_home_and_badges': HOME_READS + BADGE_READS,   # 117
+    'feed_listener_redeliveries': 0,                   # no Home feed listener exists
+    'friend_graph_refresh': 60,                             # one assumed 60-friend graph, reused from disk
     'feed_page': 10,
     'story_viewer_open': 10,
     'notification_open': 450,

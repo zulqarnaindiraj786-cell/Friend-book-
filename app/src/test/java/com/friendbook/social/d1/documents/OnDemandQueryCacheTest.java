@@ -8,6 +8,8 @@ import org.junit.Test;
 import static org.junit.Assert.*;
 
 /** Behavioural tests: populated/empty cache, explicit refresh, invalidation and eviction. */
+@org.junit.runner.RunWith(org.robolectric.RobolectricTestRunner.class)
+@org.robolectric.annotation.Config(sdk=28, application=android.app.Application.class, manifest=org.robolectric.annotation.Config.NONE)
 public class OnDemandQueryCacheTest {
     static class FakeQuery extends Query {
         boolean fresh=true, missing=false;
@@ -23,20 +25,20 @@ public class OnDemandQueryCacheTest {
     }
     @Test public void emptyCacheIsAHitWithZeroNetworkReads() throws Exception {
         FakeQuery q=new FakeQuery();
-        assertSame(q.cached,Tasks.await(q.getCachedOrFetch(false),2,TimeUnit.SECONDS));
+        assertSame(q.cached,q.getCachedOrFetch(false).getResult());
         assertEquals(0,q.networkReads);
     }
     @Test public void explicitRefreshBypassesCache() throws Exception {
         FakeQuery q=new FakeQuery();
-        assertSame(q.server,Tasks.await(q.getCachedOrFetch(true),2,TimeUnit.SECONDS));
+        assertSame(q.server,q.getCachedOrFetch(true).getResult());
         assertEquals(1,q.networkReads);
     }
     @Test public void invalidationAndEvictionFetchExactlyOnce() throws Exception {
         FakeQuery q=new FakeQuery();q.fresh=false;
-        Tasks.await(q.getCachedOrFetch(false),2,TimeUnit.SECONDS);
+        q.getCachedOrFetch(false).getResult();
         assertEquals(1,q.networkReads);
         q=new FakeQuery();q.missing=true;
-        Tasks.await(q.getCachedOrFetch(false),2,TimeUnit.SECONDS);
+        q.getCachedOrFetch(false).getResult();
         assertEquals(1,q.networkReads);
     }
 }
