@@ -1,4 +1,5 @@
-# Rank six post-rollout hours with ten read/six write shapes; analytics only, no daily certificate.
+# Refresh the six-hour production ranking before selecting the next major consumer fix.
+# Analytics only: no application load, D1 diagnostic scans, deployment or daily certificate.
 name: Analytics-only quota traffic report
 on:
   push:
