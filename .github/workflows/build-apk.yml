@@ -202,6 +202,14 @@ jobs:
         if: steps.rel.outputs.exit != '0'
         run: exit 1
 
+      - name: Verify APK and AAB signatures
+        run: |
+          set -euo pipefail
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose --print-certs app/build/outputs/apk/release/app-release.apk
+          LC_ALL=C jarsigner -verify app/build/outputs/bundle/release/app-release.aab > aab-signature-check.log 2>&1
+          grep -q 'jar verified.' aab-signature-check.log || { echo '::error::AAB signature verification failed'; exit 1; }
+          echo '::notice::APK and AAB signatures verified.'
+
       - name: Require actual Android core test results, not source-only checks
         run: python3 scripts/ci/verify_android_tests.py
 
@@ -221,6 +229,7 @@ jobs:
           unzip -l friendbook-playstore.aab | grep "proguard.map"
           test -s friendbook-mapping.txt && echo "Verified non-empty R8 deobfuscation mapping.txt"
           ls -lh friendbook-playstore.aab friendbook.apk friendbook-mapping.txt
+          sha256sum friendbook.apk friendbook-playstore.aab friendbook-mapping.txt > friendbook-SHA256SUMS.txt
 
       - name: Upload Google Play Store Signed AAB
         uses: actions/upload-artifact@v4
@@ -254,9 +263,9 @@ jobs:
           set -euo pipefail
           TAG="friendbook-2.10.33-signed-${GITHUB_SHA:0:8}"
           if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" friendbook.apk friendbook-playstore.aab friendbook-mapping.txt --clobber
+            gh release upload "$TAG" friendbook.apk friendbook-playstore.aab friendbook-mapping.txt friendbook-SHA256SUMS.txt --clobber
           else
-            gh release create "$TAG" friendbook.apk friendbook-playstore.aab friendbook-mapping.txt \
+            gh release create "$TAG" friendbook.apk friendbook-playstore.aab friendbook-mapping.txt friendbook-SHA256SUMS.txt \
               --target "$GITHUB_SHA" --prerelease --latest=false \
               --title 'friendbook 2.10.33 — Signed test APK + AAB' \
               --notes 'Owner-requested signed test candidate from PR #36, versionCode 175. Includes on-demand quota fixes and Invite Friends. Not merged, not a production capacity pass, not published to Google Play. The production Latest release is unchanged.'
