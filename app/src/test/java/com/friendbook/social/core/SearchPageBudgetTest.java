@@ -40,6 +40,7 @@ public class SearchPageBudgetTest {
             expired.startCachedFor(SearchReadPolicy.EXACT_PAGE_REUSE_MS);
             Shadows.shadowOf(Looper.getMainLooper()).idle();expired.close();
             verify(head,times(2)).get(Source.DEFAULT);
+            verify(head,never()).get(Source.SERVER);
         }
     }
 
