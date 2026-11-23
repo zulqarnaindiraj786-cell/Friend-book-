@@ -22,3 +22,25 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: python3 scripts/loadtest/d1_account_usage_analytics.py
+
+      - name: Read only deployed guard flag and deployment metadata
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          python3 - <<'PYMETA'
+          import json, os, urllib.request
+          base='https://api.cloudflare.com/client/v4/accounts/92f3d04598822de2e49e14561218d090/workers/scripts/rough-firefly-dd7b'
+          def get(suffix):
+              req=urllib.request.Request(base+suffix,headers={'Authorization':'Bearer '+os.environ['CLOUDFLARE_API_TOKEN']})
+              with urllib.request.urlopen(req,timeout=25) as response: payload=json.load(response)
+              if not payload.get('success'): raise SystemExit('Read-only Worker metadata unavailable')
+              return payload['result']
+          settings=get('/settings')
+          flag=next((x.get('text') for x in settings.get('bindings',[]) if x.get('name')=='FRIEND_GUARD_INDEXED' and x.get('type')=='plain_text'),None)
+          print('::notice::Deployed FRIEND_GUARD_INDEXED='+json.dumps(flag))
+          deployments=get('/deployments')
+          rows=deployments.get('deployments',[]) if isinstance(deployments,dict) else deployments
+          if rows:
+              latest=rows[0]
+              print('::notice::Active deployment metadata '+json.dumps({k:latest.get(k) for k in ['id','created_on','versions']},sort_keys=True))
+          PYMETA
