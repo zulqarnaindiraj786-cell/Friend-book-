@@ -11,8 +11,8 @@ class AutoPushRegistrationTest(unittest.TestCase):
         self.assertIn('setAutoInitEnabled(true)', source)
         self.assertIn('addAuthStateListener', source)
         self.assertIn('sync(app)', source)
-        self.assertIn('enqueueUniquePeriodicWork', source)
-        self.assertIn('NetworkType.CONNECTED', source)
+        self.assertNotIn('enqueueUniquePeriodicWork', source)
+        self.assertIn('NetworkType.CONNECTED', (JAVA/'push/PushDeliveryWorker.java').read_text())
 
     def test_token_refresh_and_session_recovery(self):
         self.assertIn('PushManager.save(this, token)', (JAVA/'push/FriendMessagingService.java').read_text())

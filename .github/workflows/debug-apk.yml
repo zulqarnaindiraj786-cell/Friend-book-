@@ -1,0 +1,171 @@
+name: Verify FriendBook Android candidate
+on:
+  workflow_dispatch:
+  push:
+    branches: [arena/7c7ddb7b-friend-book]
+  pull_request:
+    paths: ['app/**', 'gradle/**', 'gradlew', '*.gradle', '.github/workflows/debug-apk.yml']
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.11.1
+      - name: Install Android SDK 36
+        run: |
+          set -euo pipefail
+          if [ ! -d "$ANDROID_HOME/platforms/android-36" ] || [ ! -x "$ANDROID_HOME/build-tools/36.0.0/apksigner" ]; then
+            SDKM="$(command -v sdkmanager || find "$ANDROID_HOME/cmdline-tools" -type f -path '*/bin/sdkmanager' | sort -V | tail -1)"
+            test -x "$SDKM"
+            "$SDKM" 'platforms;android-36' 'build-tools;36.0.0'
+          fi
+      - name: Compile Android and run unit tests without packaging
+        if: github.event_name == 'push' && contains(github.event.head_commit.message, '[android-compile-only]')
+        run: |
+          if ! gradle :app:compileDebugJavaWithJavac :app:testDebugUnitTest --no-daemon --console=plain > android-compile.log 2>&1; then
+            tail -100 android-compile.log
+            grep -A 4 -E 'error:|What went wrong|FAILED|Execution failed' android-compile.log | tail -45 | while IFS= read -r line; do echo "::error::$line"; done
+            exit 1
+          fi
+      - name: Compile and test the candidate
+        if: github.event_name != 'push' || !contains(github.event.head_commit.message, '[android-compile-only]')
+        run: |
+          if ! gradle :app:testDebugUnitTest :app:assembleDebug --no-daemon --console=plain > android-build.log 2>&1; then
+            tail -100 android-build.log
+            grep -E 'error:|^> |^e: |FAILED|What went wrong' android-build.log | tail -20 | while IFS= read -r line; do echo "::error::$line"; done
+            exit 1
+          fi
+      - uses: actions/upload-artifact@v4
+        if: github.event_name != 'push' || !contains(github.event.head_commit.message, '[android-compile-only]')
+        with:
+          name: FriendBook-debug-test-only
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+  signed-candidate:
+    if: "github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && contains(github.event.head_commit.message, '[signed-candidate]'))"
+    needs: verify
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.11.1
+      - name: Install Android SDK 36
+        run: |
+          set -euo pipefail
+          if [ ! -d "$ANDROID_HOME/platforms/android-36" ] || [ ! -x "$ANDROID_HOME/build-tools/36.0.0/apksigner" ]; then
+            SDKM="$(command -v sdkmanager || find "$ANDROID_HOME/cmdline-tools" -type f -path '*/bin/sdkmanager' | sort -V | tail -1)"
+            test -x "$SDKM"
+            "$SDKM" 'platforms;android-36' 'build-tools;36.0.0'
+          fi
+      - name: Sign candidate with the original v2.8.89 key
+        run: |
+          set -euo pipefail
+          set +x
+          umask 077
+          baseline=6306172bb107bfa3f2b499f418d3cf9e3970d95a
+          git fetch --no-tags --depth=1 origin "$baseline"
+          export FRIENDBOOK_RELEASE_STORE_FILE="$RUNNER_TEMP/friendbook-candidate.p12"
+          trap 'rm -f "$FRIENDBOOK_RELEASE_STORE_FILE"' EXIT
+          git show "$baseline:app/friendbook-release.p12" > "$FRIENDBOOK_RELEASE_STORE_FILE"
+          export FRIENDBOOK_RELEASE_STORE_PASSWORD="$(git show "$baseline:app/build.gradle" | awk -F"'" '/^[[:space:]]*storePassword /{print $2;exit}')"
+          export FRIENDBOOK_RELEASE_KEY_ALIAS="$(git show "$baseline:app/build.gradle" | awk -F"'" '/^[[:space:]]*keyAlias /{print $2;exit}')"
+          export FRIENDBOOK_RELEASE_KEY_PASSWORD="$(git show "$baseline:app/build.gradle" | awk -F"'" '/^[[:space:]]*keyPassword /{print $2;exit}')"
+          : "${FRIENDBOOK_RELEASE_STORE_PASSWORD:?Missing historical store configuration}"
+          : "${FRIENDBOOK_RELEASE_KEY_ALIAS:?Missing historical alias configuration}"
+          : "${FRIENDBOOK_RELEASE_KEY_PASSWORD:?Missing historical key configuration}"
+          printf '::add-mask::%s\n' "$FRIENDBOOK_RELEASE_STORE_PASSWORD" "$FRIENDBOOK_RELEASE_KEY_PASSWORD"
+          if ! gradle :app:assembleRelease :app:bundleRelease --max-workers=2 --no-daemon --console=plain > android-release.log 2>&1; then
+            tail -100 android-release.log
+            grep -Ei 'error|exception|daemon|failed|what went wrong|killed' android-release.log | tail -20 | while IFS= read -r line; do echo "::error::$line"; done
+            exit 1
+          fi
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify app/build/outputs/apk/release/app-release.apk
+          jarsigner -verify app/build/outputs/bundle/release/app-release.aab
+      - name: Check packaged hardware features are optional
+        run: |
+          "$ANDROID_HOME/build-tools/36.0.0/aapt" dump xmltree app/build/outputs/apk/release/app-release.apk AndroidManifest.xml > "$RUNNER_TEMP/friendbook-manifest.txt"
+          python3 - <<'PY'
+          import os, pathlib, re
+          xmltree = (pathlib.Path(os.environ['RUNNER_TEMP']) / 'friendbook-manifest.txt').read_text()
+          blocks = re.split(r'(?m)^\s*E: ', xmltree)
+          for name in ('android.hardware.screen.portrait', 'android.hardware.wifi'):
+              matches = [b for b in blocks if b.startswith('uses-feature ') and ('"'+name+'"') in b]
+              if len(matches) != 1 or not re.search(r'android:required[^=]*=\(type 0x12\)0x0\b', matches[0]):
+                  raise SystemExit(f'Expected one optional declaration for {name}: {matches}')
+              print(f'{name}: required=false')
+          PY
+      - name: Validate signed AAB and report R8 mapping coverage
+        run: |
+          curl -fsSL --retry 3 https://github.com/google/bundletool/releases/download/1.18.1/bundletool-all-1.18.1.jar -o "$RUNNER_TEMP/bundletool.jar"
+          java -jar "$RUNNER_TEMP/bundletool.jar" validate --bundle=app/build/outputs/bundle/release/app-release.aab
+          java -jar "$RUNNER_TEMP/bundletool.jar" dump manifest --bundle=app/build/outputs/bundle/release/app-release.aab --module=base > "$RUNNER_TEMP/fb-base-manifest.xml"
+          python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import os, pathlib, re
+          from xml.etree import ElementTree as ET
+          manifest=ET.parse(pathlib.Path(os.environ['RUNNER_TEMP'])/'fb-base-manifest.xml').getroot()
+          ns='{http://schemas.android.com/apk/res/android}'
+          for name in ('android.hardware.screen.portrait','android.hardware.wifi'):
+              assert [x.get(ns+'required') for x in manifest.findall('uses-feature') if x.get(ns+'name')==name]==['false'],name
+          mapping=pathlib.Path('app/build/outputs/mapping/release/mapping.txt').read_text()
+          classes=re.findall(r'(?m)^(\S+) -> (\S+):$',mapping)
+          renamed=sum(old!=new for old,new in classes)
+          assert renamed>0, 'No renamed classes in the release mapping'
+          print(f'Bundletool validated the signed AAB. R8 mapping: {renamed:,} renamed class entries out of {len(classes):,} mapped entries (not the Play Console score).')
+          PY
+      - name: Report compressed APK size by component
+        run: |
+          python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          from collections import Counter
+          from pathlib import Path
+          from zipfile import ZipFile
+          apk = Path('app/build/outputs/apk/release/app-release.apk')
+          print(f"### Signed APK: {apk.stat().st_size:,} bytes")
+          print("| Component | Compressed bytes |\n|---|---:|")
+          totals = Counter()
+          with ZipFile(apk) as archive:
+              for entry in archive.infolist():
+                  name = entry.filename
+                  group = ('DEX (compressed)' if entry.compress_type else 'DEX (stored)') if name.endswith('.dex') else name.split('/')[0]
+                  totals[group] += entry.compress_size
+          for group, size in totals.most_common(12):
+              print(f"| {group} | {size:,} |")
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: FriendBook-signed-candidate
+          path: |
+            app/build/outputs/apk/release/app-release.apk
+            app/build/outputs/bundle/release/app-release.aab
+          if-no-files-found: error
+      - name: Publish direct APK and AAB links (prerelease only)
+        if: github.ref == 'refs/heads/arena/7c7ddb7b-friend-book' && contains(github.event.head_commit.message, '[publish-candidate]')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          version=$(sed -nE "s/^[[:space:]]*versionName '([^']+)'.*/\1/p" app/build.gradle | head -1)
+          test -n "$version"
+          tag="friendbook-${version}-cloudflare-${GITHUB_SHA:0:7}"
+          gh release create "$tag" \
+            app/build/outputs/apk/release/app-release.apk#FriendBook.apk \
+            app/build/outputs/bundle/release/app-release.aab#FriendBook.aab \
+            --target "$GITHUB_SHA" --prerelease --latest=false \
+            --title "FriendBook ${version} Cloudflare test candidate" \
+            --notes "Signed with the original v2.8.89 key; code and resources shrunk. Test candidate; not the production release."

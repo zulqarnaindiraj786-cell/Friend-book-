@@ -1,0 +1,85 @@
+# Bulk promotion of legacy-only root documents that are provably equivalent.
+# Rows whose projection would change real values or authorization are skipped
+# and stay on the legacy fallback; the workflow prints the per-collection table.
+name: Legacy root backfill
+on:
+  workflow_dispatch:
+  push:
+    branches: ['arena/7c7ddb7b-friend-book']
+    paths:
+      - '.github/workflows/legacy-roots-backfill.yml'
+      - 'scripts/loadtest/promote_legacy_roots.mjs'
+      - 'scripts/loadtest/verify_root_backfill.py'
+      - 'cloudflare/test/legacy-root-backfill.test.js'
+permissions:
+  contents: read
+concurrency:
+  # A database-write job, but not a deployment: it stays out of the deploy
+  # group so a queued deploy can never cancel a partially-applied promotion.
+  group: friendbook-legacy-backfill
+  cancel-in-progress: false
+jobs:
+  promote:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[legacy-roots-backfill]') || contains(github.event.head_commit.message, '[legacy-roots-diagnose]') || contains(github.event.head_commit.message, '[legacy-roots-finish]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci --ignore-scripts
+      - name: Unit tests for the bulk promoter
+        run: node --test cloudflare/test/legacy-root-backfill.test.js
+      - name: Account reserve before writing
+        run: python3 scripts/loadtest/d1_account_usage_analytics.py --root-backfill-budget
+      - name: Classify the remaining rows without writing (diagnose only)
+        if: contains(github.event.head_commit.message, '[legacy-roots-diagnose]')
+        run: node scripts/loadtest/promote_legacy_roots.mjs --collection=comments --dry-run
+      - name: Promote each requested collection and print the verification table
+        if: contains(github.event.head_commit.message, '[legacy-roots-backfill]')
+        run: |
+          set -uo pipefail
+          status=0
+          for collection in chats messages notifications posts; do
+            node scripts/loadtest/promote_legacy_roots.mjs --collection=$collection || status=1
+          done
+          # The remaining comment rows differ only in how createdAt is encoded;
+          # the opt-in checks that both encodings carry the same instant.
+          node scripts/loadtest/promote_legacy_roots.mjs --collection=comments \
+            --representation=createdAt --allow-encoding-only || status=1
+          python3 scripts/loadtest/d1_account_usage_analytics.py --root-backfill-budget || true
+          exit $status
+      - name: Finish every remaining collection (users, groups, lives, reels, stories, live_chat)
+        if: contains(github.event.head_commit.message, '[legacy-roots-finish]')
+        run: |
+          set -uo pipefail
+          status=0
+          for collection in users groups lives reels stories live_chat; do
+            echo "== $collection =="
+            node scripts/loadtest/promote_legacy_roots.mjs --collection=$collection --dry-run || status=1
+          done
+          for collection in users groups lives reels stories live_chat; do
+            echo "== promote $collection =="
+            node scripts/loadtest/promote_legacy_roots.mjs --collection=$collection || status=1
+          done
+          # Reels whose only difference is how createdAt is encoded.
+          node scripts/loadtest/promote_legacy_roots.mjs --collection=reels \
+            --representation=createdAt --allow-encoding-only || status=1
+          python3 scripts/loadtest/follow_membership_preflight.py || status=1
+          python3 scripts/loadtest/d1_account_usage_analytics.py --root-backfill-budget || true
+          exit $status
+      - name: Read-only per-collection coverage check
+        if: always() && (contains(github.event.head_commit.message, '[legacy-roots-backfill]') || contains(github.event.head_commit.message, '[legacy-roots-finish]'))
+        run: python3 -m scripts.loadtest.verify_root_backfill
+      - name: Whole-table read-only inventory (reporting only)
+        continue-on-error: true
+        if: always() && (contains(github.event.head_commit.message, '[legacy-roots-backfill]') || contains(github.event.head_commit.message, '[legacy-roots-finish]'))
+        run: python3 -m scripts.loadtest.canonical_inventory --full
+      - name: Account reserve after writing
+        if: always()
+        run: python3 scripts/loadtest/d1_account_usage_analytics.py --root-backfill-budget
+
+# Re-run marker for the verified bulk promotion.

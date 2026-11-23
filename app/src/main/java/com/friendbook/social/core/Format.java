@@ -16,6 +16,13 @@ public class Format {
         if (o instanceof Timestamp) return ((Timestamp) o).toDate().getTime();
         if (o instanceof Date) return ((Date) o).getTime();
         if (o instanceof Number) return ((Number) o).longValue();
+        // CloudflareStore returns plain JSON maps, unlike the document facade which
+        // decodes the same timestamp wrapper into Firebase Timestamp objects.
+        if (o instanceof Map) {
+            Map<?, ?> map = (Map<?, ?>) o;
+            if ("timestamp".equals(map.get("__type")) && map.get("millis") instanceof Number)
+                return ((Number) map.get("millis")).longValue();
+        }
         return 0L;
     }
 

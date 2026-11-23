@@ -11,16 +11,16 @@ const project='friendbook-17551';
 async function scenario(t){
  const f=fixture(), originalFetch=globalThis.fetch;
  const keys=await generateKeyPair('RS256');
- const state={sourceReads:0,privacy:'Public',blocked:[],banned:false};
- globalThis.fetch=async(url,options)=>{
-  const path=String(url);
-  assert.ok(path.startsWith('https://firestore.googleapis.com/v1/'),'Unexpected network destination');
-  state.sourceReads++;
-  const name=decodeURIComponent(path.split('/documents/')[1]||'');
-  if(name.startsWith('posts/')||name.startsWith('reels/'))return Response.json({fields:{authorId:{stringValue:'user1'},privacy:{stringValue:state.privacy}}});
-  if(name.startsWith('users/'))return Response.json({fields:{displayName:{stringValue:'Fixture user'},banned:{booleanValue:state.banned},blocked:{arrayValue:{values:state.blocked.map(stringValue=>({stringValue}))}}}});
-  throw Error('Unconfigured source fixture');
+ const state={unexpectedNetwork:0};
+ f.sql.exec('CREATE TABLE IF NOT EXISTS friendbook_cf_documents(path TEXT PRIMARY KEY, collection TEXT, doc_id TEXT, owner_uid TEXT, document_json TEXT, updated_at INTEGER)');
+ f.sql.exec('CREATE TABLE IF NOT EXISTS friendbook_cf_firestore_documents(path TEXT PRIMARY KEY, document_json TEXT)');
+ const putDoc=(path,value)=>{
+  f.sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET document_json=excluded.document_json').run(path,path.split('/')[0],path.split('/').at(-1),value.authorId||value.uid||'',JSON.stringify(value),Date.now());
+  f.sql.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET document_json=excluded.document_json').run(path,path.split('/')[0],path.split('/')[0],path.split('/').at(-1),value.authorId||value.uid||'',JSON.stringify(value),1,1);
  };
+ putDoc('posts/p1',{authorId:'user1',privacy:'Public'});
+ putDoc('users/user1',{displayName:'Fixture user',banned:false,blocked:[]});
+ globalThis.fetch=async()=>{state.unexpectedNetwork++;throw Error('D1-only worker attempted external data fetch')};
  const worker=createWorker((token,p)=>verifyFirebaseToken(token,p,keys.publicKey));
  const server=createServer(async(req,res)=>{
   try{
@@ -39,7 +39,7 @@ async function scenario(t){
   const result=await originalFetch('http://127.0.0.1:'+server.address().port+path,{method,headers:{...(auth?{Authorization:'Bearer '+auth}:{}),...(body===undefined?{}:{'Content-Type':'application/json'})},...(body===undefined?{}:{body:JSON.stringify(body)})});
   return {status:result.status,body:await result.json()};
  };
- return {...f,state,token,call};
+ return {...f,state,token,call,putDoc};
 }
 const route=kind=>'/v1/engagement/posts/p1/'+kind;
 
@@ -52,7 +52,7 @@ test('HTTP: auth, global OFF and staging markers reject writes before source acc
  assert.equal((await f.call(route('comments'),'POST',{id:'x',text:'denied'})).status,503);
  f.env.D1_INTERACTIONS_ENABLED='true';
  assert.equal((await f.call('/v1/engagement/posts/p2/comments','POST',{id:'x',text:'denied'})).status,503);
- assert.equal(f.state.sourceReads,0);
+ assert.equal(f.state.unexpectedNetwork,0);
  assert.equal(f.sql.prepare('SELECT COUNT(*) AS n FROM friendbook_cf_comments').get().n,0);
 });
 
@@ -74,12 +74,12 @@ test('HTTP: enabled comments/media/replies/idempotency/react/pin/edit and retain
  assert.equal(f.sql.prepare('SELECT COUNT(*) AS n FROM friendbook_cf_comments').get().n,2);
 });
 
-test('HTTP: cursor paging returns 50 + 11 unique comments and 30 + 1 reactors',async t=>{
+test('HTTP: cursor paging returns 20-item comment pages and 30 + 1 reactor pages',async t=>{
  const f=await scenario(t);
  for(let i=0;i<61;i++)assert.equal((await f.call(route('comments'),'POST',{id:'c'+String(i).padStart(3,'0'),text:'fixture'})).status,200);
- const first=await f.call(route('comments')),second=await f.call(route('comments')+'?before='+encodeURIComponent(first.body.next));
- assert.equal(first.body.comments.length,50);assert.equal(second.body.comments.length,11);
- assert.equal(new Set([...first.body.comments,...second.body.comments].map(c=>c.id)).size,61);
+ const first=await f.call(route('comments')),second=await f.call(route('comments')+'?before='+encodeURIComponent(first.body.next)),third=await f.call(route('comments')+'?before='+encodeURIComponent(second.body.next)),fourth=await f.call(route('comments')+'?before='+encodeURIComponent(third.body.next));
+ assert.deepEqual([first.body.comments.length,second.body.comments.length,third.body.comments.length,fourth.body.comments.length],[20,20,20,1]);
+ assert.equal(new Set([...first.body.comments,...second.body.comments,...third.body.comments,...fourth.body.comments].map(c=>c.id)).size,61);
  for(let i=0;i<31;i++)f.sql.prepare('INSERT INTO friendbook_cf_reactions VALUES (?,?,?,?)').run('posts/p1','actor'+String(i).padStart(3,'0'),'like',123);
  const people=await f.call(route('reactors')),more=await f.call(route('reactors')+'?after='+encodeURIComponent(people.body.next));
  assert.equal(people.body.reactors.length,30);assert.equal(more.body.reactors.length,1);
@@ -87,18 +87,19 @@ test('HTTP: cursor paging returns 50 + 11 unique comments and 30 + 1 reactors',a
 
 test('HTTP: source privacy, banned actor and blocked comment/actor lists remain private',async t=>{
  const f=await scenario(t), other=await f.token('user2');
- f.state.privacy='Only me';assert.equal((await f.call(route('comments'),'GET',undefined,other)).status,403);
- f.state.privacy='Public';f.state.banned=true;assert.equal((await f.call(route('comments'))).status,403);f.state.banned=false;
+ f.putDoc('posts/p1',{authorId:'user1',privacy:'Only me'});assert.equal((await f.call(route('comments'),'GET',undefined,other)).status,403);
+ f.putDoc('posts/p1',{authorId:'user1',privacy:'Public'});f.putDoc('users/user1',{displayName:'Fixture user',banned:true,blocked:[]});assert.equal((await f.call(route('comments'))).status,403);
+ f.putDoc('users/user1',{displayName:'Fixture user',banned:false,blocked:[]});
  f.sql.exec("INSERT INTO friendbook_cf_comments VALUES ('posts/p1','blocked-comment','blocked','private',NULL,123)");
  f.sql.exec("INSERT INTO friendbook_cf_reactions VALUES ('posts/p1','blocked','like',123)");
  f.sql.exec("INSERT INTO friendbook_cf_comments VALUES ('posts/p1','visible-comment','user1','visible',NULL,124)");
  f.sql.exec("INSERT INTO friendbook_cf_comment_reactions VALUES ('posts/p1','visible-comment','blocked','love')");
- f.state.blocked=['blocked'];
+ f.putDoc('users/user1',{displayName:'Fixture user',banned:false,blocked:['blocked']});
  assert.equal((await f.call(route('comments')+'?id=blocked-comment')).status,404);
  assert.equal((await f.call(route('reactors')+'?commentId=blocked-comment')).status,404);
  assert.deepEqual((await f.call(route('reactors'))).body.reactors,[]);
  assert.deepEqual((await f.call(route('reactors')+'?commentId=visible-comment')).body.reactors,[]);
- f.state.blocked=[];
+ f.putDoc('users/user1',{displayName:'Fixture user',banned:false,blocked:[]});
  assert.equal((await f.call(route('reactors'))).body.reactors[0].uid,'blocked');
  assert.equal((await f.call(route('reactors')+'?commentId=visible-comment')).body.reactors[0].uid,'blocked');
 });

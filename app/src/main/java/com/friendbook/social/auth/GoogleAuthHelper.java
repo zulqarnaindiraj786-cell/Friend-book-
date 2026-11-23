@@ -4,7 +4,11 @@ import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.Context;
 import android.content.Intent;
+import android.content.pm.PackageInfo;
+import android.content.pm.PackageManager;
+import android.content.pm.Signature;
 import android.net.Uri;
+import android.os.Build;
 import android.os.CancellationSignal;
 import android.text.InputType;
 import android.util.Log;
@@ -33,7 +37,6 @@ import com.friendbook.social.core.Admin;
 import com.friendbook.social.core.Fb;
 import com.friendbook.social.core.Notify;
 import com.friendbook.social.core.Prefs;
-import com.friendbook.social.core.Presence;
 import com.friendbook.social.core.Ui;
 import com.friendbook.social.main.MainActivity;
 import com.friendbook.social.settings.SessionsActivity;
@@ -50,9 +53,9 @@ import com.google.firebase.auth.AuthResult;
 import com.google.firebase.auth.FirebaseUser;
 import com.google.firebase.auth.GoogleAuthProvider;
 import com.google.firebase.auth.OAuthProvider;
-import com.google.firebase.firestore.DocumentSnapshot;
-import com.google.firebase.firestore.FieldValue;
-import com.google.firebase.firestore.SetOptions;
+import com.friendbook.social.d1.documents.DocumentSnapshot;
+import com.friendbook.social.d1.documents.FieldValue;
+import com.friendbook.social.d1.documents.SetOptions;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -341,17 +344,46 @@ public final class GoogleAuthHelper {
         String low = rawMsg == null ? "" : rawMsg.toLowerCase(Locale.US);
         if (sNativeSha1Missing || low.contains("cert") || low.contains("sha")
                 || low.contains("developer_error") || low.contains("initial state")) {
+            String fingerprint = currentSigningSha1(a);
             new AlertDialog.Builder(a)
-                    .setTitle("🔐 Add SHA-1 in Firebase Console")
-                    .setMessage("To enable instant 1-tap Google Sign-In for package com.friendbook.social, add this SHA-1 fingerprint in:\n\n"
-                            + "Firebase Console → Project Settings → Your apps → com.friendbook.social → Add fingerprint:\n\n"
-                            + RELEASE_SHA1)
-                    .setPositiveButton("📋 Copy SHA-1", (d, w) -> Ui.copy(a, RELEASE_SHA1))
+                    .setTitle("🔐 Add this app's SHA-1 in Firebase Console")
+                    .setMessage("For Google Sign-In, add the SHA-1 for this installed build and package "
+                            + a.getPackageName() + " in Firebase Console → Project Settings → Your apps → Add fingerprint:\n\n"
+                            + fingerprint)
+                    .setPositiveButton("📋 Copy SHA-1", (d, w) -> Ui.copy(a, fingerprint))
                     .setNegativeButton("Close", null)
                     .show();
             return;
         }
         Ui.toast(a, friendlyError(rawMsg));
+    }
+
+    /** SHA-1 of the actual installed APK signer (debug and release builds have different keys). */
+    private static String currentSigningSha1(Context context) {
+        try {
+            int flags = Build.VERSION.SDK_INT >= 28
+                    ? PackageManager.GET_SIGNING_CERTIFICATES : PackageManager.GET_SIGNATURES;
+            PackageInfo info = context.getPackageManager().getPackageInfo(context.getPackageName(), flags);
+            Signature[] signatures;
+            if (Build.VERSION.SDK_INT >= 28 && info.signingInfo != null) {
+                signatures = info.signingInfo.getApkContentsSigners();
+            } else {
+                //noinspection deprecation
+                signatures = info.signatures;
+            }
+            if (signatures != null && signatures.length > 0) {
+                byte[] digest = java.security.MessageDigest.getInstance("SHA-1").digest(signatures[0].toByteArray());
+                StringBuilder out = new StringBuilder();
+                for (byte value : digest) {
+                    if (out.length() > 0) out.append(':');
+                    out.append(String.format(Locale.US, "%02X", value & 0xff));
+                }
+                return out.toString();
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "Could not determine installed signing certificate", e);
+        }
+        return RELEASE_SHA1;
     }
 
     /** Ensures a signed-in FirebaseUser has a complete `users/{uid}` Firestore profile before entering MainActivity. */
@@ -447,9 +479,9 @@ public final class GoogleAuthHelper {
         u.put("contactInfoPrivacy", "Only me");
         u.put("friendsListPrivacy", "Public");
         u.put("lookupPrivacy", "Everyone");
-        u.put("isOnline", true);
-        u.put("isAdmin", Admin.isOwnerEmail(email));
-        u.put("isVerified", Admin.isOwnerEmail(email));
+        // Privileged flags are server-owned; email alone cannot grant them.
+        u.put("isAdmin", false);
+        u.put("isVerified", false);
         u.put("friendsCount", 0);
         u.put("followers", new ArrayList<String>());
         u.put("following", new ArrayList<String>());
@@ -545,28 +577,10 @@ public final class GoogleAuthHelper {
             code = Admin.extractRefCode(Prefs.pendingReferral(a));
         }
         if (code == null || code.isEmpty() || code.equals(newUid)) return;
-        final String refBy = code;
-        Prefs.setPendingReferral(a, "");
-        Fb.db().collection("users").document(refBy).get().addOnSuccessListener(d -> {
-            if (!d.exists()) return;
-            Map<String, Object> r = new HashMap<>();
-            r.put("refBy", refBy);
-            r.put("refTo", newUid);
-            r.put("status", "completed");
-            r.put("date", FieldValue.serverTimestamp());
-            r.put("createdAt", FieldValue.serverTimestamp());
-            Fb.db().collection("referrals").document(refBy + "_" + newUid).set(r);
-
-            Map<String, Object> n = new HashMap<>();
-            n.put("toUserId", refBy);
-            n.put("fromUserId", newUid);
-            n.put("fromUserName", newName);
-            n.put("fromUserPhotoUrl", newPhoto == null ? "" : newPhoto);
-            n.put("type", "referral");
-            n.put("text", "joined friendbook via your invite 🎉 (referral credit +1)");
-            n.put("isRead", false);
-            n.put("createdAt", FieldValue.serverTimestamp());
-            Fb.db().collection("notifications").add(n);
+        if (!newUid.equals(Fb.uid())) return;
+        final String referredBy = code;
+        Fb.db().claimReferral(referredBy).addOnSuccessListener(result -> {
+            if (newUid.equals(Fb.uid())) Prefs.setPendingReferral(a, "");
         });
     }
 
@@ -600,7 +614,7 @@ public final class GoogleAuthHelper {
 
     private static void openMain(Activity a) {
         Fb.startMeListener();
-        Presence.init();
+
         a.startActivity(new Intent(a, MainActivity.class));
         a.finishAffinity();
     }

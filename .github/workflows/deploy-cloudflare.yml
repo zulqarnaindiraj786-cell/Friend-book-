@@ -1,7 +1,8 @@
-name: Deploy existing Cloudflare Worker (D1 OFF)
+# Deploy the validated Worker with engagement, request and feed-loading fixes.
+name: Deploy FriendBook Cloudflare Worker (D1 ON)
 on:
   push:
-    branches: [main, 'arena/15a53658-friend-book']
+    branches: [main, 'arena/15a53658-friend-book', 'arena/f6bf61bd-friend-book', 'arena/7c7ddb7b-friend-book']
     paths:
       - 'worker.js'
       - 'wrangler.toml'
@@ -10,6 +11,8 @@ on:
       - 'docs/**'
       - '.github/workflows/deploy-cloudflare.yml'
       - 'scripts/admin/configure_video_r2.py'
+      - 'scripts/admin/migrate_firestore_to_d1.py'
+      - 'scripts/tests/test_firestore_migration.py'
   workflow_dispatch:
 permissions:
   contents: read
@@ -23,25 +26,25 @@ concurrency:
   cancel-in-progress: false
 jobs:
   deploy:
-    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/arena/15a53658-friend-book'
+    if: (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/arena/15a53658-friend-book' || github.ref == 'refs/heads/arena/f6bf61bd-friend-book' || (github.ref == 'refs/heads/arena/7c7ddb7b-friend-book' && github.event_name == 'push' && contains(github.event.head_commit.message, '[deploy-cloudflare-production]'))) && !contains(github.event.head_commit.message, '[no-deploy]')
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 360
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
           cache: npm
-      - name: Require existing resources and active Cloudflare D1/R2/Realtime configuration
+      - name: Require existing resources and active Cloudflare D1/R2 configuration
         run: |
           python3 - <<'PY'
           import pathlib, re, tomllib
           cfg = tomllib.loads(pathlib.Path('wrangler.toml').read_text())
           assert cfg['name'] == 'rough-firefly-dd7b'
+          assert cfg['vars']['CF_ACCOUNT_ID'] == '92f3d04598822de2e49e14561218d090'
           assert cfg['vars']['D1_INTERACTIONS_ENABLED'] == 'true'
           assert cfg['vars']['VIDEO_R2_ENABLED'] == 'true'
           assert cfg['vars']['VIDEO_R2_RETENTION_VERIFIED'] == 'true'
-          assert cfg['vars']['REALTIME_WS_ENABLED'] == 'true'
           assert cfg['vars']['FIREBASE_PROJECT_ID'] == 'friendbook-17551'
           assert cfg['d1_databases'] == [{
               'binding': 'DB', 'database_name': 'friendbook-db',
@@ -51,7 +54,7 @@ jobs:
           android = pathlib.Path('app/build.gradle').read_text()
           gates = re.findall(r"buildConfigField\s+['\"]boolean['\"]\s*,\s*['\"]D1_INTERACTIONS_ENABLED['\"]\s*,\s*['\"]([^'\"]+)['\"]", android)
           assert gates in (['true'], ['false']), 'Android D1 gate must be valid'
-          print('Existing Worker + DB verified; Cloudflare D1, Realtime Presence, and R2 Video enabled.')
+          print('Existing Worker + DB verified; Cloudflare D1 and R2 Video enabled.')
           PY
       - run: npm ci --ignore-scripts
       - run: npm test
@@ -59,6 +62,8 @@ jobs:
         run: |
           python3 cloudflare/test/schema_test.py
           python3 cloudflare/test/migration_test.py
+          python3 cloudflare/test/index_plan_test.py
+          python3 -m unittest scripts.tests.test_fcm_claim_migration_gate scripts.tests.test_d1_account_usage_analytics scripts.tests.test_retired_table_preflight scripts.tests.test_verify_retired_drop scripts.tests.test_retired_migration_gate
       - name: Verify Save Forever R2 configuration (no R2 object deletion)
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -98,7 +103,255 @@ jobs:
             echo '::warning::Could not store CF_AE_TOKEN; AE counts will be served from KV + memory instead (still zero D1 writes).'
           fi
 
-      - name: Deploy existing Worker and bind existing database (no migration)
+      - name: Configure private FCM server credential
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: '92f3d04598822de2e49e14561218d090'
+          FIREBASE_ADMIN_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_ADMIN_SERVICE_ACCOUNT }}
+        run: |
+          set +x
+          python3 -c 'import json,os,sys; d=json.loads(os.environ["FIREBASE_ADMIN_SERVICE_ACCOUNT"]); sys.exit(0 if d.get("type")=="service_account" and d.get("project_id")=="friendbook-17551" and d.get("private_key") and d.get("client_email") else 1)'
+          printf '%s' "$FIREBASE_ADMIN_SERVICE_ACCOUNT" | npx wrangler secret put FIREBASE_ADMIN_SERVICE_ACCOUNT
+          # Validate the send API without a real device, user payload or delivery.
+          node --input-type=module <<'JS'
+          import { googleToken, buildFcmMessage } from './cloudflare/fcm-push.js';
+          try {
+            const access = await googleToken(process.env);
+            const r = await fetch('https://fcm.googleapis.com/v1/projects/friendbook-17551/messages:send', {
+              method: 'POST', headers: { Authorization: `Bearer ${access}`, 'Content-Type': 'application/json' },
+              body: JSON.stringify({ validate_only:true, message:buildFcmMessage({topic:'friendbook_validation_only'}, {type:'push_test', eventId:'validation_probe', title:'friendbook push test', body:'Validation only'}) }),
+              signal: AbortSignal.timeout(12000),
+            });
+            const body = await r.json();
+            const reason = body.error?.details?.map(d=>d.reason).find(x=>['SERVICE_DISABLED','IAM_PERMISSION_DENIED','ACCESS_TOKEN_SCOPE_INSUFFICIENT'].includes(x));
+            console.log(`FCM validate-only: HTTP ${r.status}${reason ? ' ' + reason : ''}`);
+            console.log(`${r.ok ? '::notice::' : '::warning::'}FCM payload validation HTTP ${r.status}${reason ? ' ' + reason : ''}`);
+          } catch { console.warn('::warning::FCM validation probe could not reach the send API.'); }
+          JS
+
+      - name: Diagnose Cloudflare auth and apply pending D1 migrations
+        id: d1_diagnostics
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: '92f3d04598822de2e49e14561218d090'
+          WRANGLER_SEND_METRICS: 'false'
+          HEAD_COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
+        run: |
+          set +e
+          mkdir -p "$RUNNER_TEMP/d1-migration-diagnostics"
+          log="$RUNNER_TEMP/d1-migration-diagnostics/cloudflare-d1-diagnostics.log"
+          set -x
+          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
+            echo 'CLOUDFLARE_API_TOKEN is unavailable to this workflow.' | tee "$log"
+            echo 'whoami_status=missing-token' >> "$GITHUB_OUTPUT"
+            echo 'd1_list_status=missing-token' >> "$GITHUB_OUTPUT"
+            echo 'migration_status=missing-token' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          npx wrangler whoami 2>&1 | tee "$log"
+          whoami_status=${PIPESTATUS[0]}
+          printf '%s\n' "whoami_exit_code=$whoami_status" | tee -a "$log"
+          npx wrangler d1 list 2>&1 | tee -a "$log"
+          d1_list_status=${PIPESTATUS[0]}
+          printf '%s\n' "d1_list_exit_code=$d1_list_status" | tee -a "$log"
+          pending=$(npx wrangler d1 migrations list friendbook-db --remote 2>&1)
+          if [ "$?" -ne 0 ]; then
+            echo 'Cannot inspect pending migrations; refusing deployment.' | tee -a "$log"
+            echo "whoami_status=$whoami_status" >> "$GITHUB_OUTPUT"
+            echo "d1_list_status=$d1_list_status" >> "$GITHUB_OUTPUT"
+            echo 'migration_status=pending-list-failed' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Never let destructive table removal ride along on any branch's deployment.
+          if printf '%s\n' "$pending" | grep -q '0086_remove_unused_status_tables.sql'; then
+            printf '%s\n' "$pending" > "$RUNNER_TEMP/retired-pending.txt"
+            if [[ "$HEAD_COMMIT_MESSAGE" != *'[drop-retired-status]'* ]] || ! python3 scripts/loadtest/retired_migration_gate.py "$RUNNER_TEMP/retired-pending.txt" || ! python3 scripts/loadtest/d1_account_usage_analytics.py --retired-drop-budget || ! python3 scripts/loadtest/retired_table_preflight.py || ! python3 scripts/loadtest/d1_account_usage_analytics.py --retired-drop-budget; then
+              echo 'Retired-table removal preflight failed; no migration attempted.' | tee -a "$log"
+              echo "whoami_status=$whoami_status" >> "$GITHUB_OUTPUT"
+              echo "d1_list_status=$d1_list_status" >> "$GITHUB_OUTPUT"
+              echo 'migration_status=retired-table-preflight-failed' >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          fi
+          if [ "$GITHUB_REF" = refs/heads/arena/7c7ddb7b-friend-book ]; then
+            if printf '%s\n' "$pending" | grep -Eq '00([012][0-9]|3[0-3])_[a-z_]+\.sql'; then
+              echo 'Remote schema must already be at migration 0033; refusing to replay older migrations.' | tee -a "$log"
+              echo "whoami_status=$whoami_status" >> "$GITHUB_OUTPUT"
+              echo "d1_list_status=$d1_list_status" >> "$GITHUB_OUTPUT"
+              echo 'migration_status=baseline-not-ready' >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            # The incremental FCM bridge makes only an empty table and trigger;
+            # never mix it with an unexpected index build or backfill. Explicit
+            # opt-in is required, and account analytics must retain a reserve.
+            if printf '%s\n' "$pending" | grep -q '0085_fcm_claims_incremental.sql' || [[ "$HEAD_COMMIT_MESSAGE" == *'[fcm-bridge-only]'* ]]; then
+              printf '%s\n' "$pending" > "$RUNNER_TEMP/fcm-pending.txt"
+              if [[ "$HEAD_COMMIT_MESSAGE" != *'[fcm-bridge-only]'* ]] || ! python3 scripts/loadtest/fcm_claim_migration_gate.py pending "$RUNNER_TEMP/fcm-pending.txt" \
+                || ! python3 scripts/loadtest/d1_account_usage_analytics.py --fcm-metadata-budget; then
+                echo 'FCM metadata-only safety gate failed; no migration attempted.' | tee -a "$log"
+                echo "whoami_status=$whoami_status" >> "$GITHUB_OUTPUT"
+                echo "d1_list_status=$d1_list_status" >> "$GITHUB_OUTPUT"
+                echo 'migration_status=fcm-metadata-preflight-failed' >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
+            fi
+            if printf '%s\n' "$pending" | grep -q '0073_chat_membership_source_seek.sql'; then
+              # Limit the one-off index build rather than unexpectedly consuming
+              # a large fraction of the free daily quota. Aggregate only; no IDs.
+              count_file="$RUNNER_TEMP/chat-membership-count.json"
+              npx wrangler d1 execute friendbook-db --remote --json --command 'SELECT COUNT(*) AS n FROM (SELECT 1 FROM friendbook_cf_chat_participants LIMIT 5001)' > "$count_file" 2>> "$log"
+              count_status=$?
+              count=$(python3 -c 'import json,sys; x=json.load(open(sys.argv[1])); assert x[0]["success"]; print(int(x[0]["results"][0]["n"]))' "$count_file" 2>/dev/null)
+              if [ "$count_status" -ne 0 ] || ! [[ "$count" =~ ^[0-9]+$ ]] || [ "$count" -gt 5000 ]; then
+                echo 'Chat index build preflight failed or exceeds 5000 membership entries; no migration attempted.' | tee -a "$log"
+                echo "whoami_status=$whoami_status" >> "$GITHUB_OUTPUT"
+                echo "d1_list_status=$d1_list_status" >> "$GITHUB_OUTPUT"
+                echo 'migration_status=chat-index-preflight-failed' >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
+              echo "Chat index preflight: $count membership entries (bounded count only)." | tee -a "$log"
+            fi
+            if printf '%s\n' "$pending" | grep -q '0078_follow_trigger_cost.sql'; then
+              python3 scripts/loadtest/follow_fast_exception_preflight.py --require-index-build-safe 2>&1 | tee -a "$log"
+              preflight_status=${PIPESTATUS[0]}
+              if [ "$preflight_status" -ne 0 ]; then
+                echo 'Follow trigger rebuild preflight failed; no migration attempted.' | tee -a "$log"
+                echo "whoami_status=$whoami_status" >> "$GITHUB_OUTPUT"
+                echo "d1_list_status=$d1_list_status" >> "$GITHUB_OUTPUT"
+                echo 'migration_status=follow-trigger-preflight-failed' >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
+            fi
+            if printf '%s\n' "$pending" | grep -q '0077_user_follow_membership.sql'; then
+              # The derived index is deliberately bounded before backfill; this
+              # is not a prediction of D1 billing or capacity at future scale.
+              python3 scripts/loadtest/follow_membership_preflight.py --require-index-build-safe 2>&1 | tee -a "$log"
+              preflight_status=${PIPESTATUS[0]}
+              if [ "$preflight_status" -ne 0 ]; then
+                echo 'Follow membership preflight failed; no migration attempted.' | tee -a "$log"
+                echo "whoami_status=$whoami_status" >> "$GITHUB_OUTPUT"
+                echo "d1_list_status=$d1_list_status" >> "$GITHUB_OUTPUT"
+                echo 'migration_status=follow-index-preflight-failed' >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
+            fi
+            if printf '%s\n' "$pending" | grep -q '0084_friend_guard_exceptions.sql'; then
+              # One bounded aggregate only. Refuse truncated/large data, invalid
+              # JSON, excessive exceptions, unknown D1 read cost, or low/delayed
+              # account headroom; never infer a hard billing guarantee.
+              python3 scripts/loadtest/d1_account_usage_analytics.py --preflight-budget 2>&1 | tee -a "$log"
+              before_status=${PIPESTATUS[0]}
+              if [ "$before_status" -eq 0 ]; then
+                python3 scripts/loadtest/friend_guard_index_preflight.py --require-index-build-safe 2>&1 | tee -a "$log"
+                friend_status=${PIPESTATUS[0]}
+              else
+                friend_status=1
+              fi
+              if [ "$friend_status" -eq 0 ]; then
+                python3 scripts/loadtest/d1_account_usage_analytics.py --preflight-budget 2>&1 | tee -a "$log"
+                after_status=${PIPESTATUS[0]}
+              else
+                after_status=1
+              fi
+              if [ "$before_status" -ne 0 ] || [ "$friend_status" -ne 0 ] || [ "$after_status" -ne 0 ]; then
+                echo 'Friendship index preflight failed; no migration attempted.' | tee -a "$log"
+                echo "whoami_status=$whoami_status" >> "$GITHUB_OUTPUT"
+                echo "d1_list_status=$d1_list_status" >> "$GITHUB_OUTPUT"
+                echo 'migration_status=friend-index-preflight-failed' >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
+            fi
+            if printf '%s\n' "$pending" | grep -q '0076_legacy_comment_page_indexes.sql'; then
+              # Only aggregate bounded comment data; refuse an unexpectedly large
+              # index build or exception-heavy data rather than consume quota blindly.
+              python3 scripts/loadtest/legacy_comment_preflight.py --require-index-build-safe 2>&1 | tee -a "$log"
+              preflight_status=${PIPESTATUS[0]}
+              if [ "$preflight_status" -ne 0 ]; then
+                echo 'Comment index preflight failed; no migration attempted.' | tee -a "$log"
+                echo "whoami_status=$whoami_status" >> "$GITHUB_OUTPUT"
+                echo "d1_list_status=$d1_list_status" >> "$GITHUB_OUTPUT"
+                echo 'migration_status=comment-index-preflight-failed' >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
+            fi
+          fi
+          npx wrangler d1 migrations apply friendbook-db --remote 2>&1 | tee -a "$log"
+          migration_status=${PIPESTATUS[0]}
+          printf '%s\n' "migration_exit_code=$migration_status" | tee -a "$log"
+          if [ "$migration_status" -eq 0 ] && printf '%s\n' "$pending" | grep -q '0086_remove_unused_status_tables.sql'; then
+            python3 -m scripts.loadtest.verify_retired_drop 2>&1 | tee -a "$log"
+            if [ "${PIPESTATUS[0]}" -ne 0 ]; then
+              echo 'Schema verification failed after migration; no Worker deployment attempted.' | tee -a "$log"
+              migration_status='retired-schema-check-failed'
+            fi
+          fi
+          if [ "$migration_status" = 0 ]; then
+            # Verify on every deployment, not only the initial rollout: a later
+            # deployment must not bypass a missing or altered bridge. Read
+            # schema metadata only, never claims or application records.
+            schema="$RUNNER_TEMP/fcm-bridge-schema.json"
+            npx wrangler d1 execute friendbook-db --remote --json --command "SELECT type,name,sql FROM sqlite_master WHERE name IN ('friendbook_cf_fcm_device_claims','friendbook_cf_fcm_device_claims_v2','cf_fcm_claims_legacy_bridge') LIMIT 3" > "$schema" 2>> "$log"
+            if [ "$?" -ne 0 ] || ! python3 scripts/loadtest/fcm_claim_migration_gate.py schema "$schema"; then
+              echo 'FCM bridge schema verification failed; old Worker remains deployed.' | tee -a "$log"
+              migration_status='fcm-schema-check-failed'
+            fi
+          fi
+          echo "whoami_status=$whoami_status" >> "$GITHUB_OUTPUT"
+          echo "d1_list_status=$d1_list_status" >> "$GITHUB_OUTPUT"
+          echo "migration_status=$migration_status" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Upload Cloudflare D1 migration diagnostics (no credentials)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cloudflare-d1-diagnostics-${{ github.run_id }}
+          path: ${{ runner.temp }}/d1-migration-diagnostics/cloudflare-d1-diagnostics.log
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Publish sanitized D1 diagnostics to the open PR
+        continue-on-error: true
+        if: always()
+        uses: actions/github-script@v7
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          DIAGNOSTICS_FILE: ${{ runner.temp }}/d1-migration-diagnostics/cloudflare-d1-diagnostics.log
+        with:
+          script: |
+            const fs = require('fs');
+            const branch = context.ref.replace('refs/heads/', '');
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const prs = await github.rest.pulls.list({owner, repo, state: 'open', head: `${owner}:${branch}`});
+            if (!prs.data.length) {
+              core.warning('No open PR found for this branch; diagnostics remain available as the workflow artifact.');
+              return;
+            }
+            let text = fs.existsSync(process.env.DIAGNOSTICS_FILE)
+              ? fs.readFileSync(process.env.DIAGNOSTICS_FILE, 'utf8')
+              : 'No diagnostics file was produced.';
+            const token = process.env.CLOUDFLARE_API_TOKEN;
+            if (token) text = text.split(token).join('[REDACTED_CLOUDFLARE_TOKEN]');
+            text = text.replace(/```/g, "''' ");
+            if (text.length > 8000) text = text.slice(-8000) + '\n[truncated to most recent 8000 characters]';
+            await github.rest.issues.createComment({
+              owner, repo, issue_number: prs.data[0].number,
+              body: 'Cloudflare D1 diagnostic for workflow run ' + context.runId + ' (credentials redacted):\n\n' + text
+            });
+
+      - name: Stop unless Cloudflare auth and remote migrations passed
+        if: always()
+        env:
+          WHOAMI_STATUS: ${{ steps.d1_diagnostics.outputs.whoami_status }}
+          D1_LIST_STATUS: ${{ steps.d1_diagnostics.outputs.d1_list_status }}
+          MIGRATION_STATUS: ${{ steps.d1_diagnostics.outputs.migration_status }}
+        run: |
+          test "$WHOAMI_STATUS" = 0 || { echo 'Cloudflare whoami failed; see diagnostics artifact.'; exit 1; }
+          test "$D1_LIST_STATUS" = 0 || { echo 'Cloudflare D1 list failed; see diagnostics artifact.'; exit 1; }
+          test "$MIGRATION_STATUS" = 0 || { echo 'Remote D1 migrations failed; see diagnostics artifact.'; exit 1; }
+
+      - name: Deploy Worker with existing database bindings
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: '92f3d04598822de2e49e14561218d090'
@@ -111,8 +364,8 @@ jobs:
           mkdir -p /tmp/deploy-logs
           rm -f /tmp/deploy-logs/*.log /tmp/wrangler.toml.shipped
           cp wrangler.toml /tmp/wrangler.toml.bak
-          VARS_R2_ON="--var D1_INTERACTIONS_ENABLED:true --var VIDEO_R2_ENABLED:true --var VIDEO_R2_RETENTION_VERIFIED:true --var REALTIME_WS_ENABLED:true"
-          VARS_R2_OFF="--var D1_INTERACTIONS_ENABLED:true --var VIDEO_R2_ENABLED:false --var VIDEO_R2_RETENTION_VERIFIED:false --var REALTIME_WS_ENABLED:true"
+          VARS_R2_ON="--var D1_INTERACTIONS_ENABLED:true --var VIDEO_R2_ENABLED:true --var VIDEO_R2_RETENTION_VERIFIED:true"
+          VARS_R2_OFF="--var D1_INTERACTIONS_ENABLED:true --var VIDEO_R2_ENABLED:false --var VIDEO_R2_RETENTION_VERIFIED:false"
 
           # Removes ONLY the Analytics Engine block. D1, R2, KV, crons and vars all stay, so a refused
           # AE binding can never cost another binding the way the old truncation fallback did.
@@ -166,17 +419,177 @@ jobs:
             return 1
           }
 
-          attempt full "$VARS_R2_ON" && exit 0
-          echo '::warning::Retrying without ONLY the Analytics Engine binding. Views then count in the snapshot + memory, still with zero D1 writes.'
-          attempt no-ae "$VARS_R2_ON" && exit 0
-          echo '::warning::Retrying without ONLY the R2 bucket binding (Analytics Engine kept).'
-          attempt no-r2 "$VARS_R2_OFF" && exit 0
-          echo '::warning::Last resort: no Analytics Engine and no R2 binding.'
-          attempt no-ae-no-r2 "$VARS_R2_OFF" && exit 0
-          cp /tmp/wrangler.toml.bak wrangler.toml
-          echo '::error::Every deploy attempt was refused. The raw wrangler output of each attempt is in the Analytics Engine report on the pull request.'
-          exit 1
+          # Do not silently remove production storage or analytics bindings.
+          # A refused binding is a release blocker, not a degraded deployment.
+          attempt full "$VARS_R2_ON" || { echo '::error::Full production bindings unavailable; deployment stopped.'; exit 1; }
 
+      - name: Print exact Cloudflare Workers Builds failure and publish it to the PR
+        if: always() && github.event_name == 'push' && contains(github.event.head_commit.message, '[build-diagnose]')
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: '92f3d04598822de2e49e14561218d090'
+          WORKERS_BUILD_ID: '7e5fbcc8-fc28-4e09-b2d6-fc43084e1aa2'
+        run: |
+          node <<'NODE' | tee workers-build-diagnostic.log
+          const fs = require('node:fs');
+          (async () => {
+            const endpoint = `https://api.cloudflare.com/client/v4/accounts/${process.env.CLOUDFLARE_ACCOUNT_ID}/builds/builds/${process.env.WORKERS_BUILD_ID}/logs`;
+            const response = await fetch(endpoint, {headers:{Authorization:`Bearer ${process.env.CLOUDFLARE_API_TOKEN}`,Accept:'application/json'}});
+            const raw = await response.text();
+            let payload; try { payload=JSON.parse(raw); } catch { payload={raw:raw.slice(0,4000)}; }
+            const redactions=[process.env.CLOUDFLARE_API_TOKEN].filter(Boolean);
+            const redact = value => redactions.reduce((text,secret)=>text.replaceAll(secret,'[REDACTED_TOKEN]'),String(value));
+            let lines = payload?.result?.lines || [];
+            lines = lines.map(x => Array.isArray(x) ? x[x.length-1] : x).map(redact);
+            const detail = lines.length ? lines.slice(-160).join('\n') : redact(JSON.stringify(payload));
+            const report = {buildId:process.env.WORKERS_BUILD_ID,httpStatus:response.status,apiSuccess:payload.success,errors:(payload.errors||[]).map(e=>({...e,message:redact(e.message||'')})),logs:detail};
+            fs.writeFileSync('workers-build-diagnostic.json',JSON.stringify(report,null,2));
+            console.log(JSON.stringify(report,null,2));
+            fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY,`### Cloudflare Workers Builds diagnostic\n\nBuild \`${report.buildId}\` — API HTTP ${report.httpStatus}; API success: ${report.apiSuccess}\n\n\`\`\`text\n${detail.slice(-16000)}\n\`\`\`\n`);
+            if (response.status >= 400 || payload.success === false) console.log('Workers Builds diagnostic API returned an error; exact response is shown above.');
+          })().catch(error => { console.error(`Workers Builds diagnostic fetch failed: ${error.message}`); process.exitCode=1; });
+          NODE
+
+      - name: Verify legacy users and sessions in D1 using read-only remote SQL
+        if: always() && github.event_name == 'push' && contains(github.event.head_commit.message, '[d1-audit]')
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          SQL="SELECT json_object('users_count', (SELECT COUNT(DISTINCT doc_id) FROM friendbook_cf_firestore_documents WHERE collection_id='users' AND parent_path='users' AND document_json NOT LIKE '%d1-only%'), 'users_rows', (SELECT COUNT(*) FROM friendbook_cf_firestore_documents WHERE collection_id='users' AND parent_path='users' AND document_json NOT LIKE '%d1-only%'), 'user_sample', (SELECT json_group_array(json_object('doc_id',doc_id,'name',COALESCE(json_extract(document_json,'$.displayName'),json_extract(document_json,'$.name'),''),'email',COALESCE(json_extract(document_json,'$.email'),''))) FROM (SELECT doc_id,document_json FROM friendbook_cf_firestore_documents WHERE collection_id='users' AND parent_path='users' AND document_json NOT LIKE '%d1-only%' ORDER BY create_time ASC LIMIT 10)), 'sessions_count', (SELECT COUNT(*) FROM friendbook_cf_firestore_documents WHERE collection_id='sessions' AND path LIKE 'users/%/sessions/%'), 'sessions_sample', (SELECT json_group_array(json_object('path',path,'owner_uid',owner_uid,'created',create_time,'updated',update_time)) FROM (SELECT path,owner_uid,create_time,update_time FROM friendbook_cf_firestore_documents WHERE collection_id='sessions' AND path LIKE 'users/%/sessions/%' ORDER BY create_time ASC LIMIT 50))) AS readonly_legacy_audit;"
+          npx wrangler d1 execute friendbook-db --remote --command "$SQL" --json > d1-legacy-audit.json
+          python3 - <<'PY'
+          import json, pathlib, os
+          result=json.loads(pathlib.Path('d1-legacy-audit.json').read_text())
+          blocks=[b for b in result if isinstance(b,dict)]
+          lines=['### Read-only legacy user/session D1 audit','', 'Queried production D1 only; no Firebase reads and no writes.','', '```json', json.dumps(blocks,indent=2), '```','']
+          summary='\n'.join(lines)
+          pathlib.Path(os.environ['GITHUB_STEP_SUMMARY']).write_text(summary)
+          print(summary)
+          PY
+
+      - name: Publish exact Workers Builds error to the open PR
+        if: always() && github.event_name == 'push' && contains(github.event.head_commit.message, '[build-diagnose]') && hashFiles('workers-build-diagnostic.json') != ''
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs=require('fs'); const report=JSON.parse(fs.readFileSync('workers-build-diagnostic.json','utf8'));
+            const owner=context.repo.owner, repo=context.repo.repo, branch=context.ref.replace('refs/heads/','');
+            const prs=await github.rest.pulls.list({owner,repo,state:'open',head:`${owner}:${branch}`});
+            if(!prs.data.length) { core.warning('Open PR not found for this branch; full diagnostic is in Job Summary.'); return; }
+            const body=['Workers Builds failure diagnostic for '+report.buildId+' (HTTP '+report.httpStatus+', API success '+report.apiSuccess+')','','```json',JSON.stringify({errors:report.errors,logs:report.logs},null,2).slice(0,12000),'```'].join(String.fromCharCode(10));
+            await github.rest.issues.createComment({owner,repo,issue_number:prs.data[0].number,body});
+
+      - name: Publish read-only D1 legacy audit to the open PR
+        if: always() && github.event_name == 'push' && contains(github.event.head_commit.message, '[d1-audit]') && hashFiles('d1-legacy-audit.json') != ''
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs=require('fs'); const raw=JSON.parse(fs.readFileSync('d1-legacy-audit.json','utf8'));
+            const owner=context.repo.owner, repo=context.repo.repo, branch=context.ref.replace('refs/heads/','');
+            const prs=await github.rest.pulls.list({owner,repo,state:'open',head:`${owner}:${branch}`});
+            if(!prs.data.length) { core.warning('Open PR not found for this branch; D1 audit is in Job Summary.'); return; }
+            const body=['Read-only production D1 user/session audit for run '+context.runId+'; no Firebase reads or D1 writes.','','```json',JSON.stringify(raw,null,2).slice(0,10000),'```'].join(String.fromCharCode(10));
+            await github.rest.issues.createComment({owner,repo,issue_number:prs.data[0].number,body});
+
+      - name: Dispatch signed Android AAB build and comment on PR with GH_TOKEN secret
+        if: always() && github.event_name == 'push' && contains(github.event.head_commit.message, '[dispatch-aab]')
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$GH_TOKEN" || { echo '::error::Repository secret GH_TOKEN is empty or unavailable'; exit 1; }
+          gh workflow run build-apk.yml --repo "$GITHUB_REPOSITORY" --ref "$GITHUB_REF_NAME"
+          PR_NUMBER=$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$GITHUB_REF_NAME" --state open --json number --jq '.[0].number')
+          if [ -z "$PR_NUMBER" ] || [ "$PR_NUMBER" = "null" ]; then
+            echo '::error::Could not find the open PR for this branch'; exit 1
+          fi
+          gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --body "Dispatched the signed Android APK/AAB build from this branch using the repository's GH_TOKEN secret. Workflow run is starting; this confirms dispatch only, not build success."
+
+      - name: Read-only inspect newest account and post in production D1
+        if: github.event_name == 'push' && contains(github.event.head_commit.message, '[d1-latest-inspect]')
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          SQL="SELECT json_object('firestore_users',(SELECT COUNT(*) FROM friendbook_cf_firestore_documents WHERE collection_id='users' AND parent_path='users'),'app_users',(SELECT COUNT(*) FROM friendbook_cf_documents WHERE collection='users'),'profile_rows',(SELECT COUNT(*) FROM friendbook_cf_profiles),'firestore_posts',(SELECT COUNT(*) FROM friendbook_cf_firestore_documents WHERE collection_id='posts' AND parent_path='posts'),'app_posts',(SELECT COUNT(*) FROM friendbook_cf_documents WHERE collection='posts'),'app_comments',(SELECT COUNT(*) FROM friendbook_cf_documents WHERE collection='comments'),'app_likes',(SELECT COUNT(*) FROM friendbook_cf_documents WHERE collection='likes'),'app_reactions',(SELECT COUNT(*) FROM friendbook_cf_documents WHERE collection='reactions'),'firestore_root_comments',(SELECT COUNT(*) FROM friendbook_cf_firestore_documents WHERE collection_id='comments' AND parent_path='comments'),'firestore_nested_comments',(SELECT COUNT(*) FROM friendbook_cf_firestore_documents WHERE collection_id='comments' AND parent_path LIKE 'posts/%/comments'),'firestore_nested_reactions',(SELECT COUNT(*) FROM friendbook_cf_firestore_documents WHERE collection_id='reactions' AND parent_path LIKE 'posts/%/reactions'),'firestore_friends',(SELECT COUNT(*) FROM friendbook_cf_firestore_documents WHERE collection_id='friends' AND parent_path='friends'),'app_friends',(SELECT COUNT(*) FROM friendbook_cf_documents WHERE collection='friends'),'firestore_friendRequests',(SELECT COUNT(*) FROM friendbook_cf_firestore_documents WHERE collection_id IN ('friendRequests','friend_requests') AND parent_path IN ('friendRequests','friend_requests')),'app_friend_requests',(SELECT COUNT(*) FROM friendbook_cf_documents WHERE collection IN ('friendRequests','friend_requests')),'firestore_chats',(SELECT COUNT(*) FROM friendbook_cf_firestore_documents WHERE collection_id='chats' AND parent_path='chats'),'app_chats',(SELECT COUNT(*) FROM friendbook_cf_documents WHERE collection='chats'),'firestore_nested_messages',(SELECT COUNT(*) FROM friendbook_cf_firestore_documents WHERE collection_id='messages' AND parent_path LIKE 'chats/%/messages'),'app_messages',(SELECT COUNT(*) FROM friendbook_cf_documents WHERE collection='messages'),'app_messages_with_chat_id',(SELECT COUNT(*) FROM friendbook_cf_documents WHERE collection='messages' AND json_valid(document_json) AND json_extract(document_json,'$.chatId') IS NOT NULL),'app_messages_matching_chat_prefix',(SELECT COUNT(*) FROM friendbook_cf_documents m WHERE m.collection='messages' AND EXISTS (SELECT 1 FROM friendbook_cf_documents c WHERE c.collection='chats' AND substr(m.doc_id,1,length(c.doc_id)+1)=c.doc_id || '_')),'app_messages_matching_chat_id',(SELECT COUNT(*) FROM friendbook_cf_documents m WHERE m.collection='messages' AND json_valid(m.document_json) AND EXISTS (SELECT 1 FROM friendbook_cf_documents c WHERE c.collection='chats' AND json_extract(m.document_json,'$.chatId')=c.doc_id)),'firestore_notifications',(SELECT COUNT(*) FROM friendbook_cf_firestore_documents WHERE collection_id='notifications' AND parent_path='notifications'),'app_notifications',(SELECT COUNT(*) FROM friendbook_cf_documents WHERE collection='notifications')) AS collection_counts;"
+          npx wrangler d1 execute friendbook-db --remote --command "$SQL" --json > d1-latest-records.json
+          cat d1-latest-records.json
+          {
+            echo '### Read-only D1 collection inventory'
+            echo 'Production D1 aggregate SELECT only; no writes, Firebase reads, user IDs, profiles, or message content. Compares root collection counts across both D1 document stores.'
+            echo '```json'; cat d1-latest-records.json; echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Publish newest D1 record verification on PR with GH_TOKEN
+        if: always() && github.event_name == 'push' && contains(github.event.head_commit.message, '[d1-latest-inspect]') && hashFiles('d1-latest-records.json') != ''
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+        run: |
+          set -euo pipefail
+          PR_NUMBER=$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$GITHUB_REF_NAME" --state open --json number --jq '.[0].number')
+          test -n "$PR_NUMBER" && test "$PR_NUMBER" != null
+          BODY=$(printf 'Read-only production D1 collection inventory for run %s (aggregate SELECT only; no writes/Firebase reads or user-level data):\n\n```json\n' "$GITHUB_RUN_ID")
+          BODY+="$(cat d1-latest-records.json)"
+          BODY+=$'\n```'
+          gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --body "$BODY"
+
+      - name: Audit D1 interaction readiness without writing
+        if: github.event_name == 'push' && contains(github.event.head_commit.message, '[interaction-health]')
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+        run: |
+          set -euo pipefail
+          SQL="SELECT json_object('resources_total',(SELECT COUNT(*) FROM friendbook_cf_interaction_resources),'resources_verified',(SELECT COUNT(*) FROM friendbook_cf_interaction_resources WHERE state='verified'),'resources_unverified',(SELECT COUNT(*) FROM friendbook_cf_interaction_resources WHERE state!='verified'),'reaction_rows',(SELECT COUNT(*) FROM friendbook_cf_reactions),'reaction_total_resources',(SELECT COUNT(DISTINCT resource) FROM friendbook_cf_reaction_totals),'comment_rows',(SELECT COUNT(*) FROM friendbook_cf_comments),'comment_detail_rows',(SELECT COUNT(*) FROM friendbook_cf_comment_details),'legacy_comment_aggregate_rows',(SELECT COUNT(*) FROM friendbook_cf_comment_legacy_aggregates),'comment_resources',(SELECT COUNT(DISTINCT resource) FROM friendbook_cf_comments)) AS interaction_readiness;"
+          npx wrangler d1 execute friendbook-db --remote --command "$SQL" --json > d1-interaction-readiness.json
+          cat d1-interaction-readiness.json
+          PR_NUMBER=$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$GITHUB_REF_NAME" --state open --json number --jq '.[0].number')
+          test -n "$PR_NUMBER" && test "$PR_NUMBER" != null
+          BODY=$(printf 'Read-only production D1 interaction readiness for run %s (no writes). Aggregate table/resource counts only:\n\n```json\n' "$GITHUB_RUN_ID")
+          BODY+="$(cat d1-interaction-readiness.json)"
+          BODY+=$'\n```'
+          gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --body "$BODY"
+
+      - name: Verify production D1 push claim insert and duplicate handling
+        if: github.event_name == 'push' && contains(github.event.head_commit.message, '[verify-production-d1-write]')
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: '92f3d04598822de2e49e14561218d090'
+        run: |
+          key="validation_only_${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}"
+          sql="INSERT INTO friendbook_cf_fcm_device_claims(event_key,created_at) VALUES ('$key',0) ON CONFLICT(event_key) DO NOTHING"
+          cleanup() { npx wrangler d1 execute friendbook-db --remote --command "DELETE FROM friendbook_cf_fcm_device_claims WHERE event_key='$key'" --json >/dev/null; }
+          trap cleanup EXIT
+          for expected in 1 0; do
+            if ! npx wrangler d1 execute friendbook-db --remote --command "$sql" --json > "$RUNNER_TEMP/fcm-claim-write.json"; then
+              echo '::error::Production D1 rejected the synthetic claim write.'; exit 1
+            fi
+            node -e 'const r=require(process.argv[1])[0];const n=r?.meta?.changes;console.log(`::notice::D1 claim expected ${process.argv[2]}, got ${n} (success=${r?.success})`);if(!r?.success||Number(n)!==Number(process.argv[2]))process.exit(1)' "$RUNNER_TEMP/fcm-claim-write.json" "$expected"
+          done
+          cleanup
+          trap - EXIT
+
+      - name: Audit copied D1 collection coverage without exporting user data
+        if: github.event_name == 'push' && contains(github.event.head_commit.message, '[d1-feed-audit]')
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          SQL="SELECT collection, SUM(native) AS canonical_rows, SUM(legacy) AS legacy_only_rows FROM (
+            SELECT collection_id AS collection, COUNT(*) AS native, 0 AS legacy FROM friendbook_cf_firestore_documents GROUP BY collection_id
+            UNION ALL
+            SELECT a.collection, 0, COUNT(*) FROM friendbook_cf_documents a WHERE NOT EXISTS (
+              SELECT 1 FROM friendbook_cf_firestore_documents f WHERE f.path=a.path
+            ) GROUP BY a.collection
+          ) GROUP BY collection ORDER BY collection;"
+          npx wrangler d1 execute friendbook-db --remote --command "$SQL" --json > d1-feed-coverage.json
+          { echo '### D1 data coverage (aggregate rows only)'; echo '```json'; cat d1-feed-coverage.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: github.event_name == 'push' && contains(github.event.head_commit.message, '[d1-feed-audit]')
+        with:
+          name: d1-feed-coverage
+          path: d1-feed-coverage.json
       - name: Verify read-only Worker and D1 connectivity
         run: |
           curl --fail --silent --show-error --max-time 30 --retry 4 --retry-all-errors --retry-delay 3 \
@@ -186,7 +599,11 @@ jobs:
           python3 - <<'PY'
           import json
           with open('/tmp/friendbook-health.json') as f:
-              assert json.load(f).get('ok') is True, 'Worker/D1 health check failed'
+              health = json.load(f)
+              assert health.get('ok') is True, 'Worker/D1 health check failed'
+              assert health.get('d1InteractionsEnabled') is True, 'Worker D1 interaction gate is not enabled'
+              views = health.get('views') or {}
+              assert views.get('kv') is True, 'Live Worker VIEWS KV binding is not active'
           with open('/tmp/friendbook-health-r2.json') as f:
               r2 = json.load(f)
               assert r2.get('ok') is True and r2.get('r2Bound') is True and r2.get('videoR2Enabled') is True, 'Worker/R2 health check failed'
@@ -202,7 +619,187 @@ jobs:
             https://rough-firefly-dd7b.zulqarnaindiraj786.workers.dev/v1/videos)
           test "$vcode" = 401
           echo 'Unauthenticated profile, presence, and video requests rejected (401).'
-          echo 'Deployment passed; Cloudflare Realtime Presence + Video routes active; D1 interaction gates remain OFF.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Deployment passed; D1 interactions are explicitly verified ON, with Realtime Presence + R2 Video routes active.' >> "$GITHUB_STEP_SUMMARY"
+      - name: Copy Firebase Firestore to D1 with per-collection checkpoints
+        if: github.event_name == 'push' && contains(github.event.head_commit.message, '[firestore-copy]')
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          set +e
+          mkdir -p firestore-copy-report
+          python3 -m pip install 'google-auth==2.40.3' 'requests==2.32.5' 2>&1 | tee firestore-copy-report/run.log
+          install_status=${PIPESTATUS[0]}
+          if [ "$install_status" -ne 0 ]; then exit "$install_status"; fi
+          python3 scripts/admin/migrate_firestore_to_d1.py --execute --quota-reviewed 2>&1 | tee -a firestore-copy-report/run.log
+          copy_status=${PIPESTATUS[0]}
+          echo "copy_exit_code=$copy_status" | tee -a firestore-copy-report/run.log
+          echo "copy_exit_code=$copy_status" >> "$GITHUB_OUTPUT"
+          exit "$copy_status"
+        id: firestore_copy
+
+      - name: Upload Firestore copy checkpoint report
+        if: always() && github.event_name == 'push' && contains(github.event.head_commit.message, '[firestore-copy]')
+        uses: actions/upload-artifact@v4
+        with:
+          name: firestore-copy-report-${{ github.run_id }}
+          path: firestore-copy-report/run.log
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Publish Firestore copy status to the open PR
+        if: always() && github.event_name == 'push' && contains(github.event.head_commit.message, '[firestore-copy]')
+        uses: actions/github-script@v7
+        env:
+          COPY_REPORT: firestore-copy-report/run.log
+        with:
+          script: |
+            const fs = require('fs');
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const branch = context.ref.replace('refs/heads/', '');
+            const prs = await github.rest.pulls.list({owner, repo, state: 'open', head: `${owner}:${branch}`});
+            if (!prs.data.length) return core.warning('No open PR found; copy report remains in the workflow artifact.');
+            const report = fs.existsSync(process.env.COPY_REPORT) ? fs.readFileSync(process.env.COPY_REPORT, 'utf8') : 'No report file was produced.';
+            const body = 'Firestore-to-D1 copy report for run ' + context.runId + ':\\n\\n' + report.slice(-10000);
+            await github.rest.issues.createComment({owner, repo, issue_number: prs.data[0].number, body});
+
+      - name: Create one-time Firebase Auth user and prove D1-only profile storage
+        if: github.event_name == 'push' && contains(github.event.head_commit.message, '[live-d1-proof]')
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: '92f3d04598822de2e49e14561218d090'
+          FIREBASE_PROJECT_ID: 'friendbook-17551'
+          WORKER_URL: 'https://rough-firefly-dd7b.zulqarnaindiraj786.workers.dev'
+        run: |
+          set -euo pipefail
+          mkdir -p live-d1-proof
+          export FIREBASE_API_KEY="$(python3 -c 'import json; print(json.load(open("app/google-services.json"))["client"][1]["api_key"][0]["current_key"])')"
+          node 2>&1 <<'NODE' | tee live-d1-proof/run.log
+          const crypto = require('node:crypto');
+          const fs = require('node:fs');
+          const {spawnSync} = require('node:child_process');
+          const fail = (m) => {
+            const message = `LIVE_D1_PROOF_ERROR: ${String(m).slice(0, 1200)}`;
+            console.error(message);
+            try { fs.writeFileSync('live-d1-proof/error.txt', message + '\\n'); } catch {}
+            process.exit(1);
+          };
+          (async () => {
+            console.log('PROOF_PHASE: Firebase Auth account signup');
+            const suffix = crypto.randomUUID().replaceAll('-', '');
+            const email = `cf-d1-proof-${suffix}@example.com`;
+            const password = crypto.randomBytes(24).toString('base64url');
+            const signup = await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=${process.env.FIREBASE_API_KEY}`, {
+              method: 'POST', headers: {'content-type':'application/json'},
+              body: JSON.stringify({email, password, returnSecureToken: true})
+            });
+            const auth = await signup.json();
+            if (!signup.ok || !auth.localId || !auth.idToken) fail(`Firebase Auth signup HTTP ${signup.status}: ${auth.error?.message || JSON.stringify(auth)}`);
+            const uid = auth.localId;
+            console.log('PROOF_PHASE: Firebase Auth token acquired; UID claim matches Auth user');
+            const claims = JSON.parse(Buffer.from(auth.idToken.split('.')[1], 'base64url').toString('utf8'));
+            console.log('Firebase Auth token claims:', JSON.stringify({aud:claims.aud, iss:claims.iss, subjectMatchesAuthUid:claims.sub === uid, auth_time:claims.auth_time, iat:claims.iat, exp:claims.exp}));
+            console.log('PROOF_PHASE: Firebase Auth accounts:lookup validates issued ID token');
+            const lookup = await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:lookup?key=${process.env.FIREBASE_API_KEY}`, {
+              method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({idToken:auth.idToken})
+            });
+            const lookupBody = await lookup.json().catch(() => ({}));
+            if (!lookup.ok) fail(`Firebase Auth issued ID-token lookup failed: HTTP ${lookup.status} ${lookupBody.error?.message || lookupBody.error || 'unknown error'}`);
+            const lookedUpUser = lookupBody.users?.[0];
+            console.log('Firebase ID-token lookup:', JSON.stringify({status:lookup.status, userFound:Boolean(lookedUpUser), subjectMatchesAuthUid:lookedUpUser?.localId === uid, providerIds:(lookedUpUser?.providerUserInfo || []).map(x=>x.providerId)}));
+            console.log('PROOF_PHASE: Worker /v1/me verifies Firebase ID token');
+            const authCheck = await fetch(new URL('/v1/me', process.env.WORKER_URL), {headers:{authorization:`Bearer ${auth.idToken}`}});
+            const authCheckBody = await authCheck.text();
+            console.log('Worker Firebase identity check:', authCheck.status, authCheckBody.slice(0,500));
+            console.log('PROOF_PHASE: Worker /v1/me response', JSON.stringify({status:authCheck.status, body:authCheckBody.slice(0,500)}));
+            if (!authCheck.ok) fail(`Worker /v1/me rejected Firebase ID token: HTTP ${authCheck.status} ${authCheckBody.slice(0,500)}`);
+            const docPath = `users/${uid}`;
+            const workerUrl = new URL('/v1/firestore/document', process.env.WORKER_URL);
+            workerUrl.searchParams.set('path', docPath);
+            const payload = {data: {uid, email, displayName: 'Cloudflare D1 migration proof', proofMarker: 'd1-only', createdAt: new Date().toISOString()}};
+            console.log('PROOF_PHASE: authenticated Worker D1 document write');
+            const put = await fetch(workerUrl, {
+              method: 'PUT', headers: {'authorization': `Bearer ${auth.idToken}`, 'content-type':'application/json'},
+              body: JSON.stringify(payload)
+            });
+            const putBody = await put.json().catch(() => ({}));
+            if (!put.ok || putBody.path !== docPath || putBody.data?.proofMarker !== 'd1-only') fail(`Worker D1 write failed: HTTP ${put.status} ${JSON.stringify(putBody)}`);
+            console.log('PROOF_PHASE: authenticated Worker D1 document read-back');
+            const readBack = await fetch(workerUrl, {headers:{authorization:`Bearer ${auth.idToken}`}});
+            const readBody = await readBack.json().catch(() => ({}));
+            if (!readBack.ok || readBody.path !== docPath || readBody.data?.uid !== uid || readBody.data?.proofMarker !== 'd1-only') {
+              fail(`Authenticated Worker D1 read-back failed: HTTP ${readBack.status} ${JSON.stringify(readBody)}`);
+            }
+            console.log('Authenticated Worker read-back:', JSON.stringify({status:readBack.status, path:readBody.path, uid:readBody.data.uid, proofMarker:readBody.data.proofMarker}));
+
+            console.log('PROOF_PHASE: Cloudflare remote D1 row verification');
+            const sql = `SELECT path, owner_uid, document_json FROM friendbook_cf_firestore_documents WHERE path = '${docPath}'`;
+            const d1 = spawnSync('npx', ['wrangler','d1','execute','friendbook-db','--remote','--command',sql,'--json'], {encoding:'utf8'});
+            if (d1.status !== 0) fail(`Remote D1 read failed: ${d1.stderr || d1.stdout}`);
+            fs.writeFileSync('live-d1-proof/d1-query.json', d1.stdout);
+            const query = JSON.parse(d1.stdout);
+            const row = query.flatMap(x => x.results || []).find(r => r.path === docPath && r.owner_uid === uid);
+            if (!row || !row.document_json.includes('d1-only') || !row.document_json.includes(email)) fail('Expected test profile row missing from Cloudflare D1.');
+
+            console.log('Verified Cloudflare D1 row:', JSON.stringify({path:row.path, owner_uid:row.owner_uid, proofMarker:'d1-only'}));
+            const report = {result:'PASS', firebaseAuthUserCreated:true, firebaseIdTokenVerifiedByWorker:true,
+              workerProfileBeforeWrite:authCheck.status, authenticatedD1DocumentWrite:true, authenticatedD1DocumentReadBack:true,
+              remoteD1SqlRowMatched:true, workerPath:docPath,
+              cloudflareD1Row:{path:row.path, owner_uid:row.owner_uid, proofMarker:'d1-only'},
+              firestoreDataRequests:0};
+            fs.writeFileSync('live-d1-proof/report.json', JSON.stringify(report, null, 2));
+            console.log(JSON.stringify(report, null, 2));
+          })().catch(e => fail(`Live D1 proof failed: ${e.message}`));
+          NODE
+
+      - name: Print authenticated D1 proof result in Job Summary
+        if: always() && github.event_name == 'push' && contains(github.event.head_commit.message, '[live-d1-proof]')
+        env:
+          PROOF_LOG: live-d1-proof/run.log
+          PROOF_ERROR: live-d1-proof/error.txt
+        run: |
+          python3 - <<'PY'
+          import os, pathlib, re
+          log = pathlib.Path(os.environ['PROOF_LOG'])
+          error = pathlib.Path(os.environ['PROOF_ERROR'])
+          text = log.read_text(errors='replace') if log.exists() else ''
+          if error.exists(): text += '\n' + error.read_text(errors='replace')
+          text = re.sub(r'eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+', '[REDACTED_JWT]', text)
+          text = re.sub(r'AIza[0-9A-Za-z_-]{20,}', '[REDACTED_API_KEY]', text)
+          text = re.sub(r'(?i)(password["\s:=]+)[^,}\s]+', r'\1[REDACTED]', text)
+          lines = [line[-1000:] for line in text.splitlines() if line.strip()]
+          summary = '### Authenticated Firebase-to-D1 proof\n\n' + ('\n'.join(lines[-60:]) if lines else 'No proof log was produced.') + '\n'
+          pathlib.Path(os.environ['GITHUB_STEP_SUMMARY']).write_text(summary)
+          pathlib.Path('live-d1-proof/public-summary.txt').write_text(summary)
+          print(summary)
+          PY
+
+      - name: Upload live D1 proof
+        if: always() && github.event_name == 'push' && contains(github.event.head_commit.message, '[live-d1-proof]')
+        uses: actions/upload-artifact@v4
+        with:
+          name: live-cloudflare-d1-proof-${{ github.run_id }}
+          path: live-d1-proof/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish live D1 proof result to the open PR
+        if: always() && github.event_name == 'push' && contains(github.event.head_commit.message, '[live-d1-proof]')
+        uses: actions/github-script@v7
+        env:
+          PROOF_LOG: live-d1-proof/public-summary.txt
+        with:
+          script: |
+            const fs = require('fs');
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const branch = context.ref.replace('refs/heads/', '');
+            const prs = await github.rest.pulls.list({owner, repo, state: 'open', head: `${owner}:${branch}`});
+            if (!prs.data.length) return core.warning('No PR found to publish the proof summary.');
+            const log = fs.existsSync(process.env.PROOF_LOG) ? fs.readFileSync(process.env.PROOF_LOG, 'utf8') : 'Proof step did not produce a log.';
+            const body = 'Live D1 proof for workflow run ' + context.runId + ':\n\n' + log.slice(-10000);
+            await github.rest.issues.createComment({owner, repo, issue_number: prs.data[0].number, body});
+
       - name: Verify public Android-only release metadata
         run: |
           node --input-type=module <<'JS'

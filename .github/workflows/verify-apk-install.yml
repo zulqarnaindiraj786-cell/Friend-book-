@@ -1,0 +1,45 @@
+name: Verify published FriendBook APK installs
+on:
+  push:
+    branches: ['arena/7c7ddb7b-friend-book']
+    paths: ['.github/workflows/verify-apk-install.yml']
+permissions:
+  contents: read
+jobs:
+  install:
+    runs-on: ubuntu-latest
+    timeout-minutes: 16
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Download and check the actual release APKs
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release download friendbook-2.10.30-cloudflare-79bbea4 -p app-release.apk -D previous
+          gh release download friendbook-2.10.31-cloudflare-47f3662 --clobber -p app-release.apk -D candidate
+          tools="$ANDROID_HOME/build-tools/36.0.0"
+          if [ ! -x "$tools/apksigner" ]; then sdkmanager 'build-tools;36.0.0'; fi
+          for dir in previous candidate; do
+            unzip -tq "$dir/app-release.apk"
+            "$tools/apksigner" verify --print-certs "$dir/app-release.apk" | grep 'certificate SHA-256 digest:' > "$dir/cert.txt"
+            "$tools/aapt" dump badging "$dir/app-release.apk" > "$dir/badging.txt"
+            grep -E "^(package:|sdkVersion:|native-code:)" "$dir/badging.txt"
+          done
+          diff -u previous/cert.txt candidate/cert.txt
+          grep -q "^package: name='com.friendbook.social' versionCode='173'" candidate/badging.txt
+          test "$(wc -c < candidate/app-release.apk)" -eq 4705887
+          sha256sum candidate/app-release.apk
+      - name: Enable KVM for emulator
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Test fresh install and in-place update on Android
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          arch: x86_64
+          disable-animations: true
+          script: adb install candidate/app-release.apk && adb uninstall com.friendbook.social && adb install previous/app-release.apk && adb install -r candidate/app-release.apk && adb shell dumpsys package com.friendbook.social | grep 'versionCode=173'

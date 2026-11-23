@@ -9,14 +9,13 @@ import com.google.android.gms.tasks.Task;
 import com.google.android.gms.tasks.TaskCompletionSource;
 import com.google.android.gms.tasks.Tasks;
 import com.google.firebase.auth.FirebaseAuth;
-import com.google.firebase.database.FirebaseDatabase;
-import com.google.firebase.firestore.DocumentSnapshot;
-import com.google.firebase.firestore.FirebaseFirestore;
-import com.google.firebase.firestore.FirebaseFirestoreSettings;
-import com.google.firebase.firestore.ListenerRegistration;
-import com.google.firebase.firestore.PersistentCacheSettings;
-import com.google.firebase.firestore.SetOptions;
-import com.google.firebase.firestore.Source;
+import com.friendbook.social.d1.documents.DocumentSnapshot;
+import com.friendbook.social.d1.documents.D1DocumentStore;
+import com.friendbook.social.d1.documents.D1DocumentStoreSettings;
+import com.friendbook.social.d1.documents.ListenerRegistration;
+import com.friendbook.social.d1.documents.PersistentCacheSettings;
+import com.friendbook.social.d1.documents.SetOptions;
+import com.friendbook.social.d1.documents.Source;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -28,10 +27,6 @@ import java.util.Map;
  */
 public class Fb {
 
-    public static final String RTDB_URL = "https://friendbook-17551-default-rtdb.firebaseio.com";
-
-    private static FirebaseDatabase rtdb;
-    private static boolean rtdbTried;
     private static boolean firestoreConfigured;
     public static Models.User me;           // cached profile of the signed-in user
     private static ListenerRegistration meReg;
@@ -42,12 +37,12 @@ public class Fb {
         if (!firestoreConfigured) {
             firestoreConfigured = true;
             try {
-                FirebaseFirestoreSettings settings = new FirebaseFirestoreSettings.Builder()
+                D1DocumentStoreSettings settings = new D1DocumentStoreSettings.Builder()
                         .setLocalCacheSettings(PersistentCacheSettings.newBuilder()
                                 .setSizeBytes(100L * 1024L * 1024L) // 100 MB offline disk cache
                                 .build())
                         .build();
-                FirebaseFirestore.getInstance().setFirestoreSettings(settings);
+                D1DocumentStore.getInstance().setFirestoreSettings(settings);
             } catch (Throwable ignored) { }
         }
         // Instant 0ms cold-start hydration of signed-in user from local snapshot
@@ -60,25 +55,9 @@ public class Fb {
 
     public static FirebaseAuth auth() { return FirebaseAuth.getInstance(); }
 
-    public static FirebaseFirestore db() { return FirebaseFirestore.getInstance(); }
+    public static D1DocumentStore db() { return D1DocumentStore.getInstance(); }
 
-    /** Realtime Database (presence + typing). Returns null if the instance does not exist yet. */
-    @Nullable
-    public static FirebaseDatabase rtdb() {
-        if (rtdb != null) return rtdb;
-        if (rtdbTried) return null;
-        rtdbTried = true;
-        try {
-            rtdb = FirebaseDatabase.getInstance(RTDB_URL);
-            rtdb.setPersistenceEnabled(true);
-            rtdb.getReference(".info/connected");
-        } catch (Throwable t) {
-            rtdb = null;
-        }
-        return rtdb;
-    }
 
-    @Nullable
     public static String uid() {
         return auth().getCurrentUser() != null ? auth().getCurrentUser().getUid() : null;
     }
@@ -94,6 +73,7 @@ public class Fb {
     public static void startMeListener() {
         String uid = uid();
         if (uid == null) return;
+        if (me != null && !uid.equals(me.uid)) me=null;
         if (me == null) {
             Models.User cachedMe = FastCache.getMe();
             if (cachedMe != null && uid.equals(cachedMe.uid)) me = cachedMe;
@@ -101,7 +81,7 @@ public class Fb {
         if (meReg != null) meReg.remove();
         meReg = db().collection("users").document(uid)
                 .addSnapshotListener((doc, err) -> {
-                    if (doc == null) return;
+                    if (!uid.equals(Fb.uid()) || doc == null) return;
                     if (!doc.exists()) {
                         if (!doc.getMetadata().isFromCache()) {
                             com.google.firebase.auth.FirebaseUser fu = auth().getCurrentUser();
@@ -113,9 +93,8 @@ public class Fb {
                                         : (!em.isEmpty() && em.contains("@") ? em.substring(0, em.indexOf('@')) : "friendbook User");
                                 String ph = fu.getPhotoUrl() != null
                                         ? fu.getPhotoUrl().toString().replace("=s96-c", "=s400-c") : "";
-                                db().collection("users").document(uid).set(
-                                        com.friendbook.social.auth.GoogleAuthHelper.buildDefaultGoogleUserMap(uid, em, dn, ph),
-                                        com.google.firebase.firestore.SetOptions.merge());
+                                db().collection("users").document(uid).create(
+                                        com.friendbook.social.auth.GoogleAuthHelper.buildDefaultGoogleUserMap(uid, em, dn, ph));
                             }
                         }
                         return;
@@ -127,7 +106,7 @@ public class Fb {
                     if (u.banned && !Admin.isOwnerEmail(u.email)) {
                         me = null;
                         FastCache.clearAll(com.friendbook.social.App.instance);
-                        Presence.goOffline();
+
                         com.friendbook.social.push.PushManager.unregister(com.friendbook.social.App.instance);
                         auth().signOut();
                         android.content.Context app = com.friendbook.social.App.instance;
@@ -167,12 +146,11 @@ public class Fb {
         return me != null && me.blocked != null && me.blocked.contains(otherUid);
     }
 
-    /** Patch a couple of fields on my user doc (merge). */
-    public static void patchMe(Map<String, Object> fields) {
+    /** Apply the patch once through the D1 document API and return its acknowledgement. */
+    public static Task<Void> patchMe(Map<String, Object> fields) {
         String uid = uid();
-        if (uid == null) return;
-        CloudflareStore.put("users", uid, fields);
-        db().collection("users").document(uid).set(fields, SetOptions.merge());
+        if (uid == null) return Tasks.forException(new IllegalStateException("Not signed in"));
+        return db().collection("users").document(uid).set(fields, SetOptions.merge());
     }
 
     public static Map<String, Object> map(Object... kv) {
@@ -197,18 +175,28 @@ public class Fb {
         Models.User ram = FastCache.getUser(uid);
         if (ram != null) return Tasks.forResult(ram);
 
+        final String actor=Fb.uid();
         TaskCompletionSource<Models.User> tcs = new TaskCompletionSource<>();
         db().collection("users").document(uid).get(Source.CACHE)
                 .addOnSuccessListener(d -> {
+                    if (!java.util.Objects.equals(actor,Fb.uid())) { tcs.trySetResult(null); return; }
                     if (d != null && d.exists()) {
                         Models.User u = Models.User.fromDoc(d);
                         FastCache.putUser(u);
                         tcs.trySetResult(u);
                     } else {
-                        fetchUserNetwork(uid, tcs);
+                        fetchUserNetwork(uid, actor, tcs);
                     }
                 })
-                .addOnFailureListener(e -> fetchUserNetwork(uid, tcs));
+                .addOnFailureListener(e -> fetchUserNetwork(uid, actor, tcs));
+        return tcs.getTask();
+    }
+
+    /** Refresh an author from D1 instead of treating a stale name/photo cache as authoritative. */
+    public static Task<Models.User> getUserFresh(String uid) {
+        if (uid == null || uid.isEmpty()) return Tasks.forResult(null);
+        TaskCompletionSource<Models.User> tcs=new TaskCompletionSource<>();
+        fetchUserNetwork(uid,Fb.uid(),tcs);
         return tcs.getTask();
     }
 
@@ -240,9 +228,11 @@ public class Fb {
         } catch (Throwable ignored) { }
     }
 
-    private static void fetchUserNetwork(String uid, TaskCompletionSource<Models.User> tcs) {
+    private static void fetchUserNetwork(String uid, String actor, TaskCompletionSource<Models.User> tcs) {
+        if (!java.util.Objects.equals(actor,Fb.uid())) { tcs.trySetResult(null); return; }
         db().collection("users").document(uid).get()
                 .addOnSuccessListener(d -> {
+                    if (!java.util.Objects.equals(actor,Fb.uid())) { tcs.trySetResult(null); return; }
                     Models.User u = (d != null && d.exists()) ? Models.User.fromDoc(d) : null;
                     if (u != null) FastCache.putUser(u);
                     tcs.trySetResult(u);

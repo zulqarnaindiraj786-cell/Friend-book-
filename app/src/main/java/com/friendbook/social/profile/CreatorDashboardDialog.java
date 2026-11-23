@@ -22,8 +22,8 @@ import com.friendbook.social.live.LiveActivity;
 import com.friendbook.social.models.Models;
 import com.friendbook.social.post.CreatePostActivity;
 import com.friendbook.social.reels.AddReelActivity;
-import com.google.firebase.firestore.DocumentSnapshot;
-import com.google.firebase.firestore.SetOptions;
+import com.friendbook.social.d1.documents.DocumentSnapshot;
+import com.friendbook.social.d1.documents.SetOptions;
 
 import java.util.HashMap;
 import java.util.Map;

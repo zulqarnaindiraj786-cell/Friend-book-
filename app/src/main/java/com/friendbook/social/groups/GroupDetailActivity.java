@@ -35,10 +35,10 @@ import com.friendbook.social.post.FeedAdapter;
 import com.friendbook.social.post.PostDetailActivity;
 import com.friendbook.social.profile.ProfileActivity;
 import com.friendbook.social.story.StoriesAdapter;
-import com.google.firebase.firestore.DocumentSnapshot;
-import com.google.firebase.firestore.FieldValue;
-import com.google.firebase.firestore.ListenerRegistration;
-import com.google.firebase.firestore.SetOptions;
+import com.friendbook.social.d1.documents.DocumentSnapshot;
+import com.friendbook.social.d1.documents.FieldValue;
+import com.friendbook.social.d1.documents.ListenerRegistration;
+import com.friendbook.social.d1.documents.SetOptions;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -51,7 +51,7 @@ import java.util.Set;
 /**
  * 👥 Full Pro Community Group Detail Screen:
  *  - Cover Photo + Group Icon + Role Badge (👑 Admin / 🛡 Moderator / ✓ Member)
- *  - Invite Members picker (sends direct `group_invite` notification + share link + QR)
+ *  - Invite Members picker (sends direct `group_invite` notification + Play Store sharing)
  *  - 🛡 Manage Group Hub (for Group Admins & Group Moderators):
  *      • Pending Posts Approval Queue (Approve ✓ / Decline ✕)
  *      • Member Join Requests Queue (Approve ✓ / Decline ✕)
@@ -103,6 +103,13 @@ public class GroupDetailActivity extends Activity implements FeedAdapter.Host {
         modPostBtn.setOnClickListener(this::showQuickGroupMenu);
         topBar.addView(modPostBtn);
         root.addView(topBar);
+        TextView copyId = Ui.tv(this, "Group ID: " + id + "  (tap to copy)", 11, Ui.sub(this));
+        Ui.pad(copyId, 12, 4, 12, 4);
+        copyId.setOnClickListener(v -> {
+            android.content.ClipboardManager cb = (android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+            if (cb != null) { cb.setPrimaryClip(android.content.ClipData.newPlainText("Group ID", id)); Ui.toast(this, "Group ID copied"); }
+        });
+        root.addView(copyId);
         root.addView(Ui.divider(this));
 
         // Hero Card (Cover + Avatar + Title + Action Pills + Tabs)
@@ -457,6 +464,12 @@ public class GroupDetailActivity extends Activity implements FeedAdapter.Host {
 
     // ==================== JOIN / INVITE / QUICK MENU ====================
 
+    private void groupWrite(com.google.android.gms.tasks.Task<Void> task, String success) {
+        final String actor=Fb.uid();
+        task.addOnSuccessListener(v -> { if (!isFinishing() && java.util.Objects.equals(actor,Fb.uid())) Ui.toast(this,success); })
+                .addOnFailureListener(e -> { if (!isFinishing() && java.util.Objects.equals(actor,Fb.uid())) Ui.toast(this,"Group update failed. Please try again."); });
+    }
+
     private void onJoinOrLeaveClicked() {
         String me = Fb.uid();
         if (me == null || group == null) return;
@@ -469,8 +482,8 @@ public class GroupDetailActivity extends Activity implements FeedAdapter.Host {
         boolean isInvited = group.invitedUids.contains(me);
 
         if (isMember) {
-            if (me.equals(group.adminId) && group.adminIds.size() <= 1 && group.members.size() > 1) {
-                Ui.toast(this, "Promote another member to Group Admin before leaving");
+            if (me.equals(group.adminId)) {
+                Ui.toast(this, "Group creator cannot leave without transferring ownership");
                 return;
             }
             Ui.confirm(this, "Leave \"" + group.name + "\"?",
@@ -479,23 +492,19 @@ public class GroupDetailActivity extends Activity implements FeedAdapter.Host {
                         up.put("members", FieldValue.arrayRemove(me));
                         up.put("adminIds", FieldValue.arrayRemove(me));
                         up.put("moderatorIds", FieldValue.arrayRemove(me));
-                        Fb.db().collection("groups").document(id).update(up);
-                        Ui.toast(this, "You left " + group.name);
+                        groupWrite(Fb.db().collection("groups").document(id).update(up), "You left " + group.name);
                     });
         } else if (isPending) {
-            Fb.db().collection("groups").document(id)
-                    .update("pendingMemberIds", FieldValue.arrayRemove(me));
-            Ui.toast(this, "Join request cancelled");
+            groupWrite(Fb.db().collection("groups").document(id)
+                    .update("pendingMemberIds", FieldValue.arrayRemove(me)), "Join request cancelled");
         } else if (!isInvited && ("Private".equalsIgnoreCase(group.privacy) || group.requireJoinApproval)) {
-            Fb.db().collection("groups").document(id)
-                    .update("pendingMemberIds", FieldValue.arrayUnion(me));
-            Ui.toast(this, "⏳ Join request sent to Group Admins & Moderators");
+            groupWrite(Fb.db().collection("groups").document(id)
+                    .update("pendingMemberIds", FieldValue.arrayUnion(me)), "⏳ Join request sent to Group Admins & Moderators");
         } else {
             Map<String, Object> up = new HashMap<>();
             up.put("members", FieldValue.arrayUnion(me));
             up.put("invitedUids", FieldValue.arrayRemove(me));
-            Fb.db().collection("groups").document(id).update(up);
-            Ui.toast(this, "Joined " + group.name + " 🎉");
+            groupWrite(Fb.db().collection("groups").document(id).update(up), "Joined " + group.name + " 🎉");
         }
     }
 
@@ -506,9 +515,9 @@ public class GroupDetailActivity extends Activity implements FeedAdapter.Host {
         ScrollView sv = new ScrollView(this);
         sv.addView(box);
 
-        TextView shareLinkBtn = Ui.btnOutline(this, "🔗 Copy & Share Group Invite Link", Ui.BLUE);
+        TextView shareLinkBtn = Ui.btnOutline(this, "🔗 Share group name & app link", Ui.BLUE);
         shareLinkBtn.setOnClickListener(v -> {
-            String link = AdsConfig.OFFICIAL_WEBSITE_URL + "/?group=" + id;
+            String link = AdsConfig.PLAY_STORE_URL;
             Intent s = new Intent(Intent.ACTION_SEND);
             s.setType("text/plain");
             s.putExtra(Intent.EXTRA_TEXT, "👥 Join our group \"" + group.name + "\" on friendbook!\n" + link);
@@ -555,12 +564,16 @@ public class GroupDetailActivity extends Activity implements FeedAdapter.Host {
                 .setView(sv)
                 .setPositiveButton("Send Invites", (d, w) -> {
                     if (selected.isEmpty()) return;
+                    final String actor=Fb.uid();
+                    final java.util.List<String> recipients=new ArrayList<>(selected);
+                    final String groupName=group.name;
                     Fb.db().collection("groups").document(id)
-                            .update("invitedUids", FieldValue.arrayUnion(selected.toArray()));
-                    for (String toUid : selected) {
-                        Notify.sendGroupInvite(toUid, id, group.name);
-                    }
-                    Ui.toast(this, "Sent " + selected.size() + " group invitation(s) 📨");
+                            .update("invitedUids", FieldValue.arrayUnion(recipients.toArray()))
+                            .addOnSuccessListener(ignored -> {
+                                if (isFinishing() || !java.util.Objects.equals(actor,Fb.uid())) return;
+                                for (String toUid : recipients) Notify.sendGroupInvite(toUid,id,groupName);
+                                Ui.toast(this, "Sent " + recipients.size() + " group invitation(s) 📨");
+                            }).addOnFailureListener(error -> { if (!isFinishing()) Ui.toast(this,"Couldn't send invitations. Please try again."); });
                 })
                 .setNegativeButton("Close", null)
                 .show();
@@ -571,8 +584,7 @@ public class GroupDetailActivity extends Activity implements FeedAdapter.Host {
         String me = Fb.uid();
         PopupMenu pm = new PopupMenu(this, anchor);
         pm.getMenu().add(0, 1, 0, "➕ Invite people");
-        pm.getMenu().add(0, 2, 0, "🔗 Copy group link");
-        pm.getMenu().add(0, 3, 0, "📱 Group QR code");
+        pm.getMenu().add(0, 2, 0, "🔗 Copy app link");
         if (group.canManageGroup(me)) {
             pm.getMenu().add(0, 4, 0, "🛡 Manage group & approvals");
             pm.getMenu().add(0, 5, 0, "📌 Pin / Remove group posts");
@@ -583,8 +595,7 @@ public class GroupDetailActivity extends Activity implements FeedAdapter.Host {
         pm.setOnMenuItemClickListener(it -> {
             int item = it.getItemId();
             if (item == 1) showInviteMembersDialog();
-            else if (item == 2) Ui.copy(this, AdsConfig.OFFICIAL_WEBSITE_URL + "/?group=" + id);
-            else if (item == 3) Ui.showQrDialog(this, group.name, AdsConfig.OFFICIAL_WEBSITE_URL + "/?group=" + id);
+            else if (item == 2) Ui.copy(this, AdsConfig.PLAY_STORE_URL);
             else if (item == 4) showManageGroupHub();
             else if (item == 5) showModerateGroupPostsDialog();
             else if (item == 6) showGroupSettingsDialog();
@@ -672,19 +683,22 @@ public class GroupDetailActivity extends Activity implements FeedAdapter.Host {
             TextView appr = Ui.btn(this, "✓ Approve");
             Ui.pad(appr, 12, 6, 12, 6);
             appr.setOnClickListener(v -> {
-                Fb.db().collection("posts").document(p.id).update("groupApprovalStatus", "approved");
-                Notify.send(p.authorId, "group", "approved your post in \"" + group.name + "\" ✓", p.id);
-                card.setVisibility(View.GONE);
-                Ui.toast(this, "Post approved ✓");
+                String actor=Fb.uid();
+                Fb.db().collection("posts").document(p.id).update("groupApprovalStatus", "approved")
+                    .addOnSuccessListener(ignored -> {
+                        if (isFinishing() || !java.util.Objects.equals(actor,Fb.uid())) return;
+                        Notify.send(p.authorId, "group", "approved your post in \"" + group.name + "\" ✓", p.id);
+                        card.setVisibility(View.GONE); Ui.toast(this, "Post approved ✓");
+                    }).addOnFailureListener(error -> { if (!isFinishing()) Ui.toast(this,"Couldn't approve post. Please try again."); });
             });
             TextView decl = Ui.btnOutline(this, "✕ Decline", Ui.RED);
             Ui.pad(decl, 12, 6, 12, 6);
             LinearLayout.LayoutParams dlp = new LinearLayout.LayoutParams(-2, -2);
             dlp.leftMargin = Ui.dp(this, 8);
             decl.setOnClickListener(v -> {
-                Fb.db().collection("posts").document(p.id).delete();
-                card.setVisibility(View.GONE);
-                Ui.toast(this, "Post declined & removed");
+                Fb.db().collection("posts").document(p.id).delete().addOnSuccessListener(ignored -> {
+                    if (!isFinishing()) { card.setVisibility(View.GONE); Ui.toast(this, "Post declined & removed"); }
+                }).addOnFailureListener(error -> { if (!isFinishing()) Ui.toast(this,"Couldn't decline post. Please try again."); });
             });
             btns.addView(appr);
             btns.addView(decl, dlp);
@@ -726,10 +740,12 @@ public class GroupDetailActivity extends Activity implements FeedAdapter.Host {
                 Map<String, Object> up = new HashMap<>();
                 up.put("pendingMemberIds", FieldValue.arrayRemove(reqUid));
                 up.put("members", FieldValue.arrayUnion(reqUid));
-                Fb.db().collection("groups").document(id).update(up);
-                Notify.sendGroupInvite(reqUid, id, group.name);
-                row.setVisibility(View.GONE);
-                Ui.toast(this, "Approved ✓");
+                String actor=Fb.uid();
+                Fb.db().collection("groups").document(id).update(up).addOnSuccessListener(ignored -> {
+                    if (isFinishing() || !java.util.Objects.equals(actor,Fb.uid())) return;
+                    Notify.sendGroupInvite(reqUid, id, group.name);
+                    row.setVisibility(View.GONE); Ui.toast(this, "Approved ✓");
+                }).addOnFailureListener(error -> { if (!isFinishing()) Ui.toast(this,"Couldn't approve request. Please try again."); });
             });
 
             TextView no = Ui.btnOutline(this, "✕", Ui.RED);
@@ -738,8 +754,9 @@ public class GroupDetailActivity extends Activity implements FeedAdapter.Host {
             nlp.leftMargin = Ui.dp(this, 6);
             no.setOnClickListener(v -> {
                 Fb.db().collection("groups").document(id)
-                        .update("pendingMemberIds", FieldValue.arrayRemove(reqUid));
-                row.setVisibility(View.GONE);
+                        .update("pendingMemberIds", FieldValue.arrayRemove(reqUid))
+                        .addOnSuccessListener(ignored -> { if (!isFinishing()) row.setVisibility(View.GONE); })
+                        .addOnFailureListener(error -> { if (!isFinishing()) Ui.toast(this,"Couldn't decline request. Please try again."); });
             });
             row.addView(ok);
             row.addView(no, nlp);
@@ -790,9 +807,9 @@ public class GroupDetailActivity extends Activity implements FeedAdapter.Host {
             TextView pinB = Ui.btnOutline(this, pinned ? "Unpin" : "📌 Pin to Featured", Ui.BLUE);
             Ui.pad(pinB, 10, 5, 10, 5);
             pinB.setOnClickListener(v -> {
-                Fb.db().collection("groups").document(id).update("pinnedPostId", pinned ? "" : p.id);
-                dlg.dismiss();
-                Ui.toast(this, pinned ? "Unpinned" : "Pinned to Featured 📌");
+                Fb.db().collection("groups").document(id).update("pinnedPostId", pinned ? "" : p.id)
+                    .addOnSuccessListener(ignored -> { if (!isFinishing()) { dlg.dismiss(); Ui.toast(this, pinned ? "Unpinned" : "Pinned to Featured 📌"); } })
+                    .addOnFailureListener(error -> { if (!isFinishing()) Ui.toast(this,"Couldn't update pinned post. Please try again."); });
             });
 
             TextView delB = Ui.btnOutline(this, "🗑 Remove Post", Ui.RED);
@@ -800,9 +817,9 @@ public class GroupDetailActivity extends Activity implements FeedAdapter.Host {
             LinearLayout.LayoutParams dlp = new LinearLayout.LayoutParams(-2, -2);
             dlp.leftMargin = Ui.dp(this, 8);
             delB.setOnClickListener(v -> {
-                Fb.db().collection("posts").document(p.id).delete();
-                card.setVisibility(View.GONE);
-                Ui.toast(this, "Removed from group 🗑");
+                Fb.db().collection("posts").document(p.id).delete().addOnSuccessListener(ignored -> {
+                    if (!isFinishing()) { card.setVisibility(View.GONE); Ui.toast(this,"Removed from group 🗑"); }
+                }).addOnFailureListener(error -> { if (!isFinishing()) Ui.toast(this,"Couldn't remove post. Please try again."); });
             });
             btns.addView(pinB);
             btns.addView(delB, dlp);
@@ -1043,28 +1060,26 @@ public class GroupDetailActivity extends Activity implements FeedAdapter.Host {
             if (act == 1) {
                 startActivity(new Intent(this, ProfileActivity.class).putExtra("uid", targetUid));
             } else if (act == 2) {
-                Fb.db().collection("groups").document(id).update("adminIds",
-                        targetAdmin ? FieldValue.arrayRemove(targetUid) : FieldValue.arrayUnion(targetUid));
-                Ui.toast(this, targetAdmin ? "Removed Admin role" : targetName + " is now a Group Admin 👑");
+                groupWrite(Fb.db().collection("groups").document(id).update("adminIds",
+                        targetAdmin ? FieldValue.arrayRemove(targetUid) : FieldValue.arrayUnion(targetUid)),
+                        targetAdmin ? "Removed Admin role" : targetName + " is now a Group Admin 👑");
             } else if (act == 3) {
-                Fb.db().collection("groups").document(id).update("moderatorIds",
-                        targetMod ? FieldValue.arrayRemove(targetUid) : FieldValue.arrayUnion(targetUid));
-                Ui.toast(this, targetMod ? "Removed Moderator role" : targetName + " is now a Group Moderator 🛡");
+                groupWrite(Fb.db().collection("groups").document(id).update("moderatorIds",
+                        targetMod ? FieldValue.arrayRemove(targetUid) : FieldValue.arrayUnion(targetUid)),
+                        targetMod ? "Removed Moderator role" : targetName + " is now a Group Moderator 🛡");
             } else if (act == 4) {
                 Map<String, Object> up = new HashMap<>();
                 up.put("members", FieldValue.arrayRemove(targetUid));
                 up.put("adminIds", FieldValue.arrayRemove(targetUid));
                 up.put("moderatorIds", FieldValue.arrayRemove(targetUid));
-                Fb.db().collection("groups").document(id).update(up);
-                Ui.toast(this, "Removed " + targetName);
+                groupWrite(Fb.db().collection("groups").document(id).update(up), "Removed " + targetName);
             } else if (act == 5) {
                 Map<String, Object> up = new HashMap<>();
                 up.put("members", FieldValue.arrayRemove(targetUid));
                 up.put("adminIds", FieldValue.arrayRemove(targetUid));
                 up.put("moderatorIds", FieldValue.arrayRemove(targetUid));
                 up.put("bannedMemberIds", FieldValue.arrayUnion(targetUid));
-                Fb.db().collection("groups").document(id).update(up);
-                Ui.toast(this, "Banned " + targetName + " from group 🚫");
+                groupWrite(Fb.db().collection("groups").document(id).update(up), "Banned " + targetName + " from group 🚫");
             }
             return true;
         });

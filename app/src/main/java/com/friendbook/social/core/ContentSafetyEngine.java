@@ -11,8 +11,8 @@ import android.os.Handler;
 import android.os.Looper;
 import android.provider.OpenableColumns;
 
-import com.google.firebase.firestore.FieldValue;
-import com.google.firebase.firestore.SetOptions;
+import com.friendbook.social.d1.documents.FieldValue;
+import com.friendbook.social.d1.documents.SetOptions;
 
 import java.io.InputStream;
 import java.util.Collections;

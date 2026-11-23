@@ -14,11 +14,10 @@ import android.widget.TextView;
 import com.friendbook.social.core.Admin;
 import com.friendbook.social.core.Fb;
 import com.friendbook.social.core.Prefs;
-import com.friendbook.social.core.Presence;
 import com.friendbook.social.core.Ui;
 import com.friendbook.social.main.MainActivity;
 import com.friendbook.social.settings.SessionsActivity;
-import com.google.firebase.firestore.FieldValue;
+import com.friendbook.social.d1.documents.FieldValue;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -214,9 +213,9 @@ public class RegisterActivity extends Activity {
                     u.put("contactInfoPrivacy", "Only me");
                     u.put("friendsListPrivacy", "Public");
                     u.put("lookupPrivacy", "Everyone");
-                    u.put("isOnline", true);
-                    u.put("isAdmin", Admin.isOwnerEmail(e));
-                    u.put("isVerified", Admin.isOwnerEmail(e));
+                    // Privileged flags are server-owned; email alone cannot grant them.
+                    u.put("isAdmin", false);
+                    u.put("isVerified", false);
                     u.put("friendsCount", 0);
                     u.put("followers", new ArrayList<String>());
                     u.put("following", new ArrayList<String>());
@@ -230,7 +229,7 @@ public class RegisterActivity extends Activity {
                                 Prefs.setUnlockedSession(this, true);
                                 SessionsActivity.record();
                                 Fb.startMeListener();
-                                Presence.init();
+
                                 startActivity(new Intent(this, MainActivity.class));
                                 finishAffinity();
                             })

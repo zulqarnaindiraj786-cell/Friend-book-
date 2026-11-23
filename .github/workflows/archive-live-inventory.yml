@@ -1,0 +1,32 @@
+name: Inspect archive mapping (D1 only)
+on:
+  push:
+    branches: ['arena/f6bf61bd-friend-book']
+    paths: ['.github/workflows/archive-live-inventory.yml']
+permissions:
+  contents: read
+jobs:
+  inventory:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Inspect aggregate archive paths and live conflicts (no Firebase calls)
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: '92f3d04598822de2e49e14561218d090'
+        run: |
+          set -euo pipefail
+          SQL="WITH a AS (SELECT path,substr(path,1,instr(path,'/')-1) AS root,length(path)-length(replace(path,'/',''))+1 AS depth FROM friendbook_cf_fullcopy_archive) SELECT root,depth,COUNT(*) AS archived,SUM(CASE WHEN f.path IS NOT NULL THEN 1 ELSE 0 END) AS canonical_exists,SUM(CASE WHEN d.path IS NOT NULL THEN 1 ELSE 0 END) AS app_exists FROM a LEFT JOIN friendbook_cf_firestore_documents f USING(path) LEFT JOIN friendbook_cf_documents d USING(path) GROUP BY root,depth ORDER BY archived DESC;"
+          npx --yes wrangler@4.157.0 d1 execute friendbook-db --remote --command "$SQL" --json > "$RUNNER_TEMP/inventory.json"
+          python3 - <<'PY'
+          import json,os
+          with open(os.environ['RUNNER_TEMP']+'/inventory.json') as f: payload=json.load(f)
+          rows=[row for item in payload for row in item.get('results',[])]
+          print('::notice::ARCHIVE_PATH_INVENTORY='+json.dumps(rows,separators=(',',':')))
+          with open(os.environ['GITHUB_STEP_SUMMARY'],'a') as f:
+            f.write('## Archive mapping inventory\nD1-only aggregate; no Firebase calls or data writes.\n```json\n'+json.dumps(rows,indent=2)+'\n```\n')
+          PY

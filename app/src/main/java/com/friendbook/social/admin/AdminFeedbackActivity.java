@@ -16,9 +16,9 @@ import com.friendbook.social.core.Admin;
 import com.friendbook.social.core.Fb;
 import com.friendbook.social.core.Format;
 import com.friendbook.social.core.Ui;
-import com.google.firebase.firestore.DocumentSnapshot;
-import com.google.firebase.firestore.ListenerRegistration;
-import com.google.firebase.firestore.Query;
+import com.friendbook.social.d1.documents.DocumentSnapshot;
+import com.friendbook.social.d1.documents.ListenerRegistration;
+import com.friendbook.social.d1.documents.Query;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -60,9 +60,15 @@ public class AdminFeedbackActivity extends Activity {
         reg = Fb.db().collection("feedback")
                 .orderBy("createdAt", Query.Direction.DESCENDING).limit(100)
                 .addSnapshotListener((snap, err) -> {
+                    if (err != null || snap == null) {
+                        empty.setText("Couldn't load feedback. Reopen to retry.");
+                        empty.setVisibility(View.VISIBLE);
+                        return;
+                    }
                     items.clear();
-                    if (snap != null) items.addAll(snap.getDocuments());
+                    items.addAll(snap.getDocuments());
                     adapter.notifyDataSetChanged();
+                    empty.setText("No feedback yet");
                     empty.setVisibility(items.isEmpty() ? View.VISIBLE : View.GONE);
                 });
     }
@@ -103,8 +109,9 @@ public class AdminFeedbackActivity extends Activity {
             h.text.setText(Format.str(m, "text"));
             h.meta.setText(Format.str(m, "app") + " · " + Format.ago(Format.ts(m == null ? null : m.get("createdAt"))));
             h.del.setOnClickListener(v -> {
-                d.getReference().delete();
-                Ui.toast(AdminFeedbackActivity.this, "Archived");
+                Fb.db().moderate("delete_content", "feedback", d.getId())
+                        .addOnSuccessListener(ignored -> Ui.toast(AdminFeedbackActivity.this, "Archived"))
+                        .addOnFailureListener(error -> Ui.toast(AdminFeedbackActivity.this, "Couldn't archive feedback. Please try again."));
             });
         }
 

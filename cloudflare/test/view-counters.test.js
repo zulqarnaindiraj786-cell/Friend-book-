@@ -427,6 +427,9 @@ test('migration stays repeatable and the view path never needs it', async t => {
 test('worker exposes /v1/views behind the Firebase token gate and reports its bindings', async t => {
   resetViewState();
   const f = fixture({ kvSeed: { 'reels/r1': 12 }, sql: tsv([['reels/r1', 12]]) }); t.after(f.close);
+  const basePrepare=f.env.DB.prepare;
+  f.env.DB.prepare=q => q.includes('friendbook_cf_firestore_documents') || q.includes('friendbook_cf_documents')
+    ? {bind:()=>({first:async()=>null})} : basePrepare(q);
   const worker = createWorker(async () => 'user1');
   const fetchWith = async (path, method, token = 'id-token') => {
     const response = await worker.fetch(
@@ -437,13 +440,9 @@ test('worker exposes /v1/views behind the Firebase token gate and reports its bi
   };
 
   const counted = await fetchWith('/v1/views/reels/r1', 'POST');
-  assert.equal(counted.body.views, 13);
-  assert.equal(counted.body.counted, true);
-  assert.equal(counted.body.storage, 'ae+kv+memory');
-  assert.equal(f.ae.events.length, 1);
-  const repeat = await fetchWith('/v1/views/reels/r1', 'POST');
-  assert.equal(repeat.body.counted, false, 'the same user watching again does not count again');
-  assert.equal(repeat.body.views, 13);
+  assert.equal(counted.status, 403);
+  assert.equal((await fetchWith('/v1/views?collection=reels&top=10', 'GET')).status, 400);
+  assert.equal(f.ae.events.length, 0);
 
   const health = await fetchWith('/health', 'GET', null);
   assert.equal(health.status, 200);
@@ -453,7 +452,7 @@ test('worker exposes /v1/views behind the Firebase token gate and reports its bi
 
   resetViewState();
   assert.equal((await fetchWith('/v1/views/reels/r1', 'POST', null)).status, 401, 'no token, no view');
-  assert.equal(f.ae.events.length, 2, 'an unauthenticated request recorded nothing new');
+  assert.equal(f.ae.events.length, 0, 'an unauthenticated request recorded nothing new');
 });
 
 test('when Workers KV is not bound, the R2 snapshot keeps the counts across isolates', async t => {
@@ -551,3 +550,13 @@ function readMigration(name) {
   const { readFileSync } = require('node:fs');
   return readFileSync(resolve(root, 'cloudflare', 'migrations', name), 'utf8');
 }
+
+test('rejected view requests do not seed storage on a cold isolate', async () => {
+  resetViewState();
+  let reads = 0;
+  const env = { DB: { prepare() { reads++; throw new Error('unexpected D1 read'); } } };
+  const url = new URL('https://example.test/v1/views?collection=unknown');
+  assert.equal((await viewCounters(new Request(url), env, { uid: 'alice' }, null, url)).status, 400);
+  assert.equal((await viewCounters(new Request(url, { method: 'PUT' }), env, { uid: 'alice' }, ['', 'posts', 'post1'], url)).status, 405);
+  assert.equal(reads, 0);
+});

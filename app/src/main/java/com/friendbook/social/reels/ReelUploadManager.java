@@ -10,7 +10,7 @@ import com.friendbook.social.core.ContentSafetyEngine;
 import com.friendbook.social.core.Fb;
 import com.friendbook.social.core.Ui;
 import com.friendbook.social.models.Models;
-import com.google.firebase.firestore.FieldValue;
+import com.friendbook.social.d1.documents.FieldValue;
 
 import java.io.BufferedOutputStream;
 import java.io.File;
@@ -123,6 +123,8 @@ public final class ReelUploadManager {
             return;
         }
         final Context appCtx = context.getApplicationContext();
+        final String actor=Fb.uid();
+        if (actor==null || actor.isEmpty()) { Ui.toast(context, "Sign in to upload a Reel"); return; }
         final String caption = captionText != null ? captionText.trim() : "";
         final EditOptions opts = editOpts != null ? editOpts : new EditOptions();
 
@@ -197,7 +199,7 @@ public final class ReelUploadManager {
             // Create optimistic local Reel so Reels tab can play it immediately at 0.0ms!
             Models.Reel opt = new Models.Reel();
             opt.id = "local_uploading_" + System.currentTimeMillis();
-            opt.authorId = Fb.uid();
+            opt.authorId = actor;
             opt.authorName = Fb.myName();
             opt.authorPhoto = Fb.myPhoto();
             opt.videoUrl = stagedUri.toString();
@@ -228,7 +230,14 @@ public final class ReelUploadManager {
             opt.savedBy = new ArrayList<>();
             optimisticReel = opt;
 
-            Runnable runCloudUpload = () -> performCloudUpload(appCtx, stagedFile, stagedUri, fileBytes, caption, meta, opts);
+            Runnable runCloudUpload = () -> {
+                if (!actor.equals(Fb.uid())) {
+                    optimisticReel=null; stagedFile.delete();
+                    emit(false,0,0L,0L,"",false,"Account changed. Reel was not published.");
+                    return;
+                }
+                performCloudUpload(appCtx, stagedFile, stagedUri, fileBytes, caption, meta, opts, actor);
+            };
 
             if (alreadySafetyVerified) {
                 MAIN.post(runCloudUpload);
@@ -254,18 +263,14 @@ public final class ReelUploadManager {
                                            final long totalBytes,
                                            final String caption,
                                            final Cloudinary.VideoMeta meta,
-                                           final EditOptions opts) {
+                                           final EditOptions opts,
+                                           final String actor) {
         emit(true, 4, 0L, totalBytes, "Uploading Reel… 4%", false, null);
 
-        // Upload tiny ~15 KB poster JPEG in parallel so viewers get a 0.0ms cover image!
-        final String[] uploadedThumbHolder = new String[]{""};
-        if (meta != null && meta.posterJpeg != null && meta.posterJpeg.length > 0) {
-            Cloudinary.uploadJpegBytes(meta.posterJpeg).addOnSuccessListener(url -> {
-                if (url != null) uploadedThumbHolder[0] = url;
-            });
-        }
+        final com.google.android.gms.tasks.Task<String> posterUpload = meta != null && meta.posterJpeg != null && meta.posterJpeg.length > 0
+                ? Cloudinary.uploadJpegBytes(meta.posterJpeg) : com.google.android.gms.tasks.Tasks.forResult("");
 
-        String storagePath = "reels/" + Fb.uid() + "_" + System.currentTimeMillis() + ".mp4";
+        String storagePath = "reels/" + actor + "_" + System.currentTimeMillis() + ".mp4";
         Cloudinary.uploadOrFirebaseWithProgress(appCtx, storagePath, stagedUri,
                 (pct, sent, tot) -> {
                     int shown = Math.max(4, Math.min(98, pct));
@@ -275,16 +280,18 @@ public final class ReelUploadManager {
                             : "";
                     emit(true, shown, sent, tot, "Uploading Reel… " + shown + "%" + mbStr, false, null);
                 }).addOnSuccessListener(videoUrl -> {
-            // Seed local SSD cache immediately under the remote videoUrl so playback is 0.0ms!
-            ReelVideoCache.seedLocalUriToCache(appCtx, stagedUri, videoUrl);
-
-            String thumbUrl = uploadedThumbHolder[0];
+            if (!actor.equals(Fb.uid())) {
+                optimisticReel=null; stagedFile.delete();
+                emit(false,0,0L,0L,"",false,"Account changed. Reel was not published.");
+                return;
+            }
+            String thumbUrl = posterUpload.isSuccessful() ? posterUpload.getResult() : "";
             if (thumbUrl == null || thumbUrl.isEmpty()) {
                 thumbUrl = ReelVideoCache.deriveThumbUrl(videoUrl, "");
             }
 
             Map<String, Object> doc = Fb.map(
-                    "authorId", Fb.uid(),
+                    "authorId", actor,
                     "authorName", Fb.myName(),
                     "authorPhotoUrl", Fb.myPhoto(),
                     "videoUrl", videoUrl,
@@ -345,35 +352,39 @@ public final class ReelUploadManager {
             }
 
             emit(true, 99, totalBytes, totalBytes, "Publishing Reel… 99%", false, null);
-            String cfReelId = "reel_" + System.currentTimeMillis() + "_" + (Fb.uid() != null ? Fb.uid().substring(0, Math.min(6, Fb.uid().length())) : "u");
-            if (com.friendbook.social.core.CloudflareStore.enabled()) {
-                com.friendbook.social.core.CloudflareStore.put("reels", cfReelId, doc, () -> {
-                    optimisticReel = null;
-                    MAIN.postDelayed(() -> {
-                        try { //noinspection ResultOfMethodCallIgnored
-                            stagedFile.delete();
-                        } catch (Throwable ignored) { }
-                    }, 8000L);
-                    emit(false, 100, totalBytes, totalBytes, "Your Reel is Live!", true, null);
-                    Ui.toast(appCtx, "Your Reel is Live!");
+            // Use one stable ID and a Task with explicit success/failure. The old
+            // fire-and-forget path silently swallowed errors and stayed at 99%.
+            final com.friendbook.social.d1.documents.DocumentReference ref=Fb.db().collection("reels")
+                    .document("reel_"+java.util.UUID.randomUUID().toString());
+            final boolean posterMissing = thumbUrl == null || thumbUrl.isEmpty();
+            Runnable published=() -> {
+                // Do not block publishing on the poster, but persist a late successful upload.
+                if (posterMissing) posterUpload.addOnSuccessListener(url -> {
+                    if (actor.equals(Fb.uid()) && url != null && !url.isEmpty()) ref.update("thumbUrl", url);
                 });
-                return;
-            }
-            Fb.db().collection("reels").add(doc).addOnSuccessListener(ref -> {
                 optimisticReel = null;
-                // Clean up staging file after seeding completes
-                MAIN.postDelayed(() -> {
-                    try { //noinspection ResultOfMethodCallIgnored
-                        stagedFile.delete();
-                    } catch (Throwable ignored) { }
-                }, 8000L);
+                MAIN.postDelayed(() -> stagedFile.delete(), 8000L);
                 emit(false, 100, totalBytes, totalBytes, "Your Reel is Live!", true, null);
                 Ui.toast(appCtx, "Your Reel is Live!");
+            };
+            ref.set(doc).addOnSuccessListener(ignored -> {
+                if (actor.equals(Fb.uid())) published.run();
+                else { optimisticReel=null; stagedFile.delete(); emit(false,0,0L,0L,"",false,"Account changed. Check the original account for your Reel."); }
             }).addOnFailureListener(e -> {
-                optimisticReel = null;
-                //noinspection ResultOfMethodCallIgnored
-                stagedFile.delete();
-                emit(false, 0, 0L, 0L, "", false, e.getMessage() != null ? e.getMessage() : "Publish failed");
+                if (!actor.equals(Fb.uid())) {
+                    optimisticReel=null; stagedFile.delete();
+                    emit(false,0,0L,0L,"",false,"Account changed. Check the original account for your Reel.");return;
+                }
+                // A lost acknowledgement can follow a successful commit. Verify
+                // the same ID before telling the user to retry and risk duplicates.
+                ref.get(com.friendbook.social.d1.documents.Source.SERVER).addOnSuccessListener(snapshot -> {
+                    if (!actor.equals(Fb.uid())) { optimisticReel=null; stagedFile.delete(); emit(false,0,0L,0L,"",false,"Account changed. Check the original account for your Reel.");return; }
+                    if (snapshot.exists() && actor.equals(snapshot.getString("authorId")) && videoUrl.equals(snapshot.getString("videoUrl"))) published.run();
+                    else { optimisticReel=null; stagedFile.delete(); emit(false,0,0L,0L,"",false,"Reel not published. Please retry."); }
+                }).addOnFailureListener(readError -> {
+                    optimisticReel=null; stagedFile.delete();
+                    emit(false,0,0L,0L,"",false,"Publish could not be confirmed. Check your profile before retrying.");
+                });
             });
         }).addOnFailureListener(e -> {
             optimisticReel = null;

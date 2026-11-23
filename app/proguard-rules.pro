@@ -1,4 +1,4 @@
-# Google Play Console DEX Code Optimization & Split Debug Info (R8 Full Mode >75% Obfuscation)
+# R8 release shrinking and obfuscation; Play computes its own dashboard metric.
 -optimizationpasses 5
 -overloadaggressively
 -repackageclasses 'o'
@@ -19,3 +19,7 @@
 -dontwarn com.google.android.ump.**
 -dontwarn okhttp3.**
 -dontwarn okio.**
+
+# Meta Audience Network carries compile-time Infer nullability metadata.
+
+# AdMob waterfall loads adapter entry points by their server-supplied class names.

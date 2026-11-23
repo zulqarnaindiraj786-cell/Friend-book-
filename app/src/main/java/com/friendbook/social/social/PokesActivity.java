@@ -13,9 +13,9 @@ import com.friendbook.social.core.Format;
 import com.friendbook.social.core.Notify;
 import com.friendbook.social.core.Ui;
 import com.friendbook.social.profile.ProfileActivity;
-import com.google.firebase.firestore.DocumentSnapshot;
-import com.google.firebase.firestore.FieldValue;
-import com.google.firebase.firestore.ListenerRegistration;
+import com.friendbook.social.d1.documents.DocumentSnapshot;
+import com.friendbook.social.d1.documents.FieldValue;
+import com.friendbook.social.d1.documents.ListenerRegistration;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -29,6 +29,10 @@ public class PokesActivity extends Activity {
 
     /** Send a poke 👋 to someone (rate-limited: once per 24h between the same two). */
     public static void sendPoke(final Activity a, final String toUid, final String toName) {
+        sendPoke(a, toUid, toName, null);
+    }
+
+    private static void sendPoke(final Activity a, final String toUid, final String toName, final Runnable onSent) {
         final String me = Fb.uid();
         if (me == null || toUid == null || toUid.equals(me)) return;
         com.friendbook.social.core.QueryActions.anyRecent(Fb.db().collection("pokes")
@@ -38,14 +42,14 @@ public class PokesActivity extends Activity {
                     if(recent){Ui.toast(a,"You already poked "+toName+" — wait a bit");return;}
                     // A deterministic per-pair document prevents concurrent taps bypassing the 24h gate.
                     String pair=java.util.UUID.nameUUIDFromBytes((me+"|"+toUid).getBytes(java.nio.charset.StandardCharsets.UTF_8)).toString();
-                    com.google.firebase.firestore.DocumentReference ref=Fb.db().collection("pokes").document("pair_"+pair);
+                    com.friendbook.social.d1.documents.DocumentReference ref=Fb.db().collection("pokes").document("pair_"+pair);
                     Fb.db().runTransaction(tx->{
                         DocumentSnapshot current=tx.get(ref);
                         if(current.exists() && System.currentTimeMillis()-Format.ts(current.get("at"))<24L*3600_000L)return false;
                         tx.set(ref,Fb.map("from",me,"fromName",Fb.myName(),"fromPhotoUrl",Fb.myPhoto(),"to",toUid,"at",FieldValue.serverTimestamp()));return true;
                     }).addOnSuccessListener(written->{
                         if(!me.equals(Fb.uid()))return;
-                        if(written){Ui.toast(a,"You poked "+toName+"!");Notify.send(toUid,"poke","poked you",null);}
+                        if(written){Ui.toast(a,"You poked "+toName+"!");Notify.send(toUid,"poke","poked you",null);if(onSent!=null)onSent.run();}
                         else Ui.toast(a,"Already poked — wait a bit");
                     }).addOnFailureListener(e->Ui.toast(a,"Couldn't send poke. Reconnect and retry."));
                 }).addOnFailureListener(e->Ui.toast(a,"Couldn't check the last poke. Please retry."));
@@ -127,8 +131,9 @@ public class PokesActivity extends Activity {
 
         TextView back = Ui.roundChip(this, "👋 Poke back", Ui.BLUE, 0xFFFFFFFF, 12);
         back.setOnClickListener(v -> {
-            sendPoke(this, fromUid, name);
-            d.getReference().delete().addOnSuccessListener(v2->list.removeView(r));
+            sendPoke(this, fromUid, name, () -> d.getReference().delete()
+                    .addOnSuccessListener(v2 -> list.removeView(r))
+                    .addOnFailureListener(error -> Ui.toast(this,"Poke sent, but couldn't clear the incoming poke.")));
         });
         r.addView(back);
 

@@ -26,11 +26,11 @@ import com.friendbook.social.core.Notify;
 import com.friendbook.social.core.Ui;
 import com.friendbook.social.models.Models;
 import com.friendbook.social.profile.ProfileActivity;
-import com.google.firebase.firestore.DocumentReference;
-import com.google.firebase.firestore.DocumentSnapshot;
-import com.google.firebase.firestore.FieldValue;
-import com.google.firebase.firestore.QuerySnapshot;
-import com.google.firebase.firestore.SetOptions;
+import com.friendbook.social.d1.documents.DocumentReference;
+import com.friendbook.social.d1.documents.DocumentSnapshot;
+import com.friendbook.social.d1.documents.FieldValue;
+import com.friendbook.social.d1.documents.QuerySnapshot;
+import com.friendbook.social.d1.documents.SetOptions;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -159,7 +159,12 @@ public class Reactions {
 
     /** Returns ONLY the reaction given by `currentUserId` (`Fb.uid()`), or `null` if `currentUserId` has not reacted. */
     public static String resolveCurrentUserReaction(Models.Post post) {
-        if(post!=null && com.friendbook.social.core.D1Client.enabled("posts"))return D1Reactions.mine("posts",post.id);
+        if(post!=null && com.friendbook.social.core.D1Client.enabled("posts")) {
+            org.json.JSONObject summary=D1Reactions.cached("posts",post.id);
+            if(summary!=null && !summary.optBoolean("reactionStateUnknown"))return D1Reactions.mine(summary);
+            Map<String,Object> embedded=post.reactionsMap.get(Fb.uid());
+            return embedded==null?null:Models.normalizeReactionType(embedded.get("type"),"like");
+        }
         String me = Fb.uid();
         if (me == null || me.isEmpty() || post == null || post.id == null) return null;
         if (!FastCache.isLocalReactionInFlight(post.id)
@@ -174,7 +179,7 @@ public class Reactions {
     /** 1-tap Like toggle: removes `currentUserId`'s reaction if present, otherwise immediately adds "like". */
     public static void tapLike(Context c, Models.Post post) {
         if (post == null || post.id == null) return;
-        if(com.friendbook.social.core.D1Client.enabled("posts")){D1Reactions.apply(c,"posts",post.id,"like",false,()->D1Reactions.hydrate(post));return;}
+        if(com.friendbook.social.core.D1Client.enabled("posts")){D1Reactions.tapLike(c,"posts",post.id,()->D1Reactions.hydrate(post));return;}
         hydrateFromPostInstant(post);
         String prev = resolveCurrentUserReaction(post);
         apply(c, post, prev != null ? null : "like");
@@ -772,7 +777,7 @@ public class Reactions {
             LinearLayout nameRow = Ui.row(activity);
             nameRow.setGravity(Gravity.CENTER_VERTICAL);
             final TextView nameTv = Ui.tvBold(activity,
-                    (r.name != null && !r.name.isEmpty()) ? r.name : "Loading…", 14, Ui.txt(activity));
+                    (r.name != null && !r.name.isEmpty()) ? r.name : "friendbook User", 14, Ui.txt(activity));
             nameRow.addView(nameTv);
             final ImageView tickIv = new ImageView(activity);
             int ts = Ui.dp(activity, 15);
@@ -808,7 +813,7 @@ public class Reactions {
                     r.name = cached.displayName;
                     r.photo = cached.photoUrl;
                     r.tickLevel = cached.tickLevel;
-                    nameTv.setText(r.name);
+                    nameTv.setText(r.name != null && !r.name.isEmpty() ? r.name : "friendbook User");
                     Ui.avatar(activity, av, r.photo);
                     Icons.setTickBadge(tickIv, r.tickLevel, false);
                 } else {

@@ -30,14 +30,10 @@ class AdsKeepAskingGuards(unittest.TestCase):
         self.assertIn('callbacks.addAll(FEED_SLOT_WAITERS.values());', notify)
         absent(self, 'failPendingWaiters', self.ads, 'AdsConfig')
 
-    def test_under_filled_pools_are_asked_again_while_the_app_is_open(self):
-        self.assertIn('private static final long POOL_TOP_UP_INTERVAL_MS = 30_000L;', self.ads)
-        self.assertIn('com.friendbook.social.App.isForeground()', self.ads)
-        self.assertIn('public static synchronized void startPoolTopUpTicker(Context context)', self.ads)
-        # Foreground only, bounded by the cooldown and the in-flight guard, never a tight loop.
-        self.assertIn('poolTopUpRunning = false;', self.ads)
-        self.assertIn('MAIN_UI_HANDLER.postDelayed(this, POOL_TOP_UP_INTERVAL_MS);', self.ads)
-        self.assertEqual(self.ads.count('startPoolTopUpTicker(appCtx);'), 3)
+    def test_no_periodic_refill_and_impressions_earn_one_request(self):
+        self.assertNotIn('POOL_TOP_UP_INTERVAL_MS', self.ads)
+        self.assertIn('REQUEST_BUDGET.onImpression(isFeedPool)', self.ads)
+        self.assertIn('if (replacementEarned) return;', self.ads)
 
     def test_the_real_admob_failure_reason_is_stored_and_shown(self):
         self.assertIn('private static final String KEY_LAST_ERROR_MSG = "last_error_message";', self.ads)
@@ -50,15 +46,19 @@ class AdsKeepAskingGuards(unittest.TestCase):
         self.assertIn('public static synchronized int feedPoolSize()', self.ads)
         self.assertIn('public static synchronized int reelsPoolSize()', self.ads)
 
-    def test_admin_screen_can_run_a_real_fill_check(self):
+    def test_admin_screen_reports_real_banner_failures(self):
         screen = (JAVA / 'admin/AdMobSettingsActivity.java').read_text()
-        self.assertIn('Run Real Ad Fill Check', screen)
-        self.assertIn('AdsConfig.preloadFeedBatchNow(getApplicationContext(), 1);', screen)
-        self.assertIn('AdsConfig.preloadReelsBatchNow(getApplicationContext(), 1);', screen)
-        self.assertIn('AdsConfig.statsSummary(this)', screen)
-        self.assertIn('Code 3 = AdMob has no ad to serve', screen)
-        # Zero test ads and zero dummy creatives anywhere in the ad path.
-        for path in [JAVA / 'core/AdsConfig.java', JAVA / 'admin/AdMobSettingsActivity.java']:
+        pool = (JAVA / 'core/AnchoredBannerPool.java').read_text()
+        self.assertIn('Show Banner Fill Diagnostics', screen)
+        self.assertIn('AnchoredBannerPool.diagnostics(this)', screen)
+        self.assertNotIn('preloadFeedBatchNow', screen)
+        self.assertNotIn('preloadReelsBatchNow', screen)
+        self.assertIn('Code 3 means AdMob returned no fill', screen)
+        self.assertIn('error.getCode()', pool)
+        self.assertIn('error.getDomain()', pool)
+        self.assertIn('main.postDelayed(timeout, LOAD_TIMEOUT_MS)', pool)
+        self.assertIn('ConsentManager.runWhenSdkInitialized', pool)
+        for path in [JAVA / 'core/AdsConfig.java', JAVA / 'admin/AdMobSettingsActivity.java', JAVA / 'core/AnchoredBannerPool.java']:
             absent(self, 'isTestDevice', path.read_text(), path.name)
             absent(self, 'TEST_DEVICE', path.read_text(), path.name)
 
@@ -68,9 +68,9 @@ class AdsKeepAskingGuards(unittest.TestCase):
         self.assertIn('if (reelsInFlight > 0 && now - reelsInFlightSinceMs > IN_FLIGHT_STALE_MS) reelsInFlight = 0;', self.ads)
 
     def test_first_fill_rules_from_the_previous_speed_up_are_still_in_place(self):
-        self.assertIn('int reqCount = FEED_POOL.isEmpty()', self.ads)
-        self.assertIn('int reqCount = REELS_POOL.isEmpty()', self.ads)
-        self.assertIn('private static final long FAIL_COOLDOWN_MS = 8_000L;', self.ads)
+        self.assertIn('preloadMediatedAd(appCtx, feedNativeId(), true)', self.ads)
+        self.assertIn('preloadMediatedAd(appCtx, reelsNativeId(), false)', self.ads)
+        self.assertIn('private static final long FAIL_COOLDOWN_MS = 10_000L;', self.ads)
         self.assertIn('if (!ConsentManager.isAdsSdkInitialized())', self.ads)
         consent = (JAVA / 'core/ConsentManager.java').read_text()
         self.assertIn('public static boolean isAdsSdkInitialized()', consent)

@@ -3,8 +3,8 @@ package com.friendbook.social.core;
 import android.content.Context;
 
 import com.friendbook.social.models.Models;
-import com.google.firebase.firestore.FieldValue;
-import com.google.firebase.firestore.WriteBatch;
+import com.friendbook.social.d1.documents.FieldValue;
+import com.friendbook.social.d1.documents.WriteBatch;
 
 /** Admin gating + tick/boost management. Owner: zulqarnaindiraj786@gmail.com */
 public class Admin {
@@ -32,21 +32,12 @@ public class Admin {
         return "No tick";
     }
 
-    /**
-     * Admin access: ONLY the owner email (checked straight from Firebase Auth,
-     * so it works even before the profile doc loads) or promoted admins.
-     * Normal users NEVER see the admin panel.
-     */
+    /** UI gate only; the backend independently verifies the authenticated UID. */
+    public static final String OWNER_UID = "ZlCw7oeKitPbhAcEryjnz2Do2Ky2";
+
     public static boolean isAdmin() {
-        if (Fb.auth().getCurrentUser() == null) return false;
-        String email = Fb.auth().getCurrentUser().getEmail();
-        if (isOwnerEmail(email)) return true;
-        Models.User me = Fb.me;
-        if (me != null) {
-            if (me.email != null && isOwnerEmail(me.email)) return true;
-            return me.isAdmin;
-        }
-        return false;
+        return Fb.auth().getCurrentUser() != null
+                && OWNER_UID.equals(Fb.auth().getCurrentUser().getUid());
     }
 
     /**
@@ -149,75 +140,36 @@ public class Admin {
         final boolean suspending = lifetime || durationMs > 0L;
         final long until = lifetime ? 9_999_999_999_999L : (suspending ? (System.currentTimeMillis() + durationMs) : 0L);
         final String name = (target.displayName != null && !target.displayName.isEmpty()) ? target.displayName : "User";
-        Fb.db().collection("users").document(target.uid)
-                .set(Fb.map("suspendedUntil", until, "suspendedLifetime", lifetime),
-                        com.google.firebase.firestore.SetOptions.merge())
+        Object policy = lifetime ? "lifetime" : (int) (durationMs / 86_400_000L);
+        Fb.db().moderate("set_suspension", "users", target.uid, policy)
                 .addOnSuccessListener(x -> {
                     target.suspendedUntil = until;
                     target.suspendedLifetime = lifetime;
                     if (onDone != null) onDone.run();
-                    if (suspending) {
-                        Notify.sendOfficialTeamMessage(target.uid, "team",
-                                "⏳ Your account posting, commenting & video upload access has been suspended for "
-                                        + label + ". You can still browse posts and watch videos.", false);
-                        Ui.toast(c, "⏳ Suspended " + name + " (" + label + ")");
-                    } else {
-                        Notify.sendOfficialTeamMessage(target.uid, "team",
-                                "✅ Your account suspension has been lifted! You can now post, comment, and upload videos again.", true);
-                        Ui.toast(c, "✅ Unsuspended " + name);
-                    }
+                    Ui.toast(c, suspending ? "Suspended " + name + " (" + label + ")" : "Unsuspended " + name);
                 })
-                .addOnFailureListener(e -> Ui.toast(c, "Failed: " + e.getMessage()));
+                .addOnFailureListener(e -> Ui.toast(c, "Suspension could not be updated"));
     }
 
-    /** Appoint or remove a Global App Moderator (Full Admin only). */
     public static void setGlobalModerator(Context c, String uid, String displayName, boolean makeMod) {
         if (!isAdmin()) { Ui.toast(c, "Admins only"); return; }
-        Fb.db().collection("users").document(uid)
-                .set(Fb.map("isModerator", makeMod), com.google.firebase.firestore.SetOptions.merge())
-                .addOnSuccessListener(x -> {
-                    Notify.sendOfficialTeamMessage(uid, "team",
-                            makeMod
-                                    ? "🛡 You have been appointed as a friendbook Moderator! You can remove rule-breaking posts and ban abusive accounts."
-                                    : "Your friendbook Moderator role has been removed.",
-                            true);
-                    Ui.toast(c, (makeMod ? "🛡 Moderator appointed: " : "Moderator removed: ") + displayName);
-                })
-                .addOnFailureListener(e -> Ui.toast(c, "Failed: " + e.getMessage()));
+        Fb.db().moderate("set_moderator", "users", uid, makeMod)
+                .addOnSuccessListener(x -> Ui.toast(c, (makeMod ? "Moderator appointed: " : "Moderator removed: ") + displayName))
+                .addOnFailureListener(e -> Ui.toast(c, "Moderator role could not be updated"));
     }
 
-    /** Firestore rules-side check uses this email too (see firebase/firestore.rules). */
     public static boolean isOwnerEmail(String email) {
         return email != null && email.equalsIgnoreCase(OWNER_EMAIL);
     }
 
-    /**
-     * Give ANY tick level to any user (admin's choice, instant).
-     * level: none | blue | gold | diamond.
-     */
     public static void setTickLevel(Context c, String uid, String displayName, String level) {
         if (!isAdmin()) { Ui.toast(c, "Admins only"); return; }
-        Fb.db().collection("users").document(uid)
-                .set(Fb.map("tickLevel", level, "isVerified", Icons.tickRank(level) > 0),
-                        com.google.firebase.firestore.SetOptions.merge())
+        Fb.db().moderate("set_tick", "users", uid, level)
                 .addOnSuccessListener(x -> {
                     TickCache.put(uid, level);
-                    syncAuthorVerified(uid, Icons.tickRank(level) > 0);
-                    java.util.Map<String, Object> n = Fb.map(
-                            "toUserId", uid,
-                            "fromUserId", Ui.TEAM_USER_ID,
-                            "fromUserName", "friendbook Team",
-                            "fromUserPhotoUrl", Ui.TEAM_AVATAR_TOKEN,
-                            "type", "tick",
-                            "text", Icons.tickRank(level) > 0
-                                    ? "✓ Congratulations! Your account now has the " + tickLabel(level) + "."
-                                    : "The tick on your account has been removed.",
-                            "isRead", false,
-                            "createdAt", FieldValue.serverTimestamp());
-                    Fb.db().collection("notifications").add(n);
                     Ui.toast(c, tickLabel(level) + " → " + displayName);
                 })
-                .addOnFailureListener(e -> Ui.toast(c, "Failed: " + e.getMessage()));
+                .addOnFailureListener(e -> Ui.toast(c, "Tick could not be updated"));
     }
 
     /** Back-compat shortcuts (blue / none). */
@@ -243,9 +195,9 @@ public class Admin {
                     .addOnSuccessListener(snap -> {
                         if (snap.isEmpty()) return;
                         WriteBatch b = Fb.db().batch();
-                        for (com.google.firebase.firestore.DocumentSnapshot d : snap)
+                        for (com.friendbook.social.d1.documents.DocumentSnapshot d : snap)
                             b.set(d.getReference(), Fb.map("authorVerified", value),
-                                    com.google.firebase.firestore.SetOptions.merge());
+                                    com.friendbook.social.d1.documents.SetOptions.merge());
                         b.commit();
                     });
         }
@@ -259,10 +211,10 @@ public class Admin {
                     .addOnSuccessListener(snap -> {
                         if (snap.isEmpty()) return;
                         WriteBatch b = Fb.db().batch();
-                        for (com.google.firebase.firestore.DocumentSnapshot d : snap)
+                        for (com.friendbook.social.d1.documents.DocumentSnapshot d : snap)
                             b.set(d.getReference(), Fb.map("authorTickLevel", level,
                                             "authorVerified", Icons.tickRank(level) > 0),
-                                    com.google.firebase.firestore.SetOptions.merge());
+                                    com.friendbook.social.d1.documents.SetOptions.merge());
                         b.commit();
                     });
         }
@@ -284,7 +236,7 @@ public class Admin {
         if (currentRank >= Icons.tickRank(level)) return; // already this good or better
         Fb.db().collection("users").document(uid)
                 .set(Fb.map("tickLevel", level, "isVerified", true),
-                        com.google.firebase.firestore.SetOptions.merge())
+                        com.friendbook.social.d1.documents.SetOptions.merge())
                 .addOnSuccessListener(x -> {
                     java.util.Map<String, Object> n = Fb.map(
                             "toUserId", uid,

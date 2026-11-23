@@ -116,6 +116,12 @@ public class MessagesAdapter extends RecyclerView.Adapter<MessagesAdapter.VH> {
         next.add(m); setData(next);
     }
 
+    public void removeOptimistic(String id) {
+        List<Models.Message> next = new ArrayList<>(data);
+        next.removeIf(message -> java.util.Objects.equals(id, message.id));
+        setData(next);
+    }
+
     public List<Models.Message> all() { return new ArrayList<>(data); }
 
     @Override
@@ -352,6 +358,17 @@ public class MessagesAdapter extends RecyclerView.Adapter<MessagesAdapter.VH> {
         return vh;
     }
 
+    private void clearMessagePhoto(VH holder) {
+        com.bumptech.glide.Glide.with(activity.getApplicationContext()).clear(holder.img);
+        holder.img.setOnClickListener(null);
+    }
+
+    @Override
+    public void onViewRecycled(@NonNull VH holder) {
+        clearMessagePhoto(holder);
+        super.onViewRecycled(holder);
+    }
+
     @Override
     public void onBindViewHolder(@NonNull VH h, int position) {
         Models.Message m = data.get(position);
@@ -365,6 +382,7 @@ public class MessagesAdapter extends RecyclerView.Adapter<MessagesAdapter.VH> {
             h.senderHeader.setVisibility(View.GONE);
             h.quote.setVisibility(View.GONE);
             h.liveCard.setVisibility(View.GONE);
+            clearMessagePhoto(h);
             h.img.setVisibility(View.GONE);
             h.voiceRow.setVisibility(View.GONE);
             h.callRow.setVisibility(View.GONE);
@@ -525,11 +543,13 @@ public class MessagesAdapter extends RecyclerView.Adapter<MessagesAdapter.VH> {
             h.text.setTextColor(h.mine ? 0xCCFFFFFF : Ui.sub(c));
             h.text.setTypeface(Typeface.DEFAULT, Typeface.ITALIC);
             h.text.setVisibility(View.VISIBLE);
+            clearMessagePhoto(h);
             h.img.setVisibility(View.GONE);
             h.voiceRow.setVisibility(View.GONE);
             h.callRow.setVisibility(View.GONE);
         } else if (isLiveInvite) {
             h.text.setVisibility(View.GONE);
+            clearMessagePhoto(h);
             h.img.setVisibility(View.GONE);
             h.voiceRow.setVisibility(View.GONE);
             h.callRow.setVisibility(View.GONE);
@@ -539,6 +559,7 @@ public class MessagesAdapter extends RecyclerView.Adapter<MessagesAdapter.VH> {
             bindLiveInviteVideoCard(c, h, m);
         } else if ("sticker".equals(m.type)) {
             h.text.setVisibility(View.VISIBLE);
+            clearMessagePhoto(h);
             h.img.setVisibility(View.GONE);
             h.voiceRow.setVisibility(View.GONE);
             h.callRow.setVisibility(View.GONE);
@@ -549,6 +570,7 @@ public class MessagesAdapter extends RecyclerView.Adapter<MessagesAdapter.VH> {
             h.text.setTextSize(46f);
         } else if (isCall) {
             h.text.setVisibility(View.GONE);
+            clearMessagePhoto(h);
             h.img.setVisibility(View.GONE);
             h.voiceRow.setVisibility(View.GONE);
             h.callRow.setVisibility(View.VISIBLE);
@@ -583,6 +605,7 @@ public class MessagesAdapter extends RecyclerView.Adapter<MessagesAdapter.VH> {
             });
         } else if (isVoice) {
             h.text.setVisibility(View.GONE);
+            clearMessagePhoto(h);
             h.img.setVisibility(View.GONE);
             h.callRow.setVisibility(View.GONE);
             h.voiceRow.setVisibility(View.VISIBLE);
@@ -617,13 +640,14 @@ public class MessagesAdapter extends RecyclerView.Adapter<MessagesAdapter.VH> {
             if (hasImage || hasVideo) {
                 h.img.setVisibility(View.VISIBLE);
                 if (hasVideo) {
+                    clearMessagePhoto(h);
                     h.img.setImageResource(android.R.drawable.ic_media_play);
                     h.img.setBackgroundColor(0xFF202124);
                     h.img.setContentDescription("Play official broadcast video");
                 } else {
                     h.img.setBackgroundColor(Color.TRANSPARENT);
                     h.img.setContentDescription("Message photo");
-                    Ui.img(c, h.img, m.imageUrl);
+                    Ui.imgPreview(c, h.img, m.imageUrl);
                 }
                 h.img.setOnClickListener(v -> {
                     Intent i = new Intent(c, FullscreenMediaActivity.class);
@@ -633,6 +657,7 @@ public class MessagesAdapter extends RecyclerView.Adapter<MessagesAdapter.VH> {
                     c.startActivity(i);
                 });
             } else {
+                clearMessagePhoto(h);
                 h.img.setVisibility(View.GONE);
             }
             h.text.setText(m.text == null ? "" : m.text);

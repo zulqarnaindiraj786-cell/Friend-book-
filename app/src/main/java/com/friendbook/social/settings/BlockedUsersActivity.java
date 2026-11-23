@@ -13,8 +13,8 @@ import com.friendbook.social.core.Fb;
 import com.friendbook.social.core.Ui;
 import com.friendbook.social.friends.UsersAdapter;
 import com.friendbook.social.models.Models;
-import com.google.firebase.firestore.FieldValue;
-import com.google.firebase.firestore.ListenerRegistration;
+import com.friendbook.social.d1.documents.FieldValue;
+import com.friendbook.social.d1.documents.ListenerRegistration;
 
 import java.util.ArrayList;
 import java.util.List;

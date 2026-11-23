@@ -1,18 +1,26 @@
-# Recheck Git-connected deployment after outage; both D1 gates remain OFF.
-# Git-connected build trigger; no runtime or database changes.
+# Production Worker rollout: D1 interactions/documents and R2 video enabled; Firebase remains login identity only.
 name = "rough-firefly-dd7b"
 main = "worker.js"
 compatibility_date = "2024-01-01"
 
 [vars]
+# Public app gate; config/ads and AdMob consent still apply in Android.
+ADS_ENABLED_V3 = "true"
 CF_ACCOUNT_ID = "92f3d04598822de2e49e14561218d090"
 FIREBASE_PROJECT_ID = "friendbook-17551"
+# Server-side authority for free verification reviews; Firebase Auth UID, not a secret.
+PAYMENT_ADMIN_UIDS = "ZlCw7oeKitPbhAcEryjnz2Do2Ky2"
 D1_INTERACTIONS_ENABLED = "true"
+# Additive indexes have an automatic fallback when absent; disable to roll back.
+FRIEND_GUARD_INDEXED = "true"
 VIDEO_R2_ENABLED = "true"
 VIDEO_R2_RETENTION_VERIFIED = "true"
-REALTIME_WS_ENABLED = "true"
 CLOUDINARY_CLOUD_NAME = "x5ed4d0b"
 CLOUDINARY_UPLOAD_PRESET = "Myapp_upload"
+
+# One maintenance pass every 15 minutes; never per second or per minute.
+[triggers]
+crons = ["*/15 * * * *"]
 
 [[d1_databases]]
 binding = "DB"
@@ -42,6 +50,18 @@ dataset = "friendbook_views"
 binding = "VIDEO_BUCKET"
 bucket_name = "friendbook"
 
-[triggers]
-# Cleans temporary Cloudinary processing assets ONLY; never deletes R2 videos.
-crons = ["*/15 * * * *"]
+[[durable_objects.bindings]]
+name = "LIVE_RELAY"
+class_name = "LiveRelay"
+
+[[migrations]]
+tag = "live-relay-v1"
+new_sqlite_classes = ["LiveRelay"]
+
+[[durable_objects.bindings]]
+name = "CALL_RELAY"
+class_name = "CallRelay"
+
+[[migrations]]
+tag = "call-relay-v1"
+new_sqlite_classes = ["CallRelay"]

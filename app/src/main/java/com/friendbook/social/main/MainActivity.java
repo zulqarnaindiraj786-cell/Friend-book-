@@ -24,7 +24,6 @@ import com.friendbook.social.core.Fb;
 import com.friendbook.social.core.FeedAlgorithm;
 import com.friendbook.social.core.Icons;
 import com.friendbook.social.core.Prefs;
-import com.friendbook.social.core.Presence;
 import com.friendbook.social.core.Ui;
 import com.friendbook.social.friends.SearchActivity;
 import com.friendbook.social.groups.GroupsActivity;
@@ -34,8 +33,8 @@ import com.friendbook.social.profile.CreatorDashboardDialog;
 import com.friendbook.social.reels.AddReelActivity;
 import com.friendbook.social.social.PagesActivity;
 import com.friendbook.social.story.AddStoryActivity;
-import com.google.firebase.firestore.FieldValue;
-import com.google.firebase.firestore.ListenerRegistration;
+import com.friendbook.social.d1.documents.FieldValue;
+import com.friendbook.social.d1.documents.ListenerRegistration;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -76,6 +75,8 @@ public class MainActivity extends Activity {
     private final Fragment[] tabFragments = new Fragment[5];
     private TextView homeBadge, msgBadge, notifBadge, friendsBadge, reelsBadge;
     private int active = -1;
+    private long foregroundStartedAt;
+    private final com.friendbook.social.core.AppUpdates appUpdates = new com.friendbook.social.core.AppUpdates();
     private ListenerRegistration notifReg, chatReg, reqReg, referralReg;
 
     private final java.util.Set<String> currentPendingReqIds = new java.util.HashSet<>();
@@ -85,7 +86,6 @@ public class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle b) {
         super.onCreate(b);
-        com.friendbook.social.core.AppUpdates.check(this,false);
         if (!Fb.signedIn()) { finish(); return; }
         activeInstance = this;
         // Advance friendbook discovery epoch on every app open so user greets fresh posts, videos & ads!
@@ -104,12 +104,7 @@ public class MainActivity extends Activity {
 
         TextView logo = Ui.tvBold(this, "friendbook", 27, Ui.isDark(this) ? 0xFFFFFFFF : 0xFF111827);
         logo.setLetterSpacing(-0.03f);
-        logo.setOnClickListener(v -> {
-            if (active != TAB_HOME) select(TAB_HOME);
-            else if (tabFragments[TAB_HOME] instanceof HomeFragment) {
-                ((HomeFragment) tabFragments[TAB_HOME]).scrollToTop();
-            }
-        });
+        logo.setOnClickListener(v -> { if (active != TAB_HOME) select(TAB_HOME); });
         brandBar.addView(logo, new LinearLayout.LayoutParams(0, -2, 1));
 
         brandBar.addView(circleHeaderIcon(Icons.PLUS, v -> showUniversalCreateSheet()));
@@ -206,10 +201,8 @@ public class MainActivity extends Activity {
         select(TAB_HOME);
         refreshLiteUi();
 
-        // 6. Gather UMP GDPR Consent & Initialize Google Mobile Ads SDK — immediately preload 5 Feed Ads on app open!
-        AdsConfig.preloadFeedBatchNow(this, AdsConfig.AD_POOL_SIZE);
+        // The screen-owned banners start after consent and SDK initialization.
         ConsentManager.gatherConsentAndInitAds(this, () -> {
-            AdsConfig.preloadFeedBatchNow(this, AdsConfig.AD_POOL_SIZE);
             if (tabFragments[TAB_HOME] instanceof HomeFragment) {
                 ((HomeFragment) tabFragments[TAB_HOME]).onLiteModeChanged();
             }
@@ -218,25 +211,14 @@ public class MainActivity extends Activity {
         // ⚡ Defer non-critical SDK/network listeners until AFTER Frame #1 paints!
         Looper.myQueue().addIdleHandler(() -> {
             Fb.ensureMeFresh();
-            Presence.init();
+
             startBadgeListeners();
-            watchReferralsForFreeTick();
+            // Referral totals are not needed to paint the first screen; run them
+            // after the visible work instead of inside the cold-start burst.
+            new android.os.Handler(android.os.Looper.getMainLooper())
+                    .postDelayed(MainActivity.this::watchReferralsForFreeTick, 4_000L);
             AdsConfig.startWatching();
-            notificationPermissionHandler.postDelayed(
-                    () -> com.friendbook.social.reels.ReelVideoCache.warmStartupReels(getApplicationContext()),
-                    2000L);
-            try {
-                com.google.firebase.remoteconfig.FirebaseRemoteConfig rc =
-                        com.google.firebase.remoteconfig.FirebaseRemoteConfig.getInstance();
-                rc.setConfigSettingsAsync(new com.google.firebase.remoteconfig.FirebaseRemoteConfigSettings.Builder()
-                        .setMinimumFetchIntervalInSeconds(3600).build());
-                rc.setDefaultsAsync(java.util.Collections.singletonMap("ads_enabled_v3", true))
-                        .addOnCompleteListener(dt -> rc.fetchAndActivate().addOnCompleteListener(t -> {
-                            String raw = rc.getString("ads_enabled_v3");
-                            boolean allow = !"false".equalsIgnoreCase(raw == null ? "" : raw.trim());
-                            AdsConfig.setRemoteAllowed(allow);
-                        }));
-            } catch (Throwable ignored) { }
+            com.friendbook.social.core.CloudAppConfig.refresh(getApplicationContext());
             return false;
         });
 
@@ -382,15 +364,8 @@ public class MainActivity extends Activity {
      * Keeps fragments alive in memory via add + hide/show instead of destroying & recreating!
      */
     public void select(int tab) {
-        if (tab == TAB_REELS) {
-            AdsConfig.preloadReelsBatchNow(this, AdsConfig.AD_POOL_SIZE);
-        } else if (tab == TAB_HOME) {
-            AdsConfig.preloadFeedBatchNow(this, AdsConfig.AD_POOL_SIZE);
-        }
         if (tab == active) {
-            if (tab == TAB_HOME && tabFragments[TAB_HOME] instanceof HomeFragment) {
-                ((HomeFragment) tabFragments[TAB_HOME]).scrollToTop();
-            } else if (tab == TAB_REELS && tabFragments[TAB_REELS] instanceof com.friendbook.social.reels.ReelsFragment) {
+            if (tab == TAB_REELS && tabFragments[TAB_REELS] instanceof com.friendbook.social.reels.ReelsFragment) {
                 ((com.friendbook.social.reels.ReelsFragment) tabFragments[TAB_REELS]).refreshWithAlgorithm();
             }
             return;
@@ -444,15 +419,16 @@ public class MainActivity extends Activity {
 
     /**
      * Overload for Reels tab: accepts a featured Reel to pre-load immediately
-     * (used when opening from Home Feed Featured Reels card). All reel data is passed
-     * as fragment arguments so ReelsFragment.resetVideoPages() can seed it instantly — no spinner/blank delay. */
+     * (used when opening from Home Feed Featured Reels card). If fragment is new, creates it
+     * with ALL reel data as arguments and ADDS it to container immediately (not just show).
+     * If fragment already exists, calls focusFeaturedReel() to insert the reel at top and scroll. */
     public void select(int tab, com.friendbook.social.models.Models.Reel featuredReel) {
         if (tab == TAB_REELS && featuredReel != null
                 && featuredReel.id != null && !featuredReel.id.isEmpty()
                 && featuredReel.videoUrl != null && !featuredReel.videoUrl.isEmpty()) {
             Fragment existing = tabFragments[TAB_REELS];
             if (existing == null) {
-                // First time: create fragment with ALL reel data as arguments BEFORE adding to container
+                // First time: create fragment with ALL reel data as arguments AND add to container NOW
                 com.friendbook.social.reels.ReelsFragment f = new com.friendbook.social.reels.ReelsFragment();
                 Bundle args = new Bundle();
                 args.putString("initial_reel_id", featuredReel.id);
@@ -467,9 +443,36 @@ public class MainActivity extends Activity {
                 args.putInt("shares", featuredReel.shares);
                 f.setArguments(args);
                 tabFragments[TAB_REELS] = f;
+
+                // Do the fragment transaction HERE with ft.add() - not ft.show()!
+                // This ensures the fragment with bundle args is properly attached.
+                FragmentTransaction ft = getFragmentManager().beginTransaction();
+                if (active >= 0 && tabFragments[active] != null) {
+                    ft.hide(tabFragments[active]);
+                }
+                ft.add(container.getId(), f, "tab_" + TAB_REELS);
+                ft.commitAllowingStateLoss();
+                active = TAB_REELS;
+
+                // Update nav highlight
+                int activeSlot = 3;
+                for (int s = 0; s < 6; s++) {
+                    boolean on = s == activeSlot;
+                    slotIndicators[s].setVisibility(on ? View.VISIBLE : View.INVISIBLE);
+                    Icons.setTint(slotIcons[s], on ? Icons.BLUE : Icons.GRAY);
+                }
+                if (menuBtnCircle != null && menuBtnIcon != null) {
+                    menuBtnCircle.setBackground(Ui.circle(Ui.inputBg(this)));
+                    Icons.setTint(menuBtnIcon, Ui.txt(this));
+                }
+                clearReelsBadgeNow();
+                return; // Done - fragment added with bundle args
+            } else if (existing instanceof com.friendbook.social.reels.ReelsFragment) {
+                // Fragment already exists: insert featured reel at top and scroll to it
+                ((com.friendbook.social.reels.ReelsFragment) existing).focusFeaturedReel(featuredReel);
             }
         }
-        select(tab);
+        select(tab); // Normal path for existing fragment or non-Reels tabs
     }
 
     /** Dismiss ONLY the outer friend-request badge; pending requests and their seen flags stay untouched. */
@@ -526,17 +529,30 @@ public class MainActivity extends Activity {
                 com.friendbook.social.core.Admin.autoGrantByReferrals(this,(int)Math.min(Integer.MAX_VALUE,total)));
     }
 
+    // Badges display at most 15+; full history remains in the paginated screens.
+    private static final int BADGE_WINDOW = 32;
+
     private void startBadgeListeners() {
         String me = Fb.uid();
         if (me == null) return;
         if (notifReg != null) notifReg.remove();
         notifReg = Fb.db().collection("notifications")
                 .whereEqualTo("toUserId", me).whereEqualTo("isRead", false)
+                .orderBy("createdAt", com.friendbook.social.d1.documents.Query.Direction.DESCENDING)
+                .limit(BADGE_WINDOW)
                 .addSnapshotListener((snap, err) -> {
+                    if (snap == null || !java.util.Objects.equals(me,Fb.uid())) return;
+                    if (hasWindowFocus() && foregroundStartedAt > 0 && !snap.getMetadata().isFromCache()) {
+                        for (com.friendbook.social.d1.documents.DocumentChange change : snap.getDocumentChanges()) {
+                            if (change.getType() == com.friendbook.social.d1.documents.DocumentChange.Type.ADDED) {
+                                com.friendbook.social.push.PushManager.showForegroundInbox(this, change.getDocument(), foregroundStartedAt);
+                            }
+                        }
+                    }
                     synchronized (currentUnreadNotifIds) {
                         currentUnreadNotifIds.clear();
                         if (snap != null) {
-                            for (com.google.firebase.firestore.DocumentSnapshot d : snap) {
+                            for (com.friendbook.social.d1.documents.DocumentSnapshot d : snap) {
                                 currentUnreadNotifIds.add(d.getId());
                             }
                         }
@@ -555,7 +571,7 @@ public class MainActivity extends Activity {
                     long clearedAt = Prefs.notifBadgeClearedAt(this, me);
                     int unseen = 0;
                     if (snap != null) {
-                        for (com.google.firebase.firestore.DocumentSnapshot d : snap) {
+                        for (com.friendbook.social.d1.documents.DocumentSnapshot d : snap) {
                             long ts = com.friendbook.social.core.Format.ts(d.get("createdAt"));
                             if (clearedAt <= 0L || ts > clearedAt) {
                                 unseen++;
@@ -566,16 +582,21 @@ public class MainActivity extends Activity {
                 });
 
         if (chatReg != null) chatReg.remove();
+        // The badge only needs the rooms that can still be unread; an unbounded
+        // read of every room on every message was the biggest cold-start cost.
         chatReg = Fb.db().collection("chats")
                 .whereArrayContains("participants", me)
+                .orderBy("inboxActivityAt", com.friendbook.social.d1.documents.Query.Direction.DESCENDING)
+                .limit(com.friendbook.social.core.OnDemandLoads.CHAT_BADGE_LIMIT)
                 .addSnapshotListener((snap, err) -> {
+                    if (snap == null || !java.util.Objects.equals(me,Fb.uid())) return;
                     int total = 0;
                     long chatClearedAt = Prefs.chatBadgeClearedAt(this, me);
                     synchronized (currentUnreadChatIds) {
                         currentUnreadChatIds.clear();
                     }
                     if (snap != null) {
-                        for (com.google.firebase.firestore.DocumentSnapshot d : snap) {
+                        for (com.friendbook.social.d1.documents.DocumentSnapshot d : snap) {
                             // 📞 Detect incoming Voice / Video Calls anywhere in friendbook!
                             com.friendbook.social.chat.CallActivity.maybeHandleIncomingFromRoomDoc(this, d);
 
@@ -606,11 +627,14 @@ public class MainActivity extends Activity {
         if (reqReg != null) reqReg.remove();
         reqReg = Fb.db().collection("friend_requests")
                 .whereEqualTo("toUid", me).whereEqualTo("status", "pending")
+                .orderBy("createdAt", com.friendbook.social.d1.documents.Query.Direction.DESCENDING)
+                .limit(BADGE_WINDOW)
                 .addSnapshotListener((snap, err) -> {
+                    if (snap == null || !me.equals(Fb.uid())) return;
                     synchronized (currentPendingReqIds) {
                         currentPendingReqIds.clear();
                         if (snap != null) {
-                            for (com.google.firebase.firestore.DocumentSnapshot d : snap) {
+                            for (com.friendbook.social.d1.documents.DocumentSnapshot d : snap) {
                                 currentPendingReqIds.add(d.getId());
                             }
                         }
@@ -624,7 +648,7 @@ public class MainActivity extends Activity {
                         if (snap != null && !snap.isEmpty()) {
                             java.util.Set<String> seenIds = Prefs.dismissedFriendReqBadgeIds(this, me);
                             boolean hasUnseen = false;
-                            for (com.google.firebase.firestore.DocumentSnapshot d : snap) {
+                            for (com.friendbook.social.d1.documents.DocumentSnapshot d : snap) {
                                 if (!seenIds.contains(d.getId())) {
                                     hasUnseen = true;
                                     break;
@@ -638,7 +662,7 @@ public class MainActivity extends Activity {
                     long clearedAt = Prefs.friendRequestsClearedAt(this, me);
                     int count = 0;
                     if (snap != null) {
-                        for (com.google.firebase.firestore.DocumentSnapshot d : snap) {
+                        for (com.friendbook.social.d1.documents.DocumentSnapshot d : snap) {
                             if (seenIds.contains(d.getId())) continue;
                             long ts = com.friendbook.social.core.Format.ts(d.get("createdAt"));
                             if (clearedAt > 0L && ts > 0L && ts <= clearedAt) continue;
@@ -650,7 +674,7 @@ public class MainActivity extends Activity {
 
         // Video / Reels badge (capped at 15+ via Ui.setBadge)
         Fb.db().collection("reels")
-                .orderBy("createdAt", com.google.firebase.firestore.Query.Direction.DESCENDING)
+                .orderBy("createdAt", com.friendbook.social.d1.documents.Query.Direction.DESCENDING)
                 .limit(16)
                 .get()
                 .addOnSuccessListener(snap -> {
@@ -661,7 +685,7 @@ public class MainActivity extends Activity {
                     long clearedAt = Prefs.reelsBadgeClearedAt(this, me);
                     int unseen = 0;
                     if (snap != null) {
-                        for (com.google.firebase.firestore.DocumentSnapshot d : snap) {
+                        for (com.friendbook.social.d1.documents.DocumentSnapshot d : snap) {
                             long ts = com.friendbook.social.core.Format.ts(d.get("createdAt"));
                             if (clearedAt <= 0L || ts <= 0L || ts > clearedAt) {
                                 unseen++;
@@ -706,8 +730,9 @@ public class MainActivity extends Activity {
                     m.put("text", txt);
                     m.put("app", "friendbook-android");
                     m.put("createdAt", FieldValue.serverTimestamp());
-                    Fb.db().collection("feedback").add(m);
-                    Ui.toast(this, "Thanks for your feedback!");
+                    Fb.db().collection("feedback").add(m)
+                            .addOnSuccessListener(ref -> Ui.toast(this, "Thanks for your feedback!"))
+                            .addOnFailureListener(error -> Ui.toast(this, "Couldn't send feedback. Please try again."));
                 })
                 .setNegativeButton("Cancel", null)
                 .show();
@@ -730,6 +755,8 @@ public class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        foregroundStartedAt = System.currentTimeMillis();
+        if (!isFinishing()) appUpdates.onResume(this);
         permissionHostResumed = true;
         boolean freshSession = FeedAlgorithm.onAppResumed(this);
         if (freshSession) {
@@ -744,8 +771,9 @@ public class MainActivity extends Activity {
         com.friendbook.social.push.PushManager.sync(this);
         com.friendbook.social.push.PushOpenActivity.resumePending(this);
         refreshLiteUi();
+        if (!ConsentManager.canRequestAds(this)) ConsentManager.retryConsentOnResume(this);
         Fb.ensureMeFresh();
-        Presence.init();
+
         // Delay until Main is visible; never show a permission dialog from background/PIN/login.
         notificationPermissionHandler.removeCallbacks(notificationPermissionPrompt);
         notificationPermissionHandler.postDelayed(notificationPermissionPrompt, 2000L);
@@ -762,6 +790,7 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        appUpdates.dismiss();
         notificationPermissionHandler.removeCallbacks(notificationPermissionPrompt);
         if (activeInstance == this) activeInstance = null;
         super.onDestroy();

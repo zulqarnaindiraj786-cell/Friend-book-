@@ -1,0 +1,53 @@
+// Read-only production D1 integration check. No Firebase calls, user IDs or post IDs are printed.
+import { interactions } from '../../cloudflare/interactions.js';
+import { firestoreDocuments } from '../../cloudflare/firestore-documents.js';
+const base='https://api.cloudflare.com/client/v4/accounts/92f3d04598822de2e49e14561218d090/d1/database/e1c605ca-a50b-46c6-9deb-56dd1f70d163/query';
+if(!process.env.CLOUDFLARE_API_TOKEN) throw Error('Missing Cloudflare API token');
+async function execute(sql,params=[]) {
+  if(!/^\s*SELECT\b/i.test(sql))throw Error('Only SELECT statements are allowed');
+  const response=await fetch(base,{method:'POST',headers:{Authorization:`Bearer ${process.env.CLOUDFLARE_API_TOKEN}`,'Content-Type':'application/json'},body:JSON.stringify({sql,params})});
+  const data=await response.json();
+  if(!response.ok || !data.success)throw Error(`D1 query failed (HTTP ${response.status}): ${(data.errors||[]).map(x=>x.message).join(', ')}`);
+  return data.result?.[0]?.results || [];
+}
+const sample=(await execute("SELECT resource FROM friendbook_cf_interaction_resources WHERE state='verified' AND (resource LIKE 'posts/%' OR resource LIKE 'reels/%') LIMIT 1"))[0]?.resource;
+if(!sample){console.log('::notice::No verified engagement resource available for a read-only check');process.exit(0);}
+const slash=sample.indexOf('/'), collection=sample.slice(0,slash), id=sample.slice(slash+1);
+const db={withSession(){return this;},prepare(sql){return {bind(...args){return {first:async()=>(await execute(sql,args))[0]||null,all:async()=>({results:await execute(sql,args)}),run:async()=>{throw Error('Diagnostic is read-only');}};}};}};
+const response=await interactions(new Request(`https://test.invalid/v1/engagement/${collection}/${encodeURIComponent(id)}/reactions`),
+ {DB:db,D1_INTERACTIONS_ENABLED:'true'},{uid:'diagnostic-no-account'},[null,collection,encodeURIComponent(id),'reactions'],async(_identity,_collection,_id,_unused,context)=>{context.blocked=[];return true;});
+if(response.status!==200)throw Error(`Real D1 engagement summary failed with HTTP ${response.status}`);
+const data=await response.json();
+if(!Array.isArray(data.types) || !Array.isArray(data.preview) || typeof data.comments!=='number')throw Error('Invalid engagement summary');
+console.log('::notice title=D1 engagement diagnostic::Read-only summary query succeeded against a verified resource; no authenticated app flow was tested');
+// Exercise production D1 records through the same read-only document handlers.
+// The selected UID never leaves the runner and is not authenticated here.
+const actor=(await execute("SELECT doc_id FROM friendbook_cf_firestore_documents WHERE parent_path='users' AND COALESCE(json_extract(document_json,'$.banned'),0)=0 AND COALESCE(json_extract(document_json,'$.deactivated'),0)=0 LIMIT 1"))[0]?.doc_id;
+if(actor){
+  const query=async body=>{
+    const request=new Request('https://test.invalid/v1/firestore/query',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    const result=await firestoreDocuments(request,{DB:db},{uid:actor});
+    if(result.status!==200)throw Error(`Read-only ${body.parent} query returned ${result.status}`);
+    const payload=await result.json();if(!Array.isArray(payload.documents))throw Error(`Invalid ${body.parent} page`);
+    return payload.documents.length;
+  };
+  const before=Date.now();
+  const feed=await query({parent:'posts',orderBy:[{field:'createdAt',direction:'DESCENDING'}],limit:7});
+  const requests=await query({parent:'friend_requests',filters:[{field:'toUid',op:'==',value:actor},{field:'status',op:'==',value:'pending'}],limit:20});
+  const friends=await query({parent:'friends',filters:[{field:'participants',op:'array-contains',value:actor}],limit:20});
+  console.log(`::notice title=D1 document diagnostic::Read-only handler checks succeeded (feed rows=${feed}, request rows=${requests}, friend rows=${friends}, elapsed=${Date.now()-before}ms); simulated identity, not app login`);
+}
+// Pick an existing room and one of its stored members, then check that the
+// message query can be authorized and paged. Neither IDs nor messages are logged.
+const room=(await execute(`SELECT doc_id AS id,json_extract(document_json,'$.participants[0]') AS member
+  FROM friendbook_cf_firestore_documents WHERE parent_path='chats'
+  AND json_array_length(document_json,'$.participants')>=2
+  AND typeof(json_extract(document_json,'$.participants[0]'))='text' LIMIT 1`))[0];
+if(room?.id && room?.member){
+  const request=new Request('https://test.invalid/v1/firestore/query',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({parent:`chats/${room.id}/messages`,orderBy:[{field:'createdAt',direction:'ASCENDING'}],limit:5,limitToLast:true})});
+  const result=await firestoreDocuments(request,{DB:db},{uid:room.member});
+  if(result.status!==200)throw Error(`Read-only chat query returned ${result.status}`);
+  const payload=await result.json();if(!Array.isArray(payload.documents))throw Error('Invalid chat page');
+  console.log(`::notice title=D1 chat diagnostic::Member-scoped read returned ${payload.documents.length} messages; simulated identity, no login or message contents logged`);
+}

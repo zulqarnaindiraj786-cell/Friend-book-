@@ -19,8 +19,8 @@ import com.friendbook.social.core.Cloudinary;
 import com.friendbook.social.core.Fb;
 import com.friendbook.social.core.Ui;
 import com.friendbook.social.models.Models;
-import com.google.firebase.firestore.ListenerRegistration;
-import com.google.firebase.firestore.SetOptions;
+import com.friendbook.social.d1.documents.ListenerRegistration;
+import com.friendbook.social.d1.documents.SetOptions;
 
 import java.util.ArrayList;
 import java.util.Calendar;
@@ -272,8 +272,9 @@ public class EditProfileActivity extends Activity {
                 .addOnSuccessListener(url -> {
                     Map<String, Object> patch = new HashMap<>();
                     patch.put(isAvatar ? "photoUrl" : "coverUrl", url.toString());
-                    Fb.patchMe(patch);
-                    Ui.toast(this, isAvatar ? "Profile photo updated ✓" : "Cover updated ✓");
+                    Fb.patchMe(patch)
+                            .addOnSuccessListener(v -> Ui.toast(this, isAvatar ? "Profile photo updated ✓" : "Cover updated ✓"))
+                            .addOnFailureListener(e -> Ui.toast(this, "Couldn't save photo. Please try again."));
                 })
                 .addOnFailureListener(e -> Ui.toast(this, "Upload failed"));
     }

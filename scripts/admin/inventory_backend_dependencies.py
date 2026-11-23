@@ -13,7 +13,7 @@ STATE_PATTERNS = {
     'firebase_remote_config': re.compile(r'com\.google\.firebase\.remoteconfig\b|FirebaseRemoteConfig\b|firebaseremoteconfig\.googleapis\.com'),
     'supabase_backend': re.compile(r'\bSUPABASE_(?:URL|ANON_KEY)|supabase\.co|@supabase/supabase-js'),
     'firestore': re.compile(r'com\.google\.firebase\.firestore\b|FirebaseFirestore\b|'
-                            r'\bFb\.db\s*\(|firestore\.googleapis\.com|'
+                            r'firestore\.googleapis\.com|'
                             r'firebase-admin/firestore|\bgetFirestore\s*\(|\badmin\.firestore\s*\('),
     'realtime_database': re.compile(r'com\.google\.firebase\.database\b|FirebaseDatabase\b|'
                                     r'\bFb\.rtdb\s*\(|firebaseio\.com|firebasedatabase\.app|'
@@ -65,9 +65,20 @@ def inventory(root):
     remaining, allowed = [], []
     files = 0
     collections, rtdb_roots = set(), set()
+    adapter = root / 'app/src/main/java/com/friendbook/social/d1/documents/D1DocumentStore.java'
+    transport = root / 'app/src/main/java/com/friendbook/social/d1/documents/D1DocumentTransport.java'
+    adapter_verified = (adapter.is_file() and transport.is_file() and
+                        'D1DocumentTransport' in adapter.read_text(encoding='utf8') and
+                        '/v1/firestore/document' in transport.read_text(encoding='utf8') and
+                        'friendbook_cf_firestore_documents' in (root / 'cloudflare/firestore-documents.js').read_text(encoding='utf8'))
     for path, source in production_sources(root):
         files += 1
         services = sorted(name for name, pattern in STATE_PATTERNS.items() if pattern.search(source))
+        # Fb.db() is an app-facing compatibility API, not Firebase, only when its implementation
+        # is proven to route through the D1 transport and the Worker persists documents in D1.
+        if re.search(r'\bFb\.db\s*\(', source) and not adapter_verified and 'firestore' not in services:
+            services.append('firestore')
+            services.sort()
         permitted = sorted(name for name, pattern in ALLOWED_PATTERNS.items() if pattern.search(source))
         if services:
             names = sorted(set(LITERAL_COLLECTION.findall(source)))

@@ -17,7 +17,7 @@ import com.friendbook.social.core.Prefs;
 import com.friendbook.social.core.Ui;
 import com.friendbook.social.models.Models;
 import com.friendbook.social.profile.ProfileActivity;
-import com.google.firebase.firestore.DocumentSnapshot;
+import com.friendbook.social.d1.documents.DocumentSnapshot;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -74,7 +74,7 @@ public class FollowListActivity extends Activity {
                 render();moreButton.setText(loading?"Loading…":!error.isEmpty()?"Retry":more?"Load 20 more":"All loaded");
                 moreButton.setEnabled(!loading && more);
             });
-        followPager=pager;moreButton.setOnClickListener(v->pager.next());pager.start();
+        followPager=pager;moreButton.setOnClickListener(v->pager.next());pager.startCachedDay();
     }
     @Override protected void onDestroy(){if(followPager!=null)followPager.close();super.onDestroy();}
 

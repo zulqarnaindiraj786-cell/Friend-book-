@@ -24,9 +24,9 @@ import com.friendbook.social.core.Icons;
 import com.friendbook.social.core.Ui;
 import com.friendbook.social.friends.UsersAdapter;
 import com.friendbook.social.models.Models;
-import com.google.firebase.firestore.DocumentSnapshot;
-import com.google.firebase.firestore.ListenerRegistration;
-import com.google.firebase.firestore.Query;
+import com.friendbook.social.d1.documents.DocumentSnapshot;
+import com.friendbook.social.d1.documents.ListenerRegistration;
+import com.friendbook.social.d1.documents.Query;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -154,9 +154,8 @@ public class AdminUsersFragment extends Fragment {
             opts.add(u.isModerator
                     ? "➖ Remove App Moderator"
                     : "🛡 Make App Moderator (Posts & Ban only)");
-            opts.add(u.isAdmin ? "➖ Remove FULL Admin" : "👑 Make FULL Admin");
             opts.add(u.banned ? "✅ Unban user" : "🚫 Ban user");
-            opts.add("🗑 Delete user data");
+            opts.add(u.deactivated ? "Reactivate account" : "Deactivate account");
         }
         String[] arr = opts.toArray(new String[0]);
         Ui.choose(a, u.displayName + "\n" + u.email, arr, w -> {
@@ -171,18 +170,24 @@ public class AdminUsersFragment extends Fragment {
                 Admin.setGlobalModerator(a, u.uid, u.displayName, true);
             else if (sel.contains("Remove App Moderator"))
                 Admin.setGlobalModerator(a, u.uid, u.displayName, false);
-            else if (sel.contains("Make FULL Admin"))
-                Fb.db().collection("users").document(u.uid).update("isAdmin", true);
-            else if (sel.contains("Remove FULL Admin"))
-                Fb.db().collection("users").document(u.uid).update("isAdmin", false);
             else if (sel.contains("Unban"))
-                Fb.db().collection("users").document(u.uid).update("banned", false);
+                Fb.db().moderate("unban_user", "users", u.uid)
+                        .addOnSuccessListener(v -> Ui.toast(a, "User unbanned ✓"))
+                        .addOnFailureListener(e -> Ui.toast(a, "Couldn't unban user. Please retry."));
             else if (sel.contains("Ban user"))
                 Ui.confirm(a, "Ban " + u.displayName + "?", "They'll be signed out and blocked.",
-                        "Ban", () -> Fb.db().collection("users").document(u.uid).update("banned", true));
-            else if (sel.contains("Delete user data"))
-                Ui.confirm(a, "Delete " + u.displayName + "'s profile?", "Removes the Firestore profile doc.",
-                        "Delete", () -> Fb.db().collection("users").document(u.uid).delete());
+                        "Ban", () -> Fb.db().moderate("ban_user", "users", u.uid)
+                                .addOnSuccessListener(v -> Ui.toast(a, "User banned ✓"))
+                                .addOnFailureListener(e -> Ui.toast(a, "Couldn't ban user. Please retry.")));
+            else if (sel.equals("Reactivate account"))
+                Fb.db().moderate("reactivate_user", "users", u.uid)
+                        .addOnSuccessListener(v -> Ui.toast(a, "Account reactivated"))
+                        .addOnFailureListener(e -> Ui.toast(a, "Could not reactivate account"));
+            else if (sel.equals("Deactivate account"))
+                Ui.confirm(a, "Deactivate " + u.displayName + "?", "Blocks app access and preserves existing data.",
+                        "Deactivate", () -> Fb.db().moderate("deactivate_user", "users", u.uid)
+                                .addOnSuccessListener(v -> Ui.toast(a, "Account deactivated"))
+                                .addOnFailureListener(e -> Ui.toast(a, "Could not deactivate account")));
         });
     }
 }

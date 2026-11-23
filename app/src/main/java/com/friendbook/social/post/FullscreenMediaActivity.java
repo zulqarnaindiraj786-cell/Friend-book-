@@ -27,7 +27,7 @@ import com.friendbook.social.core.Fb;
 import com.friendbook.social.core.Format;
 import com.friendbook.social.core.Ui;
 import com.friendbook.social.models.Models;
-import com.google.firebase.firestore.ListenerRegistration;
+import com.friendbook.social.d1.documents.ListenerRegistration;
 
 import java.util.HashMap;
 import java.util.List;
@@ -68,7 +68,7 @@ public class FullscreenMediaActivity extends Activity {
     protected void onCreate(Bundle b) {
         super.onCreate(b);
         String type = getIntent().getStringExtra("type");
-        final String url = getIntent().getStringExtra("url");
+        final String url = com.friendbook.social.core.R2VideoClient.fullPlaybackUrl(getIntent().getStringExtra("url"));
         final String title = getIntent().getStringExtra("title");
         this.postId = getIntent().getStringExtra("post_id");
         final boolean guarded = getIntent().getBooleanExtra("guarded", false);
@@ -90,7 +90,15 @@ public class FullscreenMediaActivity extends Activity {
             MediaController mc = new MediaController(this);
             mc.setAnchorView(vv);
             vv.setMediaController(mc);
-            vv.setVideoURI(Uri.parse(url));
+            String stream = com.friendbook.social.reels.ReelVideoCache.optimizeStreamUrl(this, url);
+            vv.setOnErrorListener((mp, what, extra) -> {
+                if (stream.equals(url)) return false;
+                vv.setOnErrorListener(null);
+                vv.setVideoURI(Uri.parse(url));
+                vv.start();
+                return true;
+            });
+            vv.setVideoURI(Uri.parse(stream));
             vv.setOnPreparedListener(mp -> { mp.setLooping(true); vv.start(); });
         } else {
             final ImageView iv = new ImageView(this);

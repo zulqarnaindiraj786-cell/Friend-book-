@@ -4,15 +4,19 @@ import { DatabaseSync } from 'node:sqlite';
 import { readFileSync } from 'node:fs';
 import { createWorker } from '../../worker.js';
 import { authorizePost } from '../firebase-post-access.js';
+import { mirrorAllLegacy } from './fixtures/canonical.js';
 
 const MIGRATION_0001 = readFileSync(new URL('../migrations/0001_additive_profiles.sql', import.meta.url), 'utf8');
 const MIGRATION_0002 = readFileSync(new URL('../migrations/0002_additive_copy_staging.sql', import.meta.url), 'utf8');
 const MIGRATION_0003 = readFileSync(new URL('../migrations/0003_additive_interactions.sql', import.meta.url), 'utf8');
 const MIGRATION_0011 = readFileSync(new URL('../migrations/0011_additive_app_documents.sql', import.meta.url), 'utf8');
+const MIGRATION_0014 = readFileSync(new URL('../migrations/0014_additive_firestore_documents.sql', import.meta.url), 'utf8');
+const MIGRATION_0018 = readFileSync(new URL('../migrations/0018_social_guards.sql', import.meta.url), 'utf8');
+const MIGRATION_0019 = readFileSync(new URL('../migrations/0019_trusted_friendships.sql', import.meta.url), 'utf8');
 
 function createSqliteD1() {
   const sql = new DatabaseSync(':memory:');
-  for (const m of [MIGRATION_0001, MIGRATION_0002, MIGRATION_0003, MIGRATION_0011]) {
+  for (const m of [MIGRATION_0001, MIGRATION_0002, MIGRATION_0003, MIGRATION_0011, MIGRATION_0014, MIGRATION_0018, MIGRATION_0019]) {
     sql.exec(m);
   }
   const db = {
@@ -31,12 +35,17 @@ function createSqliteD1() {
         first: async () => stmt.get() || null,
       };
     },
+    async batch(stmts) {
+      sql.exec('BEGIN');
+      try { for (const s of stmts) await s.run(); sql.exec('COMMIT'); }
+      catch (error) { sql.exec('ROLLBACK'); throw error; }
+    },
   };
   return { sql, db };
 }
 
 test('/v1/docs preserves historical staging records and stores new Cloudflare documents with D1-first ACL', async () => {
-  const { db } = createSqliteD1();
+  const { sql, db } = createSqliteD1();
   await db
     .prepare(
       `INSERT INTO friendbook_cf_documents (path, collection, doc_id, owner_uid, document_json, updated_at)
@@ -55,6 +64,20 @@ test('/v1/docs preserves historical staging records and stores new Cloudflare do
     )
     .run();
 
+  await db.prepare(
+    `INSERT INTO friendbook_cf_documents (path, collection, doc_id, owner_uid, document_json, updated_at)
+     VALUES ('users/uid_old', 'users', 'uid_old', 'uid_old', ?, 1690000000000)`,
+  ).bind(JSON.stringify({ fields: { displayName: { stringValue: 'Old User' }, banned: { booleanValue: false } } })).run();
+  for (const [id, privacy] of [['private_post', 'Friends'], ['only_me_post', 'Only me']]) {
+    await db.prepare(
+      `INSERT INTO friendbook_cf_documents (path, collection, doc_id, owner_uid, document_json, updated_at)
+       VALUES (?, 'posts', ?, 'uid_old', ?, 1800000000000)`,
+    ).bind(`posts/${id}`, id, JSON.stringify({ fields: {
+      authorId: { stringValue: 'uid_old' }, content: { stringValue: id }, privacy: { stringValue: privacy },
+    } })).run();
+  }
+
+  mirrorAllLegacy(sql);
   const w = createWorker(async () => 'uid_new');
   const env = { DB: db, FIREBASE_PROJECT_ID: 'friendbook-test' };
 
@@ -75,6 +98,13 @@ test('/v1/docs preserves historical staging records and stores new Cloudflare do
     env,
   );
   assert.equal(userPutRes.status, 200);
+  const mirroredProfile = await w.fetch(
+    new Request('https://example.com/v1/firestore/document?path=users/uid_new', {
+      headers: { Authorization: 'Bearer test-token' },
+    }), env,
+  );
+  assert.equal(mirroredProfile.status, 200);
+  assert.equal((await mirroredProfile.json()).data.displayName, 'Updated User');
 
   const putRes = await w.fetch(
     new Request('https://example.com/v1/docs/posts/new_cf_post_1', {

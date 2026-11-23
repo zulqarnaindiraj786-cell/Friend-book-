@@ -1,0 +1,13 @@
+# Read-only friendship index preflight: initial migration abort
+
+This document describes the initial aborted check; later guarded deployment is recorded in `quota-friend-index-guarded.md`.
+
+At this initial stage, the candidate was disabled and its two partial-index definitions were outside the production migration directory. This investigation did not create or drop an index, deploy the experimental Worker, generate synthetic production app traffic or write app data. The previously deployed acceptance-guard coalescing remained live.
+
+Run 44997262746 first scanned at most 2,001 rows from each source table. D1 reported 4,003 reads and zero intended writes; both source samples hit their limit. Account-wide D1 GraphQL analytics run 44997426358 then reported 902,037 rows read and 40,506 rows written for the UTC day at 2026-11-22 07:15:50 UTC. These dashboard-source adaptive analytics can lag and are not a transactional live quota balance.
+
+A second preflight, run 44997568803, required account analytics below conservative 3.5M-read/60k-write thresholds and capped each source sample at 10,001 rows. It again **truncated both tables**: 10,001 canonical and 10,001 historical rows were sampled, including 386 and 121 friendship rows. No malformed outer JSON, draft-index exception or malformed wrapped element appeared in the sampled friendship rows; this says nothing about unsampled rows or concurrent changes. D1 reported 20,003 reads for this aggregate. The account-wide analytics checked immediately before it still reported 902,037 / 40,506 and may have lagged the first preflight. No application identifiers or document contents were returned.
+
+**Do not build the indexes based on this result.** Both CREATE INDEX statements scan their entire source tables, whose total sizes were not established. Index entries and any concurrent work also consume quota; a limited sample, a stale screenshot, GraphQL values, local measurements and fixed caps do not prove the migration will stay inside the remaining Free allowance. Raising the cap repeatedly would itself spend more reads. The preflight is a diagnostic only, not a deployment gate or cost estimate. Before any future migration, independently bound complete table-scan and index-write costs, refresh account-wide headroom with appropriate margin, recheck compatibility/failure/rollback and do not enable the experimental flag unless those conditions are met.
+
+The read-only preflight workflows and account analytics returned success. Local unit tests passed; the full scripts suite passed 286 tests. Android compile/unit verification passed in 44997262720 and 44997568823; no AAB was built.

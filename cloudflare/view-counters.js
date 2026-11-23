@@ -487,7 +487,6 @@ async function ensureLoaded(env, nowMs = Date.now) {
 export async function viewCounters(request, env, identity, match, url, nowMs = Date.now, ctx) {
   const uid = typeof identity?.uid === 'string' ? identity.uid : '';
   if (!uid || uid.length > 128) return json({ error: 'Unauthorized' }, 401);
-  await ensureLoaded(env, nowMs);
 
   // ---- Collection level reads: /v1/views?collection=...&ids=... (or &top=...) ----
   if (!match) {
@@ -495,17 +494,18 @@ export async function viewCounters(request, env, identity, match, url, nowMs = D
     const collection = url?.searchParams?.get('collection') || '';
     if (!COLLECTIONS.has(collection)) return json({ error: 'Invalid collection' }, 400);
     const prefix = collection + '/';
-    const storage = storageMode();
 
     const idsParam = url.searchParams.get('ids');
     if (idsParam !== null) {
       const ids = [...new Set(String(idsParam).split(',').map((s) => s.trim()).filter(validId))];
       if (ids.length > MAX_BATCH_IDS) return json({ error: 'Too many ids' }, 400);
+      await ensureLoaded(env, nowMs);
       const views = {};
       for (const id of ids) views[id] = state.totals.get(prefix + id) ?? 0;
-      return json({ collection, views, storage });
+      return json({ collection, views, storage: storageMode() });
     }
 
+    await ensureLoaded(env, nowMs);
     const requestedTop = Number(url.searchParams.get('top') ?? DEFAULT_TOP);
     const top = Number.isFinite(requestedTop)
       ? Math.min(MAX_TOP, Math.max(1, Math.trunc(requestedTop))) : DEFAULT_TOP;
@@ -516,7 +516,7 @@ export async function viewCounters(request, env, identity, match, url, nowMs = D
       .slice(0, top)) {
       views[resource.slice(prefix.length)] = total;
     }
-    return json({ collection, views, storage });
+    return json({ collection, views, storage: storageMode() });
   }
 
   // ---- Single resource: /v1/views/{collection}/{id} ----
@@ -527,10 +527,11 @@ export async function viewCounters(request, env, identity, match, url, nowMs = D
   if (!validId(id)) return json({ error: 'Invalid resource' }, 400);
   const resource = `${collection}/${id}`;
 
+  if (!['GET', 'POST'].includes(request.method)) return json({ error: 'Method not allowed' }, 405);
+  await ensureLoaded(env, nowMs);
   if (request.method === 'GET') {
     return json({ resource, views: state.totals.get(resource) ?? 0, storage: storageMode() });
   }
-  if (request.method !== 'POST') return json({ error: 'Method not allowed' }, 405);
 
   const now = Number(nowMs()) || Date.now();
   const seenKey = `${resource}|${uid}`;

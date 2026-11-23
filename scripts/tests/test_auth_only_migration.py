@@ -31,7 +31,7 @@ class BackendInventoryTest(unittest.TestCase):
                              ['fcm_delivery', 'firebase_auth'])
             self.assertFalse(result['safe_to_cutover'])
             self.assertFalse(result['capacity_verified'])
-            source.write_text(source.read_text() + '\nFb.db().collection("chats");\n'
+            source.write_text(source.read_text() + '\nFirebaseFirestore.getInstance().collection("chats");\n'
                               'Fb.rtdb().getReference("typing"); FirebaseRemoteConfig.getInstance();')
             result = inventory(root)
             self.assertEqual(result['source_reference_gate'], 'BLOCKED')
@@ -39,6 +39,13 @@ class BackendInventoryTest(unittest.TestCase):
             self.assertEqual(result['literal_rtdb_paths'], ['typing'])
             self.assertEqual(result['remaining_by_service']['firestore'], 1)
             self.assertEqual(result['remaining_by_service']['firebase_remote_config'], 1)
+
+    def test_fb_db_is_exempt_only_when_production_d1_adapter_is_verified(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = self.make_root(folder)
+            (root / 'app/src/main/java/Client.java').write_text('Fb.db().collection("users");')
+            report = inventory(root)
+            self.assertEqual(report['remaining_by_service']['firestore'], 1)
 
     def test_backend_firestore_and_supabase_are_in_scope_not_tests_or_comments(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -72,7 +79,7 @@ class BackendInventoryTest(unittest.TestCase):
     def test_cli_check_returns_nonzero_and_never_overwrites_a_report(self):
         with tempfile.TemporaryDirectory() as folder:
             root = self.make_root(folder)
-            (root / 'app/src/main/java/Client.java').write_text('Fb.db().collection("users");')
+            (root / 'app/src/main/java/Client.java').write_text('FirebaseFirestore.getInstance().collection("users");')
             report = root / 'inventory.json'
             command = [sys.executable, str(ROOT / 'scripts/admin/inventory_backend_dependencies.py'),
                        '--root', str(root), '--check', '--output', str(report)]
@@ -107,4 +114,4 @@ class CloudinaryOnlySourceGuards(unittest.TestCase):
             self.assertIn(token, source)
         self.assertNotIn('putFile(', source)
         self.assertNotIn('getDownloadUrl(', source)
-        self.assertIn('spec.put("mediaProvider", "cloudinary")', source)
+        self.assertIn('queueOfficialBroadcast(jobId, text, mediaUrl, mediaType)', source)

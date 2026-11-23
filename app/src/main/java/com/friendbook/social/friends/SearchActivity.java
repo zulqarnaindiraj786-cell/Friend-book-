@@ -23,8 +23,8 @@ import com.friendbook.social.post.FeedAdapter;
 import com.friendbook.social.post.CreatePostActivity;
 import com.friendbook.social.post.PostDetailActivity;
 import com.friendbook.social.profile.ProfileActivity;
-import com.google.firebase.firestore.DocumentSnapshot;
-import com.google.firebase.firestore.Query;
+import com.friendbook.social.d1.documents.DocumentSnapshot;
+import com.friendbook.social.d1.documents.Query;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -224,13 +224,15 @@ public class SearchActivity extends Activity implements UsersAdapter.Handler, Fe
             secondSpelling.clear();for(DocumentSnapshot doc:docs)secondSpelling.put(doc.getId(),Models.User.fromDoc(doc));mergePeople.run();finishPeople.run();
         });
         peopleA.start();if(peopleB!=null)peopleB.start();
-        // Bounded recent-post scan, not a server full-text search index. Explicit next page even after zero matches.
-        postPages=new com.friendbook.social.core.CursorPager(Fb.db().collection("posts").orderBy("createdAt",Query.Direction.DESCENDING),20,"search-posts:"+q,(docs,more,loading,error)->{
+        boolean tagSearch=q.matches("[#@][\\p{L}\\p{N}_]{1,80}");
+        Query postQuery=Fb.db().collection("posts").orderBy("createdAt",Query.Direction.DESCENDING);
+        if(tagSearch)postQuery=postQuery.matchingPostTag(q);
+        postPages=new com.friendbook.social.core.CursorPager(postQuery,20,"search-posts:"+q,(docs,more,loading,error)->{
             if(loading){morePosts.setText("Loading…");morePosts.setEnabled(false);return;}
             List<Models.Post> list=new ArrayList<>();String needle=q.toLowerCase(Locale.ROOT);
             for(DocumentSnapshot doc:docs){Models.Post p=Models.Post.fromDoc(doc);
                 if(p.archived || p.trashedAt>0 || ("Only me".equalsIgnoreCase(p.privacy) && !p.authorId.equals(Fb.uid())) || (Fb.me!=null && Fb.me.blocked.contains(p.authorId)))continue;
-                String hay=(p.content+" "+p.authorName).toLowerCase(Locale.ROOT);if(hay.contains(needle))list.add(p);
+                String hay=(p.content+" "+p.authorName).toLowerCase(Locale.ROOT);if(tagSearch || hay.contains(needle))list.add(p);
             }
             postsAdapter.setPosts(list);postsTitle.setVisibility(list.isEmpty()?View.GONE:View.VISIBLE);
             morePosts.setText(loading?"Loading…":!error.isEmpty()?"Retry posts":more?"More post results":"All scanned");morePosts.setEnabled(!loading && more);

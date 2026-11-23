@@ -1,6 +1,6 @@
 package com.friendbook.social.core;
 import com.google.android.gms.tasks.*;
-import com.google.firebase.firestore.*;
+import com.friendbook.social.d1.documents.*;
 import java.util.Objects;
 /** Exhaustive cursor batches for explicitly confirmed actions, never an app-start migration. */
 public final class QueryActions {

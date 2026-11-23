@@ -2,10 +2,10 @@ package com.friendbook.social.core;
 
 import androidx.annotation.Nullable;
 
-import com.google.firebase.firestore.DocumentReference;
-import com.google.firebase.firestore.FieldValue;
-import com.google.firebase.firestore.SetOptions;
-import com.google.firebase.firestore.WriteBatch;
+import com.friendbook.social.d1.documents.DocumentReference;
+import com.friendbook.social.d1.documents.FieldValue;
+import com.friendbook.social.d1.documents.SetOptions;
+import com.friendbook.social.d1.documents.WriteBatch;
 
 import java.util.Arrays;
 import java.util.HashMap;
@@ -19,15 +19,16 @@ public class Notify {
     }
 
     /** Commit both sides before creating a follow notification / calling the push gateway. */
-    public static void follow(String toUid, boolean following) {
+    public static com.google.android.gms.tasks.Task<Void> follow(String toUid, boolean following) {
         String me = Fb.uid();
-        if (me == null || toUid == null || toUid.isEmpty() || me.equals(toUid)) return;
+        if (me == null || toUid == null || toUid.isEmpty() || me.equals(toUid))
+            return com.google.android.gms.tasks.Tasks.forException(new IllegalArgumentException("Invalid follow target"));
         WriteBatch batch = Fb.db().batch();
         batch.set(Fb.db().collection("users").document(toUid),
                 Fb.map("followers", following ? FieldValue.arrayUnion(me) : FieldValue.arrayRemove(me)), SetOptions.merge());
         batch.set(Fb.db().collection("users").document(me),
                 Fb.map("following", following ? FieldValue.arrayUnion(toUid) : FieldValue.arrayRemove(toUid)), SetOptions.merge());
-        batch.commit().addOnSuccessListener(v -> {
+        return batch.commit().addOnSuccessListener(v -> {
             if (following && me.equals(Fb.uid())) send(toUid, "follow", "started following you");
         }).addOnFailureListener(e -> android.util.Log.w("FriendBookPush", "Follow write failed; no push sent"));
     }
@@ -57,7 +58,18 @@ public class Notify {
         if (postId != null) n.put("postId", postId);
         n.put("isRead", false);
         n.put("createdAt", FieldValue.serverTimestamp());
-        Fb.db().collection("notifications").add(n).addOnSuccessListener(ref -> {
+        String eventKey=NotificationEventKey.forAction(me,toUid,type,postId);
+        if (eventKey != null) {
+            DocumentReference ref=Fb.db().collection("notifications").document(eventKey);
+            ref.create(n).addOnSuccessListener(v -> {
+                if (me.equals(Fb.uid())) com.friendbook.social.push.FCMPush.notification(ref.getId(), n);
+            }).addOnFailureListener(e -> {
+                if (!(e instanceof com.friendbook.social.d1.documents.D1DocumentStoreException)
+                        || ((com.friendbook.social.d1.documents.D1DocumentStoreException)e).getCode()
+                        != com.friendbook.social.d1.documents.D1DocumentStoreException.Code.ALREADY_EXISTS)
+                    com.friendbook.social.push.PushTrace.failure("notification_write_failed", e);
+            });
+        } else Fb.db().collection("notifications").add(n).addOnSuccessListener(ref -> {
             com.friendbook.social.push.PushTrace.stage("notification_write_ok", "event="
                     + com.friendbook.social.push.PushTrace.id(ref.getId()));
             if (me.equals(Fb.uid())) com.friendbook.social.push.FCMPush.notification(ref.getId(), n);
@@ -146,9 +158,9 @@ public class Notify {
         if (Prefs.notifComments(c)) send(toUid, "comment", "commented on your post", postId);
     }
 
-    public static void markAllRead(java.util.List<com.google.firebase.firestore.DocumentSnapshot> docs) {
+    public static void markAllRead(java.util.List<com.friendbook.social.d1.documents.DocumentSnapshot> docs) {
         WriteBatch b = Fb.db().batch();
-        for (com.google.firebase.firestore.DocumentSnapshot d : docs)
+        for (com.friendbook.social.d1.documents.DocumentSnapshot d : docs)
             b.update(d.getReference(), "isRead", true);
         b.commit();
     }

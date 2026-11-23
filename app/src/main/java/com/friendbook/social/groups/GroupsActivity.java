@@ -26,9 +26,9 @@ import com.friendbook.social.core.Fb;
 import com.friendbook.social.core.Icons;
 import com.friendbook.social.core.Ui;
 import com.friendbook.social.models.Models;
-import com.google.firebase.firestore.DocumentSnapshot;
-import com.google.firebase.firestore.FieldValue;
-import com.google.firebase.firestore.ListenerRegistration;
+import com.friendbook.social.d1.documents.DocumentSnapshot;
+import com.friendbook.social.d1.documents.FieldValue;
+import com.friendbook.social.d1.documents.ListenerRegistration;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -147,7 +147,7 @@ public class GroupsActivity extends Activity {
     }
     private void startGroupPages() {
         if(reg!=null)reg.remove();
-        com.google.firebase.firestore.Query groupQuery=Fb.db().collection("groups");
+        com.friendbook.social.d1.documents.Query groupQuery=Fb.db().collection("groups");
         if(tabMode==1)groupQuery=groupQuery.whereArrayContains("members",Fb.uid());
         if(tabMode==2)groupQuery=groupQuery.whereArrayContains("invitedUids",Fb.uid());
         reg=com.friendbook.social.core.PagedLists.attach(this,pageControls,groupQuery,20,"groups:"+tabMode,(snap,err)-> {
@@ -302,7 +302,7 @@ public class GroupsActivity extends Activity {
                                 Ui.toast(this, "Group created 🎉");
                                 startActivity(new Intent(this, GroupDetailActivity.class)
                                         .putExtra("group_id", ref.getId()));
-                            });
+                            }).addOnFailureListener(error -> { if (!isFinishing()) Ui.toast(this,"Couldn't create group. Please try again."); });
                 })
                 .setNegativeButton("Cancel", null)
                 .show();

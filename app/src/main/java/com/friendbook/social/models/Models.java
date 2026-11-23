@@ -1,7 +1,7 @@
 package com.friendbook.social.models;
 
 import com.friendbook.social.core.Format;
-import com.google.firebase.firestore.DocumentSnapshot;
+import com.friendbook.social.d1.documents.DocumentSnapshot;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -14,7 +14,7 @@ public class Models {
     public static class User {
         public String uid, displayName, email, photoUrl, bio, coverUrl, birthday;
         public String work, education, currentCity, hometown, relationshipStatus, relationship, website, pronouns, phone, phoneNumber;
-        public boolean isOnline, isAdmin, isModerator, banned, isVerified;
+        public boolean isAdmin, isModerator, banned, isVerified;
         public long suspendedUntil;
         public boolean suspendedLifetime;
 
@@ -36,8 +36,7 @@ public class Models {
         }
         public boolean deactivated, loginAlerts, tagReviewEnabled, professionalMode;
         public boolean hideReactionCounts;
-        public boolean showActiveStatus = true;
-        public long lastSeen, createdAt;
+        public long createdAt;
         public int friendsCount;
         public int stars;     // Stars balance (monetization)
         public String tickLevel = "none"; // none | blue | gold | diamond
@@ -77,6 +76,8 @@ public class Models {
         }
         public List<String> followers = new ArrayList<>();
         public List<String> following = new ArrayList<>();
+        public int followerCount, followingCount;
+        public boolean followedByMe;
         public List<String> blocked = new ArrayList<>();
 
         public static User fromDoc(DocumentSnapshot d) {
@@ -118,15 +119,6 @@ public class Models {
             u.tagReviewEnabled = Format.boolOf(m, "tagReviewEnabled");
             u.professionalMode = Format.boolOf(m, "professionalMode");
             u.hideReactionCounts = Format.boolOf(m, "hideReactionCounts");
-            u.showActiveStatus = m == null || !m.containsKey("showActiveStatus") || Format.boolOf(m, "showActiveStatus");
-            long lsTs = Format.ts(m == null ? null : m.get("lastSeen"));
-            long lsMs = (m != null && m.get("lastSeenMs") instanceof Number)
-                    ? ((Number) m.get("lastSeenMs")).longValue() : 0L;
-            u.lastSeen = u.showActiveStatus ? (lsTs > 0 ? lsTs : lsMs) : 0L;
-            boolean rawOnline = m != null && m.containsKey("isActive") ? Format.boolOf(m, "isActive") : Format.boolOf(m, "isOnline");
-            if (m != null && m.containsKey("isOnline") && !Format.boolOf(m, "isOnline")) rawOnline = false;
-            u.isOnline = u.showActiveStatus && com.friendbook.social.core.PresencePolicy.isFreshOnline(
-                    rawOnline, u.lastSeen, com.friendbook.social.core.Presence.now());
             u.createdAt = Format.ts(m == null ? null : m.get("createdAt"));
             u.friendsCount = Format.intOf(m, "friendsCount");
             u.stars = Format.intOf(m, "stars");
@@ -160,6 +152,9 @@ public class Models {
             u.lastBonusAt = lb instanceof Number ? ((Number) lb).longValue() : Format.ts(lb);
             u.followers = Format.listOf(m, "followers");
             u.following = Format.listOf(m, "following");
+            u.followerCount = m != null && m.get("followerCount") instanceof Number ? Math.max(0, Format.intOf(m,"followerCount")) : u.followers.size();
+            u.followingCount = m != null && m.get("followingCount") instanceof Number ? Math.max(0, Format.intOf(m,"followingCount")) : u.following.size();
+            u.followedByMe = m != null && m.get("followedByMe") instanceof Boolean ? Format.boolOf(m,"followedByMe") : u.followers.contains(com.friendbook.social.core.Fb.uid());
             u.blocked = Format.listOf(m, "blockedUsers");
             return u;
         }
@@ -190,6 +185,8 @@ public class Models {
         public List<String> pollOptions = new ArrayList<>(); // non-empty ⇒ poll post
         public Map<String, Long> pollVotes = new HashMap<>(); // uid → option index
         public String pinnedCommentId = "";
+        public final List<Comment> savedDetailPreview = new ArrayList<>();
+        public List<Comment> detailPreview() { return inlineComments.isEmpty()?savedDetailPreview:inlineComments; }
         public List<Comment> inlineComments = new ArrayList<>(); // synced multi-user commentsMap on post doc
         public Map<String, Map<String, Object>> reactionsMap = new HashMap<>(); // synced multi-user reactions on post doc
 
@@ -766,7 +763,6 @@ public class Models {
         public boolean onlyAdminsCanSend;
         public List<String> adminIds = new ArrayList<>();
         public List<String> participants = new ArrayList<>();
-        public Map<String, Boolean> typing = new HashMap<>();
         public Map<String, String> participantNames = new HashMap<>();
         public Map<String, String> participantPhotos = new HashMap<>();
 
@@ -796,18 +792,13 @@ public class Models {
             }
             c.participants = Format.listOf(m, "participants");
             c.lastMessage = Format.str(m, "lastMessage");
-            long ts = Format.ts(m == null ? null : m.get("lastMessageTime"));
+            long ts = Format.ts(m == null ? null : m.get("inboxActivityAt"));
+            if(ts<=0)ts=Format.ts(m == null ? null : m.get("lastMessageTime"));
             if (ts <= 0 && m != null && m.get("lastMessageTimeMs") instanceof Number) {
                 ts = ((Number) m.get("lastMessageTimeMs")).longValue();
             }
+            if(ts<=0)ts=Format.ts(m == null ? null : m.get("lastMessageAt"));
             c.lastMessageTime = ts;
-            Object t = m == null ? null : m.get("typing");
-            if (t instanceof Map) {
-                for (Map.Entry<?, ?> e : ((Map<?, ?>) t).entrySet()) {
-                    if (e.getValue() instanceof Boolean)
-                        c.typing.put(String.valueOf(e.getKey()), (Boolean) e.getValue());
-                }
-            }
             Object pn = m == null ? null : m.get("participantNames");
             if (pn instanceof Map) {
                 for (Map.Entry<?, ?> e : ((Map<?, ?>) pn).entrySet()) {

@@ -4,15 +4,27 @@ from pathlib import Path
 ROOT=Path(__file__).resolve().parents[2]
 JAVA=ROOT/'app/src/main/java/com/friendbook/social'
 class FeedReadBudgetTest(unittest.TestCase):
-    def test_feed_first_page_is_seven_and_one_shot(self):
+    def test_feed_first_page_is_twenty_and_cache_first(self):
         source=(JAVA/'main/HomeFragment.java').read_text()
-        self.assertIn('private static final int PAGE = 7;',source)
-        first=source.split('private void startPostsQuery(boolean ordered)',1)[1].split('private void consumePostsSnapshot',1)[0]
-        self.assertIn('first.get()',first)
+        self.assertIn('private static final int PAGE = 20;',source)
+        first=source.split('private void startPostsQuery(boolean forceReload)',1)[1].split('private void consumePostsSnapshot',1)[0]
+        self.assertIn('feedQuery.limit(PAGE)', first)
+        self.assertIn('FEATURED_REELS_PAGE = 20;', source)
+        self.assertIn('first.refreshCachedHead(saved)',first)
+        self.assertIn('if(forceReload)first.get(Source.SERVER)',first)
         self.assertIn('first.get(Source.CACHE)',first)
         self.assertNotIn('addSnapshotListener',first)
         self.assertIn('generation!=feedGeneration',first)
-        self.assertIn('FieldPath.documentId()',first)
+        self.assertIn('orderBy("createdAt",Query.Direction.DESCENDING)',first)
+    def test_home_uses_page_engagement_without_background_engagement_reads(self):
+        source=(JAVA/'main/HomeFragment.java').read_text()
+        self.assertIn('feedQuery=query.withFeedEngagement()', source)
+        self.assertIn('D1Reactions.seedFeed', source)
+        self.assertNotIn('refreshVisibleEngagement', source)
+        self.assertNotIn('watchLatestPosts', source)
+        self.assertIn('>= 120_000L', source)
+        adapter=(JAVA/'post/FeedAdapter.java').read_text()
+        self.assertIn('!feedEngagementInPage &&', adapter)
     def test_pages_reuse_query_guard_duplicates_and_unlock_on_error(self):
         source=(JAVA/'main/HomeFragment.java').read_text()
         more=source.split('public void loadMore()',1)[1].split('public boolean hasMore()',1)[0]

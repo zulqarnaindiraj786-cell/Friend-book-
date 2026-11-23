@@ -33,3 +33,8 @@ __pycache__/
 
 # Private migration exports, generated SQL, counts and verification reports.
 migration-artifacts/
+
+# Keep release signing material outside the repository.
+*.p12
+*.keystore
+*.jks

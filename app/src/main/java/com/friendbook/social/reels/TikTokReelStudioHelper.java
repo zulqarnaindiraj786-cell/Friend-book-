@@ -37,8 +37,8 @@ import com.friendbook.social.core.Fb;
 import com.friendbook.social.core.StudioVectorIcons;
 import com.friendbook.social.core.Ui;
 import com.friendbook.social.models.Models;
-import com.google.firebase.firestore.DocumentSnapshot;
-import com.google.firebase.firestore.Query;
+import com.friendbook.social.d1.documents.DocumentSnapshot;
+import com.friendbook.social.d1.documents.Query;
 
 import java.io.File;
 import java.io.FileInputStream;

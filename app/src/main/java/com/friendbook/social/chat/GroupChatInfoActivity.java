@@ -25,10 +25,10 @@ import com.friendbook.social.core.Prefs;
 import com.friendbook.social.core.Ui;
 import com.friendbook.social.models.Models;
 import com.friendbook.social.profile.ProfileActivity;
-import com.google.firebase.firestore.DocumentSnapshot;
-import com.google.firebase.firestore.FieldValue;
-import com.google.firebase.firestore.ListenerRegistration;
-import com.google.firebase.firestore.SetOptions;
+import com.friendbook.social.d1.documents.DocumentSnapshot;
+import com.friendbook.social.d1.documents.FieldValue;
+import com.friendbook.social.d1.documents.ListenerRegistration;
+import com.friendbook.social.d1.documents.SetOptions;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -75,6 +75,13 @@ public class GroupChatInfoActivity extends Activity {
         LinearLayout root = Ui.col(this);
         root.setBackgroundColor(Ui.bg(this));
         root.addView(Ui.pageBar(this, "👥 Group Info & Settings"));
+        TextView copyId = Ui.tv(this, "Group chat ID: " + chatId + "  (tap to copy)", 11, Ui.sub(this));
+        Ui.pad(copyId, 12, 4, 12, 4);
+        copyId.setOnClickListener(v -> {
+            android.content.ClipboardManager cb = (android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+            if (cb != null) { cb.setPrimaryClip(android.content.ClipData.newPlainText("Group chat ID", chatId)); Ui.toast(this, "Group chat ID copied"); }
+        });
+        root.addView(copyId);
         root.addView(Ui.divider(this));
 
         ScrollView sv = new ScrollView(this);
@@ -409,7 +416,7 @@ public class GroupChatInfoActivity extends Activity {
             if (snap == null || isFinishing()) return;
             for (DocumentSnapshot d : snap.getDocuments()) {
                 Models.User u = Models.User.fromDoc(d);
-                if (room.participants.contains(u.uid) || u.banned) continue;
+                if (u.uid==null || u.uid.isEmpty() || room.participants.contains(u.uid) || u.banned || u.deactivated) continue;
                 LinearLayout row = Ui.row(this);
                 row.setGravity(Gravity.CENTER_VERTICAL);
                 Ui.pad(row, 4, 7, 4, 7);
@@ -453,11 +460,11 @@ public class GroupChatInfoActivity extends Activity {
                     patch.put("participants", FieldValue.arrayUnion(newUids.toArray()));
                     patch.put("participantNames", names);
                     patch.put("participantPhotos", photos);
-                    Fb.db().collection("chats").document(chatId).set(patch, SetOptions.merge())
+                    Fb.db().collection("chats").document(chatId).update(patch)
                             .addOnSuccessListener(x -> {
                                 postSystemMessage("➕ " + Fb.myName() + " added " + sb);
                                 Ui.toast(this, "Added " + newUids.size() + " member(s) ✓");
-                            });
+                            }).addOnFailureListener(error -> Ui.toast(this, "Could not add members: " + error.getMessage()));
                 })
                 .setNegativeButton("Cancel", null)
                 .show();
@@ -470,17 +477,22 @@ public class GroupChatInfoActivity extends Activity {
                 "You won't receive new messages from this group.", "Leave", () -> {
                     Map<String, Object> up = new HashMap<>();
                     up.put("participants", FieldValue.arrayRemove(me));
-                    up.put("adminIds", FieldValue.arrayRemove(me));
-                    // If creator leaves and no other admin exists, promote next remaining member!
+                    java.util.ArrayList<String> remainingAdmins = new java.util.ArrayList<>(room.adminIds);
+                    remainingAdmins.remove(me);
+                    // Transfer ownership and remove the departing creator in one update.
                     if (me.equals(room.createdBy)) {
+                        String successor = null;
                         for (String p : room.participants) {
-                            if (!p.equals(me)) {
-                                up.put("createdBy", p);
-                                up.put("adminIds", FieldValue.arrayUnion(p));
-                                break;
-                            }
+                            if (!p.equals(me)) { successor = p; break; }
                         }
+                        if (successor == null) {
+                            Ui.toast(this, "Delete the group instead of leaving as its last member");
+                            return;
+                        }
+                        up.put("createdBy", successor);
+                        if (!remainingAdmins.contains(successor)) remainingAdmins.add(successor);
                     }
+                    up.put("adminIds", remainingAdmins);
                     postSystemMessage("🚪 " + Fb.myName() + " left the group");
                     Fb.db().collection("chats").document(chatId).update(up)
                             .addOnSuccessListener(x -> {

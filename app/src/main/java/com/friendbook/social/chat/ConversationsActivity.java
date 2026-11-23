@@ -12,7 +12,6 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.widget.EditText;
 import android.widget.FrameLayout;
-import android.widget.HorizontalScrollView;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
@@ -25,13 +24,11 @@ import com.friendbook.social.core.Fb;
 import com.friendbook.social.core.Format;
 import com.friendbook.social.core.Icons;
 import com.friendbook.social.core.Prefs;
-import com.friendbook.social.core.Presence;
 import com.friendbook.social.core.Ui;
 import com.friendbook.social.models.Models;
-import com.google.firebase.firestore.DocumentSnapshot;
-import com.google.firebase.firestore.FieldValue;
-import com.google.firebase.firestore.ListenerRegistration;
-import com.google.firebase.firestore.SetOptions;
+import com.friendbook.social.d1.documents.DocumentSnapshot;
+import com.friendbook.social.d1.documents.FieldValue;
+import com.friendbook.social.d1.documents.SetOptions;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -47,45 +44,45 @@ import java.util.Set;
  */
 public class ConversationsActivity extends Activity {
 
+    private static java.lang.ref.WeakReference<ConversationsActivity> visibleInbox = new java.lang.ref.WeakReference<>(null);
+    private final android.os.Handler inboxHandler=new android.os.Handler(android.os.Looper.getMainLooper());
+    private boolean pushPending;
+    private final Runnable pushRefresh=()->{
+        if(!this.inboxLoading && pushPending){pushPending=false;loadInboxPage(true);}
+    };
+
+    public static void refreshVisibleInboxFromPush(String actor) {
+        new android.os.Handler(android.os.Looper.getMainLooper()).post(()->{
+            ConversationsActivity inbox=visibleInbox.get();
+            if(inbox==null || inbox.isFinishing() || !java.util.Objects.equals(actor,Fb.uid())
+                    || !java.util.Objects.equals(actor,inbox.inboxActor))return;
+            inbox.pushPending=true;
+            inbox.schedulePendingPush();
+        });
+    }
+
+    private void schedulePendingPush() {
+        if(!pushPending || inboxLoading || visibleInbox.get()!=this)return;
+        inboxHandler.removeCallbacks(pushRefresh);
+        inboxHandler.postDelayed(pushRefresh,350L);
+    }
+
     private RecyclerView rv;
     private ConvAdapter adapter;
-    private ListenerRegistration reg, usersReg;
-    private LinearLayout activeRow, activeWrap;
+    private androidx.swiperefreshlayout.widget.SwipeRefreshLayout inboxSwipe;
     private TextView inboxTab, unreadTab, groupsTab, archiveTab, empty;
     private int tabMode = 0; // 0 = All Inbox, 1 = Unread Only, 3 = Groups Only, 2 = Archived
     private boolean showArchived = false;
     private String query = "";
     private final Map<String, Models.User> userCache = new HashMap<>();
-    private boolean watchingPresence;
-    private final Map<String, Presence.Handle> activePresence = new HashMap<>();
-    private final Map<String, Boolean> onlineUsers = new HashMap<>();
-    private final Map<String, Long> lastSeenUsers = new HashMap<>();
-    private final Set<ConvAdapter.VH> boundHolders = new HashSet<>();
-
-    private void ensurePresence(String uid) {
-        if (!watchingPresence || uid == null || uid.isEmpty() || Ui.TEAM_USER_ID.equals(uid) || uid.equals(Fb.uid()) || activePresence.containsKey(uid)) return;
-        Presence.Handle handle = Presence.watch(uid, (online, lastSeen) -> {
-            if (!watchingPresence) return;
-            onlineUsers.put(uid, online); lastSeenUsers.put(uid, lastSeen);
-            renderActiveNow();
-            for (ConvAdapter.VH holder : boundHolders) if (uid.equals(holder.boundUid)) renderRowPresence(holder, online, lastSeen);
-        });
-        activePresence.put(uid, handle);
-    }
-    private void renderRowPresence(ConvAdapter.VH h, boolean online, long seen) {
-        h.dot.setVisibility(online ? View.VISIBLE : View.GONE);
-        h.lastActive.setText(com.friendbook.social.core.TimeAgoUtil.formatShortLastSeen(seen, Presence.now()));
-        h.lastActive.setContentDescription(Presence.formatActiveStatus(false, seen));
-        h.lastActive.setVisibility(!online && seen > 0 ? View.VISIBLE : View.GONE);
-        h.time.setVisibility(!online && seen > 0 ? View.GONE : View.VISIBLE);
-    }
-
-    private com.google.firebase.firestore.DocumentSnapshot inboxCursor;
+    private com.friendbook.social.d1.documents.DocumentSnapshot inboxCursor;
     private boolean inboxLoading, inboxMore=true;
     private String inboxActor;
     private int inboxGeneration;
     private TextView inboxMoreButton;
-    private android.widget.ProgressBar inboxSpinner;
+    private static final int INBOX_PAGE_SIZE=10;
+    private boolean reachedInboxBottom, loadingOlderInbox, retryOlderInbox;
+    private final List<List<Object>> renderedInboxKeys=new ArrayList<>();
     private final List<Room> allRooms = new ArrayList<>();
     private final List<Room> rooms = new ArrayList<>();
 
@@ -93,6 +90,7 @@ public class ConversationsActivity extends Activity {
         Models.ChatRoom room;
         int unread;
         String other;
+        long serverRevision;
     }
 
     @Override
@@ -164,20 +162,6 @@ public class ConversationsActivity extends Activity {
         root.addView(top);
         updateTabs();
 
-        // 🟢 Active Now horizontal bar
-        activeWrap = Ui.col(this);
-        activeWrap.setBackgroundColor(Ui.card(this));
-        activeWrap.setVisibility(View.GONE);
-        TextView actLabel = Ui.tvBold(this, "🟢 Active now", 12, Ui.sub(this));
-        Ui.pad(actLabel, 12, 4, 12, 2);
-        activeWrap.addView(actLabel);
-        HorizontalScrollView hsv = new HorizontalScrollView(this);
-        hsv.setHorizontalScrollBarEnabled(false);
-        activeRow = Ui.row(this);
-        Ui.pad(activeRow, 10, 4, 10, 8);
-        hsv.addView(activeRow);
-        activeWrap.addView(hsv);
-        root.addView(activeWrap);
         root.addView(Ui.divider(this));
 
         empty = Ui.tvBold(this, "No conversations yet.\nTap ✏️ New Chat or tap here to message anyone on friendbook 💬", 14, Ui.BLUE);
@@ -193,19 +177,28 @@ public class ConversationsActivity extends Activity {
         rv.setItemViewCacheSize(20);
         adapter = new ConvAdapter();
         rv.setAdapter(adapter);
-        com.friendbook.social.core.NearEndPaging.attach(rv,()->{loadInboxPage(false);});
         inboxMoreButton=Ui.tvBold(this,"Load more chats",13,Ui.BLUE);
         inboxMoreButton.setPadding(Ui.dp(this,12),Ui.dp(this,8),Ui.dp(this,12),Ui.dp(this,8));
-        inboxMoreButton.setOnClickListener(v -> loadInboxPage(inboxCursor==null));
+        inboxMoreButton.setGravity(Gravity.CENTER);
+        inboxMoreButton.setOnClickListener(v -> loadInboxPage(false));
+        rv.addOnScrollListener(new RecyclerView.OnScrollListener() {
+            @Override public void onScrollStateChanged(RecyclerView list,int state) {
+                if(state==RecyclerView.SCROLL_STATE_DRAGGING && !rooms.isEmpty() && !list.canScrollVertically(1)){
+                    reachedInboxBottom=true;updateInboxFooter();
+                }
+            }
+            @Override public void onScrolled(RecyclerView list,int dx,int dy) {
+                if(dy==0 || list.getScrollState()==RecyclerView.SCROLL_STATE_IDLE)return;
+                reachedInboxBottom=dy>0 && !list.canScrollVertically(1);
+                updateInboxFooter();
+            }
+        });
         inboxMoreButton.setVisibility(View.GONE);
-        TextView refreshChats=Ui.tvBold(this,"Refresh chats",13,Ui.BLUE);
-        refreshChats.setPadding(Ui.dp(this,12),Ui.dp(this,8),Ui.dp(this,12),Ui.dp(this,8));
-        refreshChats.setOnClickListener(v -> loadInboxPage(true)); refreshChats.setVisibility(View.GONE);
-
-        root.addView(rv, new LinearLayout.LayoutParams(-1, 0, 1));
+        inboxSwipe=new androidx.swiperefreshlayout.widget.SwipeRefreshLayout(this);
+        inboxSwipe.addView(rv);
+        inboxSwipe.setOnRefreshListener(()->loadInboxPage(true));
+        root.addView(inboxSwipe, new LinearLayout.LayoutParams(-1, 0, 1));
         root.addView(inboxMoreButton);
-        inboxSpinner=new android.widget.ProgressBar(this);inboxSpinner.setVisibility(View.GONE);inboxSpinner.setContentDescription("Loading more conversations");
-        root.addView(inboxSpinner,new LinearLayout.LayoutParams(Ui.dp(this,26),Ui.dp(this,26)));
         setContentView(root);
 
         // ⚡ 0.0ms Instant Frame #1 Hydration from FastCache!
@@ -218,13 +211,12 @@ public class ConversationsActivity extends Activity {
                 Room r = new Room();
                 r.room = cr;
                 r.other = cr.otherUid(me0);
-                if (r.other.isEmpty()) continue;
+                if (!cr.isGroup && r.other.isEmpty()) continue;
                 Models.User cu = com.friendbook.social.core.FastCache.getUser(r.other);
                 if (cu != null) userCache.put(r.other, cu);
                 allRooms.add(r);
             }
             if (!allRooms.isEmpty()) {
-                renderActiveNow();
                 applyFilter();
             }
         }
@@ -250,137 +242,136 @@ public class ConversationsActivity extends Activity {
         super.onStart();
         String me = Fb.uid();
         if (me == null) { finish(); return; }
-        watchingPresence = true;
-        adapter.notifyDataSetChanged();
         // Dismiss only the outer icon badge; preserve every conversation's unread state.
         com.friendbook.social.main.MainActivity.clearMessagesBadgeNow();
-        // Live snapshot listener on users so Active Now strip updates green online dots in real time!
-        usersReg = Fb.db().collection("users").limit(45).addSnapshotListener((usnap, uerr) -> {
-            if (isFinishing() || usnap == null || !java.util.Objects.equals(me,Fb.uid())) return;
-            for (DocumentSnapshot ud : usnap) {
-                Models.User u = Models.User.fromDoc(ud);
-                if (u.uid == null || u.uid.equals(me)) continue;
-                if (u.deactivated) { userCache.remove(u.uid); onlineUsers.remove(u.uid); continue; }
-                if (Fb.me != null && Fb.me.blocked != null && Fb.me.blocked.contains(u.uid)) continue;
-                com.friendbook.social.core.FastCache.putUser(u);
-                userCache.put(u.uid, u);
-                ensurePresence(u.uid);
-            }
-            renderActiveNow();
-            applyFilter();
-        });
-        if(!java.util.Objects.equals(inboxActor,me)){allRooms.clear();inboxCursor=null;inboxMore=true;inboxActor=me;}
-        inboxGeneration++; inboxLoading=false;
+        if(!java.util.Objects.equals(inboxActor,me)){allRooms.clear();userCache.clear();inboxCursor=null;inboxMore=true;inboxActor=me;}
+        inboxGeneration++; inboxLoading=false;loadingOlderInbox=false;retryOlderInbox=false;reachedInboxBottom=false;
+        visibleInbox=new java.lang.ref.WeakReference<>(this);
+        applyInboxHandoff(me);
+        applyFilter();
         loadInboxPage(true);
     }
 
-    private void loadInboxPage(boolean reset) {
-        if(inboxLoading || (!reset && (!inboxMore || inboxCursor==null))) return;
-        inboxLoading=true;inboxSpinner.setVisibility(View.VISIBLE);inboxMoreButton.setVisibility(View.GONE); final int generation=inboxGeneration; final String me=Fb.uid();
-        com.google.firebase.firestore.Query query=Fb.db().collection("chats").whereArrayContains("participants",me);
-        if(!reset && inboxCursor!=null) query=query.startAfter(inboxCursor);
-        java.util.function.Consumer<com.google.firebase.firestore.QuerySnapshot> apply=snap -> {
-            if(generation!=inboxGeneration || !java.util.Objects.equals(me,Fb.uid()) || isFinishing()) return;
-            inboxLoading=false;inboxSpinner.setVisibility(View.GONE);
-            if(!snap.getMetadata().isFromCache() && (!reset || inboxCursor==null)){
-                if(reset)allRooms.clear();inboxMore=snap.size()==10;
-                if(!snap.isEmpty())inboxCursor=snap.getDocuments().get(snap.size()-1);
+    private Room existingRoom(String id) {
+        for(Room room:allRooms)if(id.equals(room.room.id))return room;
+        return null;
+    }
+
+    private void applyInboxHandoff(String actor) {
+        if(!java.util.Objects.equals(actor,Fb.uid()))return;
+        Set<String> hidden=getSharedPreferences("fb_prefs",MODE_PRIVATE).getStringSet("hiddenChats",new HashSet<>());
+        for(InboxMessageHandoff.Head head:InboxMessageHandoff.snapshot(actor).values()){
+            if(hidden.contains(head.chatId) || (!head.group && Fb.me!=null && Fb.me.blocked!=null && Fb.me.blocked.contains(head.peerId)))continue;
+            Room row=existingRoom(head.chatId);
+            if(row==null){
+                row=new Room();row.room=new Models.ChatRoom();row.room.id=head.chatId;
+                row.room.isGroup=head.group;row.other=head.group?head.chatId:head.peerId;
+                if(row.other==null || row.other.isEmpty())continue;
+                allRooms.add(row);
             }
-                    if (snap != null) {
-                        Set<String> hiddenChats = getSharedPreferences("fb_prefs", MODE_PRIVATE)
-                                .getStringSet("hiddenChats", new HashSet<>());
-                        for (DocumentSnapshot d : snap) {
-                            CallActivity.maybeHandleIncomingFromRoomDoc(ConversationsActivity.this, d);
-                            if (hiddenChats.contains(d.getId())) continue;
-                            Room r = new Room();
-                            r.room = Models.ChatRoom.fromDoc(d);
-                            r.other = r.room.otherUid(me);
-                            if (!r.room.isGroup && r.other.isEmpty()) continue;
-                            if (!r.room.isGroup && Fb.me != null && Fb.me.blocked != null && Fb.me.blocked.contains(r.other)) continue;
-                            Object u = d.get("unreadCount");
-                            if (u instanceof Map) {
-                                Object n = ((Map<?, ?>) u).get(me);
-                                if (n instanceof Number) r.unread = ((Number) n).intValue();
-                            }
-                            allRooms.removeIf(old -> old.room.id.equals(r.room.id));
-                            allRooms.add(r);
-                            if (!r.room.isGroup && !Ui.TEAM_USER_ID.equals(r.other) && !userCache.containsKey(r.other)) {
-                                Fb.getUser(r.other).addOnSuccessListener(us -> {
-                                    if (us != null) {
-                                        com.friendbook.social.core.FastCache.putUser(us);
-                                        userCache.put(r.other, us);
-                                        ensurePresence(r.other);
-                                        renderActiveNow();
-                                        applyFilter();
-                                    }
-                                });
-                            }
-                        }
-                    }
-                    List<Models.ChatRoom> toCache = new ArrayList<>();
-                    for (Room r : allRooms) toCache.add(r.room);
-                    com.friendbook.social.core.FastCache.saveChats(toCache);
-                    renderActiveNow();
-                    applyFilter();
-            inboxMoreButton.setText("Continue loading chats");
-            inboxMoreButton.setVisibility(inboxMore && rooms.isEmpty()?View.VISIBLE:View.GONE);
+            if(head.time>=row.room.lastMessageTime){
+                row.room.lastMessage=head.preview;
+                row.room.lastMessageTime=head.time;
+                row.unread=0; // This head was observed in the open conversation.
+            }
+        }
+    }
+
+    @Override protected void onResume(){
+        super.onResume();
+        applyInboxHandoff(Fb.uid());
+        applyFilter();
+    }
+
+    private void updateInboxFooter() {
+        if(inboxMoreButton==null)return;
+        boolean available=inboxMore && inboxCursor!=null && !rooms.isEmpty();
+        inboxMoreButton.setVisibility(!available?View.GONE:reachedInboxBottom?View.VISIBLE:View.INVISIBLE);
+        inboxMoreButton.setEnabled(!inboxLoading && available && reachedInboxBottom);
+        inboxMoreButton.setText(loadingOlderInbox?"Loading older chats…":retryOlderInbox?"Retry loading chats":"Load more chats");
+    }
+
+    private void loadInboxPage(boolean reset) {
+        if(inboxLoading || (!reset && (!inboxMore || inboxCursor==null))) {
+            inboxSwipe.setRefreshing(false);
+            return;
+        }
+        inboxLoading=true;loadingOlderInbox=!reset;retryOlderInbox=false;updateInboxFooter();
+        final int generation=inboxGeneration; final String me=Fb.uid();
+        com.friendbook.social.d1.documents.Query query=Fb.db().collection("chats").whereArrayContains("participants",me)
+                .orderBy("inboxActivityAt",com.friendbook.social.d1.documents.Query.Direction.DESCENDING);
+        if(!reset && inboxCursor!=null) query=query.startAfter(inboxCursor);
+        java.util.function.Consumer<com.friendbook.social.d1.documents.QuerySnapshot> apply=snap -> {
+            if(generation!=inboxGeneration || !java.util.Objects.equals(me,Fb.uid()) || isFinishing()) return;
+            if(snap.getMetadata().isFromCache() && !allRooms.isEmpty()){
+                inboxLoading=false;loadingOlderInbox=false;inboxSwipe.setRefreshing(false);
+                return;
+            }
+            inboxLoading=false;loadingOlderInbox=false;inboxSwipe.setRefreshing(false);
+            if(!snap.getMetadata().isFromCache() && (!reset || inboxCursor==null)){
+                inboxMore=snap.size()>INBOX_PAGE_SIZE;
+                if(!snap.isEmpty())inboxCursor=snap.getDocuments().get(Math.min(INBOX_PAGE_SIZE,snap.size())-1);
+            }
+            Set<String> hiddenChats = getSharedPreferences("fb_prefs", MODE_PRIVATE)
+                    .getStringSet("hiddenChats", new HashSet<>());
+            for (DocumentSnapshot d : snap.getDocuments().subList(0,Math.min(INBOX_PAGE_SIZE,snap.size()))) {
+                CallActivity.maybeHandleIncomingFromRoomDoc(ConversationsActivity.this, d);
+                if (hiddenChats.contains(d.getId())) continue;
+                Room r = new Room();
+                r.room = Models.ChatRoom.fromDoc(d);
+                r.other = r.room.otherUid(me);
+                if (!r.room.isGroup && r.other.isEmpty()) continue;
+                if (!r.room.isGroup && Fb.me != null && Fb.me.blocked != null && Fb.me.blocked.contains(r.other)) continue;
+                Object u = d.get("unreadCount");
+                if (u instanceof Map) {
+                    Object n = ((Map<?, ?>) u).get(me);
+                    if (n instanceof Number) r.unread = ((Number) n).intValue();
+                }
+                r.serverRevision=Format.ts(d.getUpdateTime());
+                Room previous=existingRoom(r.room.id);
+                if(previous!=null && (previous.room.lastMessageTime>r.room.lastMessageTime
+                        || (r.serverRevision>0 && previous.serverRevision>r.serverRevision)))continue;
+                if(!snap.getMetadata().isFromCache() && r.unread==0)
+                    InboxMessageHandoff.confirmed(me,r.room.id,r.room.lastMessageTime);
+                if(previous!=null)allRooms.set(allRooms.indexOf(previous),r);
+                else allRooms.add(r);
+            }
+            applyInboxHandoff(me);
+            List<Models.ChatRoom> toCache = new ArrayList<>();
+            for (Room r : allRooms) toCache.add(r.room);
+            if (!snap.getMetadata().isFromCache()) com.friendbook.social.core.FastCache.saveChats(toCache);
+            applyFilter();
+            if(!reset)reachedInboxBottom=false;
+            updateInboxFooter();
+            if(!snap.getMetadata().isFromCache())schedulePendingPush();
         };
         java.util.function.Consumer<Exception> failed=error->{
             if(generation!=inboxGeneration)return;
-            inboxLoading=false;inboxSpinner.setVisibility(View.GONE);inboxMoreButton.setText("Retry loading chats");inboxMoreButton.setVisibility(View.VISIBLE);
+            boolean pulled=inboxSwipe.isRefreshing();
+            inboxLoading=false;loadingOlderInbox=false;retryOlderInbox=!reset;inboxSwipe.setRefreshing(false);
+            updateInboxFooter();
+            if(reset && (pulled || allRooms.isEmpty()))Ui.toast(this,"Couldn't refresh chats. Pull down to retry.");
+            schedulePendingPush();
         };
-        if(reset){
-            if(reg!=null)reg.remove();
-            reg=query.limit(10).addSnapshotListener(com.google.firebase.firestore.MetadataChanges.INCLUDE,(snapshot,error)->{if(error!=null)failed.accept(error);else if(snapshot!=null)apply.accept(snapshot);});
-        }else query.limit(10).get(com.google.firebase.firestore.Source.SERVER).addOnSuccessListener(apply::accept).addOnFailureListener(failed::accept);
-    }
-
-    private void renderActiveNow() {
-        activeRow.removeAllViews();
-        String me = Fb.uid();
-        List<Models.User> stripUsers = new ArrayList<>(userCache.values());
-        stripUsers.sort((a, b2) -> String.valueOf(a.uid).compareTo(String.valueOf(b2.uid)));
-        int count = 0;
-        for (Models.User u : stripUsers) {
-            if (u == null || u.uid == null || u.uid.equals(me) || u.deactivated) continue;
-            if (Fb.me != null && Fb.me.blocked != null && Fb.me.blocked.contains(u.uid)) continue;
-            boolean online = Boolean.TRUE.equals(onlineUsers.get(u.uid));
-            if (!online) continue; // Active Now contains only fresh, live presence; never cached isOnline flags.
-            if (count >= 18) break;
-            LinearLayout b = Ui.col(this);
-            b.setGravity(Gravity.CENTER);
-            FrameLayout aw = new FrameLayout(this);
-            ImageView av = new ImageView(this);
-            Ui.avatar(this, av, u.photoUrl);
-            int s = Ui.dp(this, 48);
-            aw.addView(av, new FrameLayout.LayoutParams(s, s));
-            if (online) {
-                View dot = Ui.onlineDot(this);
-                int ds = Ui.dp(this, 13);
-                aw.addView(dot, new FrameLayout.LayoutParams(ds, ds, Gravity.BOTTOM | Gravity.END));
+        com.friendbook.social.d1.documents.Query page=query.limit(INBOX_PAGE_SIZE+1);
+        if(!reset)page.get(com.friendbook.social.d1.documents.Source.SERVER).addOnSuccessListener(apply::accept).addOnFailureListener(failed::accept);
+        else page.get(com.friendbook.social.d1.documents.Source.CACHE).addOnCompleteListener(cache -> {
+            if(generation!=inboxGeneration || !java.util.Objects.equals(me,Fb.uid()) || isFinishing())return;
+            com.friendbook.social.d1.documents.QuerySnapshot cached=cache.isSuccessful()?cache.getResult():null;
+            if(cached!=null && !cached.isEmpty() && allRooms.isEmpty()) {
+                apply.accept(cached);
+                inboxLoading=true;
             }
-            b.addView(aw);
-            TextView nm = Ui.tv(this, u.displayName == null ? "User" : u.displayName.split(" ")[0], 11, Ui.txt(this));
-            nm.setSingleLine(true);
-            nm.setMaxWidth(Ui.dp(this, 58));
-            b.addView(nm);
-            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-2, -2);
-            lp.rightMargin = Ui.dp(this, 12);
-            b.setOnClickListener(v -> {
-                Intent i = new Intent(this, ChatActivity.class);
-                i.putExtra("uid", u.uid);
-                i.putExtra("name", u.displayName);
-                startActivity(i);
-            });
-            activeRow.addView(b, lp);
-            count++;
-        }
-        activeWrap.setVisibility(count > 0 && !showArchived ? View.VISIBLE : View.GONE);
+            page.refreshCachedHead(cached).addOnSuccessListener(apply::accept).addOnFailureListener(failed::accept);
+        });
     }
 
     private void applyFilter() {
+        if(adapter==null)return;
         rooms.clear();
+        Set<String> hidden=getSharedPreferences("fb_prefs",MODE_PRIVATE).getStringSet("hiddenChats",new HashSet<>());
         for (Room r : allRooms) {
+            if(hidden.contains(r.room.id) || (!r.room.isGroup && Fb.me!=null && Fb.me.blocked!=null && Fb.me.blocked.contains(r.other)))continue;
             boolean arch = Prefs.isChatArchived(this, r.room.id);
             if (arch != showArchived) continue;
             if (tabMode == 1 && r.unread <= 0) continue;
@@ -400,9 +391,26 @@ public class ConversationsActivity extends Activity {
         rooms.sort((a, b2) -> {
             boolean pa = pinned.contains(a.room.id), pb = pinned.contains(b2.room.id);
             if (pa != pb) return pa ? -1 : 1;
-            return Long.compare(b2.room.lastMessageTime, a.room.lastMessageTime);
+            int time=Long.compare(b2.room.lastMessageTime, a.room.lastMessageTime);
+            return time!=0?time:b2.room.id.compareTo(a.room.id);
         });
-        adapter.notifyDataSetChanged();
+        List<List<Object>> previous=new ArrayList<>(renderedInboxKeys);
+        renderedInboxKeys.clear();
+        for(Room r:rooms) {
+            Models.User user=userCache.get(r.other);
+            if(user==null)user=com.friendbook.social.core.FastCache.getUser(r.other);
+            renderedInboxKeys.add(java.util.Arrays.asList(r.room.id,r.room.lastMessage,r.room.lastMessageTime,r.unread,
+                    r.room.isGroup,r.room.groupName,r.room.groupPhoto,r.room.participantNames,r.room.participantPhotos,
+                    user==null?null:user.displayName,user==null?null:user.photoUrl,user==null?null:user.tickLevel,
+                    Prefs.chatNickname(this,r.room.id),pinned.contains(r.room.id),Prefs.isChatMuted(this,r.room.id)));
+        }
+        androidx.recyclerview.widget.DiffUtil.calculateDiff(new androidx.recyclerview.widget.DiffUtil.Callback() {
+            @Override public int getOldListSize(){return previous.size();}
+            @Override public int getNewListSize(){return renderedInboxKeys.size();}
+            @Override public boolean areItemsTheSame(int a,int b){return previous.get(a).get(0).equals(renderedInboxKeys.get(b).get(0));}
+            @Override public boolean areContentsTheSame(int a,int b){return previous.get(a).equals(renderedInboxKeys.get(b));}
+        }).dispatchUpdatesTo(adapter);
+        updateInboxFooter();
         empty.setText(showArchived
                 ? "No archived conversations 📦"
                 : "No conversations yet.\nTap ✏️ New Chat or tap any person above to start chatting 💬");
@@ -412,15 +420,11 @@ public class ConversationsActivity extends Activity {
     @Override
     protected void onStop() {
         super.onStop();
+        if(visibleInbox.get()==this)visibleInbox.clear();
+        pushPending=false;inboxHandler.removeCallbacks(pushRefresh);
         inboxGeneration++; inboxLoading=false;
-        if (reg != null) reg.remove();
-        if (usersReg != null) usersReg.remove();
-        watchingPresence = false;
-        for (Presence.Handle handle : activePresence.values()) handle.close();
-        activePresence.clear(); onlineUsers.clear(); lastSeenUsers.clear();
-        for (ConvAdapter.VH h : boundHolders) { h.dot.setVisibility(View.GONE); h.lastActive.setVisibility(View.GONE); }
-        boundHolders.clear();
-        renderActiveNow();
+        inboxSwipe.setRefreshing(false);
+        loadingOlderInbox=false;reachedInboxBottom=false;updateInboxFooter();
     }
 
     private void roomMenu(Room r) {
@@ -485,12 +489,12 @@ public class ConversationsActivity extends Activity {
             LinearLayout row = Ui.row(ConversationsActivity.this);
             row.setLayoutParams(new RecyclerView.LayoutParams(-1, -2));
             row.setBackgroundColor(Ui.card(ConversationsActivity.this));
+            row.setClipChildren(true);row.setClipToPadding(true);
             Ui.pad(row, 12, 10, 12, 10);
 
-            FrameLayout avWrap = (FrameLayout) getLayoutInflater().inflate(com.friendbook.social.R.layout.view_presence_avatar, row, false);
-            ImageView av = avWrap.findViewById(com.friendbook.social.R.id.presence_avatar);
-            View dot = avWrap.findViewById(com.friendbook.social.R.id.presence_green_dot);
-            row.addView(avWrap);
+            ImageView av = new ImageView(ConversationsActivity.this);
+            av.setContentDescription("Profile photo");
+            row.addView(av, new LinearLayout.LayoutParams(Ui.dp(ConversationsActivity.this, 54), Ui.dp(ConversationsActivity.this, 54)));
 
             LinearLayout mid = Ui.col(ConversationsActivity.this);
             LinearLayout.LayoutParams mp = new LinearLayout.LayoutParams(0, -2, 1);
@@ -502,12 +506,15 @@ public class ConversationsActivity extends Activity {
             tickp.leftMargin = Ui.dp(ConversationsActivity.this, 5);
             tickp.gravity = Gravity.CENTER_VERTICAL;
             LinearLayout nameRow = Ui.row(ConversationsActivity.this);
-            nameRow.addView(name);
+            name.setMaxLines(1);name.setEllipsize(android.text.TextUtils.TruncateAt.END);
+            nameRow.addView(name,new LinearLayout.LayoutParams(0,-2,1));
             nameRow.addView(tick, tickp);
             TextView last = Ui.tv(ConversationsActivity.this, "", 13, Ui.sub(ConversationsActivity.this));
             last.setMaxLines(1);
-            mid.addView(nameRow);
-            mid.addView(last);
+            last.setEllipsize(android.text.TextUtils.TruncateAt.END);
+            last.setHorizontallyScrolling(false);
+            mid.addView(nameRow,new LinearLayout.LayoutParams(-1,-2));
+            mid.addView(last,new LinearLayout.LayoutParams(-1,-2));
             row.addView(mid, mp);
 
             LinearLayout right = Ui.col(ConversationsActivity.this);
@@ -515,22 +522,17 @@ public class ConversationsActivity extends Activity {
             TextView time = Ui.tv(ConversationsActivity.this, "", 11, Ui.sub(ConversationsActivity.this));
             TextView badge = Ui.badge(ConversationsActivity.this);
             TextView pin = Ui.tv(ConversationsActivity.this, "", 12, Ui.sub(ConversationsActivity.this));
-            TextView lastActive = (TextView) getLayoutInflater().inflate(com.friendbook.social.R.layout.view_last_active, right, false);
-            lastActive.setTextColor(Ui.sub(ConversationsActivity.this));
             right.addView(time);
-            right.addView(lastActive);
             right.addView(badge);
             right.addView(pin);
             row.addView(right);
-            return new VH(row, av, dot, name, tick, last, time, badge, pin, lastActive);
+            return new VH(row, av, name, tick, last, time, badge, pin);
         }
 
         @Override
         public void onBindViewHolder(@NonNull VH h, int position) {
             Room r = rooms.get(position);
-            boundHolders.add(h); h.boundUid = null;
-            h.lastActive.setVisibility(View.GONE); h.time.setVisibility(View.VISIBLE);
-            h.dot.setVisibility(View.GONE);
+            h.time.setVisibility(View.VISIBLE);
             h.av.setPadding(0, 0, 0, 0);
             h.av.setBackground(null);
 
@@ -571,9 +573,7 @@ public class ConversationsActivity extends Activity {
                 h.name.setText(resolvedName);
                 Icons.setTickBadge(h.tick, u != null ? u.tickLevel : "none", false);
                 Ui.avatar(ConversationsActivity.this, h.av, resolvedPhoto);
-                h.boundUid = r.other;
-                ensurePresence(r.other);
-                renderRowPresence(h, Boolean.TRUE.equals(onlineUsers.get(r.other)), lastSeenUsers.getOrDefault(r.other, 0L));
+
             }
 
             boolean unread = r.unread > 0;
@@ -603,24 +603,15 @@ public class ConversationsActivity extends Activity {
                 }
                 startActivity(i);
             });
-            h.itemView.setOnLongClickListener(v -> { roomMenu(r); return true; });
-        }
-
-        @Override
-        public void onViewRecycled(@NonNull VH h) {
-            super.onViewRecycled(h);
-            boundHolders.remove(h); h.boundUid = null;
-            h.dot.setVisibility(View.GONE); h.lastActive.setVisibility(View.GONE);
+            h.itemView.setOnLongClickListener(v -> { Room current=existingRoom(r.room.id);if(current!=null)roomMenu(current);return true; });
         }
 
         class VH extends RecyclerView.ViewHolder {
             ImageView av, tick;
-            View dot;
-            TextView name, last, time, badge, pin, lastActive;
-            String boundUid;
-            VH(View v, ImageView a, View d, TextView n, ImageView tk, TextView l, TextView t, TextView b, TextView p, TextView active) {
+            TextView name, last, time, badge, pin;
+            VH(View v, ImageView a, TextView n, ImageView tk, TextView l, TextView t, TextView b, TextView p) {
                 super(v);
-                av = a; dot = d; name = n; tick = tk; last = l; time = t; badge = b; pin = p; lastActive = active;
+                av = a; name = n; tick = tk; last = l; time = t; badge = b; pin = p;
             }
         }
     }

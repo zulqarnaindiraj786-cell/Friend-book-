@@ -1,0 +1,9 @@
+-- Additive indexes for actor-scoped requests and author-scoped profile content.
+CREATE INDEX IF NOT EXISTS idx_cf_posts_author ON friendbook_cf_firestore_documents(parent_path, json_extract(document_json,'$.authorId')) WHERE parent_path='posts';
+CREATE INDEX IF NOT EXISTS idx_cf_legacy_posts_author ON friendbook_cf_documents(collection, (CASE WHEN json_type(document_json,'$.fields')='object' THEN json_extract(document_json,'$.fields.authorId.stringValue') ELSE json_extract(document_json,'$.authorId') END)) WHERE collection='posts';
+CREATE INDEX IF NOT EXISTS idx_cf_reels_author ON friendbook_cf_firestore_documents(parent_path, json_extract(document_json,'$.authorId')) WHERE parent_path='reels';
+CREATE INDEX IF NOT EXISTS idx_cf_legacy_reels_author ON friendbook_cf_documents(collection, (CASE WHEN json_type(document_json,'$.fields')='object' THEN json_extract(document_json,'$.fields.authorId.stringValue') ELSE json_extract(document_json,'$.authorId') END)) WHERE collection='reels';
+CREATE INDEX IF NOT EXISTS idx_cf_request_fromUid ON friendbook_cf_firestore_documents(parent_path, json_extract(document_json,'$.fromUid')) WHERE parent_path='friend_requests';
+CREATE INDEX IF NOT EXISTS idx_cf_legacy_request_fromUid ON friendbook_cf_documents(collection, (CASE WHEN json_type(document_json,'$.fields')='object' THEN json_extract(document_json,'$.fields.fromUid.stringValue') ELSE json_extract(document_json,'$.fromUid') END)) WHERE collection='friend_requests';
+CREATE INDEX IF NOT EXISTS idx_cf_request_toUid ON friendbook_cf_firestore_documents(parent_path, json_extract(document_json,'$.toUid')) WHERE parent_path='friend_requests';
+CREATE INDEX IF NOT EXISTS idx_cf_legacy_request_toUid ON friendbook_cf_documents(collection, (CASE WHEN json_type(document_json,'$.fields')='object' THEN json_extract(document_json,'$.fields.toUid.stringValue') ELSE json_extract(document_json,'$.toUid') END)) WHERE collection='friend_requests';

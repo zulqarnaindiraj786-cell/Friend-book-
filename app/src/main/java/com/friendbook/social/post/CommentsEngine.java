@@ -2,11 +2,11 @@ package com.friendbook.social.post;
 
 import com.friendbook.social.core.Fb;
 import com.friendbook.social.models.Models;
-import com.google.firebase.firestore.DocumentReference;
-import com.google.firebase.firestore.DocumentSnapshot;
-import com.google.firebase.firestore.FieldValue;
-import com.google.firebase.firestore.ListenerRegistration;
-import com.google.firebase.firestore.SetOptions;
+import com.friendbook.social.d1.documents.DocumentReference;
+import com.friendbook.social.d1.documents.DocumentSnapshot;
+import com.friendbook.social.d1.documents.FieldValue;
+import com.friendbook.social.d1.documents.ListenerRegistration;
+import com.friendbook.social.d1.documents.SetOptions;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -34,9 +34,9 @@ public class CommentsEngine {
     }
     private static void d1Changed(String collection,String id,org.json.JSONObject data){
         for(Handle h:new ArrayList<>(D1_HANDLES))if(h.active() && collection.equals(h.collection) && id.equals(h.docId)){
-            h.error="";if(data.has("pinned"))h.pinned=data.optString("pinned");
-            if(data.has("removed")){String removed=data.optString("removed");h.deleted.add(removed);h.latest.remove(removed);h.older.remove(removed);}
-            org.json.JSONObject row=data.optJSONObject("comment");if(row!=null){Models.Comment c=fromD1(row,h.key);h.deleted.remove(c.id);if(h.older.containsKey(c.id))h.older.put(c.id,c);else h.latest.put(c.id,c);}
+            h.revision++;h.error="";if(data.has("pinned"))h.pinned=data.optString("pinned");
+            if(data.has("removed")){String removed=data.optString("removed");h.pendingD1.remove(removed);h.deleted.add(removed);h.latest.remove(removed);h.older.remove(removed);}
+            org.json.JSONObject row=data.optJSONObject("comment");if(row!=null){Models.Comment c=fromD1(row,h.key);h.pendingD1.remove(c.id);h.deleted.remove(c.id);if(h.older.containsKey(c.id))h.older.put(c.id,c);else h.latest.put(c.id,c);}
             h.emit();
         }
         D1Reactions.invalidate(collection,id);
@@ -53,40 +53,105 @@ public class CommentsEngine {
         void onComments(List<Models.Comment> allComments, String pinnedCommentId);
     }
 
-    /** One latest-50 listener; older pages are explicit one-shot cursor reads. */
+    /** One latest-10 listener; older pages are explicit one-shot cursor reads. */
     public static class Handle {
         private final List<ListenerRegistration> regs=new ArrayList<>();
         private final Map<String,Models.Comment> latest=new LinkedHashMap<>(), older=new LinkedHashMap<>();
         private final List<Models.Comment> legacy=new ArrayList<>();
-        private com.google.firebase.firestore.Query query;
+        private com.friendbook.social.d1.documents.Query query;
         private DocumentSnapshot cursor;
         private Listener listener;
         private String pinned="", actor=Fb.uid();
         private final Set<String> deleted=new HashSet<>();
         private boolean closed, loading, more=true, cursorReady;
-        private int legacyLoaded=50, visible=50;
-        private boolean d1Mode;private String collection,docId,key,nextD1;
-        private void d1Page(boolean first){
-            if(!active()||loading)return;loading=true;error="";emit();
-            String query=first||nextD1==null?null:"?before="+android.net.Uri.encode(nextD1);
+        private int legacyLoaded=10, visible=10;
+        private boolean d1Mode,loadedOlderD1,firstPageReady;private String collection,docId,key,nextD1;
+        private long revision;
+        private boolean detailBundle,quietPage;
+        private String deltaCursor;
+        private Runnable accessDenied;
+        private static String cursorFor(Models.Comment comment) {
+            if(comment==null || comment.id==null || !comment.id.matches("[A-Za-z0-9_-]{1,128}") || comment.createdAt<=0)return null;
+            return android.util.Base64.encodeToString(new org.json.JSONArray()
+                    .put(comment.createdAt).put(comment.id).toString().getBytes(java.nio.charset.StandardCharsets.UTF_8),android.util.Base64.NO_WRAP);
+        }
+        public void publishCached() { emit(); }
+
+        private int pageAttempt;
+        private Runnable pageDeadline;
+        private final android.os.Handler pageHandler=new android.os.Handler(android.os.Looper.getMainLooper());
+        private void clearPageDeadline() {
+            if(pageDeadline!=null)pageHandler.removeCallbacks(pageDeadline);
+            pageDeadline=null;
+        }
+        private final Set<String> pendingD1=new HashSet<>();
+        private void d1Page(boolean first){d1Page(first,false);}
+        private void d1Page(boolean first,boolean background){
+            if(!active()||loading)return;loading=true;quietPage=background;if(!background){error="";emit();}
+            if(!active())return;
+            final int attempt=++pageAttempt;
+            pageDeadline=()->{
+                if(!active() || attempt!=pageAttempt)return;
+                pageDeadline=null;pageAttempt++;loading=false;
+                if(!background || detailBundle){error="Comments are taking too long. Tap to retry.";emit();}
+            };
+            pageHandler.postDelayed(pageDeadline,15000L);
+            final boolean requestingDelta=first && detailBundle && deltaCursor!=null;
+            String query="?limit=10"+(requestingDelta?"&after="+android.net.Uri.encode(deltaCursor)
+                    :first||nextD1==null?"":"&before="+android.net.Uri.encode(nextD1));
+            if(detailBundle && first)query+="&includeReactions=1";
+            final long requestedAt=android.os.SystemClock.elapsedRealtime();
+            final long requestedAtRevision=revision;
             com.friendbook.social.core.D1Client.request(collection,docId,"comments","GET",null,query).addOnSuccessListener(data->{
-                if(!active())return;loading=false;
+                if(!active() || attempt!=pageAttempt)return;
+                clearPageDeadline();loading=false;
                 org.json.JSONArray rows=data.optJSONArray("comments");if(rows==null){error="Invalid D1 response";emit();return;}
-                try{for(int i=0;i<rows.length();i++){Models.Comment c=fromD1(rows.getJSONObject(i),key);if(first)latest.put(c.id,c);else older.put(c.id,c);
-}
-                    if(!first)visible+=50;nextD1=data.isNull("next")?null:data.optString("next",null);more=nextD1!=null;pinned=data.optString("pinned");emit();
+                // A response started before a local mutation must not overwrite its result.
+                if(requestedAtRevision!=revision){if(!background || detailBundle)d1Page(first,background);return;}
+                if(detailBundle && first){
+                    org.json.JSONArray totals=data.optJSONArray("reactions");
+                    if(totals!=null)D1Reactions.acceptDetailTotals(docId,totals,requestedAt);
+                    else D1Reactions.refreshDetailTotals(docId); // Compatibility with an older Worker.
+                }
+                try{Map<String,Models.Comment> received=new LinkedHashMap<>();
+                    for(int i=0;i<rows.length();i++){Models.Comment c=fromD1(rows.getJSONObject(i),key);received.put(c.id,c);}
+                    if(requestingDelta && data.optBoolean("delta")) {
+                        for(Map.Entry<String,Models.Comment> item:received.entrySet())if(!pendingD1.contains(item.getKey()))latest.put(item.getKey(),item.getValue());
+                        visible=Math.max(visible,latest.size()+older.size());
+                        deltaCursor=data.isNull("next")?null:data.optString("next",null);
+                        error="";firstPageReady=true;pinned=data.optString("pinned");emit();return;
+                    }
+                    if(first){
+                        deltaCursor=null;
+                        // Replace the polled window, otherwise deleted/blocked comments stay forever.
+                        // Keep optimistic unsent comments until their write resolves.
+                        for(String id:new ArrayList<>(latest.keySet())) if(!pendingD1.contains(id)) older.remove(id);
+                        latest.entrySet().removeIf(entry->!pendingD1.contains(entry.getKey()));
+                        for(Map.Entry<String,Models.Comment> entry:received.entrySet())if(!pendingD1.contains(entry.getKey())){
+                            older.remove(entry.getKey());latest.put(entry.getKey(),entry.getValue());
+                        }
+                    }else older.putAll(received);
+                    if(!first){visible+=10;loadedOlderD1=true;}
+                    if(!first || !loadedOlderD1){nextD1=data.isNull("next")?null:data.optString("next",null);more=nextD1!=null;}
+                    error="";if(first)firstPageReady=true;pinned=data.optString("pinned");emit();
                 }catch(Exception e){error="Invalid D1 response";emit();}
-            }).addOnFailureListener(e->{if(active()){loading=false;error="D1 page unavailable. Tap to retry.";emit();}});
+            }).addOnFailureListener(e->{
+                if(!active() || attempt!=pageAttempt)return;
+                clearPageDeadline();loading=false;
+                if(detailBundle && com.friendbook.social.core.D1Client.isAccessDenied(e) && accessDenied!=null){accessDenied.run();return;}
+                if(!background || detailBundle){error="D1 page unavailable. Tap to retry.";emit();}
+            });
         }
         public String error="";
         public void add(ListenerRegistration r) { if(r!=null) regs.add(r); }
         private boolean active() { return !closed && java.util.Objects.equals(actor,Fb.uid()); }
         public boolean hasMore() {
-            if(d1Mode)return more || !error.isEmpty();
+            if(d1Mode)return more || deltaCursor!=null || !error.isEmpty();
             Set<String> loaded=new HashSet<>(older.keySet()); loaded.addAll(latest.keySet()); loaded.removeAll(deleted);
             return more || legacyLoaded<legacy.size() || loaded.size()>visible;
         }
-        public boolean isLoading() { return loading; }
+        public boolean isLoading() { return (loading && !quietPage) || (!firstPageReady && error.isEmpty()); }
+        public boolean hasInitialPage() { return firstPageReady; }
         private void emit() {
             if(!active()) return;
             Map<String,Models.Comment> all=new LinkedHashMap<>();
@@ -102,19 +167,40 @@ public class CommentsEngine {
         }
         public void loadMore() {
             if(!active() || loading || !hasMore()) return;
-            if(d1Mode){d1Page(nextD1==null);return;}
-            if(!more) { legacyLoaded+=50; visible+=50; emit(); return; }
+            if(d1Mode){d1Page(deltaCursor!=null || nextD1==null);return;}
+            if(!more) { legacyLoaded+=10; visible+=10; emit(); return; }
             if(!cursorReady || cursor==null) return;
             loading=true; error=""; emit();
-            query.startAfter(cursor).limit(50).get().addOnSuccessListener(page -> {
-                if(!active()) return; loading=false; visible+=50; legacyLoaded+=50;
-                more=page.size()==50;
+            query.startAfter(cursor).limit(10).get().addOnSuccessListener(page -> {
+                if(!active()) return; loading=false; visible+=10; legacyLoaded+=10;
+                more=page.size()==10;
                 if(!page.isEmpty()) cursor=page.getDocuments().get(page.size()-1);
                 for(DocumentSnapshot doc:page) { Models.Comment c=Models.Comment.fromDoc(doc); older.put(c.id,c); }
                 emit();
             }).addOnFailureListener(e -> { if(active()) { loading=false; error="Couldn't load older comments. Tap again to retry."; emit(); } });
         }
-        public void remove() { closed=true; for(ListenerRegistration reg:regs) reg.remove(); regs.clear(); }
+        public void remove() { closed=true;clearPageDeadline();for(ListenerRegistration reg:regs) reg.remove(); regs.clear(); }
+    }
+
+    public static Handle watchPostDetail(String id,Models.Post bundled,Listener listener,Runnable denied) {
+        if(!d1("posts") || id.startsWith("sponsored_ad_"))return watch("posts",id,id,listener);
+        Handle handle=new Handle();handle.listener=listener;handle.accessDenied=denied;
+        handle.d1Mode=true;handle.detailBundle=true;handle.collection="posts";handle.docId=id;handle.key=id;
+        if(bundled!=null){
+            List<Models.Comment> preview=new ArrayList<>(bundled.detailPreview());
+            preview.removeIf(c->c==null || c.id==null || c.id.isEmpty());
+            preview.sort(java.util.Comparator.comparingLong((Models.Comment c)->c.createdAt).thenComparing(c->c.id));
+            for(Models.Comment c:preview)handle.latest.put(c.id,c);
+            if(!preview.isEmpty()){
+                handle.firstPageReady=true;handle.pinned=bundled.pinnedCommentId;
+                handle.deltaCursor=Handle.cursorFor(preview.get(preview.size()-1));
+                handle.nextD1=Handle.cursorFor(preview.get(0));
+                handle.more=handle.nextD1!=null && bundled.comments>=preview.size();
+            }
+        }
+        D1_HANDLES.add(handle);handle.add(()->D1_HANDLES.remove(handle));
+        handle.d1Page(true,handle.firstPageReady);
+        return handle;
     }
 
     public static Handle watch(String collection,String docId,String queryKey,Listener listener) {
@@ -122,10 +208,11 @@ public class CommentsEngine {
         if(docId==null || docId.isEmpty()) return handle;
         if(d1(collection)){
             handle.d1Mode=true;handle.collection=collection;handle.docId=docId;handle.key=queryKey;
-            D1_HANDLES.add(handle);handle.add(()->D1_HANDLES.remove(handle));handle.d1Page(true);return handle;
+            D1_HANDLES.add(handle);handle.add(()->D1_HANDLES.remove(handle));handle.d1Page(true);
+            return handle;
         }
         DocumentReference parent=Fb.db().collection(collection).document(docId);
-        handle.query=parent.collection("comments").orderBy("createdAt",com.google.firebase.firestore.Query.Direction.DESCENDING);
+        handle.query=parent.collection("comments").orderBy("createdAt",com.friendbook.social.d1.documents.Query.Direction.DESCENDING);
         // Compatibility only: one parent read. Never rebuild or expand its old commentsMap.
         parent.get().addOnSuccessListener(doc -> {
             if(!handle.active() || !doc.exists()) return;
@@ -133,12 +220,12 @@ public class CommentsEngine {
             handle.legacy.addAll(Models.Comment.parseEmbeddedComments(queryKey,doc.getData(),handle.pinned));
             handle.legacy.sort((x,y)->Long.compare(y.createdAt,x.createdAt)); handle.emit();
         });
-        handle.add(handle.query.limit(50).addSnapshotListener((page,error) -> {
+        handle.add(handle.query.limit(10).addSnapshotListener((page,error) -> {
             if(!handle.active()) return;
             if(page==null) { handle.error="Comments unavailable. Reopen to retry."; handle.emit(); return; }
             handle.older.putAll(handle.latest);
-            for(com.google.firebase.firestore.DocumentChange change:page.getDocumentChanges()) {
-                if(change.getType()==com.google.firebase.firestore.DocumentChange.Type.REMOVED) {
+            for(com.friendbook.social.d1.documents.DocumentChange change:page.getDocumentChanges()) {
+                if(change.getType()==com.friendbook.social.d1.documents.DocumentChange.Type.REMOVED) {
                     final String id=change.getDocument().getId();
                     change.getDocument().getReference().get().addOnSuccessListener(current -> {
                         if(!handle.active()) return;
@@ -150,7 +237,7 @@ public class CommentsEngine {
             handle.latest.clear();
             for(DocumentSnapshot doc:page) { Models.Comment c=Models.Comment.fromDoc(doc); handle.latest.put(c.id,c); handle.deleted.remove(c.id); }
             if(!handle.cursorReady && !page.getMetadata().isFromCache() && !page.getMetadata().hasPendingWrites()) {
-                handle.cursorReady=true; handle.more=page.size()==50;
+                handle.cursorReady=true; handle.firstPageReady=true; handle.error=""; handle.more=page.size()==10;
                 if(!page.isEmpty()) handle.cursor=page.getDocuments().get(page.size()-1);
             }
             handle.emit();
@@ -232,6 +319,11 @@ public class CommentsEngine {
         if(d1(collection)){
             org.json.JSONObject body=com.friendbook.social.core.D1Client.object("id",newId,"text",local.content,"mediaUrl",local.imageUrl,"parentId",local.parentId.isEmpty()?null:local.parentId,"mentions",new org.json.JSONArray(local.mentions));
             if(!D1Drafts.keep(com.friendbook.social.App.instance,me,collection,docId,body)){if(cb!=null)cb.onComplete(false,"Couldn't save draft. Nothing sent.");return null;}
+            // Keep the optimistic comment in each active handle as well as the screen.
+            // An in-flight page response must not erase it before the POST resolves.
+            for(Handle h:new ArrayList<>(D1_HANDLES))if(h.active() && collection.equals(h.collection) && docId.equals(h.docId)){
+                h.revision++;h.pendingD1.add(local.id);h.deleted.remove(local.id);h.latest.put(local.id,local);
+            }
             com.friendbook.social.core.D1Client.request(collection,docId,"comments","POST",body,null).addOnSuccessListener(data->{
                 if(!java.util.Objects.equals(me,Fb.uid()))return;D1Drafts.ack(com.friendbook.social.App.instance,me,collection,docId,newId);d1Changed(collection,docId,data);if("posts".equals(collection)&&com.friendbook.social.core.Mentions.hasBulk(local.mentions))com.friendbook.social.push.FCMPush.bulkMention(docId,newId);if(cb!=null)cb.onComplete(true,null);
             }).addOnFailureListener(e->{if(!java.util.Objects.equals(me,Fb.uid()))return;
@@ -243,7 +335,7 @@ public class CommentsEngine {
 
         // Offline-capable atomic batch: canonical comment, moderation mirror, bounded ONE-item preview + counter.
         // Legacy commentsMap is never expanded; administrator migration safely removes it after copying.
-        com.google.firebase.firestore.WriteBatch batch=Fb.db().batch();
+        com.friendbook.social.d1.documents.WriteBatch batch=Fb.db().batch();
         batch.set(parentRef.collection("comments").document(newId),commentMap);
         local.canonicalStored=true;
         batch.set(Fb.db().collection("comments").document(newId),commentMap);
@@ -295,7 +387,7 @@ public class CommentsEngine {
         DocumentReference canonical=Fb.db().collection(collection).document(docId).collection("comments").document(c.id);
         DocumentReference mirror=Fb.db().collection("comments").document(c.id);
         if(c.canonicalStored) {
-            com.google.firebase.firestore.WriteBatch batch=Fb.db().batch();
+            com.friendbook.social.d1.documents.WriteBatch batch=Fb.db().batch();
             batch.set(canonical,patch,SetOptions.merge()); batch.set(mirror,patch,SetOptions.merge()); batch.commit();
         } else {
             Fb.db().runTransaction(tx -> {

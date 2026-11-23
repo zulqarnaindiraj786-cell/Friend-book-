@@ -49,6 +49,7 @@ test('480p verified bytes persist in R2 forever and only R2 URL is returned',asy
   assert.equal(response.status,200);assert.equal(body.provider,'r2');assert.equal(body.retention,'forever');
   assert.ok(body.url.startsWith(VIDEO_ORIGIN+'/videos/'));assert.equal(body.url.includes('cloudinary'),false);
   assert.equal(f.objects.size,1);assert.equal(f.sql.prepare("SELECT COUNT(*) n FROM friendbook_video_processing WHERE state='cleaned'").get().n,1);
+  assert.equal(f.sql.prepare('SELECT total_changes() n').get().n,2,'initial pending row plus terminal cleanup; no intermediate deadline write');
   const count=f.calls.length;
   assert.equal((await uploadVideo(f.request('GET'),f.env,'actor',f.fetcher)).status,200);
   assert.equal((await uploadVideo(f.request(),f.env,'actor',f.fetcher)).status,200);assert.equal(f.calls.length,count);
@@ -107,3 +108,23 @@ test('unsigned preset mode fetches 480p compressed MP4 into R2 and deletes tempo
   assert.equal(r2Health.status,200);assert.deepEqual(await r2Health.json(),{ok:true,r2Bound:true,videoR2Enabled:true});
  }finally{f.sql.close();}
 });
+
+ test('phone video pair publishes preview only after full and keeps legacy keys unchanged',async()=>{
+  const {uploadPhoneVideo}=await import('../video-r2.js');
+  const objects=new Map();
+  const env={VIDEO_R2_ENABLED:'true',VIDEO_R2_RETENTION_VERIFIED:'true',VIDEO_BUCKET:{
+   head:async key=>objects.get(key),
+   put:async(key,body,options)=>{if(!objects.has(key))objects.set(key,{size:body.length,customMetadata:options.customMetadata});},
+  }};
+  const send=(kind,method='POST',actor='alice')=>uploadPhoneVideo(new Request(`https://example.test/v1/videos/${kind}`,{
+   method,headers:{'X-Video-Id':id,...(method==='POST'?{'Content-Length':'16'}:{})},
+   ...(method==='POST'?{body:new Uint8Array([0,0,0,16,102,116,121,112,0,0,0,0,0,0,0,0])}:{}),
+  }),env,actor,kind);
+  assert.equal((await send('preview')).status,409);
+  assert.equal((await send('full')).status,200);
+  assert.equal((await send('preview','GET')).status,404);
+  const pair=await send('preview');assert.equal(pair.status,200);
+  const body=await pair.json();assert.match(body.url,/\/video_preview\.mp4$/);assert.match(body.fullUrl,/\/video_full\.mp4$/);
+  assert.equal((await send('preview','GET','bob')).status,404);
+  assert.equal((await send('full')).status,200);assert.equal(objects.size,2);
+ });

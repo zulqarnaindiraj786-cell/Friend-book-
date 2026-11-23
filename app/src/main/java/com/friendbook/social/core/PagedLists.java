@@ -3,7 +3,7 @@ package com.friendbook.social.core;
 import android.app.Activity;
 import android.widget.LinearLayout;
 import android.widget.TextView;
-import com.google.firebase.firestore.*;
+import com.friendbook.social.d1.documents.*;
 import java.util.*;
 
 /** Explicit refresh/more controls for legacy list screens. No silent truncation or background draining. */
@@ -33,7 +33,7 @@ public final class PagedLists {
                 // An empty in-flight cache isn't an authoritative empty result.
                 if(!busy && (error.isEmpty() || !docs.isEmpty()))listener.changed(new Page(docs),null);
                 if(!error.isEmpty())Ui.toast(activity,error);
-            });current[0].start();
+            });if(key.startsWith("groups:"))current[0].startCachedDay(); else current[0].start();
         };
         refresh.setOnClickListener(v->start.run());more.setOnClickListener(v->{if(current[0]!=null)current[0].next();});start.run();
         return ()->{closed[0]=true;if(current[0]!=null)current[0].close();controls.removeView(row);};

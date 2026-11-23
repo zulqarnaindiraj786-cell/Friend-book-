@@ -20,15 +20,14 @@ import com.friendbook.social.core.Fb;
 import com.friendbook.social.core.Format;
 import com.friendbook.social.core.Icons;
 import com.friendbook.social.core.Ui;
-import com.google.firebase.firestore.DocumentReference;
-import com.google.firebase.firestore.DocumentSnapshot;
-import com.google.firebase.firestore.FieldValue;
-import com.google.firebase.firestore.ListenerRegistration;
-import com.google.firebase.firestore.Query;
-import com.google.firebase.firestore.SetOptions;
-import com.google.firebase.firestore.WriteBatch;
+import com.friendbook.social.d1.documents.DocumentReference;
+import com.friendbook.social.d1.documents.DocumentSnapshot;
+import com.friendbook.social.d1.documents.FieldValue;
+import com.friendbook.social.d1.documents.ListenerRegistration;
+import com.friendbook.social.d1.documents.Query;
+import com.friendbook.social.d1.documents.SetOptions;
+import com.friendbook.social.d1.documents.WriteBatch;
 
-import java.util.Date;
 
 /**
  * Admin Payments tab — ONE unified list of every payment type:
@@ -68,7 +67,11 @@ public class AdminPaymentsFragment extends Fragment {
                     android.app.Activity a = getActivity();
                     if (a == null) return;
                     while (list.getChildCount() > 1) list.removeViewAt(1);
-                    if (snap == null || snap.isEmpty()) {
+                    if (err != null || snap == null) {
+                        countT.setText("Requests unavailable — please retry");
+                        return;
+                    }
+                    if (snap.isEmpty()) {
                         countT.setText("0 requests yet");
                         TextView empty = Ui.tv(a, "✓ Free creator badge & verification requests will appear here.",
                                 13, Ui.sub(a));
@@ -138,16 +141,30 @@ public class AdminPaymentsFragment extends Fragment {
         sp.setMargins(0, Ui.dp(a, 8), 0, 0);
         card.addView(statusT, sp);
 
-        if ("pending".equals(status)) {
+        boolean freeReview = amount == 0 && "FREE".equals(currency)
+                && ("tick_blue".equals(type) || "tick_gold".equals(type) || "tick_diamond".equals(type));
+        boolean manualSubscription = "subscription".equals(type) && amount > 0
+                && !Format.str(m, "subscriptionId").isEmpty() && currency.matches("[A-Z]{3}") && !"FREE".equals(currency);
+        if ("pending".equals(status) && !freeReview) {
+            TextView warning = Ui.tv(a, manualSubscription
+                    ? "Verify the existing payment outside the app before approving. This does not charge the customer."
+                    : "This historical request is not eligible for approval here.", 12, Ui.sub(a));
+            Ui.pad(warning, 0, 8, 0, 0);
+            card.addView(warning);
+        }
+        if ("pending".equals(status) && (freeReview || manualSubscription)) {
             LinearLayout btns = Ui.row(a);
             btns.setPadding(0, Ui.dp(a, 10), 0, 0);
             TextView approve = Ui.btn(a, "✓ Approve");
             approve.setOnClickListener(v -> confirm(a, "Approve " + typeLabel(type) + "?",
-                    "The feature activates instantly for this user.", () -> approve(d, m)));
+                    manualSubscription ? "Approve only if you confirmed the existing payment externally. Cloudflare will activate the linked subscription for 30 days."
+                            : "The feature activates instantly for this user.", () -> approve(d, m)));
             TextView reject = Ui.btnGrey(a, "✕ Reject");
-            reject.setOnClickListener(v -> confirm(a, "Reject?", "User will need to repay with a valid receipt.",
+            reject.setOnClickListener(v -> confirm(a, "Reject?", manualSubscription ? "Reject this existing payment request without activating the subscription?" : "The applicant may submit another free review later.",
                     () -> d.getReference().update("status", "rejected",
-                            "rejectedBy", Fb.uid(), "rejectedAt", FieldValue.serverTimestamp())));
+                            "rejectedBy", Fb.uid(), "rejectedAt", FieldValue.serverTimestamp())
+                            .addOnSuccessListener(x -> Ui.toast(a, "Request rejected"))
+                            .addOnFailureListener(e -> Ui.toast(a, "Couldn't reject request. Please retry."))));
             LinearLayout.LayoutParams b1 = new LinearLayout.LayoutParams(0, Ui.dp(a, 38), 1);
             LinearLayout.LayoutParams b2 = new LinearLayout.LayoutParams(0, Ui.dp(a, 38), 1);
             b2.leftMargin = Ui.dp(a, 8);
@@ -192,9 +209,8 @@ public class AdminPaymentsFragment extends Fragment {
             String subId = Format.str(m, "subscriptionId");
             if (!subId.isEmpty()) {
                 DocumentReference su = Fb.db().collection("subscriptions").document(subId);
-                batch.update(su, "status", "active",
-                        "expiry", new com.google.firebase.Timestamp(
-                                new Date(System.currentTimeMillis() + 30L * 24 * 3600 * 1000)));
+                // The Worker verifies the linked subscriber and sets the expiry atomically.
+                batch.update(su, "status", "active");
             }
         }
         batch.commit().addOnSuccessListener(x -> {
@@ -212,15 +228,8 @@ public class AdminPaymentsFragment extends Fragment {
         if (type != null && type.startsWith("tick_"))
             text = "✓ Approved! Your " + Admin.tickLabel(type.substring(5)) + " is now live 🎉";
         else text = "⭐ Your request was approved. Enjoy!";
-        java.util.Map<String, Object> n = Fb.map(
-                "toUserId", uid,
-                "fromUserId", Ui.TEAM_USER_ID,
-                "fromUserName", "friendbook Team",
-                "fromUserPhotoUrl", Ui.TEAM_AVATAR_TOKEN,
-                "type", "payment",
-                "text", text,
-                "isRead", false,
-                "createdAt", FieldValue.serverTimestamp());
-        Fb.db().collection("notifications").add(n);
+        // Use the authenticated reviewer's identity; a synthetic team UID is not
+        // authorized to write notifications and would silently fail.
+        com.friendbook.social.core.Notify.send(uid, "payment", text);
     }
 }

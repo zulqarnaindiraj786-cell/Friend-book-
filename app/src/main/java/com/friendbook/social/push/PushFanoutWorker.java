@@ -6,7 +6,7 @@ import androidx.work.*;
 import com.friendbook.social.App;
 import com.friendbook.social.core.Fb;
 import com.google.android.gms.tasks.Tasks;
-import com.google.firebase.firestore.*;
+import com.friendbook.social.d1.documents.*;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
 import org.json.JSONObject;
@@ -70,11 +70,14 @@ public final class PushFanoutWorker extends Worker {
                     n.put("fromUserPhotoUrl", Fb.myPhoto()); n.put("type", "friend_post");
                     n.put("text", "shared a new post"); n.put("postId", id);
                     n.put("isRead", false); n.put("createdAt", FieldValue.serverTimestamp());
-                    // Transaction preserves read state and original timestamp when replaying a partial batch.
-                    Tasks.await(Fb.db().runTransaction(tx -> {
-                        if (!tx.get(ref).exists()) tx.set(ref, n);
-                        return null;
-                    }), 20, TimeUnit.SECONDS);
+                    // The sender cannot read another user's inbox. Atomic create-only
+                    // preserves existing read state without reading private notifications.
+                    try { Tasks.await(ref.create(n), 20, TimeUnit.SECONDS); }
+                    catch (java.util.concurrent.ExecutionException e) {
+                        Throwable cause=e.getCause();
+                        if (!(cause instanceof D1DocumentStoreException)
+                                || ((D1DocumentStoreException) cause).getCode()!=D1DocumentStoreException.Code.ALREADY_EXISTS) throw e;
+                    }
                     if (!uid.equals(Fb.uid())) return Result.success();
                     FCMPush.notification(ref.getId(), n);
                 }

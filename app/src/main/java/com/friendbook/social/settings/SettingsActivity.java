@@ -24,13 +24,12 @@ import com.friendbook.social.core.Fb;
 import com.friendbook.social.core.Format;
 import com.friendbook.social.core.Icons;
 import com.friendbook.social.core.Prefs;
-import com.friendbook.social.core.Presence;
 import com.friendbook.social.core.Ui;
 import com.friendbook.social.models.Models;
 import com.friendbook.social.post.SavedPostsActivity;
 import com.friendbook.social.profile.EditProfileActivity;
-import com.google.firebase.firestore.DocumentSnapshot;
-import com.google.firebase.firestore.SetOptions;
+import com.friendbook.social.d1.documents.DocumentSnapshot;
+import com.friendbook.social.d1.documents.SetOptions;
 
 import java.util.ArrayList;
 import java.util.Date;
@@ -344,11 +343,6 @@ public class SettingsActivity extends Activity {
                 "Who can tag: " + (me != null ? me.tagPrivacy : "Everyone")
                         + (me != null && me.tagReviewEnabled ? " · Tag review ON" : ""),
                 this::taggingDialog));
-        body.addView(switchRowI(Icons.ACTIVE, "Active status (Online green dot)",
-                Prefs.activeStatus(this), (btn, on) -> {
-                    Prefs.setActiveStatus(this, on);
-                    if (on) Presence.init(); else Presence.goOffline();
-                }));
         body.addView(switchRowI(Icons.READ_RECEIPTS, "Read receipts in Messenger (Seen ✓✓)",
                 Prefs.readReceipts(this), (btn, on) -> Prefs.setReadReceipts(this, on)));
         body.addView(rowI(Icons.BAN, "Blocking",
@@ -436,7 +430,7 @@ public class SettingsActivity extends Activity {
                                                 "category", "csae",
                                                 "reason", txt,
                                                 "reportedBy", Fb.uid(),
-                                                "createdAt", com.google.firebase.firestore.FieldValue.serverTimestamp()));
+                                                "createdAt", com.friendbook.social.d1.documents.FieldValue.serverTimestamp()));
                                         Ui.info(this, "Priority Report Submitted",
                                                 "Thank you. Our safety team prioritizes child safety reports immediately.");
                                     })
@@ -461,7 +455,7 @@ public class SettingsActivity extends Activity {
         final String appVerName = Ui.appVersionName(this);
         final int appVerCode = Ui.appVersionCode(this);
         final String appPkg = getPackageName();
-        body.addView(rowI(Icons.INFO, "Check for APK update", "Official signed Android release", () -> com.friendbook.social.core.AppUpdates.check(this,true)));
+        body.addView(rowI(Icons.INFO, "Check for update", "Open Google Play", () -> com.friendbook.social.core.AppUpdates.openStore(this)));
         body.addView(rowI(Icons.INFO, "About", "Version " + appVerName + " · " + appPkg, () -> Ui.info(this,
                 "About friendbook",
                 "friendbook for Android\nVersion " + appVerName + " (Build " + appVerCode + ")\nPackage: " + appPkg + "\n\n"
@@ -668,7 +662,7 @@ public class SettingsActivity extends Activity {
                 if (active) {
                     Ui.toast(this, "Already signed in as " + target.name);
                 } else {
-                    Presence.goOffline();
+
                     com.friendbook.social.core.FastCache.clearAll(this);
                     com.friendbook.social.auth.GoogleAuthHelper.signOutGoogle(this);
                     com.friendbook.social.push.PushManager.unregister(com.friendbook.social.App.instance);
@@ -775,6 +769,20 @@ public class SettingsActivity extends Activity {
         box.addView(sLikes); box.addView(sComms); box.addView(sTags);
         box.addView(sReqs); box.addView(sMsgs); box.addView(sBday);
         box.addView(sGrp); box.addView(sEv); box.addView(sVib);
+
+        TextView androidSettings = Ui.tvBold(this, "Open Android notification settings", 14, Ui.BLUE);
+        Ui.pad(androidSettings, 0, 12, 0, 12);
+        androidSettings.setOnClickListener(v -> {
+            Intent intent = android.os.Build.VERSION.SDK_INT >= 26
+                    ? new Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, getPackageName())
+                    : new Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS, android.net.Uri.parse("package:" + getPackageName()));
+            startActivity(intent);
+        });
+        box.addView(androidSettings);
+        TextView test = Ui.tvBold(this, "Send real push test to this phone", 14, Ui.BLUE);
+        Ui.pad(test, 0, 12, 0, 12);
+        test.setOnClickListener(v -> com.friendbook.social.push.PushManager.testThisPhone(this, test));
+        box.addView(test);
 
         ScrollView sc = new ScrollView(this);
         sc.addView(box);
@@ -1225,9 +1233,10 @@ public class SettingsActivity extends Activity {
                     m.put("name", Fb.myName());
                     m.put("text", txt);
                     m.put("app", "friendbook-" + Ui.appVersionName(this) + " (" + Ui.appVersionCode(this) + ")");
-                    m.put("createdAt", com.google.firebase.firestore.FieldValue.serverTimestamp());
-                    Fb.db().collection("feedback").add(m);
-                    Ui.toast(this, "Thanks! Report sent to friendbook Team ✓");
+                    m.put("createdAt", com.friendbook.social.d1.documents.FieldValue.serverTimestamp());
+                    Fb.db().collection("feedback").add(m)
+                            .addOnSuccessListener(ref -> Ui.toast(this, "Thanks! Report sent to friendbook Team ✓"))
+                            .addOnFailureListener(error -> Ui.toast(this, "Couldn't send feedback. Please try again."));
                 })
                 .setNegativeButton("Cancel", null)
                 .show();
@@ -1297,7 +1306,7 @@ public class SettingsActivity extends Activity {
             Prefs.saveAccount(this, Fb.uid(), Fb.auth().getCurrentUser().getEmail(),
                     Fb.myName(), Fb.myPhoto());
         }
-        Presence.goOffline();
+
         com.friendbook.social.core.FastCache.clearAll(this);
         com.friendbook.social.auth.GoogleAuthHelper.signOutGoogle(this);
         com.friendbook.social.push.PushManager.unregister(com.friendbook.social.App.instance);

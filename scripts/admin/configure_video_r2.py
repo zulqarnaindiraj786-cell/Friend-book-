@@ -43,8 +43,13 @@ def statements(sql_text):
 
 
 def cloudflare(session, method, path, body=None, allow_forbidden=False):
-    response = session.request(method, 'https://api.cloudflare.com/client/v4/accounts/' + ACCOUNT + path,
-                               json=body, timeout=60, allow_redirects=False)
+    import time
+    for attempt in range(3 if method.upper() == 'GET' else 1):
+        response = session.request(method, 'https://api.cloudflare.com/client/v4/accounts/' + ACCOUNT + path,
+                                   json=body, timeout=60, allow_redirects=False)
+        if response.status_code not in (500, 502, 503, 504) or attempt == 2 or method.upper() != 'GET':
+            break
+        time.sleep(2 ** attempt)
     if allow_forbidden and response.status_code == 403:
         return None
     if response.status_code not in (200, 201):
@@ -82,7 +87,7 @@ def main():
             except Exception:
                 already_seeded = False
             if not already_seeded:
-                for migration in ('0001_additive_profiles.sql', '0009_additive_video_processing.sql', '0010_additive_presence_realtime.sql', '0011_additive_app_documents.sql'):
+                for migration in ('0001_additive_profiles.sql', '0009_additive_video_processing.sql', '0011_additive_app_documents.sql'):
                     sql_text = Path('cloudflare/migrations/' + migration).read_text()
                     for stmt in statements(sql_text):
                         upper = stmt.upper()

@@ -1,0 +1,76 @@
+name: Read-only D1 migration inventory
+on:
+  push:
+    branches: ['arena/f6bf61bd-friend-book']
+    paths: ['.github/workflows/firestore-copy-audit.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Aggregate D1 inventory only (zero Firebase reads and no data writes)
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: '92f3d04598822de2e49e14561218d090'
+        run: |
+          set -euo pipefail
+          test -n "$CLOUDFLARE_API_TOKEN"
+          SQL="SELECT json_object('archived_documents',(SELECT COUNT(*) FROM friendbook_cf_fullcopy_archive),'collections_complete',(SELECT COUNT(*) FROM friendbook_cf_fullcopy_queue WHERE status='complete'),'collections_pending',(SELECT COUNT(*) FROM friendbook_cf_fullcopy_queue WHERE status='pending'),'reserved_units',(SELECT reserved FROM friendbook_cf_copy_read_budget ORDER BY quota_day DESC LIMIT 1),'daily_cap',(SELECT cap FROM friendbook_cf_copy_read_budget ORDER BY quota_day DESC LIMIT 1)) AS inventory;"
+          npx --yes wrangler@4.157.0 d1 execute friendbook-db --remote --command "$SQL" --json > "$RUNNER_TEMP/inventory.json"
+          python3 - <<'PY'
+          import json, os
+          with open(os.environ['RUNNER_TEMP'] + '/inventory.json') as f: data=json.load(f)
+          rows=[r for result in data for r in result.get('results',[]) if 'inventory' in r]
+          if len(rows)!=1: raise SystemExit('Expected one aggregate inventory row')
+          inventory=json.loads(rows[0]['inventory'])
+          print('::notice::D1_AGGREGATE_INVENTORY='+json.dumps(inventory,sort_keys=True))
+          with open(os.environ['GITHUB_STEP_SUMMARY'],'a') as f:
+              f.write('## D1-only migration inventory\nNo Firebase reads or data writes.\n\n```json\n'+json.dumps(inventory,indent=2,sort_keys=True)+'\n```\n')
+          PY
+
+# Audit is read-only and does not invoke Firebase.
+
+# Owner-requested progress check: D1 aggregate only, never a Firebase scan.
+
+# D1-only owner progress refresh; does not touch Firebase.
+
+# Quota progress check: D1 aggregates only, zero Firebase calls.
+
+# D1-only progress refresh; no Firebase scan.
+
+# D1-only remaining-collections check; no Firebase reads.
+
+# D1 aggregate-only progress refresh; no Firebase requests.
+
+# D1-only copy progress refresh; no Firebase reads.
+
+# D1-only progress of explicitly authorized extension.
+
+# Read-only archive progress refresh.
+
+# Owner requested latest D1-only copy progress.
+
+# Latest owner-requested D1-only progress.
+
+# D1-only progress requested by owner.
+
+# Read-only progress refresh requested by owner.
+
+# Verify the authorized one-day budget and checkpoint in D1 only.
+
+# Read-only owner-requested copy progress.
+
+# D1-only progress check requested by owner.
+
+# D1-only progress refresh requested by owner.
+
+# Verify owner-authorized 30k cap with D1 aggregate only.
+
+# Owner-requested latest archive inventory; D1-only read.

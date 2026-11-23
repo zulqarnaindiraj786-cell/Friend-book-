@@ -10,7 +10,6 @@ import android.widget.LinearLayout;
 import android.widget.TextView;
 
 import com.friendbook.social.core.Prefs;
-import com.friendbook.social.core.Presence;
 import com.friendbook.social.core.Fb;
 import com.friendbook.social.core.Ui;
 import com.friendbook.social.main.MainActivity;
@@ -64,7 +63,7 @@ public class LockActivity extends Activity {
 
     private void go() {
         Fb.startMeListener();
-        Presence.init();
+
         startActivity(new Intent(this, MainActivity.class));
         finish();
     }

@@ -1,0 +1,41 @@
+name: Publish owner-requested signed candidate
+on:
+  push:
+    branches: ['arena/f6bf61bd-friend-book']
+    paths: ['.github/workflows/publish-signed-candidate.yml']
+permissions:
+  actions: read
+  contents: write
+jobs:
+  publish:
+    if: "contains(github.event.head_commit.message, '[publish-signed-candidate]')"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download signed APK from completed build
+        uses: actions/download-artifact@v4
+        with:
+          name: FriendBook-release-apk
+          run-id: 44441433601
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: files
+      - name: Download signed AAB from completed build
+        uses: actions/download-artifact@v4
+        with:
+          name: FriendBook-playstore-aab
+          run-id: 44441433601
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: files
+      - name: Publish direct download links without marking as latest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -eu
+          find files -type f -printf '%p %s bytes\n'
+          for name in friendbook.apk friendbook-playstore.aab; do
+            if [ ! -s "files/$name" ]; then echo "::error::Missing artifact $name"; exit 1; fi
+          done
+          if ! output=$(gh release upload friendbook-signed-3ad6dae files/friendbook.apk files/friendbook-playstore.aab \
+            --repo "$GH_REPO" --clobber 2>&1); then
+            echo "::error::Release publish failed: $output"; exit 1
+          fi

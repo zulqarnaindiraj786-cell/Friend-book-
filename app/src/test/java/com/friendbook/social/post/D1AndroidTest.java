@@ -12,8 +12,8 @@ import static org.junit.Assert.*;
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk=28,application=android.app.Application.class)
 public class D1AndroidTest {
- @Test public void releaseGateIsOffAndDisabledTransportDoesNotInitializeFirebase(){
-  assertFalse(BuildConfig.D1_INTERACTIONS_ENABLED);assertFalse(D1Client.enabled("posts"));assertFalse(D1Client.enabled("reels"));assertFalse(D1Client.enabled("unknown"));
+ @Test public void releaseGateEnablesD1InteractionsAndRejectsUnknownCollections(){
+  assertTrue(BuildConfig.D1_INTERACTIONS_ENABLED);assertTrue(D1Client.enabled("posts"));assertTrue(D1Client.enabled("reels"));assertFalse(D1Client.enabled("unknown"));
   com.google.android.gms.tasks.Task<JSONObject> task=D1Client.request("unknown","p1","comments","POST",D1Client.object("id","one"),null);
   assertTrue(task.isComplete());assertFalse(task.isSuccessful());assertNotNull(task.getException());
  }
@@ -31,6 +31,19 @@ public class D1AndroidTest {
    .put(D1Client.object("type","love","count",2,"mine",1)));
   assertEquals(9,D1Reactions.total(data));assertEquals("love",D1Reactions.mine(data));
   assertNull(D1Reactions.mine(D1Client.object("types",new JSONArray())));
+ }
+ @Test public void postLikeTapRemovesAnyExistingReactionButPickerCanChangeIt(){
+  assertEquals("like",D1Reactions.nextReaction(null,"like",true));
+  assertNull(D1Reactions.nextReaction("love","like",true));
+  assertNull(D1Reactions.nextReaction("like","like",true));
+  assertEquals("like",D1Reactions.nextReaction("love","like",false));
+  assertNull(D1Reactions.nextReaction("love","love",false));
+ }
+ @Test public void feedParsesCloudflareTimestampMaps(){
+  Map<String,Object> timestamp=new HashMap<>();timestamp.put("__type","timestamp");timestamp.put("millis",1700000000123L);
+  Map<String,Object> post=new HashMap<>();post.put("createdAt",timestamp);
+  assertEquals(1700000000123L,Models.Post.fromMap("p1",post).createdAt);
+  timestamp.put("__type","reference");assertEquals(0L,Models.Post.fromMap("p1",post).createdAt);
  }
  @Test public void removingLifecycleObserverStopsLaterCallbacks(){
   int[] events={0};Runnable close=D1Client.observe("posts/p1",()->events[0]++);

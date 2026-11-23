@@ -23,16 +23,14 @@ def absent(test, token, source, where):
 
 
 class CloudflareViewCounterGuards(unittest.TestCase):
-    def test_worker_exposes_the_views_route_behind_the_token_gate(self):
+    def test_worker_view_route_enforces_resource_privacy(self):
         worker = (ROOT / 'worker.js').read_text()
-        self.assertIn("import { viewCounters } from './cloudflare/view-counters.js';", worker)
         self.assertIn(r'/^\/v1\/views\/(posts|reels)\/([^/]+)$/', worker)
-        # /v1/views is part of the authenticated allowlist, never an unauthenticated shortcut.
         self.assertIn('!docs && !views', worker)
-        self.assertIn('if (views) return viewCounters(request, env, { uid, token: bearer[1] }', worker)
-        # The flushes need the runtime context so storage work happens after the response is sent.
-        self.assertIn('async fetch(request, env, ctx)', worker)
-        self.assertIn('new URL(request.url), Date.now, ctx)', worker)
+        # Do not expose resource IDs or counts until per-resource authorization exists.
+        self.assertIn('contentReadAllowed(env.DB,uid', worker)
+        self.assertIn('Top lists disclose resource IDs', worker)
+        self.assertLess(worker.index('uid = await verify('), worker.index('if (views) {'))
 
     def test_no_view_counter_is_written_to_firestore(self):
         for path in sorted(JAVA.rglob('*.java')):
@@ -251,16 +249,11 @@ class CloudflareViewCounterGuards(unittest.TestCase):
                         workflow.index('npm run deploy'), 'AE must be bound before the deploy')
         self.assertLess(workflow.index('npm run deploy'),
                         workflow.index('node cloudflare/report-views-ae.mjs'), 'and reported after it')
-        # A refused AE binding must never break a release, and must never cost another binding: the
-        # fallbacks remove ONE block each (the old truncation at the R2 anchor silently deleted the KV
-        # binding and the cron triggers that come after it).
-        self.assertIn("re.sub(r'# Every view is one Analytics Engine event[\\s\\S]*?\\[\\[analytics_engine_datasets\\]\\][^\\[]*', '', text)", workflow)
-        self.assertIn("re.sub(r'\\[\\[analytics_engine_datasets\\]\\][^\\[]*', '', text)", workflow)
-        self.assertIn("re.sub(r'# Existing owner-provided bucket[\\s\\S]*?\\[\\[r2_buckets\\]\\][^\\[]*', '', text)", workflow)
-        self.assertNotIn('p.write_text(text[:idx])', workflow, 'no truncation fallback may remain')
-        for attempt in ['attempt full \"$VARS_R2_ON\"', 'attempt no-ae \"$VARS_R2_ON\"',
-                        'attempt no-r2 \"$VARS_R2_OFF\"', 'attempt no-ae-no-r2 \"$VARS_R2_OFF\"']:
-            self.assertIn(attempt, workflow)
+        # Never publish a degraded worker with missing production bindings.
+        self.assertIn('attempt full "$VARS_R2_ON" ||', workflow)
+        self.assertNotIn('attempt no-ae "$VARS_R2_ON"', workflow)
+        self.assertNotIn('attempt no-r2 "$VARS_R2_OFF"', workflow)
+        self.assertNotIn('attempt no-ae-no-r2 "$VARS_R2_OFF"', workflow)
         # Each attempt keeps its raw wrangler output for the report, and records which one shipped.
         self.assertIn('mkdir -p /tmp/deploy-logs', workflow)
         self.assertIn('echo \"DEPLOY_ATTEMPT_USED=$label\" >> \"$GITHUB_ENV\"', workflow)
@@ -294,7 +287,9 @@ class CloudflareViewCounterGuards(unittest.TestCase):
         self.assertIn("const views = { ae: Boolean(env.ANALYTICS_ENGINE), kv: Boolean(env.VIEWS), "
                       "r2Snapshot: !env.VIEWS && Boolean(env.VIDEO_BUCKET), "
                       "aeReadToken: Boolean(env.CF_AE_TOKEN) };", worker)
-        self.assertIn('return json({ ok: row?.connected === 1, views }', worker)
+        self.assertIn('d1InteractionsEnabled: env.D1_INTERACTIONS_ENABLED === \'true\'', worker)
+        self.assertIn('return json({', worker)
+        self.assertIn('views,', worker)
 
     def test_reels_count_one_view_and_never_show_a_lower_number(self):
         client = (JAVA / 'core/CloudflareViews.java').read_text()
@@ -309,7 +304,12 @@ class CloudflareViewCounterGuards(unittest.TestCase):
         self.assertIn('retryNow.setOnClickListener(v -> { reelsLoadFailed = false; resetVideoPages(); });', reels)
         self.assertIn('reelsWatchdog.postDelayed(() -> {', reels)
         self.assertIn('}, 15_000L);', reels)
-        self.assertIn('if (loadAttempts < 3) { loadAttempts++; loadNextVideos(); }', reels)
+        paging = reels.split('private void loadNextVideos()', 1)[1].split('@Override public void onResume()', 1)[0]
+        self.assertNotIn('if (!pagingVideos ||', paging)
+        self.assertIn('watchdogGen++;\n            pagingVideos=false;', paging)
+        self.assertEqual(paging.count('generation!=videoGeneration || wdGen!=watchdogGen'), 3)
+        self.assertIn('if (!pageFailed[0] && loadAttempts < 3) { loadAttempts++; loadNextVideos(); }', reels)
+        self.assertNotIn('CloudflareStore.list("reels", 10', reels)
         # The page-load listener must settle its source even when the page cannot be applied: this
         # early return is what kept pagingVideos true and the spinner visible forever.
         self.assertIn('}\n                done.run();\n            }).addOnFailureListener(', reels)

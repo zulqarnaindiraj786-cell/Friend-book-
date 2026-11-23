@@ -18,8 +18,8 @@ import com.friendbook.social.core.FastCache;
 import com.friendbook.social.core.Fb;
 import com.friendbook.social.core.Ui;
 import com.friendbook.social.models.Models;
-import com.google.firebase.firestore.DocumentSnapshot;
-import com.google.firebase.firestore.ListenerRegistration;
+import com.friendbook.social.d1.documents.DocumentSnapshot;
+import com.friendbook.social.d1.documents.ListenerRegistration;
 
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -161,7 +161,6 @@ public class NewChatActivity extends Activity {
         sorted.sort((a, b2) -> {
             boolean fa = friendIds.contains(a.uid), fb = friendIds.contains(b2.uid);
             if (fa != fb) return fa ? -1 : 1;
-            if (a.isOnline != b2.isOnline) return a.isOnline ? -1 : 1;
             String na = a.displayName == null ? "" : a.displayName;
             String nb = b2.displayName == null ? "" : b2.displayName;
             return na.compareToIgnoreCase(nb);
@@ -175,7 +174,7 @@ public class NewChatActivity extends Activity {
             com.friendbook.social.friends.UsersAdapter.Row r = new com.friendbook.social.friends.UsersAdapter.Row();
             r.user = u;
             boolean isFriend = friendIds.contains(u.uid);
-            r.subtitle = (u.isOnline ? "🟢 Active now" : "💬 Tap to message")
+            r.subtitle = "💬 Tap to message"
                     + (isFriend ? " · 👥 Friend" : "");
             rows.add(r);
         }

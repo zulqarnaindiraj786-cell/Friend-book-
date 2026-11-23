@@ -9,10 +9,10 @@ test('health executes only a constant read and never exposes data', async () => 
     assert.equal(sql, 'SELECT 1 AS connected'); return { first: async () => ({ connected: 1 }) };
   } } });
   assert.equal(response.status, 200);
-  // Binding flags only: it proves which view-counter bindings a deploy actually shipped (Analytics
-  // Engine, the KV snapshot, or the R2 snapshot fallback), and exposes no counter, no id and no data.
+  // Safe feature/binding flags only: confirms the D1 interaction gate and view-counter bindings,
+  // without returning any records, counts, IDs or user data.
   assert.deepEqual(await response.json(),
-    { ok: true, views: { ae: false, kv: false, r2Snapshot: false, aeReadToken: false } });
+    { ok: true, d1InteractionsEnabled: false, views: { ae: false, kv: false, r2Snapshot: false, aeReadToken: false } });
   assert.equal(response.headers.get('Cache-Control'), 'no-store');
 });
 test('missing binding and failed DB return no internal details', async () => {
@@ -20,14 +20,21 @@ test('missing binding and failed DB return no internal details', async () => {
   const response = await call('/health', { DB: { prepare() { throw Error('secret'); } } });
   assert.equal(response.status, 503);
   assert.deepEqual(await response.json(),
-    { ok: false, views: { ae: false, kv: false, r2Snapshot: false, aeReadToken: false } });
+    { ok: false, d1InteractionsEnabled: false, views: { ae: false, kv: false, r2Snapshot: false, aeReadToken: false } });
+});
+test('health reports D1 interactions enabled without exposing data', async () => {
+  const db = { prepare: () => ({ first: async () => ({ connected: 1 }) }) };
+  const response = await call('/health', { DB: db, D1_INTERACTIONS_ENABLED: 'true' });
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(),
+    { ok: true, d1InteractionsEnabled: true, views: { ae: false, kv: false, r2Snapshot: false, aeReadToken: false } });
 });
 test('health reports the R2 snapshot fallback when Workers KV is not bound', async () => {
   const db = { prepare: () => ({ first: async () => ({ connected: 1 }) }) };
   const response = await call('/health', { DB: db, ANALYTICS_ENGINE: {}, VIDEO_BUCKET: {}, CF_AE_TOKEN: 'tok' });
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(),
-    { ok: true, views: { ae: true, kv: false, r2Snapshot: true, aeReadToken: true } });
+    { ok: true, d1InteractionsEnabled: false, views: { ae: true, kv: false, r2Snapshot: true, aeReadToken: true } });
 });
 test('unknown and write routes are closed', async () => {
   assert.equal((await call('/v1/users')).status, 404);
@@ -43,8 +50,9 @@ test('profile lookup binds only verified UID, not caller-supplied UID', async ()
     assert.equal(token, 'test'); assert.equal(project, 'friendbook-17551'); return 'verified-user';
   });
   const env = { FIREBASE_PROJECT_ID: 'friendbook-17551', DB: { prepare(sql) {
-    assert.ok(sql.endsWith('WHERE uid = ?'));
-    return { bind(uid) { assert.equal(uid, 'verified-user'); return { first: async () => null }; } };
+    const statusRead=sql.includes('friendbook_cf_firestore_documents') || sql.includes('friendbook_cf_documents');
+    assert.ok(statusRead || sql.endsWith('WHERE uid = ?'));
+    return { bind(uid) { assert.equal(uid, statusRead ? 'users/verified-user' : 'verified-user'); return { first: async () => null }; } };
   } } };
   const response = await call('/v1/me?uid=victim', env, { Authorization: 'Bearer test' }, 'GET', app);
   assert.deepEqual(await response.json(), { uid: 'verified-user', profile: null });
@@ -68,20 +76,19 @@ test('real RSA verification rejects wrong project, issuer, expiry, signature and
   const other = await generateKeyPair('RS256');
   await assert.rejects(verifyFirebaseToken(await sign({}, other.privateKey), claims.aud, keys));
 });
-test('realtime presence routes require verified Firebase identity and return fresh online state', async () => {
-  const now = Date.now();
-  const app = createWorker(async () => 'verified-user');
-  const env = { FIREBASE_PROJECT_ID: 'friendbook-17551', REALTIME_WS_ENABLED: 'true', DB: { prepare() {
-    return { bind(uid) { return { first: async () => ({ online: 1, visible: 1, last_seen: now - 5000 }) }; } };
-  } } };
-  assert.equal((await call('/v1/presence/me', env)).status, 401);
-  const me = await call('/v1/presence/me', env, { Authorization: 'Bearer test' }, 'GET', app);
-  assert.equal(me.status, 200);
-  const body = await me.json();
-  assert.equal(body.uid, 'verified-user');
-  assert.equal(body.online, true);
-  const contact = await call('/v1/presence/contact/peer-1', env, { Authorization: 'Bearer test' }, 'GET', app);
-  assert.equal(contact.status, 200);
-  assert.equal((await contact.json()).uid, 'peer-1');
-  assert.equal((await call('/v1/presence/socket', env, { Authorization: 'Bearer test' }, 'GET', app)).status, 426);
+test('retired routes do not access D1', async () => {
+  let reads=0;
+  const app=createWorker(async () => 'verified-user');
+  const env={FIREBASE_PROJECT_ID:'friendbook-17551', DB:{prepare(){reads++; throw Error('unexpected D1');}}};
+  for (const route of ['/v1/presence/me','/v1/presence/contact/peer','/v1/presence/typing/room','/v1/presence/socket'])
+    assert.equal((await call(route,env,{Authorization:'Bearer test'},'GET',app)).status,404);
+  assert.equal(reads,0);
+});
+
+test('Android public config keeps only its public boolean and rejects missing settings', async () => {
+  const response=await call('/v1/android-config',{ADS_ENABLED_V3:'false',OTHER_SETTING:'not public'});
+  assert.equal(response.status,200);
+  assert.deepEqual(await response.json(),{ads_enabled_v3:false});
+  assert.equal((await call('/v1/android-config')).status,503);
+  assert.equal((await call('/v1/android-config',{}, {},'POST')).status,405);
 });

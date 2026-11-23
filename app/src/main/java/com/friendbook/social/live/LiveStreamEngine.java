@@ -325,6 +325,12 @@ public class LiveStreamEngine {
         return coHostAudioMuted;
     }
 
+    public void resetRemoteSequences() {
+        lastDecodedHostSeq = -1;
+        lastPlayedHostAudioSeq = -1;
+        resetCoHostSequences();
+    }
+
     public void resetCoHostSequences() {
         lastDecodedCoHostSeq = -1;
         lastPlayedCoHostAudioSeq = -1;

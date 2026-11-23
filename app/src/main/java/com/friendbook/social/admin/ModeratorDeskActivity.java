@@ -24,10 +24,10 @@ import com.friendbook.social.core.Ui;
 import com.friendbook.social.models.Models;
 import com.friendbook.social.post.PostDetailActivity;
 import com.friendbook.social.profile.ProfileActivity;
-import com.google.firebase.firestore.DocumentSnapshot;
-import com.google.firebase.firestore.ListenerRegistration;
-import com.google.firebase.firestore.Query;
-import com.google.firebase.firestore.SetOptions;
+import com.friendbook.social.d1.documents.DocumentSnapshot;
+import com.friendbook.social.d1.documents.ListenerRegistration;
+import com.friendbook.social.d1.documents.Query;
+import com.friendbook.social.d1.documents.SetOptions;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -219,7 +219,7 @@ public class ModeratorDeskActivity extends Activity {
         Ui.pad(delBtn, 10, 6, 10, 6);
         delBtn.setOnClickListener(v -> Ui.confirm(this, "Delete post by " + p.authorName + "?",
                 "This permanently deletes the violating post.", "Delete", () ->
-                        Fb.db().collection("posts").document(p.id).delete()
+                        Fb.db().moderate("delete_content", "posts", p.id)
                                 .addOnSuccessListener(x -> Ui.toast(this, "Post deleted 🗑"))
                                 .addOnFailureListener(e -> Ui.toast(this, e.getMessage()))));
         head.addView(delBtn);
@@ -287,7 +287,7 @@ public class ModeratorDeskActivity extends Activity {
         LinearLayout.LayoutParams sblp = new LinearLayout.LayoutParams(-2, -2);
         sblp.rightMargin = Ui.dp(this, 6);
         suspendBtn.setOnClickListener(v -> Admin.showSuspendUserDialog(this, u, this::render));
-        row.addView(suspendBtn, sblp);
+        if (Admin.isAdmin()) row.addView(suspendBtn, sblp);
 
         TextView banBtn = u.banned
                 ? Ui.btnOutline(this, "✓ Unban", Ui.GREEN)
@@ -298,15 +298,8 @@ public class ModeratorDeskActivity extends Activity {
             Ui.confirm(this, (nextBan ? "🚫 Ban " : "✓ Unban ") + u.displayName + "?",
                     nextBan ? "This user will be blocked from using friendbook." : "Restore account access?",
                     nextBan ? "Ban" : "Unban", () ->
-                            Fb.db().collection("users").document(u.uid)
-                                    .set(Fb.map("banned", nextBan), SetOptions.merge())
-                                    .addOnSuccessListener(x -> {
-                                        if (nextBan) {
-                                            Notify.sendOfficialTeamMessage(u.uid, "ban",
-                                                    "Your account was suspended by a friendbook Moderator.", false);
-                                        }
-                                        Ui.toast(this, nextBan ? "Banned 🚫" : "Unbanned ✓");
-                                    })
+                            Fb.db().moderate(nextBan ? "ban_user" : "unban_user", "users", u.uid)
+                                    .addOnSuccessListener(x -> Ui.toast(this, nextBan ? "Banned 🚫" : "Unbanned ✓"))
                                     .addOnFailureListener(e -> Ui.toast(this, e.getMessage())));
         });
         row.addView(banBtn);

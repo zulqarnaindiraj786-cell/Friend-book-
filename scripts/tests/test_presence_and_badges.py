@@ -24,26 +24,28 @@ class PresenceBadgeTest(unittest.TestCase):
         self.assertIn('document(n.id).update("isRead", true)', source)
         self.assertIn('markAll.setOnClickListener(v -> markAllReadReal())', source)
         self.assertNotIn('markFriendRequestsSeen', (JAVA/'friends/FriendsFragment.java').read_text())
-    def test_rtdb_disconnect_is_armed_before_online_and_has_timestamp(self):
-        source=(JAVA/'core/Presence.java').read_text()
-        self.assertIn('onDisconnect().updateChildren(status(false)', source)
-        self.assertIn('if (disconnectArmed && statusRef != null)', source)
-        self.assertIn('m.put("lastSeen", ServerValue.TIMESTAMP)', source)
-        self.assertIn('"connections/" + installId()', source)
-        self.assertIn('PresencePolicy.resolve', source)
-        self.assertNotIn('mergedOnline = true', source)
-    def test_active_strip_uses_live_presence_not_cached_flags(self):
+    def test_removed_status_code_and_call_wiring(self):
+        for file in JAVA.rglob('*.java'):
+            text=file.read_text().lower()
+            self.assertNotIn('presence', text, str(file))
+            self.assertNotIn('typing', text, str(file))
+        chat=(JAVA/'chat/ChatActivity.java').read_text()
+        self.assertIn('CallActivity.maybeHandleIncomingFromRoomDoc', chat)
+        self.assertIn('RealtimeSoundGate(System.currentTimeMillis())', chat)
+        self.assertIn('setOnRefreshListener', chat)
+        for file in ['chat/NewChatActivity.java', 'live/LivePkAndGiftsUi.java']:
+            self.assertNotIn('Active now', (JAVA/file).read_text())
+
+    def test_background_start_does_not_start_profile_listener(self):
+        source=(JAVA/'App.java').read_text()
+        before=method(source,'public void onCreate()').split('registerActivityLifecycleCallbacks',1)[0]
+        self.assertNotIn('Fb.startMeListener()',before)
+        self.assertNotIn('Fb.ensureMeFresh()',before)
+        self.assertIn('Fb.ensureMeFresh()',method(source,'public void onActivityStarted(Activity a)'))
+
+    def test_manual_inbox_is_on_demand(self):
         source=(JAVA/'chat/ConversationsActivity.java').read_text()
-        strip=method(source,'private void renderActiveNow()')
-        self.assertIn('Boolean.TRUE.equals(onlineUsers.get(u.uid))',strip)
-        self.assertIn('if (!online) continue',strip)
-        self.assertNotIn('u.isOnline', strip)
-        self.assertNotIn('online && r.unread == 0',source)
-        self.assertIn('h.dot.setVisibility(online ? View.VISIBLE : View.GONE)',source)
-        self.assertIn('h.lastActive.setVisibility(!online && seen > 0',source)
-        self.assertIn('handle.close()',method(source,'protected void onStop()'))
-    def test_chat_profile_use_the_shared_presence_policy(self):
-        for file in ['chat/ChatActivity.java','profile/ProfileActivity.java']:
-            self.assertIn('Presence.watch(', (JAVA/file).read_text())
-            self.assertIn('Presence.formatActiveStatus(', (JAVA/file).read_text())
+        self.assertNotIn('addSnapshotListener',source)
+        self.assertNotIn('Fb.getUser(',source)
+        self.assertIn('inboxSwipe.setOnRefreshListener',source)
 if __name__=='__main__':unittest.main()

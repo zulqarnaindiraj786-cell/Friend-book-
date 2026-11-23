@@ -17,9 +17,9 @@ import com.friendbook.social.core.Admin;
 import com.friendbook.social.core.Fb;
 import com.friendbook.social.core.Format;
 import com.friendbook.social.core.Ui;
-import com.google.firebase.firestore.DocumentSnapshot;
-import com.google.firebase.firestore.ListenerRegistration;
-import com.google.firebase.firestore.Query;
+import com.friendbook.social.d1.documents.DocumentSnapshot;
+import com.friendbook.social.d1.documents.ListenerRegistration;
+import com.friendbook.social.d1.documents.Query;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -90,9 +90,15 @@ public class AdminContentActivity extends Activity {
     }
 
     @Override
+    protected void onStart() {
+        super.onStart();
+        if (adapter != null) listen();
+    }
+
+    @Override
     protected void onStop() {
         super.onStop();
-        if (reg != null) reg.remove();
+        if (reg != null) { reg.remove(); reg = null; }
     }
 
     private void listen() {
@@ -101,6 +107,11 @@ public class AdminContentActivity extends Activity {
         reg = Fb.db().collection(tab)
                 .orderBy(orderField, Query.Direction.DESCENDING).limit(100)
                 .addSnapshotListener((snap, err) -> {
+                    if (err != null || snap == null) {
+                        empty.setText("Couldn't load " + tab + ". Please retry.");
+                        empty.setVisibility(View.VISIBLE);
+                        return;
+                    }
                     items.clear();
                     if (snap != null) {
                         for (DocumentSnapshot d : snap) {
@@ -142,14 +153,23 @@ public class AdminContentActivity extends Activity {
     }
 
     private void deleteItem(Item it) {
-        Ui.confirm(this, "Delete this " + tab.substring(0, tab.length() - 1) + "?",
+        final String collection = tab;
+        Ui.confirm(this, "Delete this " + collection.substring(0, collection.length() - 1) + "?",
                 it.title + "\n" + it.sub, "Delete", () -> {
-                    Fb.db().collection(tab).document(it.id).delete();
-                    if ("posts".equals(tab)) {
-                        com.friendbook.social.core.QueryActions.deleteMatching(Fb.db().collection("comments").whereEqualTo("postId",it.id))
-                                .addOnFailureListener(e->Ui.toast(this,"Some comments could not be cleaned up."));
+                    if (!"posts".equals(collection) && !"reels".equals(collection) && !"stories".equals(collection)) {
+                        Ui.toast(this, "Comment moderation is not available here.");
+                        return;
                     }
-                    Ui.toast(this, "Deleted ✓");
+                    Fb.db().moderate("delete_content", collection, it.id)
+                            .addOnSuccessListener(v -> {
+                                if (collection.equals(tab)) {
+                                    items.removeIf(row -> it.id.equals(row.id));
+                                    adapter.notifyDataSetChanged();
+                                }
+                                if ("posts".equals(collection)) com.friendbook.social.core.FastCache.removeFeedPost(this, it.id);
+                                Ui.toast(this, "Deleted ✓");
+                            })
+                            .addOnFailureListener(e -> Ui.toast(this, "Couldn't delete content. Please retry."));
                 });
     }
 

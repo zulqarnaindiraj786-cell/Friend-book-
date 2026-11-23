@@ -26,7 +26,7 @@ public class PushOpenActivity extends Activity {
         Intent target = new Intent(this, MainActivity.class);
         if ("push_test".equals(type)) {
             target = new Intent(this, MainActivity.class);
-        } else if ("message".equals(type)) {
+        } else if ("message".equals(type) || "incoming_call".equals(type)) {
             target = new Intent(this, com.friendbook.social.chat.ChatActivity.class);
             target.putExtra("uid", getIntent().getStringExtra("fromUserId"));
             target.putExtra("name", getIntent().getStringExtra("title"));

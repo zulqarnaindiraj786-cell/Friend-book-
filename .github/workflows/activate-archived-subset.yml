@@ -1,0 +1,28 @@
+name: Activate approved archived social data (D1 only)
+on:
+  push:
+    branches: ['arena/f6bf61bd-friend-book']
+    paths: ['.github/workflows/activate-archived-subset.yml']
+permissions:
+  contents: read
+concurrency:
+  group: friendbook-archive-activation
+  cancel-in-progress: false
+jobs:
+  activate:
+    if: contains(github.event.head_commit.message, '[activate-archive]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Verify local activation and access invariants
+        run: python3 -m unittest discover -s scripts/tests -p 'test_activate_archive_subset.py' -v
+      - name: Install HTTP dependency
+        run: python3 -m pip install requests==2.32.5
+      - name: Restore missing records from existing D1 archive only
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: python3 scripts/admin/activate_archive_subset.py
