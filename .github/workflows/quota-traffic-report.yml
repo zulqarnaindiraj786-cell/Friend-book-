@@ -1,4 +1,4 @@
-# Recheck current traffic after signed 2.10.34 build; analytics only.
+# Owner reports installing new APK and a five-minute session; capture delayed 5/15/60m analytics.
 name: Analytics-only quota traffic report
 on:
   push:
