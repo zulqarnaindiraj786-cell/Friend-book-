@@ -30,7 +30,15 @@ public class Fb {
     private static boolean firestoreConfigured;
     public static Models.User me;           // cached profile of the signed-in user
     private static ListenerRegistration meReg;
-    private static long meLastRefresh;
+    private static String meListenerActor;
+    private static boolean meListenerFailed;
+    public interface MeObserver { void changed(Models.User user); }
+    private static final java.util.Set<MeObserver> ME_OBSERVERS=new java.util.concurrent.CopyOnWriteArraySet<>();
+    public static void addMeObserver(MeObserver observer) {
+        ME_OBSERVERS.add(observer);
+        if (me!=null && java.util.Objects.equals(me.uid,uid())) observer.changed(me);
+    }
+    public static void removeMeObserver(MeObserver observer) { ME_OBSERVERS.remove(observer); }
 
     public static void init(Context appContext) {
         FastCache.init(appContext);
@@ -79,9 +87,14 @@ public class Fb {
             if (cachedMe != null && uid.equals(cachedMe.uid)) me = cachedMe;
         }
         if (meReg != null) meReg.remove();
+        meListenerActor=uid;
+        meListenerFailed=false;
         meReg = db().collection("users").document(uid)
                 .addSnapshotListener((doc, err) -> {
-                    if (!uid.equals(Fb.uid()) || doc == null) return;
+                    if (!uid.equals(Fb.uid())) return;
+                    if (err!=null) { meListenerFailed=true;return; }
+                    if (doc==null) return;
+                    meListenerFailed=false;
                     if (!doc.exists()) {
                         if (!doc.getMetadata().isFromCache()) {
                             com.google.firebase.auth.FirebaseUser fu = auth().getCurrentUser();
@@ -103,6 +116,7 @@ public class Fb {
                     me = u;
                     FastCache.saveMe(com.friendbook.social.App.instance, u);
                     syncProfileToCloudflare(u);
+                    for (MeObserver observer : ME_OBSERVERS) observer.changed(u);
                     if (u.banned && !Admin.isOwnerEmail(u.email)) {
                         me = null;
                         FastCache.clearAll(com.friendbook.social.App.instance);
@@ -120,11 +134,12 @@ public class Fb {
                         }
                     }
                 });
-        meLastRefresh = System.currentTimeMillis();
     }
 
     public static void ensureMeFresh() {
-        if (uid() != null && (meReg == null || System.currentTimeMillis() - meLastRefresh > 60_000))
+        // The existing registration receives committed changes/foreground refreshes already.
+        // Age alone is not a reason to detach and fetch the same document again.
+        if (OnDemandLoads.profileListenerNeedsRestart(uid(),meListenerActor,meReg!=null,meListenerFailed))
             startMeListener();
     }
 

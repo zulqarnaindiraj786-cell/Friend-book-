@@ -68,7 +68,7 @@ import java.util.Map;
  * ⚡ friendbook Ultra-Fast Pro Reels Player:
  * - Hardware TextureView + MediaPlayer + Persistent 240 MB SSD Cache (ReelVideoCache)
  * - Instant 0.0ms first-frame JPEG poster thumbnail (zero black screen on swipe!)
- * - Automatic 3-Reel lookahead background prefetching (pos + 1, pos + 2, pos + 3)
+ * - Only the selected Reel streams; next-holder preparation uses complete local files only.
  * - Non-destructive snapshot updates so Likes/Comments NEVER interrupt video playback
  * - Crystal-clear high-visibility "＋ Upload Reel" button in top bar AND right action rail
  * - Live background upload status pill + instant optimistic playback of user's own uploaded Reel
@@ -1680,11 +1680,6 @@ public class ReelsFragment extends Fragment {
                         renderedFirstFrame = true;
                         final int position = getBindingAdapterPosition();
                         prepareNextHolder(position);
-                        java.lang.ref.WeakReference<VH> weak = new java.lang.ref.WeakReference<>(this);
-                        ReelVideoCache.warmUpcomingAfterPlay(context, data, reelIndexForPos(position), () -> {
-                            VH holder = weak.get();
-                            if (holder != null) holder.prepareNextHolder(position);
-                        });
                     }
                 } else if (what == MediaPlayer.MEDIA_INFO_BUFFERING_START && wantPlay && !userPaused) {
                     ReelVideoCache.cancelUpcomingWarm();

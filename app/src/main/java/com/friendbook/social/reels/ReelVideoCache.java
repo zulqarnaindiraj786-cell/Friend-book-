@@ -6,37 +6,18 @@ import com.friendbook.social.core.FastCache;
 import com.friendbook.social.core.Prefs;
 import com.friendbook.social.models.Models;
 
-import java.io.BufferedInputStream;
-import java.io.BufferedOutputStream;
 import java.io.File;
-import java.io.FileOutputStream;
-import java.io.InputStream;
-import java.net.HttpURLConnection;
-import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.Arrays;
 import java.util.Comparator;
-import java.util.List;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 
-/** Bounded disk cache for exact playback renditions, with one unmetered-Wi-Fi lookahead. */
+/** Bounded local cache for exact playback renditions. No unseen-video downloads. */
 public final class ReelVideoCache {
 
     private static final String DIR_NAME = "reels_fast_cache";
     private static final long MAX_CACHE_BYTES = 240L * 1024L * 1024L; // 240 MB persistent LRU cache
     private static final long MAX_PREFETCH_FILE_BYTES = 45L * 1024L * 1024L; // cap single prefetch safety
-
-    private static final ExecutorService PREFETCH_POOL = Executors.newSingleThreadExecutor(r -> {
-        Thread t = new Thread(r, "reel-turbo-prefetch");
-        t.setDaemon(true);
-        t.setPriority(Thread.NORM_PRIORITY - 1);
-        return t;
-    });
-
-    private static final ConcurrentHashMap<String, Boolean> IN_FLIGHT = new ConcurrentHashMap<>();
 
     private ReelVideoCache() {}
 
@@ -176,108 +157,11 @@ public final class ReelVideoCache {
         return null;
     }
 
-    private static volatile String wantedWarmKey="";
-    public static void cancelUpcomingWarm() { wantedWarmKey=""; }
-
-    /** Asynchronously downloads a single Reel video into the persistent SSD cache if not cached yet. */
-    private static void prefetchSingle(final Context c, final String rawVideoUrl, final Runnable onReady) {
-        if (!canPrefetch(c) || rawVideoUrl == null || rawVideoUrl.isEmpty()) return;
-        if (rawVideoUrl.startsWith("file:") || rawVideoUrl.startsWith("content:")) return;
-        final Context appCtx = c.getApplicationContext();
-        final String streamUrl = startupUrl(appCtx, rawVideoUrl);
-        final String key = cacheKey(streamUrl);
-        if (key.isEmpty()) return;
-        wantedWarmKey=key;
-        File existing = new File(cacheDir(appCtx), key + ".mp4");
-        if (existing.exists() && existing.length() > 1024L) {
-            notifyReady(key, onReady);
-            return;
-        }
-        if (IN_FLIGHT.putIfAbsent(key, Boolean.TRUE) != null) return;
-
-        PREFETCH_POOL.execute(() -> {
-            File dir = cacheDir(appCtx);
-            File dest = new File(dir, key + ".mp4");
-            File part = new File(dir, key + ".part");
-            HttpURLConnection conn = null;
-            try {
-                if (!key.equals(wantedWarmKey) || !canPrefetch(appCtx) || (dest.exists() && dest.length() > 1024L)) return;
-                conn = (HttpURLConnection) new URL(streamUrl).openConnection();
-                conn.setInstanceFollowRedirects(true);
-                conn.setConnectTimeout(15000);
-                conn.setReadTimeout(45000);
-                conn.setRequestProperty("Accept", "video/mp4,video/*,*/*");
-                conn.setRequestProperty("Accept-Encoding", "identity");
-                int code = conn.getResponseCode();
-                if (code == HttpURLConnection.HTTP_OK) {
-                    long contentLen = conn.getContentLengthLong();
-                    if (contentLen > MAX_PREFETCH_FILE_BYTES) return;
-                    try (InputStream in = new BufferedInputStream(conn.getInputStream(), 64 * 1024);
-                         FileOutputStream fos = new FileOutputStream(part);
-                         BufferedOutputStream out = new BufferedOutputStream(fos, 64 * 1024)) {
-                        byte[] buf = new byte[64 * 1024];
-                        long total = 0L;
-                        int n;
-                        while ((n = in.read(buf)) != -1) {
-                            if(!key.equals(wantedWarmKey)) { part.delete(); return; }
-                            out.write(buf, 0, n);
-                            total += n;
-                            if (total > MAX_PREFETCH_FILE_BYTES) {
-                                out.close();
-                                //noinspection ResultOfMethodCallIgnored
-                                part.delete();
-                                return;
-                            }
-                        }
-                        out.flush();
-                    }
-                    if (key.equals(wantedWarmKey) && completeDownload(contentLen,part.length()) && part.renameTo(dest)) {
-                        Prefs.recordBytes(appCtx, dest.length(), Math.max(0L, dest.length() * 2));
-                        trimCacheIfNeeded(dir);
-                        notifyReady(key, onReady);
-                    } else {
-                        //noinspection ResultOfMethodCallIgnored
-                        part.delete();
-                    }
-                }
-            } catch (Throwable ignored) {
-                //noinspection ResultOfMethodCallIgnored
-                part.delete();
-            } finally {
-                IN_FLIGHT.remove(key);
-                if (conn != null) {
-                    try { conn.disconnect(); } catch (Throwable ignored) { }
-                }
-            }
-        });
-    }
-
-    private static boolean canPrefetch(Context c) {
-        if (c == null || Prefs.dataSaver(c) || Prefs.turbo2g(c) || FastCache.netTier(c)!=FastCache.NetTier.WIFI) return false;
-        android.net.ConnectivityManager cm=c.getSystemService(android.net.ConnectivityManager.class);
-        if (cm==null || cm.isActiveNetworkMetered()) return false;
-        android.net.Network network=cm.getActiveNetwork();
-        android.net.NetworkCapabilities caps=network==null?null:cm.getNetworkCapabilities(network);
-        return caps!=null && caps.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_VALIDATED);
-    }
+    /** Compatibility hook: there is no speculative network work left to cancel. */
+    public static void cancelUpcomingWarm() { }
 
     static boolean completeDownload(long expected, long actual) {
         return expected > 1024L && expected <= MAX_PREFETCH_FILE_BYTES && actual == expected;
-    }
-
-    private static void notifyReady(String key, Runnable callback) {
-        if (callback == null) return;
-        new android.os.Handler(android.os.Looper.getMainLooper()).post(() -> {
-            if (key.equals(wantedWarmKey)) callback.run();
-        });
-    }
-
-    /** Never duplicate the playing stream. At most one next Reel is warmed on unmetered Wi-Fi. */
-    public static void warmUpcomingAfterPlay(Context c, List<Models.Reel> reels, int currentIndex, Runnable onReady) {
-        if (!canPrefetch(c) || reels==null || currentIndex<0 || currentIndex>=reels.size()-1) return;
-        Models.Reel next=reels.get(currentIndex+1);
-        if (next==null || next.videoUrl==null || !next.videoUrl.matches("(?i)https://[^?#]+\\.mp4")) return;
-        prefetchSingle(c,next.videoUrl,onReady);
     }
 
     private static synchronized void trimCacheIfNeeded(File dir) {

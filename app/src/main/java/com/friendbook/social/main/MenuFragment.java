@@ -32,7 +32,6 @@ import com.friendbook.social.settings.SettingsActivity;
 import com.friendbook.social.settings.TimeSpentActivity;
 import com.google.firebase.Timestamp;
 import com.friendbook.social.d1.documents.FieldValue;
-import com.friendbook.social.d1.documents.ListenerRegistration;
 
 import java.util.Calendar;
 import java.util.HashMap;
@@ -48,7 +47,7 @@ public class MenuFragment extends Fragment {
 
     private ImageView avatar, tickIv;
     private TextView name, bio;
-    private ListenerRegistration meReg;
+    private final Fb.MeObserver meObserver=this::renderSharedProfile;
 
     @Nullable
     @Override
@@ -470,32 +469,32 @@ public class MenuFragment extends Fragment {
         return wrap;
     }
 
-    @Override
-    public void onStart() {
-        super.onStart();
-        String me = Fb.uid();
-        if (me == null) return;
-        meReg = Fb.db().collection("users").document(me)
-                .addSnapshotListener((d, err) -> {
-                    if (d == null || !d.exists() || getActivity() == null) return;
-                    Models.User u = Models.User.fromDoc(d);
-                    name.setText(u.displayName);
-                    Icons.setTickBadge(tickIv, u.tickLevel, false);
-                    String sub = (u.professionalMode ? "📊 Creator · " : "")
-                            + (u.bio == null || u.bio.isEmpty() ? "Tap to view your profile" : u.bio);
-                    bio.setText(sub);
-                    Ui.avatar(getActivity(), avatar, u.photoUrl);
-                    if (Fb.auth().getCurrentUser() != null) {
-                        Prefs.saveAccount(getActivity(), u.uid,
-                                Fb.auth().getCurrentUser().getEmail(), u.displayName, u.photoUrl);
-                    }
-                });
+    private void renderSharedProfile(Models.User u) {
+        if (!isAdded() || isHidden() || getActivity()==null || name==null
+                || u==null || !java.util.Objects.equals(u.uid,Fb.uid())) return;
+        name.setText(u.displayName);
+        Icons.setTickBadge(tickIv,u.tickLevel,false);
+        bio.setText((u.professionalMode ? "📊 Creator · " : "")
+                + (u.bio==null || u.bio.isEmpty()?"Tap to view your profile":u.bio));
+        Ui.avatar(getActivity(),avatar,u.photoUrl);
+        if(Fb.auth().getCurrentUser()!=null) Prefs.saveAccount(getActivity(),u.uid,
+                Fb.auth().getCurrentUser().getEmail(),u.displayName,u.photoUrl);
     }
 
-    @Override
-    public void onStop() {
+    @Override public void onStart() {
+        super.onStart();
+        if (!isHidden()) Fb.addMeObserver(meObserver);
+    }
+
+    @Override public void onHiddenChanged(boolean hidden) {
+        super.onHiddenChanged(hidden);
+        if(hidden) Fb.removeMeObserver(meObserver);
+        else if(isAdded() && isResumed()) Fb.addMeObserver(meObserver);
+    }
+
+    @Override public void onStop() {
+        Fb.removeMeObserver(meObserver);
         super.onStop();
-        if (meReg != null) meReg.remove();
     }
 
     private void claimDailyBonus(final Activity a) {

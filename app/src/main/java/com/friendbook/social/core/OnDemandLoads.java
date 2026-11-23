@@ -35,6 +35,13 @@ public final class OnDemandLoads {
         return nowMs < lastFetchMs || nowMs - lastFetchMs >= PYMK_CACHE_MS;
     }
 
+    /** Keep a healthy account-scoped registration; age alone never requires a new read. */
+    public static boolean profileListenerNeedsRestart(String actor,String registeredActor,
+                                                      boolean registered,boolean failed) {
+        return actor!=null && !actor.isEmpty()
+                && (!registered || failed || !actor.equals(registeredActor));
+    }
+
     /** A tab switch may repaint from cache but must never start a network read. */
     public static boolean pymkShouldFetchOnTabReturn(boolean forced) {
         return forced;
