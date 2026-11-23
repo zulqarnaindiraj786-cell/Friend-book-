@@ -59,7 +59,7 @@ jobs:
                   if secret: text=text.replace(secret,'[REDACTED]')
               return re.sub(r'\x1b\[[0-9;]*m','',text)
           def failure(kind,error,tb):
-              detail='HTTP '+str(error.code) if isinstance(error,urllib.error.HTTPError) else kind.__name__
+              detail='HTTP '+str(error.code) if isinstance(error,urllib.error.HTTPError) else kind.__name__+': '+str(error)
               if isinstance(error,urllib.error.HTTPError):
                   try:
                       raw=error.read().decode('utf-8',errors='replace')
@@ -78,7 +78,7 @@ jobs:
               if result.returncode:
                   detail=safe(result.stdout+'\n'+result.stderr)[-3000:].replace('\n',' %0A')
                   print('::error::Monitor CLI '+stage+' '+detail,flush=True)
-                  raise SystemExit(result.returncode)
+                  raise RuntimeError(result.returncode)
               print('::notice::Monitor '+stage+' completed',flush=True)
           account=os.environ['CLOUDFLARE_ACCOUNT_ID']
           api='https://api.cloudflare.com/client/v4/accounts/'+account
@@ -88,9 +88,9 @@ jobs:
           try:
               with urllib.request.urlopen(req,timeout=30) as response: source=response.read().decode('utf-8',errors='replace')
               if 'quota_monitor_report' not in source or 'createQuotaMonitor' not in source:
-                  raise SystemExit('Monitor name is already in use by an unrelated script; not deploying')
+                  raise RuntimeError('Monitor name is already in use by an unrelated script; not deploying')
           except urllib.error.HTTPError as error:
-              if error.code!=404: raise SystemExit('Worker name preflight unavailable; not deploying')
+              if error.code!=404: raise RuntimeError('Worker name preflight unavailable; not deploying')
           command=['npx','--yes','wrangler@4.157.0']
           stage='script upload'
           cli(['deploy','--config','wrangler.quota-monitor.toml'])
@@ -123,7 +123,7 @@ jobs:
           req=urllib.request.Request(api+'/workers/subdomain',headers=headers)
           with urllib.request.urlopen(req,timeout=30) as response: payload=json.load(response)
           subdomain=payload.get('result',{}).get('subdomain','')
-          if not payload.get('success') or not re.fullmatch('[a-zA-Z0-9-]+',subdomain): raise SystemExit('Worker subdomain unavailable')
+          if not payload.get('success') or not re.fullmatch('[a-zA-Z0-9-]+',subdomain): raise RuntimeError('Worker subdomain unavailable')
           base='https://friendbook-quota-monitor.'+subdomain+'.workers.dev'
           print('::notice::Monitor URL '+base+'/health')
           stage='public health smoke check'
@@ -136,18 +136,18 @@ jobs:
                   if attempt==5 or error.code not in (403,404,429,500,502,503,504): raise
                   time.sleep(3)
 
-          if health!={'ok':True,'role':'observe_only','d1_bound':False}: raise SystemExit('Monitor health mismatch')
+          if health!={'ok':True,'role':'observe_only','d1_bound':False}: raise RuntimeError('Monitor health mismatch '+json.dumps({k:health.get(k) for k in ('ok','role','d1_bound')}))
           stage='private report access check'
           try:
               urllib.request.urlopen(base+'/report',timeout=30)
-              raise SystemExit('Report unexpectedly public')
+              raise RuntimeError('Report unexpectedly public')
           except urllib.error.HTTPError as error:
-              if error.code!=401: raise SystemExit('Unexpected unauthenticated report status')
+              if error.code!=401: raise RuntimeError('Unexpected unauthenticated report status')
           stage='authenticated analytics report'
           req=urllib.request.Request(base+'/report',headers={'Authorization':'Bearer '+report_token})
           with urllib.request.urlopen(req,timeout=45) as response: report=json.load(response)
           if report.get('role')!='observe_only' or report.get('automatic_fix_actions')!=[] or report.get('future_quota_guarantee') is not False:
-              raise SystemExit('Unsafe monitor report contract')
+              raise RuntimeError('Unsafe monitor report contract')
           print('::notice::Isolated monitor health '+base+'/health')
           print('::notice::Live monitor report '+json.dumps(report,sort_keys=True))
           print('::notice::Monitor deployed with 15-minute aggregate logging. Application Worker, data and cron unchanged. It does not auto-fix or enforce quota.')
