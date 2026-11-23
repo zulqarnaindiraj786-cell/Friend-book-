@@ -62,3 +62,21 @@ Analytics-only report https://github.com/zulqarnaindiraj786-cell/Friend-book-/ac
 | 60 minutes | 7,622 | 194 | 2,636 |
 
 All three account-wide database splits observed only the primary database, were not truncated, and observed other-database subtotals were 0/0. These are quiet/delayed windows, not representative activity or completed-day acceptance; the hour spans versions and engineering work, and the report ends before this final rollout completed. The existing strict daily FAIL is unchanged. Latest conservative proof boundary is **2026-11-23T13:51:50Z**, superseding earlier boundaries above. Nothing here certifies that every application behavior or unknown device consumer is defect-free.
+
+## Largest-cost evidence continuation (no new app quota-fix claim)
+
+The previous CI report exposed only 5-minute shapes: GitHub's per-step notice cap hid later-window details, and artifact download was unavailable in this environment. Reporter source **d2427c5** now reserves six compact notices (top two shapes for read/write ranking in each of the 5/15/60-minute windows) before verbose detail. Data remains sanitized; no raw SQL, bindings, tokens, device attribution or new application queries are emitted. Added a regression for coverage, output bounds, privacy and ordering; **386 Python tests PASS**. Worker source is unchanged from the last 281-test green deployment.
+
+Analytics-only run https://github.com/zulqarnaindiraj786-cell/Friend-book-/actions/runs/45188572461 **SUCCESS**, end **2026-11-23T13:54:32Z**. Actual totals: 5m **7/0**, 15m **13/0**, 60m **7,623/194** reads/writes. Account database splits observed only primary D1 without truncation, not a full-day other-database exclusion.
+
+Largest observed 60m read shapes:
+- Engagement/comment/reaction summary SELECT: **2,639 reads / 303 executions**, 303 returned rows (about 8.71 billed reads per execution in this mixed window).
+- Schema-inspection SELECT: **1,473 reads / 5 executions**.
+
+Largest observed 60m write shapes:
+- Canonical-comment INSERT with collision guard: **96 writes / 16 executions**, 32 reads, no returned rows. This groups an SQL shape, not a known device or actor. Associated index/trigger work may be necessary; six billed writes per insert does not by itself prove waste.
+- Recognized diagnostic billing-probe INSERT: **20 writes / 10 executions**.
+
+These windows include engineering/probe traffic and multiple earlier versions. Do not extrapolate them to five active users or claim a matched savings percentage. Engagement summary source was reviewed against the observed shape: it already uses resource totals, a single actor reaction lookup, blocked-author indexed subtraction, and a two-comment preview. No new unnecessary work was established by those aggregate numbers; no speculative cache/security removal/index rebuild was shipped. Repeated FCM registration already has a user/token no-op guard. Android listener code remains push/on-demand rather than a demonstrated timer leak.
+
+This continuation improves visibility into actual large consumers; it does **not** solve or certify the outstanding full-day acceptance. The deployment/proof boundary remains unchanged at 2026-11-23T13:51:50Z. No app deployment or migration was required for this analytics-only change; PR remains unmerged. No background future monitoring is promised.
