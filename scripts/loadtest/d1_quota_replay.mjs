@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
 import { readdirSync, readFileSync } from 'node:fs';
 import { createWorker } from '../../worker.js';
+import { assertReadOnlyWorkloads } from './quota_replay_contract.mjs';
 
 globalThis.fetch=async()=>{throw new Error('Network access is disabled in the quota replay');};
 const sql = new DatabaseSync(':memory:');
@@ -357,6 +358,7 @@ assert.equal(report.workloads.multiTypeReactionSummary.changedRowsIncludingTrigg
 assert.equal(sql.prepare("SELECT total FROM friendbook_cf_reaction_totals WHERE resource='posts/item39' AND type='like'").get().total,users);
 assert.equal(report.workloads.unchangedProfileHeartbeat.changedRowsIncludingTriggers,0);
 assert.equal(report.workloads.duplicateReceiptAndUnreadReset.changedRowsIncludingTriggers,0);
+assertReadOnlyWorkloads(report);
 if (collectPlans) report.queryPlans=[...queryPlans.values()];
 console.log(JSON.stringify(report,null,2));
 sql.close();
