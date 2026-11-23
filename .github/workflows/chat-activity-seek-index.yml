@@ -1,0 +1,45 @@
+name: Gate and install shared chat activity index
+on:
+  push:
+    branches: [arena/b52bc74d-friend-book]
+    paths:
+      - '.github/workflows/chat-activity-seek-index.yml'
+      - 'cloudflare/migrations/0091_chat_activity_seek.sql'
+      - 'scripts/admin/install_chat_activity_seek.py'
+      - 'scripts/tests/test_chat_activity_seek.py'
+permissions:
+  contents: read
+concurrency:
+  group: friendbook-cloudflare-production
+  cancel-in-progress: false
+jobs:
+  index:
+    if: contains(github.event.head_commit.message, '[shared-chat-index]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - name: Full regressions before any production operation
+        run: |
+          npm test
+          python3 -m unittest discover -s scripts/tests
+          python3 cloudflare/test/schema_test.py
+          python3 cloudflare/test/migration_test.py
+          python3 cloudflare/test/index_plan_test.py
+      - name: Compile exact Worker without deployment
+        run: npx --yes wrangler@4.157.0 deploy --dry-run --outdir /tmp/inbox-compile
+      - name: Isolated billed-write gate then create only the reviewed index
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: python3 scripts/admin/install_chat_activity_seek.py --probe-and-build-reviewed-index --output /tmp/chat-activity-index-evidence.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: shared-chat-activity-index-evidence
+          path: /tmp/chat-activity-index-evidence.json
+          retention-days: 14

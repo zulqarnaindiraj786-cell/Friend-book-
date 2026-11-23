@@ -1,3 +1,5 @@
+import { inboxSqlActivity } from './inbox-activity-sql.js';
+import { recordInboxSortCost, tryInboxSeek, suspendInboxSeek } from './inbox-plan-hints.js';
 import { writeAttribution } from './write-attribution.js';
 import { accountStatus } from './account-access.js';
 import { pushCommittedChat } from './fcm-push.js';
@@ -317,17 +319,7 @@ function inboxActivity(data) {
     : value?.__type==='timestamp' && Number.isFinite(value.millis) ? value.millis : 0;
   return millis(data.lastMessageTime)||millis(data.lastMessageTimeMs)||millis(data.lastMessageAt);
 }
-const inboxSqlMillis=field=>`CASE
-  WHEN json_type(f.document_json,'$.${field}') IN ('integer','real')
-    AND abs(CAST(json_extract(f.document_json,'$.${field}') AS REAL))<=1.7976931348623157e308
-    THEN json_extract(f.document_json,'$.${field}')
-  WHEN json_extract(f.document_json,'$.${field}.__type')='timestamp'
-    AND json_type(f.document_json,'$.${field}.millis') IN ('integer','real')
-    AND abs(CAST(json_extract(f.document_json,'$.${field}.millis') AS REAL))<=1.7976931348623157e308
-    THEN CASE WHEN abs(CAST(json_extract(f.document_json,'$.${field}.millis') AS REAL))<9.223372036854776e18
-      THEN CAST(json_extract(f.document_json,'$.${field}.millis') AS INTEGER)
-      ELSE json_extract(f.document_json,'$.${field}.millis') END ELSE 0 END`;
-const inboxSqlActivity=`COALESCE(${['lastMessageTime','lastMessageTimeMs','lastMessageAt'].map(f=>`NULLIF((${inboxSqlMillis(f)}),0)`).join(',')},0)`;
+
 
 // Bound document materialization, not just the final HTTP response. No derived
 // per-member activity table or message-write fanout is introduced. SQLite still
@@ -349,10 +341,41 @@ async function boundedInboxPage(db,uid,spec,requestUserReads) {
     if(!cursor?.length)return;
     const op=(start!==desc)?'>':'<';
     if(cursor.length===1){predicates.push(`inbox_activity ${op}${inclusive?'=':''} ?`);bindings.push(cursor[0]);}
-    else {predicates.push(`(inbox_activity ${op} ? OR (inbox_activity=? AND doc_id ${op}${inclusive?'=':''} ?))`);bindings.push(cursor[0],cursor[0],cursor[1]);}
+    else {predicates.push(`(inbox_activity ${op}= ? AND (inbox_activity ${op} ? OR (inbox_activity=? AND doc_id ${op}${inclusive?'=':''} ?)))`);bindings.push(cursor[0],cursor[0],cursor[0],cursor[1]);}
   }
   bound(spec.startAfter,true,false);bound(spec.startAt,true,true);
   bound(spec.endBefore,false,false);bound(spec.endAt,false,true);
+  // Only try the shared ordered stream after actual D1 metadata has shown
+  // this actor's membership sort to be expensive. No extra count/probe query
+  // for small inboxes. The hint never substitutes for current document ACLs.
+  if(tryInboxSeek(db,uid)) {
+    try {
+      const head=await db.prepare(`SELECT f.*, ${inboxSqlActivity} AS inbox_activity,
+        EXISTS(SELECT 1 FROM friendbook_cf_chat_participants m WHERE m.participant_uid=?
+          AND m.chat_path=f.path AND m.source=1) AS inbox_member
+        FROM friendbook_cf_firestore_documents f INDEXED BY idx_cf_chat_activity_seek
+        WHERE f.path='chats/'||f.doc_id
+          ${predicates.map(p=>' AND '+p).join('')}
+        ORDER BY inbox_activity ${direction},doc_id ${direction} LIMIT ?`)
+        .bind(uid,...bindings.slice(1),64).all();
+      const rows=head.results||[];
+      if(rows.every(row=>/^[\x20-\x7e]+$/.test(row.doc_id) && row.path===`chats/${row.doc_id}` && isDocumentPath(row.path))) {
+        const memberRows=rows.filter(row=>row.inbox_member===1);
+        const docs=memberRows.map(row=>rowToDocument({...row,[canonicalRootSnapshot]:true}));
+        if(docs.every((doc,i)=>inboxActivity(doc.data)===memberRows[i].inbox_activity)) {
+          const visible=await visibleDocuments(db,uid,'chats',prefilterRaw(docs,'chats',spec.filters),requestUserReads);
+          if(visible.length>=spec.limit || rows.length<64)
+            return applyQuery(visible.map(doc=>({...doc,data:{...doc.data,inboxActivityAt:inboxActivity(doc.data)}})),spec);
+        }
+      }
+      // A sparse user's index attempt must not add 64 unrelated candidates to
+      // every request. Retain the exact membership query during cooldown.
+      suspendInboxSeek(db,uid);
+    } catch(error) {
+      if(!/no such index: idx_cf_chat_activity_seek/.test(String(error)))throw error;
+      suspendInboxSeek(db,uid);
+    }
+  }
   const allowed=[];let after=null,batches=0;
   while(allowed.length<spec.limit) {
     // A badly stale membership index must not cause repeated whole-inbox sorts.
@@ -373,6 +396,7 @@ async function boundedInboxPage(db,uid,spec,requestUserReads) {
       if(/no such (?:index: idx_cf_chat_participant_source|table: friendbook_cf_chat_participants)/.test(String(error)))return null;
       throw error;
     }
+    recordInboxSortCost(db,uid,result.meta);
     const rows=result.results||[];
     // SQLite UTF-8 and JS UTF-16 can disagree amongst non-ASCII ID ties.
     // ASCII candidates cannot be displaced by those ties; otherwise preserve
