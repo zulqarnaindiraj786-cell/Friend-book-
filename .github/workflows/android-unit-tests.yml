@@ -49,7 +49,9 @@ jobs:
           RESULT=$?
           grep -E "d1.documents.ListenerPollingPolicyTest|tests completed|FAILED" unit-tests.log | tail -30
           if [ "$RESULT" != "0" ]; then
-            tail -120 unit-tests.log | while IFS= read -r line; do echo "::error::${line:0:400}"; done
+            grep -nE "error: |FAILED|expected:|Tests? .*failed|AssertionError|Exception" unit-tests.log \
+              | head -40 | while IFS= read -r line; do echo "::error::${line:0:400}"; done
+            tail -40 unit-tests.log | while IFS= read -r line; do echo "::warning::${line:0:400}"; done
           else
             echo '::notice::On-demand document tests passed: no per-second document reads and no fixed-rate polling loops.'
           fi
