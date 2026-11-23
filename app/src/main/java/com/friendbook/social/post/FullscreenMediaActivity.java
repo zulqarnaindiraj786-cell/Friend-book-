@@ -90,7 +90,8 @@ public class FullscreenMediaActivity extends Activity {
             MediaController mc = new MediaController(this);
             mc.setAnchorView(vv);
             vv.setMediaController(mc);
-            vv.setVideoURI(Uri.parse(url));
+            // Chat + profile videos: replay from the disk cache instead of re-downloading.
+            vv.setVideoURI(com.friendbook.social.core.MediaDiskCache.uriForPlayback(this, url));
             vv.setOnPreparedListener(mp -> { mp.setLooping(true); vv.start(); });
         } else {
             final ImageView iv = new ImageView(this);

@@ -329,7 +329,9 @@ public class StoryViewerActivity extends Activity {
             video.setVisibility(View.VISIBLE);
             captionT.setText(s.caption == null ? "" : s.caption);
             captionT.setVisibility(s.caption == null || s.caption.isEmpty() ? View.GONE : View.VISIBLE);
-            video.setVideoURI(Uri.parse(s.mediaUrl));
+            // Play from the on-device cache when this story video was already seen; a first view
+            // streams normally and fills the cache so every later open is offline-instant.
+            video.setVideoURI(com.friendbook.social.core.MediaDiskCache.uriForPlayback(this, s.mediaUrl));
             video.setOnPreparedListener(mp -> video.start());
             video.setOnCompletionListener(mp -> step(1));
         } else {
@@ -350,6 +352,8 @@ public class StoryViewerActivity extends Activity {
             Fb.db().storyEngagement(s.id, "view", null)
                     .addOnSuccessListener(v -> { if (me.equals(Fb.uid()) && !s.viewedBy.contains(me)) s.viewedBy.add(me); });
         }
+
+        warmNextStoryVideo();
 
         if (!"video".equals(s.mediaType)) {
             animateSegment(5500);
@@ -486,6 +490,17 @@ public class StoryViewerActivity extends Activity {
             fill.setLayoutParams(fp);
         });
         anim.start();
+    }
+
+    /** Pre-downloads the next story video so swiping never re-downloads bytes we already streamed. */
+    private void warmNextStoryVideo() {
+        for (int i = index + 1; i < stories.size(); i++) {
+            Models.Story next = stories.get(i);
+            if (next != null && "video".equals(next.mediaType) && next.mediaUrl != null && !next.mediaUrl.isEmpty()) {
+                com.friendbook.social.core.MediaDiskCache.warm(this, next.mediaUrl);
+                return;
+            }
+        }
     }
 
     private void stopTimer() {
