@@ -98,3 +98,30 @@ mechanical patch.
 2. `http-e2e` (3 comment tests) + the 4 `comment-api.js` union sites.
 3. `firestore-documents` — 13 test families, the bulk.
 4. Only then delete the 75 arms in `firestore-documents.js` and re-run the 5-user budget.
+
+## Batch 1 + 2 result (this pass)
+
+With `readPreferredDocumentJson` and `/v1/docs` canonical-only, 19 tests went red.
+Four of the five files are now converted and green in isolation:
+
+| File | Fix |
+| --- | --- |
+| `call-relay-quota` | mirror-only peer now asserted invisible (fail-closed `null`), canonical peer asserted working |
+| `live-pk-room-quota` | read counter retargeted from the `UNION ALL` arm to the single canonical lookup |
+| `fcm-push` | recipient `users/bob` gets its canonical twin (`mirrorLegacy`) |
+| `http-e2e` | `putDoc` writes both rows, so canonical-only reads see the fixture |
+
+Remaining: `firestore-documents` 13 families. The cause is **not** seeding alone —
+the error contract changed:
+
+* a mirror-only document now answers **404** where the old fallback answered 403
+  (`existing friendships are read-only…`, `comments and reactions authorize parent…`);
+* content ACL (`contentReadAllowed`) authorizes from `readPreferredDocumentJson`,
+  so a legacy-only post is filtered out and the query legitimately returns `[]`
+  (`bounded posts/reels pages…`, `indexed tag search…`, `Home story expiry…`);
+* blanket `mirrorAllLegacy` is wrong: 9 extra tests deliberately seed stale
+  mirrors that must stay hidden, and they regress (69/20).
+
+So the 13 need per-test judgement: mirror the rows that stand for "already
+backfilled history", keep stale-shadow rows unmirrored, and rewrite the
+`403 → 404` assertions to the new contract.
