@@ -139,6 +139,22 @@ def category(sql):
     return 'application_or_unattributed'
 
 
+
+def redacted_inventory_structure(sql):
+    # Diagnostic grammar from a fixed vocabulary, NOT raw SQL. Literals,
+    # arbitrary identifiers, numeric values and comments never pass through.
+    vocabulary=set("select count sum coalesce case when then else end as from where and or not is null left join on indexed by limit order group having asc desc with materialized exists distinct in sampled legacy_only path collection parent_path doc_id document_json owner_uid updated_at update_time sample l f s a friendbook_cf_documents friendbook_cf_firestore_documents idx_friendbook_cf_documents_collection_updated idx_friendbook_cf_firestore_parent".split())
+    pattern=r"'(?:''|[^'])*'|\"(?:\"\"|[^\"])*\"|`[^`]*`|\[[^\]]*\]|--[^\n]*|/\*[\s\S]*?\*/|\?[0-9]*|[A-Za-z_][A-Za-z0-9_]*|[0-9]+(?:\.[0-9]+)?|<>|!=|<=|>=|[^\s]"
+    result=[]
+    for token in re.findall(pattern,sql):
+        if token.startswith(('--','/*')):continue
+        lower=token.lower()
+        if lower in vocabulary:result.append(lower)
+        elif token in ('(',')',',','.','=','<','>','<>','!=','<=','>=','*','+','-','/'):result.append(token)
+        else:result.append('?')
+    return ' '.join(result)[:1800]
+
+
 def safe_shape(sql):
     # Fixed vocabulary only; never emit SQL, bindings, IDs or document values.
     q=re.sub(r'\s+',' ',sql).strip().lower()
@@ -180,6 +196,8 @@ def safe_shape(sql):
                               'canonical_rows','legacy_rows','canonical_count','legacy_count','remaining','total','n')
              if re.search(r'\bas '+name+r'\b',q)]
     if aliases:result['recognized_aliases']=aliases
+    if set(('sampled','legacy_only')) <= set(aliases) and set(('canonical_documents','legacy_mirror')) <= set(tables):
+        result['redacted_inventory_structure']=redacted_inventory_structure(sql)
     return result
 
 

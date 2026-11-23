@@ -220,3 +220,14 @@ class TrafficReport(unittest.TestCase):
         self.assertNotEqual(p.normalize_shape("SELECT 'A b'"),p.normalize_shape("SELECT 'A  b'"))
         self.assertNotEqual(p.normalize_shape("SELECT 'Case'"),p.normalize_shape("SELECT 'case'"))
         self.assertNotEqual(p.normalize_shape('SELECT ?1'),p.normalize_shape('SELECT ?2'))
+
+
+    def test_inventory_structure_never_exposes_values_identifiers_or_comments(self):
+        sql="SELECT COUNT(*) AS sampled, SUM(CASE WHEN f.path IS NULL THEN 1 ELSE 0 END) AS legacy_only FROM friendbook_cf_documents PRIVATE_TABLE LEFT JOIN friendbook_cf_firestore_documents f ON f.path='SECRET_ID' WHERE a=123 -- SECRET_COMMENT"
+        shape=p.safe_shape(sql)
+        grammar=shape['redacted_inventory_structure']
+        self.assertIn('count ( * ) as sampled',grammar)
+        for private in ('PRIVATE_TABLE','SECRET_ID','123','SECRET_COMMENT'):
+            self.assertNotIn(private,grammar)
+        self.assertNotIn('SECRET',p.redacted_inventory_structure("SELECT 'a--SECRET', \"SECRET\", `SECRET`, [SECRET] /*SECRET*/"))
+        self.assertLessEqual(len(p.redacted_inventory_structure(sql*100)),1800)
