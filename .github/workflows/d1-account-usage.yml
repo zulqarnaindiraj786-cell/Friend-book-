@@ -1,4 +1,4 @@
-# Read-only account-wide analytics only. No D1 SQL, mutations, or app traffic.
+# Read-only analytics, Worker metadata and schema SQL. No mutations or app traffic.
 # Compare whole-account totals after disabling typing and optimizing live/call checks.
 name: Read-only account D1 usage
 on:
@@ -50,4 +50,14 @@ jobs:
           for result in schema['result']:
               print('::notice::Friendship schema indexes '+json.dumps(result.get('results',[]),sort_keys=True))
               print('::notice::Schema query cost '+json.dumps(result.get('meta',{}),sort_keys=True))
+          req=urllib.request.Request(base+'/content',headers={'Authorization':'Bearer '+os.environ['CLOUDFLARE_API_TOKEN']})
+          with urllib.request.urlopen(req,timeout=25) as response: source=response.read().decode('utf-8',errors='replace')
+          markers=['malformedFriendProbe','idx_cf_friend_guard_exceptions','idx_cf_friend_participant_0','friendshipCandidates','duplicateCanonical','duplicateLegacy','FRIEND_GUARD_INDEXED']
+          print('::notice::Deployed source markers '+json.dumps({m:m in source for m in markers},sort_keys=True))
+          query="SELECT name,sql FROM sqlite_schema WHERE type='index' AND (name LIKE '%request%' OR name LIKE 'idx_cf_friend_%' OR name LIKE 'idx_cf_legacy_friend_%') ORDER BY name"
+          req=urllib.request.Request('https://api.cloudflare.com/client/v4/accounts/92f3d04598822de2e49e14561218d090/d1/database/e1c605ca-a50b-46c6-9deb-56dd1f70d163/query',data=json.dumps({'sql':query}).encode(),headers={'Authorization':'Bearer '+os.environ['CLOUDFLARE_API_TOKEN'],'Content-Type':'application/json'})
+          with urllib.request.urlopen(req,timeout=25) as response: schema=json.load(response)
+          if not schema.get('success'): raise SystemExit('Read-only index definitions unavailable')
+          for result in schema['result']:
+              print('::notice::Request and friendship index definitions '+json.dumps(result.get('results',[]),sort_keys=True))
           PYMETA
