@@ -76,3 +76,25 @@ export function createTestDb(extra = []) {
 then point the 20 test files at it, land migration `0087`, drop the 18 UPSERT
 tails, and only after the suite is green start deleting the 83 `UNION ALL` /
 `NOT EXISTS` arms (they become no-ops the moment the view is in place).
+
+## Measured blast radius (every attempt reverted to keep the suite at 234/234)
+
+| Attempt | Change | Result |
+| --- | --- | --- |
+| A. Point reads canonical-only (`readPreferredDocumentJson` + `readRootStorageRow`) | 2 functions | **32 red** |
+| B. Legacy table → compatibility view + `INSTEAD OF` triggers | migration + 18 UPSERT tails stripped | mechanism OK, **60+ red** (30+ migrations build index/trigger on the table, so the swap must be last) |
+| C. Bidirectional mirror triggers (canonical ⇄ legacy, no drift possible) | migration only | mechanism OK — heal, c→l insert/update/delete, l→c insert/update/delete all verified — **81 red** because 81 tests deliberately seed drift |
+| D. `/v1/docs` + `readPreferredDocumentJson` canonical-only alone | 1 file | **19 red** in 5 files (`firestore-documents` 13, `http-e2e` 3, `call-relay-quota` 1, `fcm-push` 1, `live-pk-room-quota` 1) |
+| D+. D plus blanket `autoMirror` on those 5 files | test seeding | worse (35 red) — the fixtures build their own D1 wrappers |
+
+Conclusion: the production change is one function; **the work is the test contract**.
+The suite is written around drift between the two stores (precedence, dual-store
+guards, "legacy-only" rows). Step 1 has to be a per-file conversion, not a
+mechanical patch.
+
+### Suggested order
+
+1. `call-relay-quota`, `fcm-push`, `live-pk-room-quota` — one test each, seed the canonical twin.
+2. `http-e2e` (3 comment tests) + the 4 `comment-api.js` union sites.
+3. `firestore-documents` — 13 test families, the bulk.
+4. Only then delete the 75 arms in `firestore-documents.js` and re-run the 5-user budget.
