@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Five-user daily D1 read/write budget, derived from the limits in this codebase.
 
-No network access. Every read cost is a `limit(...)`, a badge window constant or a documented
-single-document read in the Android/Worker code; nothing is invented. Run:
+No network access. This is a document-delivery scenario, NOT measured D1 rows_read. SQL indexes,
+engagement subqueries and server scans can consume more; production telemetry is required. Run:
 
     python3 -m scripts.loadtest.five_user_budget
 
@@ -35,17 +35,17 @@ ACTIVITY = {
 # HomeFragment: posts limit(20), stories limit(10), lives limit(25), notes/users limit(30), me doc 1
 # MainActivity badges: notifications BADGE_WINDOW(32), chats CHAT_BADGE_LIMIT(20), friend_requests
 #   BADGE_WINDOW(32), reels limit(16) — all one-shot now, so a change re-reads nothing.
-HOME_READS = 20 + 10 + 25 + 30 + 1
+HOME_READS = 10 + 3 + 3 + 1
 BADGE_READS = 32 + 20 + 32 + 16
 FRIEND_GRAPH_TTL_REFRESHES = 4          # cached 15 minutes
 
 READ_COST = {
     'app_open_home_and_badges': HOME_READS + BADGE_READS,   # 118
-    'feed_listener_redeliveries': 2 * 20,                   # the feed listener still re-reads its page
+    'feed_listener_redeliveries': 0,                   # the feed listener still re-reads its page
     'friend_graph_refresh': 60,                             # cached 15 min; ~4 reads of a 60-friend graph
-    'feed_page': 20,
+    'feed_page': 10,
     'story_viewer_open': 10,
-    'notification_open': 20,
+    'notification_open': 450,
     'chat_list_open': 10 + 20,                              # inbox limit(10) + users strip (cached 10 min)
     'chat_thread_open': 40 + 1 + 2,
     'chat_send': 3,
@@ -82,9 +82,11 @@ PUBLISHED_BASELINE_WRITES = 1_875
 def per_user_reads():
     a, c = ACTIVITY, READ_COST
     return {
-        'app_opens': a['app_opens'] * c['app_open_home_and_badges'],
+        'app_opens': c['app_open_home_and_badges'] + (a['app_opens'] - 1),
+        'visible_discovery': 3,
+        'explicit_home_refreshes': 2 * (HOME_READS - 1 + 3 + 60),
         'feed_listener': a['app_opens'] * c['feed_listener_redeliveries'],
-        'friend_graph': a['app_opens'] * 0 + FRIEND_GRAPH_TTL_REFRESHES * c['friend_graph_refresh'],
+        'friend_graph': c['friend_graph_refresh'],
         'feed_pages': a['feed_pages'] * c['feed_page'],
         'story_viewer': a['story_viewer_opens'] * c['story_viewer_open'],
         'notifications': a['notification_opens'] * c['notification_open'],
@@ -126,6 +128,12 @@ def main():
     top_reads = sorted(reads.items(), key=lambda kv: kv[1], reverse=True)
     report = {
         'users': USERS,
+        'measurement': 'document-delivery estimate, not D1 rows_read telemetry',
+        'assumptions': '20 opens: 1 cache miss, 19 cache hits; 60 friends; 2 explicit Home refreshes; cache not evicted/invalidated otherwise',
+        'cold_open_documents_with_60_friends': HOME_READS + BADGE_READS + 60,
+        'cached_open_incremental_home_and_badge_documents': 0,
+        'cached_open_auth_allowance': 1,
+        'all_20_opens_cache_miss_daily_reads': (sum(reads.values()) - reads['app_opens'] + 20 * (HOME_READS + BADGE_READS + 60)) * USERS + CRON_RUNS * CRON_READS_PER_RUN,
         'reads_per_user_per_day': reads,
         'reads_per_user_total': sum(reads.values()),
         'writes_per_user_per_day': writes,

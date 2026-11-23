@@ -4,12 +4,12 @@ from pathlib import Path
 ROOT=Path(__file__).resolve().parents[2]
 JAVA=ROOT/'app/src/main/java/com/friendbook/social'
 class FeedReadBudgetTest(unittest.TestCase):
-    def test_feed_first_page_is_twenty_and_cache_first(self):
+    def test_feed_first_page_is_ten_and_cache_first(self):
         source=(JAVA/'main/HomeFragment.java').read_text()
-        self.assertIn('private static final int PAGE = 20;',source)
+        self.assertIn('private static final int PAGE = 10;',source)
         first=source.split('private void startPostsQuery(boolean forceReload)',1)[1].split('private void consumePostsSnapshot',1)[0]
         self.assertIn('feedQuery.limit(PAGE)', first)
-        self.assertIn('FEATURED_REELS_PAGE = 20;', source)
+        self.assertNotIn('loadFeaturedReelsForHome', source)
         self.assertIn('first.refreshCachedHead(saved)',first)
         self.assertIn('if(forceReload)first.get(Source.SERVER)',first)
         self.assertIn('first.get(Source.CACHE)',first)
@@ -22,7 +22,8 @@ class FeedReadBudgetTest(unittest.TestCase):
         self.assertIn('D1Reactions.seedFeed', source)
         self.assertNotIn('refreshVisibleEngagement', source)
         self.assertNotIn('watchLatestPosts', source)
-        self.assertIn('>= 120_000L', source)
+        self.assertNotIn('>= 120_000L', source)
+        self.assertIn('first.hasFreshLocalPage(Long.MAX_VALUE)', source)
         adapter=(JAVA/'post/FeedAdapter.java').read_text()
         self.assertIn('!feedEngagementInPage &&', adapter)
     def test_pages_reuse_query_guard_duplicates_and_unlock_on_error(self):
@@ -34,7 +35,7 @@ class FeedReadBudgetTest(unittest.TestCase):
     def test_stories_have_cursor_pages_and_discoverable_more_control(self):
         source=(JAVA/'main/HomeFragment.java').read_text()
         stories=source.split('private void startStoriesListener()',1)[1].split('// ---------- Host ----------',1)[0]
-        for token in ['page.limit(10).get()','storyQuery.startAfter(storyCursor)','if(loadingStories','generation!=storyGeneration','storyIds.add','moreStories=snapshot.size()==10']:
+        for token in ['page.limit(3).getCachedOrFetch(forceSections)','storyQuery.startAfter(storyCursor)','if(loadingStories','generation!=storyGeneration','storyIds.add','moreStories=snapshot.size()==3']:
             self.assertIn(token,stories)
         self.assertNotIn('addSnapshotListener',stories)
         self.assertIn('More stories ›',(JAVA/'post/FeedAdapter.java').read_text())

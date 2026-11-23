@@ -251,6 +251,16 @@ public class Query {
         return get(Source.DEFAULT);
     }
 
+    /** Explicit on-demand lists: reuse even an empty cached result; never revalidate in background.
+     * Cache keys are account-scoped. Pull-to-refresh must pass force=true.
+     */
+    public Task<QuerySnapshot> getCachedOrFetch(boolean force) {
+        if (force || !hasFreshLocalPage(Long.MAX_VALUE)) return get(Source.SERVER);
+        return get(Source.CACHE).continueWithTask(Runnable::run, task ->
+                task.isSuccessful() ? com.google.android.gms.tasks.Tasks.forResult(task.getResult())
+                        : get(Source.SERVER));
+    }
+
     public Task<QuerySnapshot> get(Source source) {
         final String actor = D1DocumentStore.authenticatedUid();
         final String key = D1DocumentStore.queryCacheKey(this, actor);

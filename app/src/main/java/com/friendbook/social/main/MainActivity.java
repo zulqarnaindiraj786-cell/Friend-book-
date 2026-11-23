@@ -564,7 +564,7 @@ public class MainActivity extends Activity {
                 .whereEqualTo("toUserId", me).whereEqualTo("isRead", false)
                 .orderBy("createdAt", com.friendbook.social.d1.documents.Query.Direction.DESCENDING)
                 .limit(BADGE_WINDOW)
-                .get()
+                .getCachedOrFetch(false)
                 .addOnSuccessListener((snap) -> {
                     if (snap == null || !java.util.Objects.equals(me,Fb.uid())) return;
                     if (hasWindowFocus() && foregroundStartedAt > 0 && !snap.getMetadata().isFromCache()) {
@@ -612,7 +612,7 @@ public class MainActivity extends Activity {
                 .whereArrayContains("participants", me)
                 .orderBy("inboxActivityAt", com.friendbook.social.d1.documents.Query.Direction.DESCENDING)
                 .limit(com.friendbook.social.core.OnDemandLoads.CHAT_BADGE_LIMIT)
-                .get()
+                .getCachedOrFetch(false)
                 .addOnSuccessListener((snap) -> {
                     if (snap == null || !java.util.Objects.equals(me,Fb.uid())) return;
                     int total = 0;
@@ -654,7 +654,7 @@ public class MainActivity extends Activity {
                 .whereEqualTo("toUid", me).whereEqualTo("status", "pending")
                 .orderBy("createdAt", com.friendbook.social.d1.documents.Query.Direction.DESCENDING)
                 .limit(BADGE_WINDOW)
-                .get()
+                .getCachedOrFetch(false)
                 .addOnSuccessListener((snap) -> {
                     if (snap == null || !me.equals(Fb.uid())) return;
                     synchronized (currentPendingReqIds) {
@@ -702,7 +702,7 @@ public class MainActivity extends Activity {
         Fb.db().collection("reels")
                 .orderBy("createdAt", com.friendbook.social.d1.documents.Query.Direction.DESCENDING)
                 .limit(16)
-                .get()
+                .getCachedOrFetch(false)
                 .addOnSuccessListener(snap -> {
                     if (Prefs.quiet(this) || active == TAB_REELS) {
                         Ui.setBadge(reelsBadge, 0);

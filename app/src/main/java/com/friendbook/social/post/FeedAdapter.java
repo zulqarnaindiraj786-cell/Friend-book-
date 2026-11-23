@@ -59,6 +59,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         default boolean hasPageError(){return false;}
         default void onPostDeleted(String id) { }
         default void openFindFriends() { }
+        default void onDiscoveryVisible() { }
         default void openReelsTab(Models.Reel featuredReel) { }
         default void loadMoreStories() { }
         default boolean hasMoreStories() { return false; }
@@ -92,7 +93,16 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         feedBanners.show(holder.feedBanner, holder.bannerPostId, anchor);
     }
 
+    private View discoveryViewport;
+    private void requestVisibleDiscovery() {
+        android.graphics.Rect rect=new android.graphics.Rect();
+        if (host!=null && discoveryViewport!=null && discoveryViewport.isShown()
+                && discoveryViewport.getGlobalVisibleRect(rect) && rect.height()>0)
+            host.onDiscoveryVisible();
+    }
+
     public void refreshFeedBannerVisibility() {
+        requestVisibleDiscovery();
         if (feedBanners != null) feedBanners.refreshVisibleSlots();
     }
 
@@ -649,6 +659,8 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             return;
         }
         vh.firstPostDiscoveryBox.setVisibility(View.VISIBLE);
+        discoveryViewport=vh.firstPostDiscoveryBox;
+        discoveryViewport.post(this::requestVisibleDiscovery);
 
         // 1. Bind Facebook-Style "People You May Know" horizontal cards
         vh.firstPostPymkRow.removeAllViews();
@@ -951,7 +963,8 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         Models.User author = pagePost || p.authorId == null ? null
                 : com.friendbook.social.core.FastCache.getUser(p.authorId);
         String actor = Fb.uid();
-        if (!pagePost && p.authorId != null && !p.authorId.isEmpty()
+        if (!pagePost && author == null && (p.authorName == null || p.authorName.isEmpty())
+                && p.authorId != null && !p.authorId.isEmpty()
                 && requestedAuthors.add(String.valueOf(actor) + ":" + p.authorId)) {
             final String requestKey=String.valueOf(actor) + ":" + p.authorId;
             Fb.getUserFresh(p.authorId).addOnSuccessListener(loaded -> {
