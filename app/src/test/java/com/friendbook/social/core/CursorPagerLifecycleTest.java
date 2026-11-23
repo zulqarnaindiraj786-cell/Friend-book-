@@ -20,25 +20,26 @@ import static org.mockito.Mockito.*;
 @Config(sdk=28,application=android.app.Application.class)
 public class CursorPagerLifecycleTest {
     @Test public void closingOnCachedPaintPreventsServerRequestForEmptyPopulatedAndFailedCache() {
-        for(int variant=0;variant<3;variant++) {
+        for(int variant=0;variant<6;variant++) {
             try(MockedStatic<Fb> fb=mockStatic(Fb.class)) {
                 fb.when(Fb::uid).thenReturn("viewer");
                 Query query=mock(Query.class),head=mock(Query.class);
                 when(query.limit(10)).thenReturn(head);
                 QuerySnapshot cache=mock(QuerySnapshot.class);
                 DocumentSnapshot doc=mock(com.friendbook.social.d1.documents.QueryDocumentSnapshot.class);when(doc.getId()).thenReturn("one");
-                when(cache.isEmpty()).thenReturn(variant==0);
-                when(cache.size()).thenReturn(variant==0?0:1);
-                when(cache.getDocuments()).thenReturn(variant==0?Collections.emptyList():Collections.singletonList(doc));
+                when(cache.isEmpty()).thenReturn(variant%3==0);
+                when(cache.size()).thenReturn(variant%3==0?0:1);
+                when(cache.getDocuments()).thenReturn(variant%3==0?Collections.emptyList():Collections.singletonList(doc));
                 when(cache.iterator()).thenAnswer(call->cache.getDocuments().iterator());
-                when(head.get(Source.CACHE)).thenReturn(variant==2?Tasks.forException(new java.io.IOException("cache miss")):Tasks.forResult(cache));
+                when(head.get(Source.CACHE)).thenReturn(variant%3==2?Tasks.forException(new java.io.IOException("cache miss")):Tasks.forResult(cache));
                 // If the regression returns this stub prevents an unrelated NPE.
                 when(head.get(Source.SERVER)).thenReturn(Tasks.forException(new java.io.IOException("must not run")));
                 CursorPager[] pager={null};
                 pager[0]=new CursorPager(query,10,"lifecycle:"+variant,(docs,more,loading,error)->pager[0].close());
-                pager[0].startFullRefresh();
+                if(variant<3) pager[0].startFullRefresh(); else pager[0].startDelta();
                 Shadows.shadowOf(Looper.getMainLooper()).idle();
                 verify(head,never()).get(Source.SERVER);
+                verify(head,never()).refreshCachedHead(org.mockito.ArgumentMatchers.nullable(QuerySnapshot.class));
             }
         }
     }
