@@ -3047,7 +3047,11 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0, ct
     catch { return json({ error: 'Read unavailable' }, 503); }
     if (!row) return json({ exists: false, id: docIdOf(docPath), path: docPath, data: null });
     const document = rowToDocument(row);
-    try { if (!(await contentReadAllowed(db,uid,docPath,requestAccountReads(identity),true))) return json({error:'Forbidden'},403); }
+    // Only the just-read canonical root can seed content authorization. Keep
+    // nested resources and every profile/group/friendship dependency fresh.
+    const canonicalContentFields=row[canonicalRootSnapshot] && parts.length===2
+      && ['posts','reels','stories'].includes(parts[0]) ? toFirestoreFields(row.document_json) : undefined;
+    try { if (!(await contentReadAllowed(db,uid,docPath,requestAccountReads(identity),true,canonicalContentFields))) return json({error:'Forbidden'},403); }
     catch { return json({error:'Content access unavailable'},503); }
     if (parts[0] === 'friend_requests' && !canReadFriendRequest(uid, document.data)) return json({ error:'Forbidden' }, 403);
     if (parts[0]==='officialBroadcasts' && document.data?.adminId!==uid) return json({error:'Forbidden'},403);

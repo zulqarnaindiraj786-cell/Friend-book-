@@ -24,11 +24,11 @@ export function supportedCollectionPath(path) {
   if (['posts','reels'].includes(p[0])) return p.length===1 || (p.length===3 && ['comments','reactions'].includes(p[2]));
   return true;
 }
-export async function contentReadAllowed(db, uid, path, requestUserReads, includeArchivedOwner = false) {
+export async function contentReadAllowed(db, uid, path, requestUserReads, includeArchivedOwner = false, canonicalFields) {
   const p=path.split('/');
   if (p[0]==='lives') return authorizeLiveRoom(db,p[1],uid,requestUserReads);
   if (!['posts','reels','stories'].includes(p[0])) return true;
-  return authorizePost({uid,db},p[0],p[1],undefined,undefined,requestUserReads,includeArchivedOwner);
+  return authorizePost({uid,db},p[0],p[1],undefined,undefined,requestUserReads,includeArchivedOwner,canonicalFields);
 }
 export function contentWriteAllowed(path, uid, before, after) {
   const p=path.split('/');

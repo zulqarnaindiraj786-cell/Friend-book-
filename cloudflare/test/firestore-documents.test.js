@@ -3340,3 +3340,34 @@ test('Search ordered people head bounds common prefix reads instead of loading e
   assert.equal(prefixRows,10,'first head must not materialize all 2000 matching profiles');
   assert.match(plans.join('\n'),/SEARCH .*USING INDEX idx_cf_users_display_name/);
 });
+
+test('canonical content GET authorizes the same fresh root once and retains privacy and block checks', async () => {
+  for(const root of ['posts','reels','stories']) {
+    const sql=new DatabaseSync(':memory:');
+    for(const ddl of [resourcesSchema,appSchema,schema])sql.exec(ddl);
+    const put=sql.prepare('INSERT OR REPLACE INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)');
+    const seed=(parent,id,data)=>put.run(`${parent}/${id}`,parent,parent,id,id,JSON.stringify(data),1,1);
+    seed('users','viewer',{displayName:'Viewer'});seed('users','author',{displayName:'Author'});
+    let rootReads=0;
+    const db={prepare(q){const stmt=sql.prepare(q);return{bind(...args){return{
+      first:async()=>{if(q.includes('friendbook_cf_firestore_documents') && q.includes('WHERE path') && args[0]===`${root}/p`)rootReads++;return stmt.get(...args)||null;},
+      all:async()=>({results:stmt.all(...args)}),
+    };}};}};
+    const read=async(actor,expected)=>{
+      rootReads=0;
+      const response=await createWorker(async token=>token).fetch(new Request(`https://example.test/v1/firestore/document?path=${root}/p`,{
+        headers:{authorization:`Bearer ${actor}`},
+      }),{DB:db,FIREBASE_PROJECT_ID:'test'});
+      assert.equal(response.status,expected,`${root} ${actor}`);
+      assert.equal(rootReads,1,'GET must not re-read the same canonical content for ACL');
+      return response;
+    };
+    seed(root,'p',{authorId:'author',privacy:'Public',content:'visible'});
+    assert.equal((await (await read('viewer',200)).json()).data.content,'visible');
+    seed(root,'p',{authorId:'author',privacy:'Only me'});
+    await read('viewer',403);await read('author',200);
+    seed(root,'p',{authorId:'author',privacy:'Public'});
+    seed('users','author',{displayName:'Author',blocked:['viewer']});await read('viewer',403);
+    seed('users','author',{displayName:'Author',banned:true});await read('viewer',403);
+  }
+});

@@ -3,7 +3,7 @@ import { trustedGroupOwner } from './social-access.js';
 
 // D1-only authorization. Firebase is used to verify the caller's Auth token in
 // worker.js; no source-data request is made to Firestore from this module.
-export async function authorizePost({ uid, db }, collection, id, _unused, context, requestUserReads, includeArchivedOwner = false) {
+export async function authorizePost({ uid, db }, collection, id, _unused, context, requestUserReads, includeArchivedOwner = false, canonicalFields) {
   if (!db || typeof uid !== 'string' || !uid) return false;
   // Coalesce shared ACL dependencies only within this one query request.
   // Pending promises must be shared too: a feed authorizes rows concurrently.
@@ -22,7 +22,10 @@ export async function authorizePost({ uid, db }, collection, id, _unused, contex
   const list = (f, key) => [...(f[key]?.arrayValue?.values || []), ...(key === 'blocked' ? (f.blockedUsers?.arrayValue?.values || []) : [])]
     .map(v => v.stringValue).filter(v => typeof v === 'string');
 
-  const post = await fields(`${collection}/${id}`);
+  // A document GET may supply its freshly read canonical storage snapshot.
+  // Authorize precisely the row returned, not a second copy of the same root.
+  // Never supplied from client JSON, list projections or a cross-request cache.
+  const post = canonicalFields ?? await fields(`${collection}/${id}`);
   const owner = string(post, 'authorId');
   if (!owner) return false;
   const hidden=Boolean(post.archived?.booleanValue) || Number(post.trashedAt?.integerValue || post.trashedAt?.doubleValue || post.trashedAt?.timestampValue && Date.parse(post.trashedAt.timestampValue) || 0) > 0;
