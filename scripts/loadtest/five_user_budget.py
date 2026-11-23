@@ -19,6 +19,9 @@ ACTIVITY = {
     'feed_pages': 20,            # further pages after the first (HomeFragment PAGE = 10)
     'story_viewer_opens': 10,
     'notification_opens': 5,
+    'notification_pages': 5,
+    'notification_mark_all': 1,
+    'notification_unread_to_mark': 40,
     'chat_list_opens': 10,
     'chat_thread_opens': 12,
     'chat_sent': 30,
@@ -45,7 +48,10 @@ READ_COST = {
     'friend_graph_refresh': 60,                             # one assumed 60-friend graph, reused from disk
     'feed_page': 10,
     'story_viewer_open': 10,
-    'notification_open': 450,
+    'notification_open': 20,  # first page, not the explicit mark-all operation
+    'notification_page': 20,
+    'notification_sender_lookups': 20,  # conservative allowance: one unknown sender per row
+    'notification_mark_batch': 20,
     'chat_list_open': 10 + 20,                              # inbox limit(10) + users strip (cached 10 min)
     'chat_thread_open': 40 + 1 + 2,
     'chat_send': 3,
@@ -89,7 +95,13 @@ def per_user_reads():
         'friend_graph': c['friend_graph_refresh'],
         'feed_pages': a['feed_pages'] * c['feed_page'],
         'story_viewer': a['story_viewer_opens'] * c['story_viewer_open'],
+        # Charge every list open/page as a cache miss (hits cost zero query documents).
         'notifications': a['notification_opens'] * c['notification_open'],
+        'notification_pages': a['notification_pages'] * c['notification_page'],
+        'notification_senders': (a['notification_opens'] + a['notification_pages']) * c['notification_sender_lookups'],
+        # Mark-all reads every unread row, plus an empty-tail probe and refreshed head.
+        # Smaller batches reduce peak work, NOT total rows needed to mark everything.
+        'notification_mark_all': a['notification_mark_all'] * (a['notification_unread_to_mark'] + 1 + c['notification_open']),
         'chat_list': a['chat_list_opens'] * c['chat_list_open'],
         'chat_threads': a['chat_thread_opens'] * c['chat_thread_open'],
         'chat_sends': a['chat_sent'] * c['chat_send'],
@@ -105,6 +117,7 @@ def per_user_writes():
         'messages': a['chat_sent'] * w['message'],
         'room_previews': a['chat_sent'] * w['room_preview'],
         'notifications': a['chat_sent'] * w['notification'],
+        'notification_mark_all': a['notification_mark_all'] * a['notification_unread_to_mark'],
         'reactions': a['likes_reactions'] * w['reaction'],
         'receipts': round(a['chat_received'] * 0.5) * w['receipt'],
         'posts_comments': (a['posts_comments'] * 2) * w['post_or_comment'],
@@ -129,7 +142,7 @@ def main():
     report = {
         'users': USERS,
         'measurement': 'document-delivery estimate, not D1 rows_read telemetry',
-        'assumptions': '20 opens: 1 cache miss, 19 cache hits; 60 friends; 2 explicit Home refreshes; cache not evicted/invalidated otherwise',
+        'assumptions': '20 opens: 1 cache miss, 19 cache hits; 60 friends; 2 explicit Home refreshes; cache not evicted/invalidated otherwise; notification list: 5 opens + 5 older pages charged as misses, 200 sender lookups, 1 explicit mark-all of 40 unread',
         'cold_open_documents_with_60_friends': HOME_READS + BADGE_READS + 60,
         'cached_open_incremental_home_and_badge_documents': 0,
         'cached_open_auth_allowance': 1,

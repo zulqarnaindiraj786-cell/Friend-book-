@@ -23,6 +23,7 @@ public final class CursorPager {
     private List<DocumentSnapshot> observedHead=Collections.emptyList();
     private boolean receivedObserved;
     private boolean more=true,loading,closed,serverReceived;
+    private boolean reuseExactPages;
     private int requestGeneration;
     private final android.os.Handler timeoutHandler=new android.os.Handler(android.os.Looper.getMainLooper());
     private Runnable timeout;
@@ -32,6 +33,9 @@ public final class CursorPager {
     public void start() { start(false); }
     public void startDelta() { startLocal(0,false); }
     public void startFullRefresh() { startLocal(0,true); }
+    /** Cache-first explicit list: no background revalidation; writes invalidate exact query pages. */
+    public void startOnDemand() { reuseExactPages=true; startLocal(Long.MAX_VALUE,true); }
+    public void refreshOnDemand() { reuseExactPages=true; startFullRefresh(); }
     public void startCachedDay() { startLocal(24*60*60*1000L,true); }
     private void startLocal(long maxAgeMs,boolean full) {
         if(!active() || loading)return;
@@ -119,9 +123,10 @@ public final class CursorPager {
         Query page=query;if(cursor!=null)page=page.startAfter(cursor);
         timeout=()->{if(active() && loading && request==requestGeneration){requestGeneration++;loading=false;emit("Loading is taking too long. Tap to retry.");}};
         timeoutHandler.postDelayed(timeout,20000L);
-        page.limit(size).get().addOnSuccessListener(result -> {
+        Query bounded=page.limit(size);
+        (reuseExactPages ? bounded.getCachedOrFetch(false) : bounded.get()).addOnSuccessListener(result -> {
             if(!active() || request!=requestGeneration)return;timeoutHandler.removeCallbacks(timeout);loading=false;
-            boolean offline=result.getMetadata().isFromCache();
+            boolean offline=result.getMetadata().isFromCache() && !reuseExactPages;
             if(!offline)serverReceived=true;
             if(!offline)more=result.size()==size;
             // An offline cache can be incomplete or empty; it cannot prove that

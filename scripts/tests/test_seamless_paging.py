@@ -7,8 +7,11 @@ class SeamlessPaging(unittest.TestCase):
         helper=(ROOT/'core/NearEndPaging.java').read_text()
         self.assertIn('SCROLL_STATE_IDLE',helper)
         self.assertIn('gate.shouldLoad',helper)
-        for path in ['main/NotificationsFragment.java','friends/FollowListActivity.java']:
+        for path in ['friends/FollowListActivity.java']:
             self.assertIn('NearEndPaging.attach(rv,', (ROOT/path).read_text())
+        notifications=(ROOT/'main/NotificationsFragment.java').read_text()
+        self.assertIn('pageGate.shouldLoad(dy',notifications)
+        self.assertIn('getItemCount()-1',notifications)
         inbox=(ROOT/'chat/ConversationsActivity.java').read_text()
         self.assertNotIn('NearEndPaging.attach',inbox)
         self.assertIn('inboxMoreButton.setOnClickListener',inbox)

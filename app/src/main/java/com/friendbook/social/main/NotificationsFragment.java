@@ -34,9 +34,14 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
-/** Notifications tab: realtime list, unread highlight, mark-all-read, deep links. */
+/** On-demand notifications: cached pages, unread highlight, explicit mark-all-read, deep links. */
 public class NotificationsFragment extends Fragment {
 
+    private static final int PAGE_SIZE = 20;
+    private static final int MARK_READ_BATCH_SIZE = 20;
+    private final java.util.Set<String> pendingReadIds=new java.util.HashSet<>();
+    private boolean markingAll;
+    private int markReadGeneration;
     private NotifAdapter adapter;
     private com.friendbook.social.core.CursorPager pager;
     private androidx.swiperefreshlayout.widget.SwipeRefreshLayout swipe;
@@ -90,12 +95,22 @@ public class NotificationsFragment extends Fragment {
         root.addView(empty);
 
         RecyclerView rv = new RecyclerView(a);
-        rv.setLayoutManager(new LinearLayoutManager(a));
+        LinearLayoutManager layout=new LinearLayoutManager(a);
+        layout.setItemPrefetchEnabled(false);
+        rv.setLayoutManager(layout);
         rv.setItemAnimator(null);
         rv.setItemViewCacheSize(20);
         adapter = new NotifAdapter();
         rv.setAdapter(adapter);
-        com.friendbook.social.core.NearEndPaging.attach(rv,()->{if(pager!=null)pager.next();});
+        com.friendbook.social.core.ScrollPageGate pageGate=new com.friendbook.social.core.ScrollPageGate();
+        rv.addOnScrollListener(new RecyclerView.OnScrollListener() {
+            @Override public void onScrolled(RecyclerView list,int dx,int dy) {
+                if(dy>0 && isResumed() && !isHidden()
+                        && list.getScrollState()!=RecyclerView.SCROLL_STATE_IDLE
+                        && pageGate.shouldLoad(dy,layout.findLastVisibleItemPosition()>=adapter.getItemCount()-1,adapter.getItemCount())
+                        && pager!=null) pager.next();
+            }
+        });
         swipe = new androidx.swiperefreshlayout.widget.SwipeRefreshLayout(a);
         swipe.setColorSchemeColors(Ui.BLUE);
         swipe.addView(rv);
@@ -134,19 +149,48 @@ public class NotificationsFragment extends Fragment {
     private void markAllReadReal() {
         // Only the explicit "Mark all read" button invokes this operation.
         String me = Fb.uid();
-        if (me == null) return;
-        Fb.db().collection("notifications").whereEqualTo("toUserId", me).whereEqualTo("isRead", false)
-                .limit(450).get().addOnSuccessListener(snap -> {
-                    if (!me.equals(Fb.uid()) || snap == null || snap.isEmpty()) return;
+        if (me == null || markingAll) return;
+        markingAll=true;
+        markUnreadBatch(me, ++markReadGeneration, null);
+    }
+
+    private void markUnreadBatch(String me, int generation, DocumentSnapshot cursor) {
+        // All rows are touched only for this explicit operation, never for opening the tab.
+        if (!isAdded() || isHidden() || !me.equals(Fb.uid()) || generation!=markReadGeneration) {
+            markingAll=false;return;
+        }
+        com.friendbook.social.d1.documents.Query unread=Fb.db().collection("notifications")
+                .whereEqualTo("toUserId", me).whereEqualTo("isRead", false)
+                .orderBy("createdAt",com.friendbook.social.d1.documents.Query.Direction.DESCENDING);
+        // Keyset continuation avoids repeatedly scanning the already-marked prefix.
+        if(cursor!=null)unread=unread.startAfter(cursor);
+        unread.limit(MARK_READ_BATCH_SIZE).get(com.friendbook.social.d1.documents.Source.SERVER).addOnSuccessListener(snap -> {
+                    if (!me.equals(Fb.uid()) || generation!=markReadGeneration) return;
+                    if (snap == null) { markingAll=false;return; }
+                    if (snap.isEmpty()) { finishMarkAll(me,generation);return; }
                     com.friendbook.social.d1.documents.WriteBatch batch = Fb.db().batch();
                     for (DocumentSnapshot d : snap) batch.update(d.getReference(), "isRead", true);
                     batch.commit().addOnSuccessListener(v -> {
-                        if (!me.equals(Fb.uid())) return;
-                        markAllReadOptimisticNow();
-                        MainActivity.clearNotificationsBadgeNow();
-                        if (snap.size() == 450) markAllReadReal();
-                    });
-                });
+                        if (!me.equals(Fb.uid()) || generation!=markReadGeneration) return;
+                        if (snap.size() == MARK_READ_BATCH_SIZE) markUnreadBatch(me,generation,snap.getDocuments().get(snap.size()-1));
+                        else finishMarkAll(me,generation);
+                    }).addOnFailureListener(error -> markAllFailed(generation));
+                }).addOnFailureListener(error -> markAllFailed(generation));
+    }
+
+    private void finishMarkAll(String me,int generation) {
+        if (!me.equals(Fb.uid()) || generation!=markReadGeneration) return;
+        markingAll=false;
+        markAllReadOptimisticNow();
+        MainActivity.clearNotificationsBadgeNow();
+        // The unread pager must not keep old unread cursors after a successful bulk action.
+        if (isAdded() && !isHidden()) startPages();
+    }
+
+    private void markAllFailed(int generation) {
+        if (generation!=markReadGeneration) return;
+        markingAll=false;
+        if (getActivity()!=null) Ui.toast(getActivity(),"Couldn't mark all read. Tap to retry.");
     }
 
     @Override
@@ -182,7 +226,7 @@ public class NotificationsFragment extends Fragment {
         com.friendbook.social.d1.documents.Query query=Fb.db().collection("notifications").whereEqualTo("toUserId",me);
         if(unreadOnly)query=query.whereEqualTo("isRead",false);
         query = query.orderBy("createdAt", com.friendbook.social.d1.documents.Query.Direction.DESCENDING);
-        pager=new com.friendbook.social.core.CursorPager(query,20,"notifications:"+unreadOnly,(docs,more,loading,error)->{
+        pager=new com.friendbook.social.core.CursorPager(query,PAGE_SIZE,"notifications:"+unreadOnly,(docs,more,loading,error)->{
             android.app.Activity act=getActivity();if(act==null || adapter==null)return;
             if(loading){moreButton.setText("Loading…");moreButton.setEnabled(false);return;}
             if(swipe!=null)swipe.setRefreshing(false);
@@ -196,7 +240,7 @@ public class NotificationsFragment extends Fragment {
             moreButton.setText(!error.isEmpty()?"Retry notifications":more?"Load 20 more":"All loaded");
             moreButton.setEnabled(!loading && (more || !error.isEmpty()));
         });
-        if(full)pager.startFullRefresh(); else pager.startDelta();
+        if(full)pager.refreshOnDemand(); else pager.startOnDemand();
     }
 
     private void setUnreadOnly(boolean on) {
@@ -244,12 +288,23 @@ public class NotificationsFragment extends Fragment {
     }
 
     private void stopPages() {
+        markReadGeneration++;markingAll=false;
         if(pager!=null){pager.close();pager=null;}
     }
 
     private void open(Models.Notif n) {
-        if (!n.isRead) {
-            Fb.db().collection("notifications").document(n.id).update("isRead", true);
+        if (!n.isRead && pendingReadIds.add(n.id)) {
+            final String actor=Fb.uid();
+            Fb.db().collection("notifications").document(n.id).update("isRead", true)
+                    .addOnSuccessListener(ignored -> {
+                        pendingReadIds.remove(n.id);
+                        if (!java.util.Objects.equals(actor,Fb.uid())) return;
+                        n.isRead=true;
+                        if (unreadOnly) { data.remove(n);if(pager!=null)pager.forget(n.id); }
+                        else com.friendbook.social.core.FastCache.saveNotifications(data);
+                        if(adapter!=null)adapter.notifyDataSetChanged();
+                        if(empty!=null)empty.setVisibility(data.isEmpty()?View.VISIBLE:View.GONE);
+                    }).addOnFailureListener(error -> pendingReadIds.remove(n.id));
         }
         android.app.Activity a = getActivity();
         if (a == null) return;
