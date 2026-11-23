@@ -177,6 +177,21 @@ def cross_window_totals(windows):
     return results
 
 
+
+def priority_shape_notices(windows):
+    # GitHub keeps only a small number of notices per step. Reserve six compact
+    # notices for the two costliest shapes in EVERY window before verbose detail.
+    # Only accept the sanitized summaries, never raw SQL or bindings.
+    lines=[]
+    for window in windows:
+        for metric in ('rowsRead','rowsWritten'):
+            lines.append('Sanitized priority shapes '+json.dumps({
+                'minutes':window['minutes'],'end':window['end'],'ranked_by':metric,
+                'may_be_truncated':window[metric]['may_be_truncated'],
+                'shapes':window[metric]['largest_shapes'][:2]},sort_keys=True))
+    return lines
+
+
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output',type=Path)
@@ -208,6 +223,7 @@ def main():
     # CI can cap annotations per step: put ALL window totals first, rather
     # than losing 15/60-minute evidence behind the five-minute shape notices.
     print('::notice::Sanitized cross-window totals '+json.dumps(cross_window_totals(report['windows']),sort_keys=True))
+    for line in priority_shape_notices(report['windows']): print('::notice::'+line)
     for window in report['windows']:
         for line in notice_lines(window): print('::notice::'+line)
     if args.output:

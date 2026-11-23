@@ -158,3 +158,24 @@ class TrafficReport(unittest.TestCase):
         self.assertLess(len(str(result)),4000)
         windows[0]['account_database_breakdown']={'status':'analytics_unavailable_not_zero','databases':[]}
         self.assertIsNone(p.cross_window_totals(windows)[0]['observed_other_database_subtotals'])
+
+
+    def test_priority_shapes_reserve_each_window_before_detail_without_raw_sql(self):
+        windows=[]
+        groups=[{'dimensions':{'query':"SELECT document_json FROM friendbook_cf_firestore_documents WHERE path='PRIVATE'"},
+                 'sum':{'rowsRead':100-i,'rowsWritten':i},'count':2} for i in range(5)]
+        for minutes in (5,15,60):
+            windows.append({'minutes':minutes,'end':'end',
+              **{metric:p.summarize_shapes(groups,metric) for metric in ('rowsRead','rowsWritten')}})
+        lines=p.priority_shape_notices(windows)
+        self.assertEqual(len(lines),6)
+        self.assertNotIn('PRIVATE',str(lines))
+        self.assertNotIn('SELECT document_json',str(lines))
+        for i,line in enumerate(lines):
+            self.assertLess(len(line),3000)
+            data=json.loads(line.removeprefix('Sanitized priority shapes '))
+            self.assertEqual(data['minutes'],(5,15,60)[i//2])
+            self.assertEqual(len(data['shapes']),2)
+            self.assertEqual(data['ranked_by'],('rowsRead','rowsWritten')[i%2])
+        source=(ROOT/'scripts/loadtest/quota_traffic_report.py').read_text()
+        self.assertLess(source.index("for line in priority_shape_notices(report['windows'])"),source.index("for line in notice_lines(window)"))
