@@ -62,3 +62,13 @@ The account-daily acceptance FAIL previously observed is not changed by these wi
 The inspected current Android `ListenerPollingPolicy.intervalMs` returns Long.MAX_VALUE for every path. Thus historical SQL counts alone cannot establish that the current source has per-second polling. Installed APK versions remain unknown. Friendship candidate unions are security-sensitive, so they were not blindly removed.
 
 Attempted stable prerelease publication of the existing signed 2.10.34 build verified source/signature-test provenance and downloaded both build artifacts in CI, but GitHub release creation returned HTTP 403 in runs 45170291635 and 45170406219. No release was published or claimed. Signed build artifacts in run 45166501055 remain the available delivery mechanism, subject to artifact retention and GitHub access.
+
+## Canonical chat authorization follow-up
+
+Source 487f3e09f539f325e9d327f2da4e66ec5654c7b9 deployed successfully in run 45173483731, job completed at provider-reported 2026-11-23T12:21:51Z.
+
+`loadChat` previously queried the legacy mirror when no canonical room existed. It now performs exactly one canonical lookup and fails closed when missing. This prevents stale mirror membership from authorizing a missing canonical room, and removes one lookup on missing-room checks. It does NOT reduce reads of existing rooms or solve full inbox scans.
+
+New tests assert the single-read missing-room budget, no mirror fallback, and fresh membership revocation on the next request (no cross-request authorization cache). All 243 Worker tests and 372 Python tests passed. Deployment preflight, resource/cron preservation, health/auth smoke checks succeeded. No D1 migrations or schema mutation were run.
+
+Open measured hotspots remain: existing-room chat-list scan/pagination, notifications compatibility path, high point-lookup caller volume, and mirror-write provenance. Do not describe this narrow fix as resolving those or all measured quota consumers. Latest deployment boundary is 12:21:51Z for future full-day checks.
