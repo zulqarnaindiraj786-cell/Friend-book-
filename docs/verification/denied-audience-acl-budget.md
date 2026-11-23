@@ -22,3 +22,9 @@ These are local prepared-statement/fixture counts, not billed D1 rows or measure
 - Diff whitespace check passed.
 
 Code-only deployment requested with the accompanying marker commit. Rollout outcome must be recorded separately. No Android change, packaging or PR merge in this patch.
+
+## Verified rollout and additional equivalence check
+
+Code-only rollout [45215521957](https://github.com/zulqarnaindiraj786-cell/Friend-book-/actions/runs/45215521957) succeeded for `e0d6484c1f47bc5f7895f6f5b8f4c2a0bd9279ae`. Full regressions, production dry-run, resource/schedule preservation and health/auth smoke checks passed. No D1 migrations ran.
+
+A supplementary local mock differential experiment compared the pre-change and new authorization functions over **1,848 combinations**: eleven audience representations, self/non-owner, seven profile presence/ban/block modes, six group modes and friendship present/absent. All returned decisions matched. This is supplementary local evidence, not a production race/traffic test or an app-wide security proof. Existing independent canonical post authorization reads were deliberately retained.
