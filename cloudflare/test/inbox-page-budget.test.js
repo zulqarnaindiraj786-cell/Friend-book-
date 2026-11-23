@@ -12,7 +12,7 @@ function fixture(withIndex=false,measuredCost=null) {
   if(withIndex)sql.exec(readFileSync(new URL('../migrations/0091_chat_activity_seek.sql',import.meta.url),'utf8'));
   const reads=[];
   const db={prepare(q){const stmt=sql.prepare(q);return {bind(...a){return {
-    async all(){const results=stmt.all(...a);reads.push({q,args:a,rows:results.length});return {results,...(measuredCost!==null && q.includes('WITH quota_inbox_candidates')?{meta:{rows_read:measuredCost}}:{})};},
+    async all(){const results=stmt.all(...a);reads.push({q,args:a,rows:results.length,jsonBytes:results.reduce((n,r)=>n+(r.document_json?.length||0),0)});return {results,...(measuredCost!==null && q.includes('WITH quota_inbox_candidates')?{meta:{rows_read:measuredCost}}:{})};},
     async first(){return stmt.get(...a)||null;},async run(){return stmt.run(...a);},
   };}};}};
   const add=(id,data)=>sql.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)')
@@ -159,5 +159,16 @@ test('unsafe JSON integers preserve JS-rounded activity ties and cursors through
     f.sql.exec("UPDATE friendbook_cf_firestore_documents SET document_json='{\"participants\":[\"alice\",\"bob\"],\"lastMessageTime\":9007199254740993}' WHERE path='chats/a'");
     f.expensive();assert.deepEqual((await f.query({})).map(d=>d.id),['z','a']);
     assert.deepEqual(await f.query({startAfter:[9007199254740992,'z']}),await f.query({startAfter:[9007199254740992,'z']},true));
+  } finally {f.sql.close();}
+});
+
+
+test('shared head does not materialize unrelated large chat document JSON',async()=>{
+  const f=fixture(true);try {
+    for(let i=0;i<40;i++)f.add(`other${i}`,{participants:['alice','eve'],lastMessageTime:1000-i,lastMessage:'x'.repeat(50000)});
+    for(let i=0;i<20;i++)f.add(`own${i}`,{participants:['alice','bob'],lastMessageTime:100-i});
+    f.expensive();assert.deepEqual(await f.query({}),await f.query({},true));
+    const head=f.reads.find(r=>r.q.includes('idx_cf_chat_activity_seek'));
+    assert.equal(head.rows,60);assert.ok(head.jsonBytes<5000,'unrelated multi-megabyte payload stays out of Worker materialization');
   } finally {f.sql.close();}
 });

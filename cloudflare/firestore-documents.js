@@ -351,9 +351,16 @@ async function boundedInboxPage(db,uid,spec,requestUserReads) {
   const seekSize=inboxSeekSize(db,uid,spec.limit);
   if(seekSize) {
     try {
-      const head=await db.prepare(`SELECT f.*, CAST((${inboxSqlActivity}) AS REAL) AS inbox_activity,
-        EXISTS(SELECT 1 FROM friendbook_cf_chat_participants m WHERE m.participant_uid=?
-          AND m.chat_path=f.path AND m.source=1) AS inbox_member
+      // Do not materialize another actor's chat JSON merely to inspect the
+      // shared ordered head. The same source-1 membership check gates JSON;
+      // authoritative canonical membership is still rechecked below.
+      const memberSql=`EXISTS(SELECT 1 FROM friendbook_cf_chat_participants m
+        WHERE m.participant_uid=?1 AND m.chat_path=f.path AND m.source=1)`;
+      const head=await db.prepare(`SELECT f.path,f.parent_path,f.collection_id,f.doc_id,
+        f.owner_uid,f.create_time,f.update_time,
+        CASE WHEN ${memberSql} THEN f.document_json ELSE '{}' END AS document_json,
+        CAST((${inboxSqlActivity}) AS REAL) AS inbox_activity,
+        ${memberSql} AS inbox_member
         FROM friendbook_cf_firestore_documents f INDEXED BY idx_cf_chat_activity_seek
         WHERE f.path='chats/'||f.doc_id
           ${predicates.map(p=>' AND '+p.replaceAll('inbox_activity',`(${inboxSqlActivity})`)).join('')}

@@ -1,4 +1,4 @@
-# Code-only rollout: adaptive bounded shared activity seek; reviewed index installed separately.
+# Code-only rollout: preserve adaptive bounded seek and avoid materializing unrelated chat JSON.
 name: Deploy quota fixes without database migrations
 on:
   push:
