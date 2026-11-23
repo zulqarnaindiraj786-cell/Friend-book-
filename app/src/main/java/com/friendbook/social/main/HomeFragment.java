@@ -459,13 +459,15 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         org.json.JSONArray arr = new org.json.JSONArray();
         for (Models.User u : rows) {
             if (u == null || u.uid == null) continue;
-            arr.put(new org.json.JSONObject()
-                    .put("uid", u.uid)
-                    .put("name", u.displayName == null ? "" : u.displayName)
-                    .put("photo", u.photoUrl == null ? "" : u.photoUrl)
-                    .put("note", u.statusNote == null ? "" : u.statusNote)
-                    .put("noteAt", u.statusNoteAt)
-                    .put("tick", u.tickLevel == null ? "none" : u.tickLevel));
+            try {
+                arr.put(new org.json.JSONObject()
+                        .put("uid", u.uid)
+                        .put("name", u.displayName == null ? "" : u.displayName)
+                        .put("photo", u.photoUrl == null ? "" : u.photoUrl)
+                        .put("note", u.statusNote == null ? "" : u.statusNote)
+                        .put("noteAt", u.statusNoteAt)
+                        .put("tick", u.tickLevel == null ? "none" : u.tickLevel));
+            } catch (org.json.JSONException skipped) { /* A broken row must not block the cache. */ }
         }
         return arr;
     }
