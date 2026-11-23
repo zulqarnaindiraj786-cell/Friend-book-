@@ -19,6 +19,7 @@ class SharedProfileQuota(unittest.TestCase):
         self.assertIn('observer.changed(u)',s)
         self.assertIn('if (u.banned',s)
         self.assertIn('auth().signOut()',s)
+        self.assertLess(s.index('auth().signOut()'),s.index('observer.changed(u)'))
     def test_reel_cache_has_no_speculative_network_downloader(self):
         s=(JAVA/'reels/ReelVideoCache.java').read_text()
         for forbidden in ['HttpURLConnection','prefetchSingle','warmUpcomingAfterPlay','PREFETCH_POOL']:

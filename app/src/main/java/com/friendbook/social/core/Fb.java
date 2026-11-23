@@ -116,7 +116,6 @@ public class Fb {
                     me = u;
                     FastCache.saveMe(com.friendbook.social.App.instance, u);
                     syncProfileToCloudflare(u);
-                    for (MeObserver observer : ME_OBSERVERS) observer.changed(u);
                     if (u.banned && !Admin.isOwnerEmail(u.email)) {
                         me = null;
                         FastCache.clearAll(com.friendbook.social.App.instance);
@@ -133,6 +132,9 @@ public class Fb {
                             app.startActivity(i);
                         }
                     }
+                    // Security handling must complete before any optional UI callback.
+                    if (me!=null && uid.equals(Fb.uid()))
+                        for (MeObserver observer : ME_OBSERVERS) observer.changed(u);
                 });
     }
 
