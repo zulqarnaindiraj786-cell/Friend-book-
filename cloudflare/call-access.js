@@ -3,8 +3,16 @@ import { readD1DocumentFields } from './app-documents.js';
 const blocked=(profile,uid)=>['blocked','blockedUsers'].some(k=>(profile?.[k]?.arrayValue?.values||[]).some(v=>v.stringValue===uid));
 const active=profile=>profile && profile.banned?.booleanValue!==true && profile.deactivated?.booleanValue!==true
   && profile.suspendedLifetime?.booleanValue!==true && !(Number(profile.suspendedUntil?.integerValue ?? profile.suspendedUntil?.doubleValue)>Date.now());
-export async function callAccountsAllowed(db,a,b) {
-  const [first,second]=await Promise.all([readD1DocumentFields(db,`users/${a}`),readD1DocumentFields(db,`users/${b}`)]);
+// Optional caller-owned request map only. Media renewals omit it and keep
+// rechecking both current profiles on every authorization operation.
+export function readCallProfile(db,uid,reads) {
+  const path=`users/${uid}`;
+  if(!reads)return readD1DocumentFields(db,path);
+  if(!reads.has(path))reads.set(path,readD1DocumentFields(db,path));
+  return reads.get(path);
+}
+export async function callAccountsAllowed(db,a,b,reads) {
+  const [first,second]=await Promise.all([readCallProfile(db,a,reads),readCallProfile(db,b,reads)]);
   return active(first) && active(second) && !blocked(first,b) && !blocked(second,a);
 }
 export async function authorizeCallMedia(db,chat,call,uid) {

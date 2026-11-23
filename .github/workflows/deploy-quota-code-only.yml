@@ -1,4 +1,4 @@
-# Code-only rollout: share guarded PK room/profile snapshots across room, status, invite and accept actions.
+# Code-only rollout: reuse call-signaling request profiles; keep media renewal authorization fresh.
 name: Deploy quota fixes without database migrations
 on:
   push:

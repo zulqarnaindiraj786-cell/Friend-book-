@@ -7,7 +7,7 @@ import { profileAudience } from './profile-audience.js';
 import { mapBounded } from './map-bounded.js';
 import { engagementSummary, batchEngagementReads, MAX_FEED_ENGAGEMENT_PAGE } from './interactions.js';
 import { requestAccountReads, readD1DocumentFields, toFirestoreFields, fromFirestoreValue } from './app-documents.js';
-import { callAccountsAllowed } from './call-access.js';
+import { callAccountsAllowed, readCallProfile } from './call-access.js';
 import { authorizeLiveMedia, authorizeLiveRoom } from './live-access.js';
 import { canReadPayment, canCreateFreeReview, isPaymentAdmin } from './payment-access.js';
 import { canReadFriendRequest, canCreateFriendRequest, canDeleteFriendRequest, friendshipReadView, canCreateGroup, canUpdateGroup, canManageGroup, canSelfManageGroup, isSelfArrayChange, groupReadView, trustedGroupOwner } from './social-access.js';
@@ -2816,7 +2816,7 @@ async function livePk(request,db,uid,now,identity) {
   }
 }
 
-async function signalChatCall(request,db,uid,now) {
+async function signalChatCall(request,db,uid,now,identity) {
   if (request.method!=='POST') return json({error:'Method not allowed'},405);
   let input; try { input=await request.json(); } catch { return json({error:'Invalid JSON'},400); }
   const {chatId,callId,action}=input||{};
@@ -2831,13 +2831,14 @@ async function signalChatCall(request,db,uid,now) {
     }
     if (!room || room.isGroup===true || !Array.isArray(room.participants) || room.participants.length!==2 || !room.participants.includes(uid)) return json({error:'Forbidden'},403);
     const peer=room.participants.find(id=>id!==uid);
-    if (!validSegment(peer) || !await callAccountsAllowed(db,uid,peer)) return json({error:'Forbidden'},403);
+    const reads=requestAccountReads(identity);
+    if (!validSegment(peer) || !await callAccountsAllowed(db,uid,peer,reads)) return json({error:'Forbidden'},403);
     const stored=await db.prepare('SELECT * FROM friendbook_cf_chat_calls WHERE chat_id=?').bind(chatId).first();
     let next, expires;
     if (action==='start') {
       if (!['voice','video'].includes(input.callType) || (stored && ['ringing','connected'].includes(stored.status) && stored.expires_at>now)) return json({error:'Call already active or invalid'},409);
-      const caller=await readRow(db,`users/${uid}`), profile=caller?decodeValue(JSON.parse(caller.document_json)):{};
-      next={callId,chatId,callerId:uid,calleeId:peer,callerName:String(profile.displayName||'').slice(0,200),callerPhoto:String(profile.photoUrl||'').slice(0,2048),callType:input.callType,status:'ringing',startedAt:now};
+      const profile=await readCallProfile(db,uid,reads);
+      next={callId,chatId,callerId:uid,calleeId:peer,callerName:String(fromFirestoreValue(profile?.displayName)||'').slice(0,200),callerPhoto:String(fromFirestoreValue(profile?.photoUrl)||'').slice(0,2048),callType:input.callType,status:'ringing',startedAt:now};
       expires=now+45000;
     } else {
       const call=room.activeCall;
@@ -3000,7 +3001,7 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0, ct
 
 
   if (path === '/v1/firestore/claim-referral') return claimReferral(request,db,uid,now);
-  if (path === '/v1/chat/call') return signalChatCall(request,db,uid,now);
+  if (path === '/v1/chat/call') return signalChatCall(request,db,uid,now,identity);
   if (path === '/v1/live/pk') return livePk(request,db,uid,now,identity);
   if (path === '/v1/admin/recover-social') return recoverLegacySocial(request,env,uid,now);
   if (path === '/v1/admin/broadcast') return adminBroadcast(request,env,uid,now);

@@ -2753,13 +2753,17 @@ test('direct calls authorize both call participants, reject forged transitions a
  sql.exec(readFileSync(new URL('../migrations/0048_direct_chat_calls.sql',import.meta.url),'utf8'));
  const insert=sql.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)');
  for (const uid of ['alice','bob','eve']) insert.run('users/'+uid,'users','users',uid,uid,JSON.stringify({displayName:uid}),1,1);
- const db={prepare(q){const stmt=sql.prepare(q);return{bind(...a){return{run:async()=>stmt.run(...a),first:async()=>stmt.get(...a)||null};}};},
+ const profileReads=[];
+ const db={prepare(q){const stmt=sql.prepare(q);return{bind(...a){return{run:async()=>stmt.run(...a),first:async()=>{if(q.includes('FROM friendbook_cf_firestore_documents') && String(a[0]).startsWith('users/'))profileReads.push(a[0]);return stmt.get(...a)||null;}};}};},
    async batch(statements){sql.exec('BEGIN');try{for(const s of statements) await s.run();sql.exec('COMMIT');}catch(e){sql.exec('ROLLBACK');throw e;}}};
  const worker=createWorker(async token=>token),env={DB:db,FIREBASE_PROJECT_ID:'test'};
- const send=(uid,action,callId='first',callType='video')=>worker.fetch(new Request('https://example.test/v1/chat/call',{
+ const send=(uid,action,callId='first',callType='video')=>{profileReads.length=0;return worker.fetch(new Request('https://example.test/v1/chat/call',{
    method:'POST',headers:{authorization:`Bearer ${uid}`,'content-type':'application/json'},
-   body:JSON.stringify({chatId:'alice_bob',callId,action,peerId:'bob',callType})}),env);
- let r=await send('alice','start');assert.equal(r.status,200,await r.text());
+   body:JSON.stringify({chatId:'alice_bob',callId,action,peerId:'bob',callType})}),env);};
+ let r=await send('alice','start');assert.equal(r.status,200,await r.clone().text());
+ assert.equal((await r.json()).callerName,'alice');
+ assert.equal(profileReads.filter(p=>p==='users/alice').length,1,'gate, call ACL and caller label share one request snapshot');
+ assert.equal(profileReads.filter(p=>p==='users/bob').length,1,'peer profile stays fresh');
  assert.equal(await authorizeCallMedia(db,'alice_bob','first','alice'),null);
  assert.equal((await send('alice','accept')).status,403);
  assert.equal((await send('eve','accept')).status,403);
@@ -2770,12 +2774,15 @@ test('direct calls authorize both call participants, reject forged transitions a
  assert.equal((await send('alice','start','other')).status,409);
  assert.equal((await send('alice','end')).status,200);
  assert.equal(await authorizeCallMedia(db,'alice_bob','first','alice'),null);
- assert.equal((await send('alice','start','second','voice')).status,200);
+ sql.prepare('UPDATE friendbook_cf_firestore_documents SET document_json=? WHERE path=?').run(JSON.stringify({displayName:'Renamed caller',photoUrl:'https://example.test/avatar'}),'users/alice');
+ const second=await send('alice','start','second','voice');assert.equal(second.status,200);
+ const secondBody=await second.json();assert.equal(secondBody.callerName,'Renamed caller');assert.equal(secondBody.callerPhoto,'https://example.test/avatar');
  assert.equal((await send('alice','end','first')).status,409);
  assert.equal((await send('bob','accept','second','voice')).status,200);
  assert.equal(await authorizeCallMedia(db,'alice_bob','second','bob'),'voice');
  sql.prepare('UPDATE friendbook_cf_firestore_documents SET document_json=? WHERE path=?').run('{"blocked":["bob"]}','users/alice');
  assert.equal(await authorizeCallMedia(db,'alice_bob','second','bob'),null);
+ assert.equal((await send('alice','start','third')).status,403,'next HTTP request sees the new block');
  sql.close();
 });
 
