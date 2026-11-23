@@ -39,10 +39,13 @@ jobs:
           import { readFileSync } from 'node:fs';
           import worker from './worker.js';
           const config = readFileSync('wrangler.toml', 'utf8');
-          if (/^\s*\[triggers\]/m.test(config) || /^\s*crons\s*=/m.test(config))
-            throw Error('wrangler.toml still configures cron triggers');
-          if ('scheduled' in worker) throw Error('worker still exports scheduled()');
-          console.log('::notice::Candidate has no cron trigger and no scheduled handler.');
+          const cronLines = config.split('\n').filter(line => /^\s*crons?\s*=/.test(line));
+          if (cronLines.length !== 1) throw Error('expected exactly one cron declaration');
+          if (!/\*\/15 \* \* \* \*/.test(cronLines[0])) throw Error('the only cron must be every 15 minutes');
+          if (/\*\/1 |\*\/5 |^\s*crons\s*=\s*\[\s*"\* \* \* \* \*"/.test(config))
+            throw Error('per-second or per-minute cron is forbidden');
+          if (!('scheduled' in worker)) throw Error('the 15-minute maintenance handler is missing');
+          console.log('::notice::Candidate schedules exactly one 15-minute maintenance pass.');
           JS
       - name: Fail closed unless 0086 is the only pending migration
         run: |
@@ -108,9 +111,10 @@ jobs:
                   return json.loads(response.read() or b'{}')
 
           schedules = ((get('/schedules').get('result') or {}).get('schedules') or [])
-          print('::notice::deployed schedules after upload: ' + json.dumps({'count': len(schedules)}))
-          if schedules:
-              raise SystemExit('Cron schedules were re-attached by the upload.')
+          crons = sorted(item.get('cron') for item in schedules if isinstance(item, dict))
+          print('::notice::deployed schedules after upload: ' + json.dumps({'count': len(schedules), 'crons': crons}))
+          if crons != ['*/15 * * * *']:
+              raise SystemExit('Expected exactly one 15-minute cron; found ' + json.dumps(crons))
 
           p = subprocess.Popen(['npx', '--yes', 'wrangler@4.157.0', 'tail', 'rough-firefly-dd7b', '--format', 'json'],
                                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, start_new_session=True)
@@ -176,7 +180,7 @@ jobs:
           serving = [s for s in counters['presence'] if s not in ('404', 'None')]
           if serving:
               raise SystemExit('Presence routes still answer with statuses: ' + ','.join(sorted(serving)))
-          if counters['cron']:
-              raise SystemExit('Scheduled invocations are still running.')
-          print('::notice::Presence routes answer 404 only and no cron invocation was observed.')
+          if counters['cron'] > 1:
+              raise SystemExit('More than one scheduled invocation in the observation window.')
+          print('::notice::Presence routes answer 404 only and at most one 15-minute maintenance pass ran.')
           PY
