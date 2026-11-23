@@ -23,3 +23,7 @@ The old query was not universally unindexed: matching legacy expression indexes 
 - Diff whitespace check passed.
 
 A code-only rollout is requested with the accompanying marker commit; verify its outcome separately. No Android packaging/merge, schema migration, account/ACL cache, cron change or data deletion. Completed-day quota target remains unverified.
+
+## Verified production rollout
+
+Code-only run [45220396473](https://github.com/zulqarnaindiraj786-cell/Friend-book-/actions/runs/45220396473) completed **success** for `d9e685af33ebfe69090b50576eb2d0199d12e631`. Full regressions, production dry-run, code-only deployment, resource/schedule preservation and health/auth smoke checks passed. No D1 migrations ran. This server-side change is deployed without a new Android package; actual profile-aggregate traffic and billed savings remain unmeasured.
