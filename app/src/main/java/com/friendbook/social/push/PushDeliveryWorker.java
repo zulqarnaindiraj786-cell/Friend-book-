@@ -17,7 +17,7 @@ public final class PushDeliveryWorker extends Worker {
     public static void enqueue(JSONObject body, boolean replaceRegistration) {
         String uid = Fb.uid(); if (uid == null) return;
         String action = body.optString("action");
-        String key = "register".equals(action) ? "register_" + uid : uid + "_" + body.toString();
+        String key = PushWorkKey.of(uid, body);
         OneTimeWorkRequest.Builder builder = new OneTimeWorkRequest.Builder(PushDeliveryWorker.class)
                 .setInputData(new Data.Builder().putString("uid", uid).putString("body", body.toString()).build())
                 .setConstraints(new Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
