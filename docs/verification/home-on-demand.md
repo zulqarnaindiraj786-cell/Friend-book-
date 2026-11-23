@@ -1,6 +1,6 @@
 # Home on-demand audit (2026-11-19)
 
-PR #36 remains unmerged. No APK/AAB requested or published.
+PR #36 remains unmerged. The owner subsequently requested signed APK/AAB; version 2.10.33 test-candidate files are now built and published separately (see latest evidence below). Production Latest is unchanged.
 
 ## Implemented
 - Initial feed and each scroll-boundary page: 10 posts, no automatic page draining.
@@ -236,3 +236,29 @@ Proof:
   No device screenshot/pixel-match or installed-WhatsApp end-to-end test claimed.
 - Previous daily budget remains a scenario; no guessed savings from avoided eviction subtracted.
 - PR #36 remains unmerged; no APK/AAB produced.
+
+
+## Owner-requested signed APK + AAB — verified success
+Source: `eb806088462d48d6093b8a6a6778a8e9434494b8`; version **2.10.33 / versionCode 175**.
+
+- Historical keystore/password pair verified without printing credentials. The CI signing step
+  confirmed it used that historical pair; keystore material is runner-temporary and removed.
+- Additional quota fix: failed/missing feed-author requests no longer remove their dedup key and
+  retry on every row rebind. One attempt per account/author/adapter until explicit Home refresh;
+  explicit refresh resets the attempt set, preserving user-controlled recovery. No timed retry.
+- Worker tests **234/234**; Python **341**; debug Android/JVM gate PASS:
+  https://github.com/zulqarnaindiraj786-cell/Friend-book-/actions/runs/45112710649
+- Signed release build **PASS** (release unit tests, R8, APK + AAB packaging, executed-core-suite
+  verification, APK/apksigner and AAB/jarsigner signature checks, gateway and isolated emulator tests):
+  https://github.com/zulqarnaindiraj786-cell/Friend-book-/actions/runs/45112769053
+- Candidate release (prerelease, explicitly not Latest):
+  https://github.com/zulqarnaindiraj786-cell/Friend-book-/releases/tag/friendbook-2.10.33-signed-eb806088
+- APK: `friendbook.apk`, 4,963,984 bytes, SHA-256
+  `3f18dfe2fec8a1d3dc70f2785ea8379dbbd10b459d6f3f3718061b19483e178f`.
+- AAB: `friendbook-playstore.aab`, 8,840,568 bytes, SHA-256
+  `e6f16accd9765a38c5da56523010b42b9b87598c8437a942e6b134c0fabb0a39`.
+- Release includes R8 mapping and `friendbook-SHA256SUMS.txt`; Actions artifacts retained seven days.
+- Verified through GitHub API that production Latest remains **v2.10.32**. No merge or Google Play
+  publishing performed. The signed candidate includes Invite Friends and all preceding quota fixes.
+- No on-device/Google Play approval/live D1 quota guarantee is claimed. The earlier daily budget is
+  still a model, and no guessed daily saving for failed-author retries is subtracted.
