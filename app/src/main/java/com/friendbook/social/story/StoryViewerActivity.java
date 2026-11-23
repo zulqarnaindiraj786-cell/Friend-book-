@@ -70,11 +70,17 @@ public class StoryViewerActivity extends Activity {
     private static final Handler H = new Handler(Looper.getMainLooper());
     private Runnable timer;
     private ValueAnimator anim;
+    private TextView storyStatus;
+    private Runnable mediaTimeout;
+    private int playbackToken;
+    private boolean ready;
+    private final java.util.Set<String> recordingViews=new java.util.HashSet<>();
+
 
     @Override
     protected void onCreate(Bundle b) {
         super.onCreate(b);
-        getWindow().setStatusBarColor(Color.BLACK);
+        com.friendbook.social.core.Ui.statusBar(getWindow(), Color.BLACK);
         authorId = getIntent().getStringExtra("author");
         specificStoryId = getIntent().getStringExtra("story_id");
         if (authorId == null) { finish(); return; }
@@ -226,6 +232,10 @@ public class StoryViewerActivity extends Activity {
         FrameLayout.LayoutParams moreParams=new FrameLayout.LayoutParams(-2,-2,Gravity.TOP|Gravity.END);
         moreParams.topMargin=Ui.dp(this,92);root.addView(moreStories,moreParams);
         moreStories.setOnClickListener(v->{if(storyPages!=null)storyPages.next();});
+        storyStatus=Ui.tvBold(this,"Loading story…",16,Color.WHITE);
+        Ui.pad(storyStatus,16,10,16,10);
+        storyStatus.setBackgroundColor(0xCC202020);
+        root.addView(storyStatus,new FrameLayout.LayoutParams(-2,-2,Gravity.CENTER));
         setContentView(root);
     }
 
@@ -238,6 +248,11 @@ public class StoryViewerActivity extends Activity {
     @Override
     protected void onStart() {
         super.onStart();
+        if(storyStatus!=null)loadStories();
+    }
+
+    private void loadStories(){
+        status("Loading story…",null);
         final int request=++storyRequest;final String actor=Fb.uid();viewerActor=actor;
         if(actor==null){finish();return;}
         if(actor.equals(authorId)){viewerFriend=true;loadStoryPages(request);return;}
@@ -245,8 +260,8 @@ public class StoryViewerActivity extends Activity {
                 .count().get(com.friendbook.social.d1.documents.AggregateSource.SERVER).addOnSuccessListener(count->{
                     if(request!=storyRequest || !java.util.Objects.equals(actor,Fb.uid()) || isFinishing())return;
                     viewerFriend=count.getCount()>0;
-                    if(viewerFriend || (Fb.me!=null && Fb.me.following.contains(authorId)))loadStoryPages(request);else finish();
-                }).addOnFailureListener(error->{if(request==storyRequest)finish();});
+                    if(viewerFriend || (Fb.me!=null && Fb.me.following.contains(authorId)))loadStoryPages(request);else status("This story is unavailable",null);
+                }).addOnFailureListener(error->{if(request==storyRequest)status("Story could not load · Tap to retry",this::reload);});
     }
     private boolean allowedStory(Models.Story story){
         return java.util.Objects.equals(viewerActor,Fb.uid()) && com.friendbook.social.core.StoryAudience.visible(Fb.uid(),story.authorId,story.privacy,viewerFriend,
@@ -257,16 +272,18 @@ public class StoryViewerActivity extends Activity {
             moreStories.setVisibility(View.GONE);
             Fb.db().collection("stories").document(specificStoryId).get().addOnSuccessListener(doc->{
                 if(request!=storyRequest || isFinishing())return;
-                if(!doc.exists()){finish();return;}Models.Story story=Models.Story.fromDoc(doc);
-                if(!authorId.equals(story.authorId) || !allowedStory(story)){finish();return;}stories.clear();stories.add(story);index=0;show();
-            }).addOnFailureListener(e->{if(request==storyRequest)Ui.toast(this,"Couldn't load story. Reopen to retry.");});
+                if(!doc.exists()){status("This story is no longer available",null);return;}Models.Story story=Models.Story.fromDoc(doc);
+                if(!authorId.equals(story.authorId) || !allowedStory(story)
+                        || (getIntent().getBooleanExtra("active_story_only",false) && story.expired())){status("This story is unavailable",null);return;}stories.clear();stories.add(story);index=0;show();
+            }).addOnFailureListener(e->{if(request==storyRequest)status("Story could not load · Tap to retry",this::reload);});
             return;
         }
         storyPages=new com.friendbook.social.core.CursorPager(Fb.db().collection("stories").whereEqualTo("authorId",authorId),10,"story-viewer:"+authorId,(docs,more,busy,error)->{
             if(request!=storyRequest || isFinishing())return;
             storyMore=more;storyBusy=busy;moreStories.setEnabled(!busy && more);
             moreStories.setText(busy?"Loading…":!error.isEmpty()?"Retry stories":more?"More stories":"All loaded");
-            if(busy || !error.isEmpty())return;
+            if(!error.isEmpty()){if(stories.isEmpty() || advanceAfterPage)status("Stories could not load · Tap to retry",this::reload);return;}
+            if(busy)return;
             String current=stories.isEmpty()?null:stories.get(Math.min(index,stories.size()-1)).id;
             stories.clear();for(DocumentSnapshot doc:docs){Models.Story story=Models.Story.fromDoc(doc);if(!story.expired() && allowedStory(story))stories.add(story);}
             // Keep append order stable: cursor doc-ID order, never re-sort a growing sequence under the viewer.
@@ -276,7 +293,7 @@ public class StoryViewerActivity extends Activity {
             // A page can contain only expired or audience-filtered stories. Do
             // not leave an empty viewer waiting for the user to discover paging.
             if(stories.isEmpty()){
-                if(!more)finish();else if(storyPages!=null)storyPages.next();
+                if(!more)status("No active stories",null);else if(storyPages!=null)storyPages.next();
                 return;
             }
             index=Math.min(index,stories.size()-1);show();
@@ -288,11 +305,66 @@ public class StoryViewerActivity extends Activity {
         super.onStop();
         if (reg != null) reg.remove();
         storyRequest++;if(storyPages!=null){storyPages.close();storyPages=null;}
+        if(video!=null)clearMedia();
+    }
+
+    private void reload(){
+        clearMedia();
+        if(storyPages!=null){storyPages.close();storyPages=null;}
+        advanceAfterPage=false;
+        status("Loading story…",null);
+        loadStories();
+    }
+
+    private void status(String message,Runnable retry){
+        storyStatus.setText(message);
+        storyStatus.setVisibility(View.VISIBLE);
+        storyStatus.setOnClickListener(retry==null?null:v->retry.run());
+        storyStatus.setClickable(retry!=null);
+    }
+
+    private void clearMedia(){
+        playbackToken++;
+        ready=false;
+        if(mediaTimeout!=null)H.removeCallbacks(mediaTimeout);
         stopTimer();
+        video.setOnPreparedListener(null);
+        video.setOnCompletionListener(null);
+        video.setOnErrorListener(null);
+        video.stopPlayback();
+        com.bumptech.glide.Glide.with(this).clear(img);
+    }
+
+    private void failed(int token){
+        if(token!=playbackToken || isFinishing())return;
+        clearMedia();
+        status("Story media could not load · Tap to retry",this::show);
+    }
+
+    private void ready(int token,Models.Story story,boolean isVideo){
+        if(token!=playbackToken || ready || isFinishing())return;
+        if(mediaTimeout!=null)H.removeCallbacks(mediaTimeout);
+        ready=true;
+        storyStatus.setVisibility(View.GONE);
+        animateSegment(isVideo?Math.max(1,video.getDuration()):5500);
+        if(!isVideo){timer=()->{if(token==playbackToken)step(1);};H.postDelayed(timer,5500);}
+        String actor=Fb.uid();
+        String viewKey=actor+":"+story.id;
+        if(actor!=null && !actor.equals(story.authorId) && !story.viewedBy.contains(actor) && recordingViews.add(viewKey)){
+            Fb.db().storyEngagement(story.id,"view",null).addOnCompleteListener(task->{
+                recordingViews.remove(viewKey);
+                if(task.isSuccessful() && actor.equals(Fb.uid()) && !story.viewedBy.contains(actor)) story.viewedBy.add(actor);
+            });
+        }
     }
 
     private void show() {
-        stopTimer();
+        if(stories.isEmpty())return;
+        clearMedia();
+        final int token=playbackToken;
+        status("Loading story…",null);
+        mediaTimeout=()->failed(token);
+        H.postDelayed(mediaTimeout,20000L);
         Models.Story s = stories.get(index);
         nameT.setText(s.authorName);
         timeT.setText(Format.ago(s.createdAt) + ("Friends".equalsIgnoreCase(s.privacy) ? " · 👥" : " · 🌐"));
@@ -311,7 +383,7 @@ public class StoryViewerActivity extends Activity {
 
         buildSegments();
 
-        if ("text".equals(s.mediaType) || s.mediaUrl == null || s.mediaUrl.isEmpty()) {
+        if ("text".equalsIgnoreCase(s.mediaType)) {
             video.stopPlayback();
             video.setVisibility(View.GONE);
             img.setVisibility(View.GONE);
@@ -323,17 +395,35 @@ public class StoryViewerActivity extends Activity {
                     : s.fontStyle == 2 ? Typeface.MONOSPACE : Typeface.DEFAULT_BOLD;
             textCanvas.setTypeface(tf, Typeface.BOLD);
             textCanvas.setText(s.caption == null ? "" : s.caption);
-        } else if ("video".equals(s.mediaType)) {
+            ready(token,s,false);
+        } else if(s.mediaUrl==null || s.mediaUrl.isEmpty()){
+            failed(token);
+        } else if ("video".equalsIgnoreCase(s.mediaType)) {
             textCanvas.setVisibility(View.GONE);
             img.setVisibility(View.GONE);
             video.setVisibility(View.VISIBLE);
             captionT.setText(s.caption == null ? "" : s.caption);
             captionT.setVisibility(s.caption == null || s.caption.isEmpty() ? View.GONE : View.VISIBLE);
-            // Play from the on-device cache when this story video was already seen; a first view
-            // streams normally and fills the cache so every later open is offline-instant.
-            video.setVideoURI(com.friendbook.social.core.MediaDiskCache.uriForPlayback(this, s.mediaUrl));
-            video.setOnPreparedListener(mp -> video.start());
-            video.setOnCompletionListener(mp -> step(1));
+            video.setOnPreparedListener(mp -> {
+                if(token!=playbackToken)return;
+                mp.setOnInfoListener((player,what,extra)->{
+                    if(what==android.media.MediaPlayer.MEDIA_INFO_VIDEO_RENDERING_START)ready(token,s,true);
+                    return false;
+                });
+                video.start();
+            });
+            video.setOnCompletionListener(mp -> {if(token==playbackToken && ready)step(1);});
+            String stream = com.friendbook.social.reels.ReelVideoCache.optimizeStreamUrl(this, s.mediaUrl);
+            boolean[] fallback = {stream.equals(s.mediaUrl)};
+            video.setOnErrorListener((mp,what,extra)->{
+                H.post(() -> {
+                    if (token != playbackToken) return;
+                    if (!fallback[0]) { fallback[0] = true; video.setVideoURI(Uri.parse(s.mediaUrl)); }
+                    else failed(token);
+                });
+                return true;
+            });
+            video.setVideoURI(com.friendbook.social.core.MediaDiskCache.uriForPlayback(this, stream)); // STEP 6: play from disk cache
         } else {
             video.stopPlayback();
             video.setVisibility(View.GONE);
@@ -341,27 +431,27 @@ public class StoryViewerActivity extends Activity {
             img.setVisibility(View.VISIBLE);
             captionT.setText(s.caption == null ? "" : s.caption);
             captionT.setVisibility(s.caption == null || s.caption.isEmpty() ? View.GONE : View.VISIBLE);
-            Ui.imgFeedModerated(this, img, s.mediaUrl, "stories", s.id, s.authorId, s.caption, () -> {
-                Ui.toast(this, "🛡 Unsafe story automatically deleted");
-                finish();
-            });
+            loadImage(token,s,Ui.optimizeImageUrl(this,s.mediaUrl,false));
         }
+    }
 
-        String me = Fb.uid();
-        if (me != null && !mine && !s.viewedBy.contains(me)) {
-            Fb.db().storyEngagement(s.id, "view", null)
-                    .addOnSuccessListener(v -> { if (me.equals(Fb.uid()) && !s.viewedBy.contains(me)) s.viewedBy.add(me); });
-        }
-
-        warmNextStoryVideo();
-
-        if (!"video".equals(s.mediaType)) {
-            animateSegment(5500);
-            timer = () -> step(1);
-            H.postDelayed(timer, 5500);
-        } else {
-            animateSegment(15000);
-        }
+    private void loadImage(int token,Models.Story s,String url){
+            com.bumptech.glide.Glide.with(this).load(url).fitCenter().dontAnimate()
+                    .diskCacheStrategy(com.bumptech.glide.load.engine.DiskCacheStrategy.ALL)
+                    .listener(new com.bumptech.glide.request.RequestListener<android.graphics.drawable.Drawable>() {
+                        @Override public boolean onLoadFailed(com.bumptech.glide.load.engine.GlideException error,Object model,
+                                com.bumptech.glide.request.target.Target<android.graphics.drawable.Drawable> target,boolean first){
+                            H.post(()->{
+                                if(token!=playbackToken || isFinishing())return;
+                                if(!s.mediaUrl.equals(url))loadImage(token,s,s.mediaUrl);
+                                else failed(token);
+                            });return true;
+                        }
+                        @Override public boolean onResourceReady(android.graphics.drawable.Drawable drawable,Object model,
+                                com.bumptech.glide.request.target.Target<android.graphics.drawable.Drawable> target,com.bumptech.glide.load.DataSource source,boolean first){
+                            H.post(()->ready(token,s,false));return token!=playbackToken;
+                        }
+                    }).into(img);
     }
 
     private void storyMenu(View anchor) {
@@ -492,23 +582,13 @@ public class StoryViewerActivity extends Activity {
         anim.start();
     }
 
-    /** Pre-downloads the next story video so swiping never re-downloads bytes we already streamed. */
-    private void warmNextStoryVideo() {
-        for (int i = index + 1; i < stories.size(); i++) {
-            Models.Story next = stories.get(i);
-            if (next != null && "video".equals(next.mediaType) && next.mediaUrl != null && !next.mediaUrl.isEmpty()) {
-                com.friendbook.social.core.MediaDiskCache.warm(this, next.mediaUrl);
-                return;
-            }
-        }
-    }
-
     private void stopTimer() {
         if (timer != null) H.removeCallbacks(timer);
         if (anim != null) anim.cancel();
     }
 
     private void step(int delta) {
+        if(stories.isEmpty())return;
         int next = index + delta;
         if (next < 0) next = 0;
         if (next >= stories.size()) {

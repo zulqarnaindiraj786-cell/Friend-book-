@@ -33,7 +33,7 @@ public final class PagedLists {
                 // An empty in-flight cache isn't an authoritative empty result.
                 if(!busy && (error.isEmpty() || !docs.isEmpty()))listener.changed(new Page(docs),null);
                 if(!error.isEmpty())Ui.toast(activity,error);
-            });current[0].start();
+            });if(key.startsWith("groups:"))current[0].startCachedDay(); else current[0].start();
         };
         refresh.setOnClickListener(v->start.run());more.setOnClickListener(v->{if(current[0]!=null)current[0].next();});start.run();
         return ()->{closed[0]=true;if(current[0]!=null)current[0].close();controls.removeView(row);};

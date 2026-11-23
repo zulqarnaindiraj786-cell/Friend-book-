@@ -86,3 +86,21 @@ D1 row, Firebase login or Cloudinary upload changes accompany this routing fix.
 See `docs/testing/hybrid-interactions.md` for the guarded likes/comments backend
 and its release blockers. Android remains on Firebase; do not enable the new
 flag merely because the Worker builds successfully. No production copy is run.
+
+### Local WebSocket smoke test
+
+From the repository root, run `npm ci`, then:
+
+```sh
+WRANGLER_SEND_METRICS=false npx --yes wrangler@4.157.0 deploy --dry-run --outdir /tmp/friendbook-worker
+npm install --prefix /tmp/friendbook-smoke --no-audit --no-fund miniflare@4
+MINIFLARE=/tmp/friendbook-smoke/node_modules/miniflare node cloudflare/test/live-runtime-smoke.cjs /tmp/friendbook-worker/worker.js
+```
+
+The smoke test uses fixture identities and a disposable Cloudflare runtime with D1 and a Durable Object. It verifies room creation, publisher/watcher access, forwarding both packet types, and denial after a broadcast ends. It does not validate Android codecs, Google Sign-In, or production configuration.
+
+### D1 query indexes and admin access
+
+The existing schema keeps reactions and comments in their resource-keyed tables (0003/0004/0032), and profile document reads use the document path primary key. Author profiles, feed pages, chat history, friend requests and inbox queries use the query-specific indexes in 0023–0029. Migration 0036 adds partial recipient indexes for unread-only notification badge queries, including historical typed records; it does not replace the regular inbox indexes. Migration 0037 adds a separate indexed, server-written audit for ending live rooms without rewriting the existing ban/delete audit table.
+
+The Worker checks the configured administrator UID (`PAYMENT_ADMIN_UIDS`) before serving private admin report collections or accepting moderation writes. The Android admin panel uses the audited `end_live` action rather than a host-only document update. Existing gift, referral and subscription documents can be read by the administrator; this does not enable client writes to those collections, billing transitions, or official broadcast fanout.

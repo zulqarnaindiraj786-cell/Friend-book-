@@ -74,7 +74,7 @@ public class FollowListActivity extends Activity {
                 render();moreButton.setText(loading?"Loading…":!error.isEmpty()?"Retry":more?"Load 20 more":"All loaded");
                 moreButton.setEnabled(!loading && more);
             });
-        followPager=pager;moreButton.setOnClickListener(v->pager.next());pager.start();
+        followPager=pager;moreButton.setOnClickListener(v->pager.next());pager.startCachedDay();
     }
     @Override protected void onDestroy(){if(followPager!=null)followPager.close();super.onDestroy();}
 

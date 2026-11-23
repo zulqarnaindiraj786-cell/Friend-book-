@@ -37,7 +37,6 @@ import com.friendbook.social.core.Fb;
 import com.friendbook.social.core.Format;
 import com.friendbook.social.core.Icons;
 import com.friendbook.social.core.Notify;
-import com.friendbook.social.core.Presence;
 import com.friendbook.social.core.Ui;
 import com.friendbook.social.friends.FollowListActivity;
 import com.friendbook.social.friends.UsersAdapter;
@@ -88,13 +87,19 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
     private String attemptedProfileRepairUid = "";
     private String friendState = "none"; // none|friends|outgoing|incoming
     private String incomingRequestId = null;
-    private boolean hasOut, hasIn;
+    private boolean hasOut, hasIn, requestBusy, outgoingKnown;
+    private String outgoingRequestId;
+    private String requestPendingLabel;
+    private int profileAudienceCount=-1;
+    private boolean audienceIncludesViewer, viewerFriendKnown;
     private int userPostCount = -1; // unknown until an authenticated D1 count returns
     private ListenerRegistration postCountReg;
     private String profileSearchQuery = "";
 
     private TextView topTitleTv, editTopIcon, guardBadge;
-    private TextView nameT, categoryT, bioT, statsT, presenceT;
+    private TextView nameT, categoryT, bioT, statsT;
+    private String boundAvatarUrl, boundCoverUrl;
+    private Map<String, Object> boundProfileFields;
     private ImageView nameTick, cover, avatar;
     private View coverCamBtn, avatarCamBtn;
     private LinearLayout ownActionsCol, visitorActionsRow, moneyRow;
@@ -119,7 +124,6 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
 
     private final List<Models.Post> allLoadedPosts = new ArrayList<>();
     private ListenerRegistration userReg, friendsReg, ownerFriendsReg, outReg, inReg, postsReg, reelsReg;
-    private Presence.Handle presenceH;
     private final List<String> friendIds = new ArrayList<>();
     private final List<String> ownerFriendIds = new ArrayList<>();
     private final Map<String, Models.User> userCache = new HashMap<>();
@@ -260,11 +264,10 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
 
         statsT = Ui.tv(this, "", 13.5f, Ui.sub(this));
         statsT.setPadding(0, Ui.dp(this, 4), 0, 0);
+        statsT.setLines(2);
+        statsT.setEllipsize(android.text.TextUtils.TruncateAt.END);
         rightNameCol.addView(statsT);
 
-        presenceT = Ui.tv(this, "", 12, Ui.GREEN);
-        presenceT.setVisibility(View.GONE);
-        rightNameCol.addView(presenceT);
         heroTopStack.addView(rightNameCol, rncLp);
 
         // Full 114dp Circular Profile Picture overlapping bottom-left of Cover Photo & top-left of Name Strip
@@ -851,7 +854,6 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
             profile.put("contactInfoPrivacy", "Only me");
             profile.put("friendsListPrivacy", "Public");
             profile.put("lookupPrivacy", "Everyone");
-            profile.put("isOnline", true);
             profile.put("friendsCount", 0);
             profile.put("followers", new ArrayList<String>());
             profile.put("following", new ArrayList<String>());
@@ -874,29 +876,14 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
     protected void onStart() {
         super.onStart();
         FastCache.addReactionObserver(reactionObserver);
-        final int generation=++profileStartGeneration;
-        final String actor=Fb.uid();
-        final java.util.concurrent.atomic.AtomicBoolean started=new java.util.concurrent.atomic.AtomicBoolean();
-        Runnable fallback=() -> {
-            if(generation!=profileStartGeneration || !java.util.Objects.equals(actor,Fb.uid()) || isFinishing())return;
-            if(started.compareAndSet(false,true)) startProfileListeners();
-        };
-        // Do not block the whole profile on a slow combined request. Existing listeners
-        // are the fallback and continue to refresh all changes after initial hydration.
-        new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(fallback,1500);
-        if (actor==null || uid==null) { fallback.run(); return; }
-        Fb.db().fetchProfileBootstrap(uid).addOnSuccessListener(result -> {
-            if(generation!=profileStartGeneration || !java.util.Objects.equals(actor,Fb.uid()) || isFinishing())return;
-            if(started.compareAndSet(false,true)) {
-                Fb.db().cacheProfileBootstrap(uid,actor,result);
-                startProfileListeners();
-            }
-        }).addOnFailureListener(error -> fallback.run());
+        ++profileStartGeneration;
+        // Start header and first posts independently; a slow page must not delay the header.
+        startProfileListeners();
     }
 
     private void startProfileListeners() {
-        userReg = Fb.db().collection("users").document(uid)
-                .addSnapshotListener((d, err) -> {
+        com.friendbook.social.d1.documents.DocumentReference profileRef=Fb.db().collection("users").document(uid).withProfileAudience();
+        com.friendbook.social.d1.documents.EventListener<DocumentSnapshot> profileResult=(d,err)->{
                     if (d == null) {
                         // Permission loss must not leave previously visible private data onscreen.
                         if (err != null && err.getCode()==com.friendbook.social.d1.documents.D1DocumentStoreException.Code.PERMISSION_DENIED) { finish(); return; }
@@ -911,13 +898,25 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
                         nameT.setText("User not found");
                         return;
                     }
+                    Map<String, Object> fields = new java.util.HashMap<>(d.getData());
+                    for (String volatileField : new String[]{"lastSeen", "lastSeenMs", "isOnline", "isActive"}) fields.remove(volatileField);
+                    if (fields.equals(boundProfileFields)) return;
+                    boundProfileFields = fields;
                     user = Models.User.fromDoc(d);
+                    Long audienceCount=d.getLong("profileAudienceCount");
+                    profileAudienceCount=audienceCount==null?-1:audienceCount.intValue();
+                    audienceIncludesViewer=Boolean.TRUE.equals(d.getBoolean("profileAudienceIncludesViewer"));
                     FastCache.putUser(user);
                     if (mine) FastCache.saveMe(this, user);
                     bindUser();
-                    if (postsAdapter != null) postsAdapter.notifyDataSetChanged();
+                    applyPostsFilter();
                     if(activeTab==3 && friendPager==null)startFriendPages();
-                });
+        };
+        if(mine && profileRef.hasFreshOwnProfileCache()) {
+            profileRef.get(com.friendbook.social.d1.documents.Source.CACHE)
+                    .addOnSuccessListener(d->profileResult.onEvent(d,null));
+        } else userReg=profileRef.addSnapshotListener(profileResult);
+        startPostsWatcher();
         watchSubscription();
         String me = Fb.uid();
         if (me != null && !mine) {
@@ -926,6 +925,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
                     java.util.Arrays.asList(me,uid),java.util.Arrays.asList(uid,me))).limit(1).addSnapshotListener((snap,err)->{
                 if (snap==null) return; // keep the last confirmed relationship on a transient error
                 if (snap.getMetadata().isFromCache()) return; // a partial cache is not authoritative relationship state
+                viewerFriendKnown=true;
                 friendIds.clear();if(!snap.isEmpty())friendIds.add(uid);
                 computeFriendState();applyPostsFilter();renderFriendsTab();
             });
@@ -933,7 +933,10 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
                     .whereEqualTo("fromUid", me).whereEqualTo("toUid", uid).whereEqualTo("status", "pending").limit(1)
                     .addSnapshotListener((snap, err) -> {
                         if (snap == null || snap.getMetadata().isFromCache()) return;
+                        if (requestBusy || !me.equals(Fb.uid())) return;
+                        outgoingKnown=true;
                         hasOut = !snap.isEmpty();
+                        outgoingRequestId=hasOut?snap.getDocuments().get(0).getId():null;
                         computeFriendState();
                     });
             inReg = Fb.db().collection("friend_requests")
@@ -944,21 +947,8 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
                         incomingRequestId = hasIn ? snap.getDocuments().get(0).getId() : null;
                         computeFriendState();
                     });
-            // STEP 7: one-shot presence read on open instead of a 30s polling watcher.
-            Presence.peek(uid, (online, lastSeen) -> {
-                if (online) {
-                    presenceT.setText("🟢 Active now");
-                    presenceT.setVisibility(View.VISIBLE);
-                } else if (lastSeen > 0) {
-                    presenceT.setText(Presence.formatActiveStatus(false, lastSeen));
-                    presenceT.setVisibility(View.VISIBLE);
-                } else {
-                    presenceT.setVisibility(View.GONE);
-                }
-            });
         }
         if(activeTab==3)startFriendPages();
-        startPostsWatcher();
         if(activeTab==1) startReelsWatcher();
     }
 
@@ -972,25 +962,29 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
             ownerFriendIds.clear();for(DocumentSnapshot doc:docs)for(String other:Models.ChatRoom.fromDoc(doc).participants)
                 if(!other.equals(uid) && !ownerFriendIds.contains(other)){ownerFriendIds.add(other);ensureUser(other);}
             renderFriendsTab();moreProfileFriends.setText(busy?"Loading…":!error.isEmpty()?"Retry friends":more?"Load 20 more friends":"All loaded");moreProfileFriends.setEnabled(!busy && more);
-        });moreProfileFriends.setOnClickListener(v->{if(friendPager!=null)friendPager.next();});friendPager.start();
+        });moreProfileFriends.setOnClickListener(v->{if(friendPager!=null)friendPager.next();});friendPager.startCachedDay();
     }
 
     private void startPostsWatcher() {
         if(postCountReg!=null)postCountReg.remove();
         final int generation=profileStartGeneration;
-        postCountReg=com.friendbook.social.core.CountReads.once(Fb.db().collection("posts").whereEqualTo("authorId",uid), count -> {
-            if(generation!=profileStartGeneration || isFinishing())return;
-            userPostCount=(int)Math.min(Integer.MAX_VALUE,count);
-            if(user!=null)updateStatsLine();
-        });
+        postCountReg=null;
         if(postPager!=null) postPager.close();
+        final long requestedAt = android.os.SystemClock.elapsedRealtime();
         postPager=new com.friendbook.social.core.CursorPager(Fb.db().collection("posts").whereEqualTo("authorId",uid)
-                .orderBy("createdAt", com.friendbook.social.d1.documents.Query.Direction.DESCENDING),7,"profile-posts:"+uid,(docs,more,loading,error)-> {
+                .orderBy("createdAt", com.friendbook.social.d1.documents.Query.Direction.DESCENDING).withFeedEngagement(),10,"profile-posts:"+uid,(docs,more,loading,error)-> {
             if(isFinishing() || loading)return;
+            if (!error.isEmpty() && docs.isEmpty()) {
+                Ui.toast(this,error);
+                return;
+            }
+
                     allLoadedPosts.clear();
                     if (docs != null) {
                         for (DocumentSnapshot d : docs) {
+                            com.friendbook.social.post.D1Reactions.seedFeed(this, d, requestedAt);
                             Models.Post p = Models.Post.fromDoc(d);
+                            com.friendbook.social.post.D1Reactions.hydrate(p);
                             allLoadedPosts.add(p);
                         }
                     }
@@ -1011,6 +1005,24 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
             if(!error.isEmpty())Ui.toast(this,error);
         });
         postPager.start();
+        refreshPostCount(generation);
+    }
+
+    private void refreshPostCount(int generation) {
+        if (postCountReg != null) postCountReg.remove();
+        // Independent from the page request and canceled when the profile stops.
+        postCountReg=com.friendbook.social.core.CountReads.once(Fb.db().collection("posts").whereEqualTo("authorId",uid), count -> {
+            if(generation!=profileStartGeneration || isFinishing())return;
+            userPostCount=(int)Math.min(Integer.MAX_VALUE,count);
+            if(user!=null)updateStatsLine();
+        });
+    }
+
+    @Override public void onPostDeleted(String id) {
+        if (postPager != null) postPager.forget(id);
+        allLoadedPosts.removeIf(post -> id.equals(post.id));
+        applyPostsFilter();
+        refreshPostCount(profileStartGeneration);
     }
 
     private void applyPostsFilter() {
@@ -1082,20 +1094,30 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
         if (postsReg != null) postsReg.remove();
         if (reelsReg != null) reelsReg.remove();
         if (subReg != null) subReg.remove();
-        if (presenceH != null) presenceH.close();
+    }
+
+    private int displayedFollowerCount() {
+        boolean viewerCounts=user.followedByMe || hasOut || friendIds.contains(uid);
+        if(profileAudienceCount>=0){
+            if(!mine && viewerCounts && !audienceIncludesViewer)return profileAudienceCount+1;
+            if(!mine && !viewerCounts && outgoingKnown && viewerFriendKnown && audienceIncludesViewer)
+                return Math.max(0,profileAudienceCount-1);
+            return profileAudienceCount;
+        }
+        int base=Math.max(user.followerCount, user.friendsCount);
+        return base+(!mine && hasOut && !user.followedByMe && !friendIds.contains(uid)?1:0);
     }
 
     private void updateStatsLine() {
         if (user == null) return;
-        // 2.8.89 showed at least the friend count in the profile headline.
-        int followers = Math.max(user.followerCount, user.friendsCount);
+        int followers = displayedFollowerCount();
         int following = user.followingCount;
 
         SpannableStringBuilder sb = new SpannableStringBuilder();
         appendBoldStat(sb, Format.count(followers), " followers · ");
         appendBoldStat(sb, Format.count(following), " following · ");
         appendBoldStat(sb, userPostCount<0 ? "—" : Format.count(userPostCount), userPostCount == 1 ? " post" : " posts");
-        statsT.setText(sb);
+        if (!android.text.TextUtils.equals(statsT.getText(), sb)) statsT.setText(sb);
         statsT.setOnClickListener(v -> Ui.choose(this, user.displayName, new String[]{
                 "👥 Followers (" + Format.count(followers) + ")",
                 "🚶 Following (" + Format.count(following) + ")",
@@ -1142,17 +1164,23 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
         com.friendbook.social.core.LinkUtils.makeLinksClickable(bioT);
         bioT.setVisibility(hasBio ? View.VISIBLE : View.GONE);
 
-        Ui.avatarLarge(this, avatar, user.photoUrl);
+        if (!java.util.Objects.equals(boundAvatarUrl, user.photoUrl)) {
+            boundAvatarUrl = user.photoUrl;
+            Ui.avatarLarge(this, avatar, user.photoUrl);
+        }
         if (guardBadge != null) {
             guardBadge.setVisibility(user.profilePicGuard ? View.VISIBLE : View.GONE);
         }
-        if (Ui.hasRealPhoto(user.coverUrl)) {
-            Ui.img(this, cover, user.coverUrl);
-        } else {
-            try { com.bumptech.glide.Glide.with(getApplicationContext()).clear(cover); } catch (Throwable ignored) {}
-            cover.setImageDrawable(new android.graphics.drawable.GradientDrawable(
-                    android.graphics.drawable.GradientDrawable.Orientation.TL_BR,
-                    new int[]{0xFF1877F2, 0xFF0E4A9E, 0xFF1A2538}));
+        if (!java.util.Objects.equals(boundCoverUrl, user.coverUrl)) {
+            boundCoverUrl = user.coverUrl;
+            if (Ui.hasRealPhoto(user.coverUrl)) {
+                Ui.img(this, cover, user.coverUrl);
+            } else {
+                try { com.bumptech.glide.Glide.with(getApplicationContext()).clear(cover); } catch (Throwable ignored) {}
+                cover.setImageDrawable(new android.graphics.drawable.GradientDrawable(
+                        android.graphics.drawable.GradientDrawable.Orientation.TL_BR,
+                        new int[]{0xFF1877F2, 0xFF0E4A9E, 0xFF1A2538}));
+            }
         }
         renderVisiblePhotos();
 
@@ -1431,16 +1459,22 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
 
     private void computeFriendState() {
         if (mine) return;
+        boolean wasFriend="friends".equals(friendState);
         if (hasIn) friendState = "incoming";
         else if (hasOut) friendState = "outgoing";
         else if (friendIds.contains(uid)) friendState = "friends";
         else friendState = "none";
         refreshButtons();
-        if (user != null) bindUser();
+        if (user != null) {
+            if(wasFriend!="friends".equals(friendState))bindUser();
+            else updateStatsLine();
+        }
     }
 
     private void refreshButtons() {
         if (mine || user == null) return;
+        primaryBtn.setEnabled(!requestBusy);
+        if(requestBusy){primaryBtn.setText(requestPendingLabel);return;}
         switch (friendState) {
             case "friends": primaryBtn.setText("✓ Friends"); break;
             case "outgoing": primaryBtn.setText("✓ Requested"); break;
@@ -1452,7 +1486,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
     }
 
     private void primary() {
-        if (user == null) return;
+        if (user == null || requestBusy) return;
         if (mine) {
             startActivity(new Intent(this, EditProfileActivity.class));
             return;
@@ -1466,22 +1500,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
                 });
                 break;
             case "outgoing":
-                Ui.confirm(this, "Cancel friend request?", "", "Cancel request", () -> {
-                    String actor = Fb.uid();
-                    if (actor == null) return;
-                    Fb.db().collection("friend_requests").whereEqualTo("fromUid",actor)
-                            .whereEqualTo("toUid",uid).whereEqualTo("status","pending").limit(20).get()
-                            .addOnSuccessListener(page -> {
-                                if (!actor.equals(Fb.uid())) return;
-                                if (page.getMetadata().isFromCache() || page.size() == 20) {
-                                    Ui.toast(this,"Couldn't verify requests. Please retry online."); return;
-                                }
-                                java.util.List<com.google.android.gms.tasks.Task<Void>> deletes = new java.util.ArrayList<>();
-                                for (DocumentSnapshot doc : page) deletes.add(doc.getReference().delete());
-                                com.google.android.gms.tasks.Tasks.whenAll(deletes)
-                                        .addOnFailureListener(e -> Ui.toast(this,"Couldn't cancel. Please retry."));
-                            }).addOnFailureListener(e -> Ui.toast(this,"Couldn't cancel. Please retry."));
-                });
+                Ui.confirm(this, "Cancel friend request?", "", "Cancel request", this::cancelOutgoingRequest);
                 break;
             case "incoming":
                 Ui.choose(this, "Respond to request", new String[]{"✔ Confirm", "Delete"}, w -> {
@@ -1505,16 +1524,42 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
                 });
                 break;
             default:
+                String requestActor = Fb.uid();
+                if (requestActor == null) return;
+                requestBusy=true;requestPendingLabel="Sending…";refreshButtons();
                 Map<String, Object> m = Fb.map(
-                        "fromUid", Fb.uid(), "toUid", uid,
+                        "fromUid", requestActor, "toUid", uid,
                         "fromUserName", Fb.myName(), "fromUserPhotoUrl", Fb.myPhoto(),
                         "status", "pending", "createdAt", FieldValue.serverTimestamp());
                 Fb.db().collection("friend_requests").add(m).addOnSuccessListener(x -> {
+                    if (!requestActor.equals(Fb.uid()) || isFinishing()) return;
+                    requestBusy=false;outgoingKnown=true;hasOut=true;outgoingRequestId=x.getId();
+                    computeFriendState();
                     Notify.send(uid, "friend_request", "sent you a friend request");
                     Ui.toast(this, "Friend request sent ✓");
+                }).addOnFailureListener(e -> {
+                    if (requestActor.equals(Fb.uid()) && !isFinishing()) {
+                        requestBusy=false;computeFriendState();
+                        Ui.toast(this, "Couldn't send friend request. Please retry.");
+                    }
                 });
                 break;
         }
+    }
+
+    private void cancelOutgoingRequest() {
+        String actor=Fb.uid(), requestId=outgoingRequestId;
+        if(actor==null || requestBusy || requestId==null || !hasOut)return;
+        requestBusy=true;requestPendingLabel="Cancelling…";refreshButtons();
+        // The listener or send acknowledgement already provided the exact ID.
+        Fb.db().collection("friend_requests").document(requestId).delete().addOnCompleteListener(result->{
+            if(!actor.equals(Fb.uid()) || isFinishing())return;
+            requestBusy=false;
+            if(result.isSuccessful()){
+                outgoingKnown=true;hasOut=false;outgoingRequestId=null;
+            }else Ui.toast(this,"Couldn't cancel. Please retry.");
+            computeFriendState();
+        });
     }
 
     private void reconfirmFriendship() {
@@ -1602,7 +1647,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
             pm.getMenu().add("🖐 Poke " + (user != null ? firstOnly(user.displayName) : "them"));
             pm.getMenu().add(blocked ? "🔓 Unblock user" : "🚫 Block user");
             pm.getMenu().add("💙 See friendship");
-            pm.getMenu().add("🔗 Copy profile link");
+            pm.getMenu().add("🔗 Copy app link");
             pm.getMenu().add("🚩 Report profile");
             boolean isFav = Fb.me != null && Fb.me.favoriteUids != null
                     && Fb.me.favoriteUids.contains(uid);
@@ -1637,7 +1682,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
             pm.getMenu().add("👁 View as Public");
             pm.getMenu().add(user != null && user.profileLocked ? "🔓 Unlock profile" : "🔒 Lock profile");
             pm.getMenu().add("📦 Archive & Recycle Bin");
-            pm.getMenu().add("🔗 Copy profile link");
+            pm.getMenu().add("🔗 Copy app link");
             pm.getMenu().add("📷 Change profile photo");
             pm.getMenu().add("🖼 Change cover photo");
         }
@@ -1656,8 +1701,8 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
                 Ui.confirm(this, "Block " + (user != null ? user.displayName : "") + "?", "", "Block", () ->
                         Fb.patchMe(Fb.map("blockedUsers", FieldValue.arrayUnion(uid))));
             } else if (t.contains("See friendship")) showFriendship();
-            else if (t.contains("Copy profile link")) {
-                Ui.copy(this, com.friendbook.social.core.AdsConfig.OFFICIAL_WEBSITE_URL + "/?user=" + uid);
+            else if (t.contains("Copy app link")) {
+                Ui.copy(this, com.friendbook.social.core.AdsConfig.PLAY_STORE_URL);
             } else if (t.contains("Tick level (admin)")) {
                 Ui.choose(this, "🛡 Set tick for " + (user != null ? user.displayName : "user"),
                         new String[]{"✓ Blue tick", "✨ Gold tick", "💎 Diamond tick", "✕ Remove tick"},
@@ -1798,11 +1843,11 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
 
     private void adminStats() {
         Ui.toast(this, "Counting posts…");
-        Fb.db().collection("posts").whereEqualTo("authorId", uid).limit(100).get()
+        Fb.db().collection("posts").whereEqualTo("authorId", uid).count().get(com.friendbook.social.d1.documents.AggregateSource.SERVER)
                 .addOnSuccessListener(snap -> {
-                    int pcount = snap.size();
+                    long pcount = snap.getCount();
                     Ui.info(this, "🛡 📊 " + (user != null ? user.displayName : "User"),
-                            "• Posts: " + pcount + (pcount >= 100 ? "+" : "") + "\n"
+                            "• Posts: " + pcount + "\n"
                             + "• Friends: " + (user != null ? user.friendsCount : 0) + "\n"
                             + "• Followers: " + (user != null && user.followers != null
                                     ? user.followers.size() : 0) + "\n"
@@ -1856,7 +1901,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
         if (user.relationship != null && !user.relationship.isEmpty()) addAboutRow(card, "💞", user.relationship);
         if (user.website != null && !user.website.isEmpty()) addAboutRow(card, "🌐", user.website);
         addAboutRow(card, "👥", Format.count(user.friendsCount) + " friends");
-        addAboutRow(card, "🚶", Format.count(user.followerCount) + " followers · " + Format.count(user.followingCount) + " following");
+        addAboutRow(card, "🚶", Format.count(displayedFollowerCount()) + " followers · " + Format.count(user.followingCount) + " following");
 
         boolean canSeeContact = (mine && !viewAsPublic)
                 || "Public".equalsIgnoreCase(user.contactInfoPrivacy)
@@ -1947,7 +1992,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
             friendUsers.add(u);
             UsersAdapter.Row r = new UsersAdapter.Row();
             r.user = u;
-            r.subtitle = "Friend"; // Live profile/chat status comes from Presence.watch, never this cached user card.
+            r.subtitle = "Friend";
             rows.add(r);
         }
         friendsAdapter.setData(rows);
@@ -2027,7 +2072,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
 
         @Override public void onBindViewHolder(@NonNull VH h, int i) {
             String url = media.get(i);
-            Ui.img(ProfileActivity.this, h.iv, url);
+            Ui.imgPreview(ProfileActivity.this, h.iv, url);
             h.iv.setOnClickListener(v -> openFullscreenImage(url));
         }
 

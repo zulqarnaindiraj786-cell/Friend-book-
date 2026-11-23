@@ -19,7 +19,9 @@ public final class CursorPager {
     private final String actor,key;
     private final Listener listener;
     private final LinkedHashMap<String,DocumentSnapshot> records=new LinkedHashMap<>();
-    private DocumentSnapshot cursor;
+    private DocumentSnapshot cursor,observedTail;
+    private List<DocumentSnapshot> observedHead=Collections.emptyList();
+    private boolean receivedObserved;
     private boolean more=true,loading,closed,serverReceived;
     private int requestGeneration;
     private final android.os.Handler timeoutHandler=new android.os.Handler(android.os.Looper.getMainLooper());
@@ -27,25 +29,100 @@ public final class CursorPager {
     public CursorPager(Query query,int size,String key,Listener listener) {
         this.query=query;this.size=size;this.actor=Fb.uid();this.key=actor+":"+key;this.listener=listener;
     }
-    public void start() {
+    public void start() { start(false); }
+    public void startDelta() { startLocal(0,false); }
+    public void startFullRefresh() { startLocal(0,true); }
+    public void startCachedDay() { startLocal(24*60*60*1000L,true); }
+    private void startLocal(long maxAgeMs,boolean full) {
+        if(!active() || loading)return;
+        loading=true;
+        final int request=++requestGeneration;
+        Query head=query.limit(size);
+        head.get(Source.CACHE).addOnCompleteListener(cache -> {
+            if(!active() || request!=requestGeneration)return;
+            QuerySnapshot cached=cache.isSuccessful()?cache.getResult():null;
+            if(cached!=null && maxAgeMs>0 && head.hasFreshLocalPage(maxAgeMs)) {
+                loading=false;
+                for(DocumentSnapshot doc:cached)records.put(doc.getId(),doc);
+                if(!cached.isEmpty())cursor=cached.getDocuments().get(cached.size()-1);
+                more=cached.size()==size;
+                emit("");
+                return;
+            }
+            if(cached!=null && !cached.isEmpty()) {
+                for(DocumentSnapshot doc:cached)records.put(doc.getId(),doc);
+                cursor=cached.getDocuments().get(cached.size()-1);
+                more=cached.size()==size;
+                loading=false;emit("");loading=true;
+            } else emit("");
+            (full ? head.get(Source.SERVER) : head.refreshCachedHead(cached)).addOnSuccessListener(page -> {
+                if(!active() || request!=requestGeneration)return;
+                loading=false;
+                acceptObservedFirstPage(page);
+            }).addOnFailureListener(error -> {
+                if(!active() || request!=requestGeneration)return;
+                loading=false;emit("Couldn't refresh. Pull down to retry.");
+            });
+        });
+    }
+    public void startObserved() { start(true); }
+    private void start(boolean observed) {
+        if (!active()) return;
         CachedPage cached=CACHE.get(key);
         if(cached!=null){for(DocumentSnapshot doc:cached.docs)records.put(doc.getId(),doc);more=cached.more;emit("");}
+        if (!active()) return;
         if (cached==null) query.limit(size).get(Source.CACHE).addOnSuccessListener(page -> {
             if (!active() || serverReceived || !records.isEmpty()) return;
             for (DocumentSnapshot doc:page) records.put(doc.getId(),doc);
             if (!records.isEmpty()) { boolean wasLoading=loading;loading=false;emit("");loading=wasLoading; }
         });
-        more=true;next();
+        more=true;
+        if (!observed) next();
+    }
+    /** Reuse the verified first page already fetched by the section listener. */
+    public void acceptObservedFirstPage(QuerySnapshot page) {
+        if (!active() || page == null || page.getMetadata().isFromCache()) return;
+        List<DocumentSnapshot> docs=page.getDocuments();
+        if (receivedObserved && sameData(observedHead,docs)) return;
+        boolean hasOlderPages=cursor!=null && observedTail!=null && (loading || !cursor.getId().equals(observedTail.getId()));
+        receivedObserved=true;observedHead=new ArrayList<>(docs);
+        observedTail=docs.isEmpty()?null:docs.get(docs.size()-1);
+        if (page.size()<size || !hasOlderPages) {
+            if (loading) { requestGeneration++; if (timeout!=null) timeoutHandler.removeCallbacks(timeout); loading=false; }
+            records.clear();cursor=observedTail;more=page.size()==size;
+        } else {
+            // Refresh the live head without discarding older pages or invalidating their in-flight read.
+            Set<String> headIds=new HashSet<>();for(DocumentSnapshot doc:docs)headIds.add(doc.getId());
+            com.google.firebase.Timestamp boundary=observedTail==null?null:observedTail.getTimestamp("createdAt");
+            records.values().removeIf(doc->{
+                com.google.firebase.Timestamp time=doc.getTimestamp("createdAt");
+                return headIds.contains(doc.getId()) || (boundary!=null && time!=null && (time.compareTo(boundary)>0 || (time.equals(boundary) && doc.getId().compareTo(observedTail.getId())>0)));
+            });
+        }
+        LinkedHashMap<String,DocumentSnapshot> merged=new LinkedHashMap<>();
+        for(DocumentSnapshot doc:docs)merged.put(doc.getId(),doc);
+        merged.putAll(records);records.clear();records.putAll(merged);
+        serverReceived=true;
+        CACHE.put(key,new CachedPage(new ArrayList<>(docs),page.size()==size));
+        emit("");
+    }
+    public void observedError() {
+        if (active() && !serverReceived && !loading) emit("Couldn't load this page. Tap to retry.");
     }
     public void next() {
-        if(closed || loading || !more || !Objects.equals(actor,Fb.uid())) return;
-        loading=true;if(cursor!=null || records.isEmpty())emit("");Query page=query;if(cursor!=null)page=page.startAfter(cursor);
+        if(!active() || loading || !more) return;
+        loading=true;
         final int request=++requestGeneration;
+        if(cursor!=null || records.isEmpty())emit("");
+        // A listener can replace or close this pager during rendering.
+        if(!active() || request!=requestGeneration)return;
+        Query page=query;if(cursor!=null)page=page.startAfter(cursor);
         timeout=()->{if(active() && loading && request==requestGeneration){requestGeneration++;loading=false;emit("Loading is taking too long. Tap to retry.");}};
         timeoutHandler.postDelayed(timeout,20000L);
         page.limit(size).get().addOnSuccessListener(result -> {
-            if(!active() || request!=requestGeneration)return;timeoutHandler.removeCallbacks(timeout);loading=false;serverReceived=true;
+            if(!active() || request!=requestGeneration)return;timeoutHandler.removeCallbacks(timeout);loading=false;
             boolean offline=result.getMetadata().isFromCache();
+            if(!offline)serverReceived=true;
             if(!offline)more=result.size()==size;
             // An offline cache can be incomplete or empty; it cannot prove that
             // previously confirmed rows disappeared. Only replace on a server read.
@@ -60,7 +137,7 @@ public final class CursorPager {
             emit(offline?"Showing cached results. Reconnect and tap to retry.":"");
         }).addOnFailureListener(error -> {if(active() && request==requestGeneration){timeoutHandler.removeCallbacks(timeout);loading=false;emit("Couldn't load this page. Tap to retry.");}});
     }
-    private boolean active(){return !closed && Objects.equals(actor,Fb.uid());}
+    private boolean active(){return !closed && actor!=null && Objects.equals(actor,Fb.uid());}
     private void emit(String error){
         if(!active())return;List<DocumentSnapshot> docs=new ArrayList<>(records.values());
         if(delivered && !loading && !lastLoading && more==lastMore && error.isEmpty() && lastError.isEmpty() && sameData(lastDelivered,docs))return;

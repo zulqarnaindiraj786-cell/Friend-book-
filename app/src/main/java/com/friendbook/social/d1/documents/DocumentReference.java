@@ -14,6 +14,7 @@ public class DocumentReference {
     private final D1DocumentStore firestore;
     private final String path;
     private final String id;
+    private boolean profileAudience;
 
     DocumentReference(D1DocumentStore firestore, String path) {
         this.firestore = firestore;
@@ -32,6 +33,14 @@ public class DocumentReference {
 
     public String getId() { return id; }
 
+    public DocumentReference withProfileAudience() {
+        DocumentReference ref=new DocumentReference(firestore,path);
+        ref.profileAudience=true;
+        return ref;
+    }
+
+    boolean includesProfileAudience(){return profileAudience;}
+
     public String getPath() { return path; }
 
     public D1DocumentStore getStore() { return firestore; }
@@ -43,6 +52,10 @@ public class DocumentReference {
     public CollectionReference getParent() {
         int idx = path.lastIndexOf('/');
         return idx > 0 ? new CollectionReference(firestore, path.substring(0, idx)) : null;
+    }
+
+    public boolean hasFreshOwnProfileCache() {
+        return firestore.ownProfileCacheFresh(path) && firestore.getCachedDoc(path)!=null;
     }
 
     public Task<DocumentSnapshot> get() {

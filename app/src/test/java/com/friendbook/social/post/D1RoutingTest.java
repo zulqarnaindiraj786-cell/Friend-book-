@@ -46,7 +46,7 @@ public class D1RoutingTest {
    drafts.when(()->D1Drafts.keep(nullable(android.content.Context.class),anyString(),anyString(),anyString(),any(JSONObject.class))).thenReturn(true);
    fb.when(Fb::uid).thenReturn("u1");fb.when(Fb::myName).thenReturn("User");fb.when(Fb::myPhoto).thenReturn("");d1.when(()->D1Client.enabled("posts")).thenReturn(true);
    TaskCompletionSource<JSONObject> page=new TaskCompletionSource<>();
-   d1.when(()->D1Client.request(eq("posts"),eq("p1"),eq("comments"),eq("GET"),isNull(),isNull())).thenReturn(page.getTask());
+   d1.when(()->D1Client.request(eq("posts"),eq("p1"),eq("comments"),eq("GET"),isNull(),eq("?limit=10"))).thenReturn(page.getTask());
    d1.when(()->D1Client.request(eq("posts"),eq("p1"),eq("comments"),eq("POST"),any(JSONObject.class),isNull())).thenReturn(Tasks.forException(new IOException("offline")));
    int[] renders={0};CommentsEngine.Handle h=CommentsEngine.watch("posts","p1","p1",(all,pin)->renders[0]++);
    boolean[] failed={false};CommentsEngine.sendComment("posts","p1","p1","retry me","","",(ok,error)->failed[0]=!ok);

@@ -84,7 +84,6 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
 
     private static final int REQ_LIVE_PERMS = 701;
     private static final int REQ_COHOST_PERMS = 702;
-    private static final int REQ_PK_GUEST_PERMS = 703;
 
     private static final String[] FILTER_NAMES = {
             "4K Natural", "Golden Warm", "Cinema Cool", "Rosy Face",
@@ -241,7 +240,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
     private long coHostSeqOut = 0L;
     private long pkSeqOut = 0L;
     private long lastHostVideoUpdateMs = 0L;
-    private long lastCoHostMediaPushMs = 0L;
+    private long lastPkLeftFrame, lastPkRightFrame;
     private long lastPkMediaPushMs = 0L;
     private int peakViewers = 1;
     private int currentViewers = 1;
@@ -303,6 +302,13 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
     private int myVotedOption = -1;
 
     // Listeners & Timers
+    private LiveRelayClient liveRelay;
+    private volatile LiveRelayClient coHostRelay;
+    private LiveRelayClient pkOpponentRelay;
+    private volatile LiveRelayClient pkGuestRelay;
+    private static final int REQ_PK_GUEST_PERMS = 703;
+    private final Runnable pollPkRoom = this::refreshCloudPk;
+    private boolean pkPollPending;
     private ListenerRegistration liveDocReg;
     private ListenerRegistration chatColReg;
     private ListenerRegistration pkBattleReg;
@@ -337,28 +343,24 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
         }
     };
 
-    private final Runnable hostHeartbeatTask = new Runnable() {
-        @Override
-        public void run() {
-            if (!isEnded && isHost && isLiveStarted && liveId != null) {
-                Map<String, Object> hb = new HashMap<>();
-                hb.put("lastHeartbeatMs", System.currentTimeMillis());
-                hb.put("viewerIds", new ArrayList<>(activeViewerIds));
-                hb.put("viewerCount", Math.max(1, currentViewers));
-                hb.put("peakViewers", peakViewers);
-                hb.put("likesCount", totalLikes);
-                Fb.db().collection("lives").document(liveId).update(hb);
-                uiHandler.postDelayed(this, 8000L);
-            }
-        }
-    };
+    /**
+     * One write per real event (start, viewer change, screen leave). There is no
+     * repeating heartbeat: a closed or idle app must not write on a timer.
+     */
+    private void publishHostHeartbeat() {
+        if (isEnded || !isHost || !isLiveStarted || liveId == null) return;
+        Map<String, Object> hb = new HashMap<>();
+        hb.put("lastHeartbeatMs", System.currentTimeMillis());
+        hb.put("viewerIds", new ArrayList<>(activeViewerIds));
+        hb.put("peakViewers", peakViewers);
+        Fb.db().collection("lives").document(liveId).update(hb);
+    }
 
     @Override
     protected void onCreate(@Nullable Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
-        getWindow().setStatusBarColor(0xFF000000);
-        getWindow().setNavigationBarColor(0xFF000000);
+        com.friendbook.social.core.Ui.statusBar(getWindow(), 0xFF000000);
 
         liveId = getIntent().getStringExtra("live_id");
         hostId = getIntent().getStringExtra("host_id");
@@ -1285,7 +1287,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
             } else if (reqCode == REQ_COHOST_PERMS) {
                 activateLocalCoHostStreaming();
             } else if (reqCode == REQ_PK_GUEST_PERMS) {
-                activateLocalPkGuestStreaming();
+                activatePkGuest();
             }
         }
     }
@@ -1301,10 +1303,13 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
                 fallbackStage.setVisibility(View.VISIBLE);
                 stageStatusTv.setText("Audio-only mode (grant Camera permission for video)");
             }
-        } else if (requestCode == REQ_COHOST_PERMS && camOk) {
-            activateLocalCoHostStreaming();
-        } else if (requestCode == REQ_PK_GUEST_PERMS && camOk) {
-            activateLocalPkGuestStreaming();
+        } else if (requestCode == REQ_COHOST_PERMS) {
+            if (camOk && checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED)
+                activateLocalCoHostStreaming();
+            else removeActiveCoHost();
+        } else if (requestCode == REQ_PK_GUEST_PERMS) {
+            if (camOk && checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) activatePkGuest();
+            else endActivePkBattle();
         }
     }
 
@@ -1367,7 +1372,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
         doc.put("privacy", privacyFriendsOnly ? "friends" : "public");
         doc.put("status", "live");
         doc.put("viewers", 1);
-        doc.put("viewerCount", 1);
+        doc.put("viewerCount", 0);
         doc.put("peakViewers", 1);
         doc.put("stars", 0);
         doc.put("totalStars", 0);
@@ -1395,16 +1400,17 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
         hostTopName.setText(hostNameStr);
 
         docRef.set(doc).addOnSuccessListener(unused -> {
-            setupRtdbFastLane();
-            attachRoomListeners();
-            // Start real-time camera video + real-time microphone voice streaming + speaker (for Co-Host)!
-            engine.startBroadcasting(true);
-            engine.startSpeakerPlayback();
-            uiHandler.post(durationTicker);
-            // QUOTA: one heartbeat write per minute instead of every 8s (150s liveness window).
-            uiHandler.postDelayed(hostHeartbeatTask, 60_000L);
-            postSystemChat(hostNameStr + " started a live video & voice broadcast!");
-            notifyFollowersGoingLive();
+            if (isFinishing() || isDestroyed() || isEnded) return;
+            openLiveRelay(true, () -> {
+                attachRoomListeners();
+                // Start real-time camera video + real-time microphone voice streaming + speaker (for Co-Host)!
+                engine.startBroadcasting(true);
+                engine.startSpeakerPlayback();
+                uiHandler.post(durationTicker);
+                publishHostHeartbeat();
+                postSystemChat(hostNameStr + " started a live video & voice broadcast!");
+                notifyFollowersGoingLive();
+            });
         }).addOnFailureListener(e -> {
             // A rejected room creation is not a running broadcast. In particular,
             // onDestroy must not attempt to end a room that was never created.
@@ -1427,102 +1433,61 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
     // ==================== VIEWER JOINING REAL-TIME VIDEO + VOICE ROOM ====================
 
     private void joinExistingLiveAsViewer() {
-        isLiveStarted = true;
-        engine.startSpeakerPlayback();
-        setupRtdbFastLane();
-        attachRoomListeners();
-
-        // Update `viewers` (100% allowed by deployed firestore.rules!) + post join packet in `chat`!
-        viewerCountJoined = true;
-        Fb.db().collection("lives").document(liveId)
-                .update("viewers", FieldValue.increment(1));
-
-        Map<String, Object> joinPkt = new HashMap<>();
-        joinPkt.put("type", "join");
-        joinPkt.put("uid", Fb.uid());
-        joinPkt.put("name", Fb.myName());
-        joinPkt.put("photo", Fb.myPhoto() == null ? "" : Fb.myPhoto());
-        joinPkt.put("text", "joined the live");
-        joinPkt.put("createdAtMs", System.currentTimeMillis());
-        joinPkt.put("createdAt", FieldValue.serverTimestamp());
-        Fb.db().collection("lives").document(liveId).collection("chat").add(joinPkt);
+        openLiveRelay(false, () -> {
+            isLiveStarted = true;
+            engine.startSpeakerPlayback();
+            attachRoomListeners();
+        });
     }
 
-    // ==================== DUAL-LANE STREAMING (RTDB FAST LANE + FIRESTORE GUARANTEED LANE) ====================
-
-    // Low-latency media signaling now uses the D1-backed snapshot lane below.
-    private void setupRtdbFastLane() { /* D1 snapshot listeners are installed by the reliable lane. */ }
+    private void openLiveRelay(boolean publish, Runnable ready) {
+        liveRelay = new LiveRelayClient(new LiveRelayClient.Listener() {
+            @Override public void ready() {
+                if (!isFinishing() && !isEnded) {
+                    ready.run();
+                    uiHandler.removeCallbacks(pollPkRoom);
+                    uiHandler.post(pollPkRoom);
+                }
+            }
+            @Override public void packet(String kind, String data, long seq) {
+                if (isFinishing() || isDestroyed()) return;
+                boolean guest = kind.startsWith("pk_");
+                if (guest && (!pkBattleActive || !pkLiveIdA.equals(pkLiveIdB) || "B".equals(pkRole))) return;
+                boolean co = kind.startsWith("co_");
+                if (co && (pkBattleActive || isMeActiveCoHost || activeCoHostUid.isEmpty())) return;
+                boolean right = guest || co || (pkBattleActive && !pkLiveIdA.equals(pkLiveIdB) && liveId != null && liveId.equals(pkLiveIdB));
+                if (kind.endsWith("video")) engine.decodeRemoteFrame(data, seq, right);
+                else engine.enqueueRemoteAudio(data, seq, right);
+            }
+            @Override public void audience(int count) {
+                if (isFinishing() || isDestroyed() || isEnded) return;
+                currentViewers = count;
+                peakViewers = Math.max(peakViewers, count);
+                if (viewerCountTv != null) viewerCountTv.setText(Format.count(count));
+            }
+            @Override public void disconnected() {
+                if (!isFinishing() && !isEnded) {
+                    Ui.toast(LiveActivity.this, "Live connection unavailable");
+                    finish();
+                }
+            }
+        });
+        liveRelay.open(liveId, publish);
+    }
 
     @Override
     public void onEncodedVideoFrame(String base64Webp, int width, int height) {
         if (isEnded || !isLiveStarted || liveId == null) return;
         if (isHost) {
             long seq = ++frameSeqOut;
-            long now = System.currentTimeMillis();
-            if (rtdbStreamRef != null) {
-                Map<String, Object> fast = new HashMap<>();
-                fast.put("v", base64Webp);
-                fast.put("vs", seq);
-                fast.put("camOff", false);
-                rtdbStreamRef.updateChildren(fast);
-            }
-            // Guaranteed Firestore real-time stream (100% allowed for hostId == request.auth.uid!)
-            Map<String, Object> upd = new HashMap<>();
-            upd.put("liveFrameB64", base64Webp);
-            upd.put("frameSeq", seq);
-            upd.put("frameTs", now);
-            upd.put("cameraPaused", false);
-            upd.put("filterIndex", currentFilterIdx);
-            Fb.db().collection("lives").document(liveId).update(upd);
-
-            // Also publish to shared 2-User PK Battle Media Channel when PK is active!
-            if (pkBattleActive && !pkBattleId.isEmpty() && ("A".equals(pkRole) || "B".equals(pkRole))) {
-                String sideKey = "B".equals(pkRole) ? "b" : "a";
-                String mediaDocId = "pkmedia_" + pkBattleId + "_" + sideKey;
-                Map<String, Object> pkV = new HashMap<>();
-                pkV.put("v", base64Webp);
-                pkV.put("vs", seq);
-                pkV.put("camOff", false);
-                pkV.put("ts", now);
-                DatabaseReference pkRef = "B".equals(pkRole) ? pkRtdbBRef : pkRtdbARef;
-                if (pkRef != null) {
-                    try { pkRef.updateChildren(pkV); } catch (Throwable ignored) { }
-                }
-                Fb.db().collection("chats").document(mediaDocId).set(pkV, SetOptions.merge());
-            }
+            if (liveRelay != null) liveRelay.send("video", base64Webp, seq);
         }
     }
 
     @Override
     public void onEncodedAudioChunk(String base64Ulaw, int voiceLevel) {
-        if (isEnded || !isLiveStarted || liveId == null) return;
-        if (isHost) {
-            long seq = ++audioSeqOut;
-            if (rtdbStreamRef != null) {
-                Map<String, Object> fast = new HashMap<>();
-                fast.put("a", base64Ulaw);
-                fast.put("as", seq);
-                rtdbStreamRef.updateChildren(fast);
-            }
-            Map<String, Object> upd = new HashMap<>();
-            upd.put("audioB64", base64Ulaw);
-            upd.put("audioSeq", seq);
-            upd.put("audioLevel", voiceLevel);
-            Fb.db().collection("lives").document(liveId).update(upd);
-
-            if (pkBattleActive && !pkBattleId.isEmpty() && ("A".equals(pkRole) || "B".equals(pkRole))) {
-                String sideKey = "B".equals(pkRole) ? "b" : "a";
-                String mediaDocId = "pkmedia_" + pkBattleId + "_" + sideKey;
-                Map<String, Object> pkA = new HashMap<>();
-                pkA.put("a", base64Ulaw);
-                pkA.put("as", seq);
-                DatabaseReference pkRef = "B".equals(pkRole) ? pkRtdbBRef : pkRtdbARef;
-                if (pkRef != null) {
-                    try { pkRef.updateChildren(pkA); } catch (Throwable ignored) { }
-                }
-                Fb.db().collection("chats").document(mediaDocId).set(pkA, SetOptions.merge());
-            }
-        }
+        if (!isEnded && isLiveStarted && isHost && liveRelay != null)
+            liveRelay.send("audio", base64Ulaw, ++audioSeqOut);
     }
 
     @Override
@@ -1545,6 +1510,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
             if (!isCoHost) {
                 // Side A (Left 50% Pane)
                 if (!(isHost && "A".equals(pkRole))) {
+                    lastPkLeftFrame = android.os.SystemClock.elapsedRealtime();
                     pkLeftRemoteImg.setVisibility(View.VISIBLE);
                     pkLeftRemoteImg.setImageBitmap(bitmap);
                     pkLeftFallbackBox.setVisibility(View.GONE);
@@ -1552,6 +1518,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
             } else {
                 // Side B (Right 50% Pane)
                 if (!(isHost && "B".equals(pkRole)) && !isMePkGuest) {
+                    lastPkRightFrame = android.os.SystemClock.elapsedRealtime();
                     pkRightRemoteImg.setVisibility(View.VISIBLE);
                     pkRightRemoteImg.setImageBitmap(bitmap);
                     pkRightFallbackBox.setVisibility(View.GONE);
@@ -1671,25 +1638,12 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
             }
         }
 
-        int vDoc = Math.max(1, Math.max(Format.intOf(m, "viewers"), Format.intOf(m, "viewerCount")));
-        currentViewers = isHost ? Math.max(vDoc, activeViewerIds.size()) : vDoc;
-        if (currentViewers > peakViewers) peakViewers = currentViewers;
-        viewerCountTv.setText(Format.count(currentViewers));
 
         totalStarsReceived = Math.max(Format.intOf(m, "stars"), Format.intOf(m, "totalStars"));
         int docLikes = Format.intOf(m, "likesCount");
-        if (docLikes > totalLikes) totalLikes = docLikes;
+        totalLikes = docLikes;
         if (likesBadgeTv != null) likesBadgeTv.setText(Format.count(totalLikes));
-        hostTopSub.setText(Format.count(totalStarsReceived) + " Stars  ·  " + Format.count(totalLikes) + " Likes");
-
-        // 2-User Split-Screen PK Battle Room Sync
-        boolean docPkActive = Boolean.TRUE.equals(m.get("pkActive"));
-        String docPkId = Format.str(m, "pkBattleId");
-        if (docPkActive && !docPkId.isEmpty() && !endedPkBattleIds.contains(docPkId)) {
-            subscribeToPkBattle(docPkId);
-        } else if (!docPkActive && !isHost && pkBattleActive) {
-            teardownPkStageUi();
-        }
+        hostTopSub.setText(Format.count(totalStarsReceived) + " Stars  ·  " + Format.count(Format.intOf(m, "socialGiftPoints")) + " Gift Points  ·  " + Format.count(totalLikes) + " Likes");
 
         // Filter Sync
         int remoteFilter = Format.intOf(m, "filterIndex");
@@ -1737,9 +1691,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
         // Co-Host Stage State Sync
         String newCoUid = Format.str(m, "coHostUid");
         String newCoName = Format.str(m, "coHostName");
-        handleCoHostStateUpdate(newCoUid, newCoName,
-                Format.str(m, "coHostFrameB64"), Format.longOf(m, "coHostFrameSeq"),
-                Format.str(m, "coHostAudioB64"), Format.longOf(m, "coHostAudioSeq"));
+        handleCoHostStateUpdate(Format.str(m, "coHostGrant").isEmpty() ? "" : newCoUid, newCoName);
 
         // Pinned Comment Banner
         String pinned = Format.str(m, "pinnedComment");
@@ -1773,7 +1725,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
 
     private final Set<String> processedPacketIds = new HashSet<>();
 
-    private final com.friendbook.social.core.RealtimeSoundGate giftSoundGate = new com.friendbook.social.core.RealtimeSoundGate(com.friendbook.social.core.Presence.now());
+    private final com.friendbook.social.core.RealtimeSoundGate giftSoundGate = new com.friendbook.social.core.RealtimeSoundGate(System.currentTimeMillis());
     private void onChatSnapshot(List<DocumentSnapshot> docs, boolean fromCache) {
         boolean soundEligible = giftSoundGate.begin(fromCache);
         List<ChatItem> visibleMessages = new ArrayList<>();
@@ -1793,7 +1745,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
             // Immediately hide permanently blocked users from Live Chat!
             if (!uid.isEmpty() && Fb.me != null && Fb.me.blocked != null && Fb.me.blocked.contains(uid)) {
                 if ("gift".equals(type)) giftSoundGate.observe(id, Format.longOf(m, "createdAtMs"),
-                        com.friendbook.social.core.Presence.now(), soundEligible);
+                        System.currentTimeMillis(), soundEligible);
                 continue;
             }
 
@@ -1805,14 +1757,15 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
             if ("join".equals(type)) {
                 if (!uid.isEmpty() && activeViewerIds.add(uid)) {
                     totalUniqueViewers++;
+                    // A real viewer change is the moment the room document needs
+                    // the new list; no timer writes it later.
+                    publishHostHeartbeat();
                 }
                 visibleMessages.add(new ChatItem(id, uid, name, photo, text, "join"));
             } else if ("leave".equals(type)) {
-                activeViewerIds.remove(uid);
+                if (activeViewerIds.remove(uid)) publishHostHeartbeat();
             } else if ("reaction".equals(type)) {
                 if (isNewPacket) {
-                    totalLikes++;
-                    if (likesBadgeTv != null) likesBadgeTv.setText(Format.count(totalLikes));
                     if (!uid.equals(Fb.uid())) {
                         spawnFloatingEmoji(text.isEmpty() ? "heart" : text);
                     }
@@ -1823,7 +1776,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
                 String gName = Format.strOr(m, "giftName", "Gift");
                 long giftTime = Format.ts(m.get("createdAt"));
                 if (giftTime <= 0) giftTime = Format.longOf(m, "createdAtMs");
-                boolean freshGiftSound = giftSoundGate.observe(id, giftTime, com.friendbook.social.core.Presence.now(), soundEligible);
+                boolean freshGiftSound = giftSoundGate.observe(id, giftTime, System.currentTimeMillis(), soundEligible);
                 if (isNewPacket && stars > 0) {
                     totalGiftsCount++;
                     int prev = supporterStars.containsKey(uid) ? supporterStars.get(uid) : 0;
@@ -1840,53 +1793,17 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
                 String targetUid = Format.str(m, "targetUid");
                 String pkId = Format.str(m, "pkBattleId");
                 int durS = Math.max(60, Format.intOf(m, "durationSec"));
-                if (isNewPacket && targetUid.equals(Fb.uid()) && !pkId.isEmpty()
+                if (isNewPacket && System.currentTimeMillis() - Format.longOf(m, "createdAtMs") < 90000L && targetUid.equals(Fb.uid()) && !pkId.isEmpty()
                         && !id.equals(lastHandledPkInviteId) && pkInvitesEnabled) {
                     lastHandledPkInviteId = id;
                     promptIncomingPkChallenge(pkId, uid, name, photo, durS);
                 }
             } else if ("pk_req".equals(type)) {
-                if (isNewPacket && isHost && !uid.isEmpty() && !uid.equals(Fb.uid()) && pkInvitesEnabled) {
-                    promptViewerRequestedPk(uid, name, photo);
+                if (isHost && isNewPacket && pkInvitesEnabled && !pkBattleActive
+                        && System.currentTimeMillis() - Format.longOf(m, "createdAtMs") < 90000L) {
+                    Ui.confirm(this, "PK request from " + name, "Invite this viewer to a split-screen PK?",
+                            "Invite", () -> challengeViewerToPk(uid, name, photo, 180));
                 }
-                visibleMessages.add(new ChatItem(id, uid, name, photo, "requested a PK Battle!", "system"));
-            } else if ("pk_leave".equals(type)) {
-                String leftPkId = Format.str(m, "pkBattleId");
-                if (!leftPkId.isEmpty()) endedPkBattleIds.add(leftPkId);
-                if (isNewPacket) {
-                    if (isHost && liveId != null) {
-                        Map<String, Object> lu = new HashMap<>();
-                        lu.put("pkActive", false);
-                        lu.put("pkBattleId", "");
-                        Fb.db().collection("lives").document(liveId).update(lu);
-                    }
-                    if (pkBattleActive) {
-                        teardownPkStageUi();
-                        if (!uid.equals(Fb.uid())) {
-                            Ui.toast(this, name + " left the Live Match");
-                        }
-                    }
-                }
-                visibleMessages.add(new ChatItem(id, uid, name, photo, "left the Live Match", "system"));
-            } else if ("cohost_leave".equals(type)) {
-                if (isNewPacket && isHost && liveId != null && uid.equals(activeCoHostUid)) {
-                    Map<String, Object> cu = new HashMap<>();
-                    cu.put("coHostUid", "");
-                    cu.put("coHostName", "");
-                    cu.put("coHostFrameB64", "");
-                    cu.put("coHostAudioB64", "");
-                    Fb.db().collection("lives").document(liveId).update(cu);
-                    if (rtdbStreamRef != null) {
-                        try {
-                            Map<String, Object> rClear = new HashMap<>();
-                            rClear.put("cv", "");
-                            rClear.put("ca", "");
-                            rClear.put("cCamOff", true);
-                            rtdbStreamRef.updateChildren(rClear);
-                        } catch (Throwable ignored) { }
-                    }
-                }
-                visibleMessages.add(new ChatItem(id, uid, name, photo, "left the Co-Host stage", "system"));
             } else if ("qa".equals(type)) {
                 if (isNewPacket) {
                     qaItems.add(0, new ChatItem(id, uid, name, photo, text, "qa"));
@@ -1908,29 +1825,6 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
                     }
                 }
                 visibleMessages.add(new ChatItem(id, uid, name, photo, "requested to join Live", "system"));
-            } else if ("cohost_media".equals(type)) {
-                // Co-Host real-time camera + voice relay packet!
-                if (isNewPacket && uid.equals(activeCoHostUid) && !uid.equals(Fb.uid())) {
-                    String cf = Format.str(m, "v");
-                    String ca = Format.str(m, "a");
-                    long seq = Format.longOf(m, "seq");
-                    if (!cf.isEmpty()) engine.decodeRemoteFrame(cf, seq, true);
-                    if (!ca.isEmpty()) engine.enqueueRemoteAudio(ca, seq, true);
-                    if (isHost && liveId != null) {
-                        Map<String, Object> relay = new HashMap<>();
-                        if (!cf.isEmpty()) {
-                            relay.put("coHostFrameB64", cf);
-                            relay.put("coHostFrameSeq", seq);
-                        }
-                        if (!ca.isEmpty()) {
-                            relay.put("coHostAudioB64", ca);
-                            relay.put("coHostAudioSeq", seq);
-                        }
-                        if (!relay.isEmpty()) {
-                            Fb.db().collection("lives").document(liveId).update(relay);
-                        }
-                    }
-                }
             } else {
                 if (isNewPacket && "chat".equals(type)) totalComments++;
                 visibleMessages.add(new ChatItem(id, uid, name, photo, text, type));
@@ -1945,9 +1839,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
 
     // ==================== CO-HOST ("JOIN LIVE" SPLIT SCREEN VIDEO + VOICE) ====================
 
-    private void handleCoHostStateUpdate(String coUid, String coName,
-                                         String coFrameB64, long coFrameSeq,
-                                         String coAudioB64, long coAudioSeq) {
+    private void handleCoHostStateUpdate(String coUid, String coName) {
         activeCoHostUid = coUid == null ? "" : coUid;
         activeCoHostName = coName == null ? "" : coName;
         String me = Fb.uid();
@@ -1984,10 +1876,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
             coHostLocalTexture.setVisibility(View.GONE);
             if (coHostBeautyOverlay != null) coHostBeautyOverlay.setVisibility(View.GONE);
             coHostRemoteImage.setVisibility(View.VISIBLE);
-            if (!isHost) {
-                if (!coFrameB64.isEmpty()) engine.decodeRemoteFrame(coFrameB64, coFrameSeq, true);
-                if (!coAudioB64.isEmpty()) engine.enqueueRemoteAudio(coAudioB64, coAudioSeq, true);
-            }
+
         }
     }
 
@@ -2017,42 +1906,36 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
         }
         coHostLocalEngine.attachCameraPreview(coHostLocalTexture, true);
         coHostLocalEngine.attachBeautyOverlay(coHostBeautyOverlay);
-        coHostLocalEngine.startBroadcasting(true);
+        if (coHostRelay != null) return;
+        coHostRelay = new LiveRelayClient(new LiveRelayClient.Listener() {
+            @Override public void ready() {
+                if (isMeActiveCoHost && !isEnded && coHostLocalEngine != null) coHostLocalEngine.startBroadcasting(true);
+            }
+            @Override public void packet(String kind, String data, long seq) { }
+            @Override public void audience(int count) { }
+            @Override public void disconnected() {
+                if (!isFinishing() && !isEnded) {
+                    removeActiveCoHost();
+                    Ui.toast(LiveActivity.this, "Co-Host connection unavailable");
+                }
+            }
+        });
+        coHostRelay.open(liveId, "cohost");
     }
 
     private void pushCoHostMediaPacket(@Nullable String vB64, @Nullable String aB64) {
-        if (!isMeActiveCoHost || liveId == null || isEnded) return;
-        long now = System.currentTimeMillis();
-        long seq = ++coHostSeqOut;
-        if (rtdbStreamRef != null) {
-            Map<String, Object> fast = new HashMap<>();
-            if (vB64 != null) {
-                fast.put("cv", vB64);
-                fast.put("cvs", seq);
-                fast.put("cCamOff", false);
-            }
-            if (aB64 != null) {
-                fast.put("ca", aB64);
-                fast.put("cas", seq);
-            }
-            try { rtdbStreamRef.updateChildren(fast); } catch (Throwable ignored) { }
-        }
-        if (vB64 != null && now - lastCoHostMediaPushMs < 420L) return;
-        if (vB64 != null) lastCoHostMediaPushMs = now;
-
-        Map<String, Object> pkt = new HashMap<>();
-        pkt.put("type", "cohost_media");
-        pkt.put("uid", Fb.uid());
-        pkt.put("name", Fb.myName());
-        pkt.put("seq", seq);
-        if (vB64 != null) pkt.put("v", vB64);
-        if (aB64 != null) pkt.put("a", aB64);
-        pkt.put("createdAtMs", now);
-        Fb.db().collection("lives").document(liveId).collection("chat").add(pkt);
+        LiveRelayClient relay = coHostRelay;
+        if (relay == null || isEnded) return;
+        if (vB64 != null) relay.send("video", vB64, ++coHostSeqOut);
+        if (aB64 != null) relay.send("audio", aB64, ++coHostSeqOut);
     }
 
     private void stopLocalCoHostStreaming() {
         isMeActiveCoHost = false;
+        if (coHostRelay != null) {
+            coHostRelay.close();
+            coHostRelay = null;
+        }
         if (coHostLocalEngine != null) {
             coHostLocalEngine.releaseAll();
             coHostLocalEngine = null;
@@ -2076,8 +1959,10 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
         req.put("photo", Fb.myPhoto() == null ? "" : Fb.myPhoto());
         req.put("text", "wants to join on camera");
         req.put("createdAtMs", System.currentTimeMillis());
-        Fb.db().collection("lives").document(liveId).collection("chat").add(req);
-        Ui.toast(this, "Co-Host join request sent to " + hostNameStr + "!");
+        if (liveId == null || isEnded) return;
+        Fb.db().collection("lives").document(liveId).collection("chat").add(req)
+                .addOnSuccessListener(result -> Ui.toast(this, "Co-Host join request sent"))
+                .addOnFailureListener(error -> Ui.toast(this, "Co-Host request could not be sent"));
     }
 
     private void showCoHostManagerSheet() {
@@ -2091,12 +1976,11 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
         for (final ChatItem req : pendingCoHostRequests.values()) {
             labels.add("Accept " + req.name + " onto Split-Screen Live");
             actions.add(() -> {
-                pendingCoHostRequests.remove(req.uid);
-                Map<String, Object> upd = new HashMap<>();
-                upd.put("coHostUid", req.uid);
-                upd.put("coHostName", req.name);
-                Fb.db().collection("lives").document(liveId).update(upd);
-                postSystemChat(req.name + " joined as Co-Host!");
+                if (liveId == null || isEnded) return;
+                Fb.db().collection("lives").document(liveId).collection("chat").add(Fb.map(
+                        "type", "cohost_accept", "requestId", req.id, "targetUid", req.uid))
+                        .addOnSuccessListener(result -> pendingCoHostRequests.remove(req.uid))
+                        .addOnFailureListener(error -> Ui.toast(this, "Co-Host request expired or unavailable"));
             });
         }
         labels.add(coHostAllowed ? "Turn OFF Co-Host Requests" : "Turn ON Co-Host Requests");
@@ -2111,47 +1995,16 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
     }
 
     private void removeActiveCoHost() {
-        if (isHost && liveId != null) {
-            Map<String, Object> upd = new HashMap<>();
-            upd.put("coHostUid", "");
-            upd.put("coHostName", "");
-            upd.put("coHostFrameB64", "");
-            upd.put("coHostAudioB64", "");
-            Fb.db().collection("lives").document(liveId).update(upd);
-            if (rtdbStreamRef != null) {
-                try {
-                    Map<String, Object> rClear = new HashMap<>();
-                    rClear.put("cv", "");
-                    rClear.put("ca", "");
-                    rClear.put("cCamOff", true);
-                    rtdbStreamRef.updateChildren(rClear);
-                } catch (Throwable ignored) { }
-            }
-        } else if (isMeActiveCoHost) {
+        if (liveId == null || activeCoHostUid.isEmpty() || (!isHost && !isMeActiveCoHost)) return;
+        String target = activeCoHostUid;
+        if (!isHost) {
             coHostLeftLocallyUntilMs = System.currentTimeMillis() + 15_000L;
-            activeCoHostUid = "";
             stopLocalCoHostStreaming();
             coHostCard.setVisibility(View.GONE);
-            if (rtdbStreamRef != null) {
-                try {
-                    Map<String, Object> rClear = new HashMap<>();
-                    rClear.put("cv", "");
-                    rClear.put("ca", "");
-                    rClear.put("cCamOff", true);
-                    rtdbStreamRef.updateChildren(rClear);
-                } catch (Throwable ignored) { }
-            }
-            if (liveId != null) {
-                Map<String, Object> leavePkt = new HashMap<>();
-                leavePkt.put("type", "cohost_leave");
-                leavePkt.put("uid", Fb.uid());
-                leavePkt.put("name", Fb.myName());
-                leavePkt.put("text", "left the Co-Host stage");
-                leavePkt.put("createdAtMs", System.currentTimeMillis());
-                Fb.db().collection("lives").document(liveId).collection("chat").add(leavePkt);
-            }
-            Ui.toast(this, "You left the Co-Host match");
         }
+        Fb.db().collection("lives").document(liveId).collection("chat").add(Fb.map(
+                "type", "cohost_remove", "targetUid", target))
+                .addOnFailureListener(error -> Ui.toast(this, "Co-Host stage could not be updated"));
     }
 
     // ==================== INTERACTIVE LIVE POLLS & Q&A STAGE SPOTLIGHT ====================
@@ -2410,12 +2263,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
     private void sendHeartLike() {
         spawnFloatingEmoji("heart");
         spawnFloatingEmoji("heart");
-        totalLikes++;
-        if (likesBadgeTv != null) likesBadgeTv.setText(Format.count(totalLikes));
         if (liveId == null || isEnded) return;
-        // `likesCount` is explicitly allowed for any signed-in viewer in deployed firestore.rules!
-        Fb.db().collection("lives").document(liveId)
-                .update("likesCount", FieldValue.increment(1));
         Map<String, Object> r = new HashMap<>();
         r.put("type", "reaction");
         r.put("uid", Fb.uid());
@@ -2432,8 +2280,6 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
         }
         spawnFloatingEmoji(emoji);
         if (liveId == null || isEnded) return;
-        Fb.db().collection("lives").document(liveId)
-                .update("likesCount", FieldValue.increment(1));
         Map<String, Object> r = new HashMap<>();
         r.put("type", "reaction");
         r.put("uid", Fb.uid());
@@ -2503,60 +2349,23 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
 
         LivePkAndGiftsUi.showGiftDrawer(this, nameA, pkBattleActive && !pkVictoryPhase, nameB, defaultSideB,
                 (gift, targetPkSideB) -> {
-                    int coins = gift.coins;
-                    String recipientUid = (pkBattleActive && targetPkSideB && !pkHostBUid.isEmpty())
-                            ? pkHostBUid : (pkBattleActive && !pkHostAUid.isEmpty() ? pkHostAUid : hostId);
-                    String recipientLiveId = (pkBattleActive && targetPkSideB && !pkLiveIdB.isEmpty())
-                            ? pkLiveIdB : (pkBattleActive && !pkLiveIdA.isEmpty() ? pkLiveIdA : liveId);
-                    String recipientName = (pkBattleActive && targetPkSideB && !pkHostBName.isEmpty())
-                            ? pkHostBName : nameA;
-
-                    if (recipientLiveId != null && !recipientLiveId.isEmpty()) {
-                        Fb.db().collection("lives").document(recipientLiveId)
-                                .update("stars", FieldValue.increment(coins));
+                    if (liveId == null || isEnded || (pkBattleActive && (isHost || pkVictoryPhase))) {
+                        Ui.toast(this, "Gifts are unavailable in this room mode");
+                        return;
                     }
-
-                    // Boost PK Battle Score Bar in real time across BOTH rooms!
-                    if (pkBattleActive && !pkVictoryPhase && !pkBattleId.isEmpty()) {
-                        String scoreField = targetPkSideB ? "scoreB" : "scoreA";
-                        Fb.db().collection("chats").document("pkbattle_" + pkBattleId)
-                                .set(Fb.map(scoreField, FieldValue.increment(coins)), SetOptions.merge());
+                    Map<String, Object> request = new HashMap<>();
+                    request.put("type", "gift");
+                    request.put("uid", Fb.uid());
+                    request.put("giftId", gift.id);
+                    request.put("requestId", java.util.UUID.randomUUID().toString());
+                    String room = liveId;
+                    if (pkBattleActive) {
+                        room = targetPkSideB ? pkLiveIdB : pkLiveIdA;
+                        request.put("pkId", pkBattleId);
+                        request.put("pkSide", targetPkSideB ? "B" : "A");
                     }
-
-                    Map<String, Object> giftDoc = new HashMap<>();
-                    giftDoc.put("senderId", Fb.uid());
-                    giftDoc.put("senderName", Fb.myName());
-                    giftDoc.put("toUid", recipientUid);
-                    giftDoc.put("liveId", recipientLiveId);
-                    giftDoc.put("stars", coins);
-                    giftDoc.put("giftId", gift.id);
-                    giftDoc.put("giftName", gift.name);
-                    giftDoc.put("createdAt", FieldValue.serverTimestamp());
-                    Fb.db().collection("gifts").add(giftDoc);
-
-                    Map<String, Object> chatGift = new HashMap<>();
-                    chatGift.put("type", "gift");
-                    chatGift.put("uid", Fb.uid());
-                    chatGift.put("name", Fb.myName());
-                    chatGift.put("photo", Fb.myPhoto() == null ? "" : Fb.myPhoto());
-                    chatGift.put("stars", coins);
-                    chatGift.put("giftId", gift.id);
-                    chatGift.put("giftEmoji", gift.icon);
-                    chatGift.put("giftName", gift.name);
-                    chatGift.put("text", "sent " + gift.name + " (" + coins + " Stars)"
-                            + (pkBattleActive ? " to " + recipientName : "") + "!");
-                    chatGift.put("createdAtMs", System.currentTimeMillis());
-                    chatGift.put("createdAt", FieldValue.serverTimestamp());
-                    if (liveId != null) {
-                        Fb.db().collection("lives").document(liveId).collection("chat").add(chatGift);
-                    }
-                    // Mirror gift celebration banner to opponent's room if battling across 2 Live rooms!
-                    if (pkBattleActive && !pkLiveIdA.isEmpty() && !pkLiveIdB.isEmpty() && !pkLiveIdA.equals(pkLiveIdB)) {
-                        String otherRoom = pkLiveIdA.equals(liveId) ? pkLiveIdB : pkLiveIdA;
-                        Fb.db().collection("lives").document(otherRoom).collection("chat").add(chatGift);
-                    }
-
-                    spawnFloatingEmoji(gift.icon);
+                    Fb.db().collection("lives").document(room).collection("chat").add(request)
+                            .addOnFailureListener(error -> Ui.toast(this, "Gift could not be sent"));
                 });
     }
 
@@ -2699,6 +2508,16 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
             toggleHostCameraPause();
             return;
         }
+        if (pkBattleActive && isMePkGuest && pkGuestEngine != null) {
+            boolean paused = !pkGuestEngine.isCameraPaused();
+            pkGuestEngine.setCameraPaused(paused);
+            pkRightGuestTexture.setVisibility(paused ? View.INVISIBLE : View.VISIBLE);
+            if (pkGuestBeautyOverlay != null) pkGuestBeautyOverlay.setVisibility(!paused && pkGuestEngine.getBeautyLevel() > 0 ? View.VISIBLE : View.GONE);
+            pkRightFallbackBox.setVisibility(paused ? View.VISIBLE : View.GONE);
+            if (btnVideoPause != null) btnVideoPause.setText(paused ? "none" : "camera");
+            Ui.toast(this, paused ? "PK camera off · mic unchanged" : "PK camera on");
+            return;
+        }
         if (isMeActiveCoHost && coHostLocalEngine != null) {
             boolean nextPaused = !coHostLocalEngine.isCameraPaused();
             coHostLocalEngine.setCameraPaused(nextPaused);
@@ -2709,30 +2528,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
             }
             if (btnVideoPause != null) btnVideoPause.setText(nextPaused ? "none" : "camera");
             if (coHostCamToggleBtn != null) coHostCamToggleBtn.setText(nextPaused ? "none" : "camera");
-            if (rtdbStreamRef != null) {
-                try { rtdbStreamRef.child("cCamOff").setValue(nextPaused); } catch (Throwable ignored) { }
-            }
             Ui.toast(this, nextPaused ? "Co-Host camera OFF (Voice still live)" : "Co-Host camera ON");
-            return;
-        }
-        if (isMePkGuest && pkGuestEngine != null) {
-            boolean nextPaused = !pkGuestEngine.isCameraPaused();
-            pkGuestEngine.setCameraPaused(nextPaused);
-            pkRightGuestTexture.setVisibility(nextPaused ? View.GONE : View.VISIBLE);
-            if (pkGuestBeautyOverlay != null) {
-                pkGuestBeautyOverlay.setVisibility((!nextPaused && pkGuestEngine.getBeautyLevel() > 0)
-                        ? View.VISIBLE : View.GONE);
-            }
-            pkRightFallbackBox.setVisibility(nextPaused ? View.VISIBLE : View.GONE);
-            if (btnVideoPause != null) btnVideoPause.setText(nextPaused ? "none" : "camera");
-            if (pkRtdbBRef != null) {
-                try { pkRtdbBRef.child("camOff").setValue(nextPaused); } catch (Throwable ignored) { }
-            }
-            if (!pkBattleId.isEmpty()) {
-                Fb.db().collection("chats").document("pkmedia_" + pkBattleId + "_b")
-                        .set(Fb.map("camOff", nextPaused), SetOptions.merge());
-            }
-            Ui.toast(this, nextPaused ? "PK camera OFF (Voice still live)" : "PK camera ON");
             return;
         }
         requestOrLeaveCoHostStage();
@@ -2762,15 +2558,6 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
         }
         if (liveId != null && isLiveStarted) {
             Fb.db().collection("lives").document(liveId).update("cameraPaused", nextPaused);
-        }
-        if (pkBattleActive && !pkBattleId.isEmpty() && ("A".equals(pkRole) || "B".equals(pkRole))) {
-            String sideKey = "B".equals(pkRole) ? "b" : "a";
-            DatabaseReference pkRef = "B".equals(pkRole) ? pkRtdbBRef : pkRtdbARef;
-            if (pkRef != null) {
-                try { pkRef.child("camOff").setValue(nextPaused); } catch (Throwable ignored) { }
-            }
-            Fb.db().collection("chats").document("pkmedia_" + pkBattleId + "_" + sideKey)
-                    .set(Fb.map("camOff", nextPaused), SetOptions.merge());
         }
         Ui.toast(this, nextPaused ? "Camera OFF (Voice still live)" : "Camera ON");
     }
@@ -3175,30 +2962,11 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
                     "Leave PK", this::endActivePkBattle);
             return;
         }
-        if (!pkInvitesEnabled) {
-            Ui.toast(this, "Host turned off PK Battle requests");
-            return;
-        }
-        if (liveId == null) return;
-        Map<String, Object> req = new HashMap<>();
-        req.put("type", "pk_req");
-        req.put("uid", Fb.uid());
-        req.put("name", Fb.myName());
-        req.put("photo", Fb.myPhoto() == null ? "" : Fb.myPhoto());
-        req.put("text", "challenged Host to a Split-Screen PK Battle!");
-        req.put("createdAtMs", System.currentTimeMillis());
-        Fb.db().collection("lives").document(liveId).collection("chat").add(req);
-        Ui.toast(this, "PK Battle challenge sent to " + hostNameStr + "!");
-    }
-
-    private void promptViewerRequestedPk(final String vUid, final String vName, final String vPhoto) {
-        if (isFinishing() || pkBattleActive) {
-            Ui.toast(this, vName + " wants to battle next!");
-            return;
-        }
-        Ui.confirm(this, "PK Challenge from " + vName + "!",
-                vName + " wants to join a 3-Minute Split-Screen Live PK Battle with you!",
-                "Start PK", () -> challengeViewerToPk(vUid, vName, vPhoto, 180));
+        if (liveId == null || isEnded || !pkInvitesEnabled) return;
+        Fb.db().collection("lives").document(liveId).collection("chat")
+                .add(Fb.map("type", "pk_req", "uid", Fb.uid(), "text", "requested a PK battle"))
+                .addOnSuccessListener(result -> Ui.toast(this, "PK request sent"))
+                .addOnFailureListener(error -> Ui.toast(this, "PK request unavailable"));
     }
 
     private void challengeLiveHostToPk(@NonNull String targetLiveId,
@@ -3206,95 +2974,22 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
                                        @NonNull String targetHostName,
                                        @NonNull String targetHostPhoto,
                                        int durationSec) {
-        String me = Fb.uid();
-        if (me == null || liveId == null) return;
-        String newPkId = liveId + "_" + System.currentTimeMillis();
-        pkDurationSec = durationSec;
-
-        Map<String, Object> pkDoc = new HashMap<>();
-        pkDoc.put("pkBattleId", newPkId);
-        pkDoc.put("status", "invited");
-        pkDoc.put("hostAUid", me);
-        pkDoc.put("hostAName", hostNameStr);
-        pkDoc.put("hostAPhoto", hostPhotoStr);
-        pkDoc.put("liveIdA", liveId);
-        pkDoc.put("hostBUid", targetHostUid);
-        pkDoc.put("hostBName", targetHostName);
-        pkDoc.put("hostBPhoto", targetHostPhoto);
-        pkDoc.put("liveIdB", targetLiveId);
-        pkDoc.put("durationSec", durationSec);
-        pkDoc.put("scoreA", 0);
-        pkDoc.put("scoreB", 0);
-        pkDoc.put("createdAtMs", System.currentTimeMillis());
-
-        Fb.db().collection("chats").document("pkbattle_" + newPkId).set(pkDoc);
-        subscribeToPkBattle(newPkId);
-
-        Map<String, Object> inv = new HashMap<>();
-        inv.put("type", "pk_invite");
-        inv.put("uid", me);
-        inv.put("name", hostNameStr);
-        inv.put("photo", hostPhotoStr);
-        inv.put("targetUid", targetHostUid);
-        inv.put("pkBattleId", newPkId);
-        inv.put("durationSec", durationSec);
-        inv.put("text", "challenged " + targetHostName + " to a PK Battle!");
-        inv.put("createdAtMs", System.currentTimeMillis());
-        Fb.db().collection("lives").document(targetLiveId).collection("chat").add(inv);
-        LivePkAndGiftsUi.sendDirectLiveInviteToUser(
-                me, targetHostUid,
-                hostId != null && !hostId.isEmpty() ? hostId : me,
-                hostNameStr, hostPhotoStr, liveTitleStr, liveId);
-
-        Ui.toast(this, "PK Challenge & Live Video sent to " + targetHostName + "'s Inbox!");
+        if (!isHost || liveId == null || isEnded) return;
+        cloudPk(Fb.map("action", "invite", "roomA", liveId, "roomB", targetLiveId, "durationSec", durationSec))
+                .addOnSuccessListener(result -> Ui.toast(this, "PK invite sent"))
+                .addOnFailureListener(error -> Ui.toast(this, "PK invite unavailable"));
     }
 
-    private void challengeViewerToPk(@NonNull String targetUid,
-                                     @NonNull String targetName,
-                                     @NonNull String targetPhoto,
-                                     int durationSec) {
-        String me = Fb.uid();
-        if (me == null || liveId == null) return;
-        String newPkId = liveId + "_" + System.currentTimeMillis();
-        pkDurationSec = durationSec;
+    private void challengeViewerToPk(@NonNull String targetUid, @NonNull String targetName,
+                                     @NonNull String targetPhoto, int durationSec) {
+        if (!isHost || liveId == null || isEnded) return;
+        cloudPk(Fb.map("action", "invite", "roomA", liveId, "roomB", liveId, "guestUid", targetUid, "durationSec", durationSec))
+                .addOnSuccessListener(result -> Ui.toast(this, "PK invite sent"))
+                .addOnFailureListener(error -> Ui.toast(this, "PK invite unavailable"));
+    }
 
-        Map<String, Object> pkDoc = new HashMap<>();
-        pkDoc.put("pkBattleId", newPkId);
-        pkDoc.put("status", "invited");
-        pkDoc.put("hostAUid", me);
-        pkDoc.put("hostAName", hostNameStr);
-        pkDoc.put("hostAPhoto", hostPhotoStr);
-        pkDoc.put("liveIdA", liveId);
-        pkDoc.put("hostBUid", targetUid);
-        pkDoc.put("hostBName", targetName);
-        pkDoc.put("hostBPhoto", targetPhoto);
-        pkDoc.put("liveIdB", liveId);
-        pkDoc.put("durationSec", durationSec);
-        pkDoc.put("scoreA", 0);
-        pkDoc.put("scoreB", 0);
-        pkDoc.put("createdAtMs", System.currentTimeMillis());
-
-        Fb.db().collection("chats").document("pkbattle_" + newPkId).set(pkDoc);
-        subscribeToPkBattle(newPkId);
-
-        Map<String, Object> inv = new HashMap<>();
-        inv.put("type", "pk_invite");
-        inv.put("uid", me);
-        inv.put("name", hostNameStr);
-        inv.put("photo", hostPhotoStr);
-        inv.put("targetUid", targetUid);
-        inv.put("pkBattleId", newPkId);
-        inv.put("durationSec", durationSec);
-        inv.put("text", "invited " + targetName + " to a Split-Screen PK Battle!");
-        inv.put("createdAtMs", System.currentTimeMillis());
-        Fb.db().collection("lives").document(liveId).collection("chat").add(inv);
-
-        LivePkAndGiftsUi.sendDirectLiveInviteToUser(
-                me, targetUid,
-                hostId != null && !hostId.isEmpty() ? hostId : me,
-                hostNameStr, hostPhotoStr, liveTitleStr, liveId);
-
-        Ui.toast(this, "PK Invite & Live Video sent to " + targetName + "'s Inbox!");
+    private com.google.android.gms.tasks.Task<org.json.JSONObject> cloudPk(Map<String, Object> data) {
+        return Fb.db().livePk(new org.json.JSONObject(data));
     }
 
     private void promptIncomingPkChallenge(final String incomingPkId,
@@ -3309,180 +3004,83 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
                 .setMessage(challengerName + " challenged you to a " + mins
                         + "-minute Split-Screen Live Video + Voice PK Match!\n\nAccept to go side-by-side live now?")
                 .setPositiveButton("Accept PK", (d, w) -> acceptIncomingPkBattle(incomingPkId, durationSec))
-                .setNegativeButton("Decline", (d, w) -> Fb.db().collection("chats")
-                        .document("pkbattle_" + incomingPkId)
-                        .set(Fb.map("status", "declined"), SetOptions.merge()))
+                .setNegativeButton("Decline", (d, w) -> cloudPk(Fb.map("action", "decline", "id", incomingPkId)))
                 .show();
     }
 
     private void acceptIncomingPkBattle(@NonNull String incomingPkId, int durationSec) {
-        long now = System.currentTimeMillis();
-        long ends = now + Math.max(60, durationSec) * 1000L;
-        Map<String, Object> upd = new HashMap<>();
-        upd.put("status", "active");
-        upd.put("startedAtMs", now);
-        upd.put("endsAtMs", ends);
-        upd.put("scoreA", 0);
-        upd.put("scoreB", 0);
-        if (isHost && liveId != null) {
-            upd.put("liveIdB", liveId);
-        }
-        Fb.db().collection("chats").document("pkbattle_" + incomingPkId).set(upd, SetOptions.merge());
-        subscribeToPkBattle(incomingPkId);
-
-        if (isHost && liveId != null) {
-            Map<String, Object> liveUpd = new HashMap<>();
-            liveUpd.put("pkActive", true);
-            liveUpd.put("pkBattleId", incomingPkId);
-            Fb.db().collection("lives").document(liveId).update(liveUpd);
-        }
+        cloudPk(Fb.map("action", "accept", "id", incomingPkId))
+                .addOnSuccessListener(result -> refreshCloudPk())
+                .addOnFailureListener(error -> Ui.toast(this, "PK invite expired or unavailable"));
     }
 
-    private void subscribeToPkBattle(@NonNull String targetPkId) {
-        if (targetPkId.isEmpty() || targetPkId.equals(subscribedPkBattleId)) return;
-        cleanupPkListeners();
-        subscribedPkBattleId = targetPkId;
-        pkBattleId = targetPkId;
-        engine.resetCoHostSequences();
-
-
-
-        pkBattleReg = Fb.db().collection("chats").document("pkbattle_" + targetPkId)
-                .addSnapshotListener((snap, err) -> {
-                    if (isFinishing() || isEnded || snap == null || !snap.exists()) return;
-                    onPkBattleDocSnapshot(snap);
-                });
-
-        pkMediaAReg = Fb.db().collection("chats").document("pkmedia_" + targetPkId + "_a")
-                .addSnapshotListener((snap, err) -> {
-                    if (isFinishing() || isEnded || !pkBattleActive || snap == null || !snap.exists()) return;
-                    if ("A".equals(pkRole)) return; // Don't decode our own Side A stream!
-                    Map<String, Object> m = snap.getData();
-                    if (m == null) return;
-                    if (Boolean.TRUE.equals(m.get("camOff"))) {
-                        pkLeftRemoteImg.setVisibility(View.GONE);
-                        pkLeftFallbackBox.setVisibility(View.VISIBLE);
-                    } else {
-                        String v = Format.str(m, "v");
-                        long vs = Format.longOf(m, "vs");
-                        if (!v.isEmpty()) engine.decodeRemoteFrame(v, vs, false);
-                    }
-                    String a = Format.str(m, "a");
-                    long as = Format.longOf(m, "as");
-                    if (!a.isEmpty()) engine.enqueueRemoteAudio(a, as, false);
-                });
-
-        pkMediaBReg = Fb.db().collection("chats").document("pkmedia_" + targetPkId + "_b")
-                .addSnapshotListener((snap, err) -> {
-                    if (isFinishing() || isEnded || !pkBattleActive || snap == null || !snap.exists()) return;
-                    if ("B".equals(pkRole)) return; // Don't decode our own Side B stream!
-                    Map<String, Object> m = snap.getData();
-                    if (m == null) return;
-                    if (Boolean.TRUE.equals(m.get("camOff"))) {
-                        pkRightRemoteImg.setVisibility(View.GONE);
-                        pkRightFallbackBox.setVisibility(View.VISIBLE);
-                    } else {
-                        String v = Format.str(m, "v");
-                        long vs = Format.longOf(m, "vs");
-                        if (!v.isEmpty()) engine.decodeRemoteFrame(v, vs, true);
-                    }
-                    String a = Format.str(m, "a");
-                    long as = Format.longOf(m, "as");
-                    if (!a.isEmpty()) engine.enqueueRemoteAudio(a, as, true);
-                });
+    private void refreshCloudPk() {
+        if (isEnded || isFinishing() || isDestroyed() || liveId == null || pkPollPending) return;
+        pkPollPending = true;
+        final String room = liveId;
+        cloudPk(Fb.map("action", "room", "room", room)).addOnCompleteListener(task -> {
+            pkPollPending = false;
+            if (isEnded || isFinishing() || isDestroyed() || !room.equals(liveId)) return;
+            if (task.isSuccessful()) {
+                org.json.JSONObject battle = task.getResult();
+                if ("active".equals(battle.optString("status"))) applyCloudPk(battle);
+                else if (pkBattleActive) teardownPkStageUi();
+            }
+            // On demand only: the next PK read happens on a user action, a push
+            // invalidation or the next screen resume. No 2.5/6 second timer.
+        });
     }
 
-    private void onPkBattleDocSnapshot(@NonNull DocumentSnapshot snap) {
-        Map<String, Object> m = snap.getData();
-        if (m == null) return;
-        String status = Format.str(m, "status");
-        if ("declined".equals(status)) {
-            if (Fb.uid() != null && Fb.uid().equals(Format.str(m, "hostAUid"))) {
-                Ui.toast(this, "Opponent declined PK challenge");
-            }
-            teardownPkStageUi();
-            return;
-        }
-        if ("ended".equals(status)) {
-            if (!pkBattleId.isEmpty()) endedPkBattleIds.add(pkBattleId);
-            if (isHost && liveId != null) {
-                Map<String, Object> lu = new HashMap<>();
-                lu.put("pkActive", false);
-                lu.put("pkBattleId", "");
-                Fb.db().collection("lives").document(liveId).update(lu);
-            }
-            teardownPkStageUi();
-            return;
-        }
-        if (!"active".equals(status) && !"victory".equals(status)) {
-            return;
-        }
-
-        String me = Fb.uid() == null ? "" : Fb.uid();
-        pkHostAUid = Format.str(m, "hostAUid");
-        pkHostAName = Format.strOr(m, "hostAName", "Host A");
-        pkHostAPhoto = Format.str(m, "hostAPhoto");
-        pkLiveIdA = Format.str(m, "liveIdA");
-        pkHostBUid = Format.str(m, "hostBUid");
-        pkHostBName = Format.strOr(m, "hostBName", "Host B");
-        pkHostBPhoto = Format.str(m, "hostBPhoto");
-        pkLiveIdB = Format.str(m, "liveIdB");
-        pkScoreA = Format.intOf(m, "scoreA");
-        pkScoreB = Format.intOf(m, "scoreB");
-        pkDurationSec = Math.max(60, Format.intOf(m, "durationSec"));
-        long newEndsAt = Format.longOf(m, "endsAtMs");
-
-        // Detect Rematch reset!
-        if (newEndsAt > System.currentTimeMillis() + 5000L && pkVictoryPhase) {
-            pkVictoryPhase = false;
-            pkLeftResultStamp.setVisibility(View.GONE);
-            pkRightResultStamp.setVisibility(View.GONE);
-            pkResultBanner.setVisibility(View.GONE);
-        }
-        pkEndsAtMs = newEndsAt;
-
-        if (me.equals(pkHostAUid)) pkRole = "A";
-        else if (me.equals(pkHostBUid)) pkRole = "B";
-        else pkRole = "viewer";
-
-        boolean wasActive = pkBattleActive;
+    private void applyCloudPk(org.json.JSONObject battle) {
+        String id = battle.optString("id");
+        boolean changed = !id.equals(pkBattleId) || !pkBattleActive;
+        if (changed && pkBattleActive) teardownPkStageUi();
+        pkBattleId = id;
+        pkLiveIdA = battle.optString("room_a");
+        pkLiveIdB = battle.optString("room_b");
+        pkHostAUid = battle.optString("host_a");
+        pkHostBUid = battle.optString("host_b");
+        pkHostAName = battle.optString("name_a", "Host A");
+        pkHostBName = battle.optString("name_b", "Host B");
+        String me = Fb.uid();
+        pkRole = pkHostAUid.equals(me) ? "A" : pkHostBUid.equals(me) ? "B" : "viewer";
+        pkEndsAtMs = battle.optLong("expires_at");
+        pkScoreA = battle.optInt("score_a");
+        pkScoreB = battle.optInt("score_b");
+        pkDurationSec = battle.optInt("duration_sec", 180);
         pkBattleActive = true;
-
-        // Host A marks own live room `pkActive = true` as soon as B accepts!
-        if (!wasActive && isHost && liveId != null) {
-            Map<String, Object> lu = new HashMap<>();
-            lu.put("pkActive", true);
-            lu.put("pkBattleId", pkBattleId);
-            Fb.db().collection("lives").document(liveId).update(lu);
-            engine.startSpeakerPlayback();
-            postSystemChat("PK BATTLE STARTED: " + pkHostAName + " VS " + pkHostBName + "!");
+        if (changed) {
+            engine.resetRemoteSequences();
+            applyPkLayoutGeometry(true);
+            if (isHost) engine.startSpeakerPlayback();
+            pkLeftNameBadge.setText(pkHostAName);
+            pkRightNameBadge.setText(pkHostBName);
+            pkLeftMuteBtn.setVisibility("A".equals(pkRole) ? View.GONE : View.VISIBLE);
+            pkRightMuteBtn.setVisibility("B".equals(pkRole) ? View.GONE : View.VISIBLE);
+            if (pkLeaveMatchBtn != null) pkLeaveMatchBtn.setVisibility(isHost || "B".equals(pkRole) ? View.VISIBLE : View.GONE);
+            liveBadgeTv.setText("PK LIVE");
         }
-
-        // If I am a Viewer who accepted PK (`!isHost && "B".equals(pkRole)`), start my PK Guest camera + mic!
-        if (!isHost && "B".equals(pkRole) && !isMePkGuest) {
+        boolean sameRoom = pkLiveIdA.equals(pkLiveIdB);
+        if (changed && sameRoom && "B".equals(pkRole)) {
             isMePkGuest = true;
             ensureLivePermissions(REQ_PK_GUEST_PERMS);
         }
-
-        if (!wasActive) {
-            applyPkLayoutGeometry(true);
+        if (!sameRoom && pkOpponentRelay == null) {
+            final boolean opponentRight = liveId.equals(pkLiveIdA);
+            pkOpponentRelay = new LiveRelayClient(new LiveRelayClient.Listener() {
+                @Override public void ready() { }
+                @Override public void audience(int count) { }
+                @Override public void packet(String kind, String data, long seq) {
+                    if (!pkBattleActive || !id.equals(pkBattleId)) return;
+                    if (kind.equals("video")) engine.decodeRemoteFrame(data, seq, opponentRight);
+                    else if (kind.equals("audio")) engine.enqueueRemoteAudio(data, seq, opponentRight);
+                }
+                @Override public void disconnected() { pkOpponentRelay = null; }
+            });
+            pkOpponentRelay.open(opponentRight ? pkLiveIdB : pkLiveIdA, false);
         }
-
-        // Update PK Names, Avatars, Mute Buttons, Leave Match Button & Score Bar!
-        pkLeftNameBadge.setText(pkHostAName);
-        pkRightNameBadge.setText(pkHostBName);
-        Ui.avatar(this, pkLeftAvatar, pkHostAPhoto);
-        Ui.avatar(this, pkRightAvatar, pkHostBPhoto);
-        pkLeftMuteBtn.setVisibility("A".equals(pkRole) ? View.GONE : View.VISIBLE);
-        pkRightMuteBtn.setVisibility("B".equals(pkRole) ? View.GONE : View.VISIBLE);
-        if (pkLeaveMatchBtn != null) {
-            boolean canLeave = isHost || "A".equals(pkRole) || "B".equals(pkRole) || isMePkGuest;
-            pkLeaveMatchBtn.setVisibility(canLeave ? View.VISIBLE : View.GONE);
-        }
-        liveBadgeTv.setText("PK LIVE");
-
         updatePkScoreBarUi();
-        tickPkCountdown();
+        if (changed) tickPkCountdown();
     }
 
     private void applyPkLayoutGeometry(boolean enterPk) {
@@ -3560,6 +3158,17 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
 
     private void tickPkCountdown() {
         if (!pkBattleActive || pkTimerPillTv == null || pkEndsAtMs <= 0L) return;
+        long now = android.os.SystemClock.elapsedRealtime();
+        if (lastPkLeftFrame > 0 && now - lastPkLeftFrame > 4_000L && !(isHost && "A".equals(pkRole))) {
+            lastPkLeftFrame = 0;
+            pkLeftRemoteImg.setVisibility(View.GONE);
+            pkLeftFallbackBox.setVisibility(View.VISIBLE);
+        }
+        if (lastPkRightFrame > 0 && now - lastPkRightFrame > 4_000L && !(isHost && "B".equals(pkRole)) && !isMePkGuest) {
+            lastPkRightFrame = 0;
+            pkRightRemoteImg.setVisibility(View.GONE);
+            pkRightFallbackBox.setVisibility(View.VISIBLE);
+        }
         long remMs = pkEndsAtMs - System.currentTimeMillis();
         if (remMs > 0L) {
             long remSec = remMs / 1000L;
@@ -3618,16 +3227,10 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
     }
 
     private void startPkRematchNow() {
-        if (pkBattleId.isEmpty()) return;
-        long now = System.currentTimeMillis();
-        Map<String, Object> reset = new HashMap<>();
-        reset.put("status", "active");
-        reset.put("scoreA", 0);
-        reset.put("scoreB", 0);
-        reset.put("startedAtMs", now);
-        reset.put("endsAtMs", now + pkDurationSec * 1000L);
-        Fb.db().collection("chats").document("pkbattle_" + pkBattleId).set(reset, SetOptions.merge());
-        postSystemChat("PK REMATCH STARTED!");
+        if (!isHost || !pkBattleActive) return;
+        final String otherRoom = liveId.equals(pkLiveIdA) ? pkLiveIdB : pkLiveIdA;
+        if (otherRoom.equals(liveId)) challengeViewerToPk(pkHostBUid, pkHostBName, "", pkDurationSec);
+        else challengeLiveHostToPk(otherRoom, "", "", "", pkDurationSec);
     }
 
     private void promptLeaveCurrentMatch() {
@@ -3637,46 +3240,16 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
     }
 
     private void endActivePkBattle() {
-        String oldPkId = pkBattleId;
-        String oldLiveA = pkLiveIdA;
-        String oldLiveB = pkLiveIdB;
-        if (!oldPkId.isEmpty()) {
-            endedPkBattleIds.add(oldPkId);
-            Map<String, Object> endDoc = new HashMap<>();
-            endDoc.put("status", "ended");
-            endDoc.put("endedByUid", Fb.uid() == null ? "" : Fb.uid());
-            endDoc.put("endedByName", Fb.myName());
-            Fb.db().collection("chats").document("pkbattle_" + oldPkId)
-                    .set(endDoc, SetOptions.merge());
-        }
-        if (isHost && liveId != null) {
-            Map<String, Object> lu = new HashMap<>();
-            lu.put("pkActive", false);
-            lu.put("pkBattleId", "");
-            Fb.db().collection("lives").document(liveId).update(lu);
-        }
-        Map<String, Object> leavePkt = new HashMap<>();
-        leavePkt.put("type", "pk_leave");
-        leavePkt.put("uid", Fb.uid() == null ? "" : Fb.uid());
-        leavePkt.put("name", Fb.myName());
-        leavePkt.put("pkBattleId", oldPkId);
-        leavePkt.put("text", "left the Live Match");
-        leavePkt.put("createdAtMs", System.currentTimeMillis());
-        if (liveId != null && !liveId.isEmpty()) {
-            Fb.db().collection("lives").document(liveId).collection("chat").add(leavePkt);
-        }
-        if (!oldLiveA.isEmpty() && !oldLiveA.equals(liveId)) {
-            Fb.db().collection("lives").document(oldLiveA).collection("chat").add(leavePkt);
-        }
-        if (!oldLiveB.isEmpty() && !oldLiveB.equals(liveId) && !oldLiveB.equals(oldLiveA)) {
-            Fb.db().collection("lives").document(oldLiveB).collection("chat").add(leavePkt);
-        }
-        teardownPkStageUi();
-        Ui.toast(this, "Left Live Match");
+        if ((!isHost && !"B".equals(pkRole)) || pkBattleId.isEmpty()) return;
+        if (isMePkGuest) stopLocalPkGuestStreaming();
+        cloudPk(Fb.map("action", "end", "id", pkBattleId)).addOnSuccessListener(result -> teardownPkStageUi())
+                .addOnFailureListener(error -> Ui.toast(this, "Could not end PK match"));
     }
 
     private void teardownPkStageUi() {
+        lastPkLeftFrame = lastPkRightFrame = 0;
         pkBattleActive = false;
+        engine.resetRemoteSequences();
         pkVictoryPhase = false;
         pkRole = "";
         pkBattleId = "";
@@ -3685,70 +3258,42 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
         applyPkLayoutGeometry(false);
     }
 
-    private void activateLocalPkGuestStreaming() {
-        if (!isMePkGuest || isFinishing()) return;
-        pkRightFallbackBox.setVisibility(View.GONE);
-        pkRightRemoteImg.setVisibility(View.GONE);
-        pkRightGuestTexture.setVisibility(View.VISIBLE);
-        if (pkGuestEngine == null) {
-            pkGuestEngine = new LiveStreamEngine(this, new LiveStreamEngine.Listener() {
-                @Override
-                public void onEncodedVideoFrame(String base64Webp, int width, int height) {
-                    pushPkGuestMediaPacket(base64Webp, null);
-                }
-                @Override
-                public void onEncodedAudioChunk(String base64Ulaw, int voiceLevel) {
-                    pushPkGuestMediaPacket(null, base64Ulaw);
-                }
-                @Override
-                public void onLocalVoiceLevel(int voiceLevel) { }
-                @Override
-                public void onDecodedRemoteVideo(Bitmap bitmap, boolean isCoHost) { }
-                @Override
-                public void onCameraError(String message) { }
-            });
-            pkGuestEngine.setStreamQuality(LiveStreamEngine.QUALITY_BALANCED);
-            pkGuestEngine.setBeautyLevel(engine.getBeautyLevel());
-        }
+    private void activatePkGuest() {
+        if (!isMePkGuest || !pkBattleActive || pkGuestRelay != null || isEnded || isFinishing()) return;
+        pkGuestEngine = new LiveStreamEngine(this, new LiveStreamEngine.Listener() {
+            @Override public void onEncodedVideoFrame(String data, int width, int height) { sendPkGuest("video", data); }
+            @Override public void onEncodedAudioChunk(String data, int level) { sendPkGuest("audio", data); }
+            @Override public void onLocalVoiceLevel(int level) { }
+            @Override public void onDecodedRemoteVideo(Bitmap bitmap, boolean coHost) { }
+            @Override public void onCameraError(String message) { }
+        });
         pkGuestEngine.attachCameraPreview(pkRightGuestTexture, true);
         pkGuestEngine.attachBeautyOverlay(pkGuestBeautyOverlay);
-        pkGuestEngine.startBroadcasting(true);
+        pkGuestRelay = new LiveRelayClient(new LiveRelayClient.Listener() {
+            @Override public void ready() {
+                if (!isMePkGuest || isEnded || pkGuestEngine == null) return;
+                pkRightGuestTexture.setVisibility(pkGuestEngine.isCameraPaused() ? View.INVISIBLE : View.VISIBLE);
+                pkRightFallbackBox.setVisibility(pkGuestEngine.isCameraPaused() ? View.VISIBLE : View.GONE);
+                pkGuestEngine.startBroadcasting(true);
+            }
+            @Override public void packet(String kind, String data, long seq) { }
+            @Override public void audience(int count) { }
+            @Override public void disconnected() {
+                stopLocalPkGuestStreaming();
+                if (!isEnded && !isFinishing()) endActivePkBattle();
+            }
+        });
+        pkGuestRelay.open(liveId, "pkguest");
     }
 
-    private void pushPkGuestMediaPacket(@Nullable String vB64, @Nullable String aB64) {
-        if (!isMePkGuest || !pkBattleActive || pkBattleId.isEmpty() || isEnded) return;
-        long now = System.currentTimeMillis();
-        long seq = ++pkSeqOut;
-        if (pkRtdbBRef != null) {
-            Map<String, Object> fast = new HashMap<>();
-            if (vB64 != null) {
-                fast.put("v", vB64);
-                fast.put("vs", seq);
-                fast.put("camOff", false);
-            }
-            if (aB64 != null) {
-                fast.put("a", aB64);
-                fast.put("as", seq);
-            }
-            try { pkRtdbBRef.updateChildren(fast); } catch (Throwable ignored) { }
-        }
-        if (vB64 != null && now - lastPkMediaPushMs < 380L) return;
-        if (vB64 != null) lastPkMediaPushMs = now;
-        Map<String, Object> pkt = new HashMap<>();
-        if (vB64 != null) {
-            pkt.put("v", vB64);
-            pkt.put("vs", seq);
-            pkt.put("camOff", false);
-        }
-        if (aB64 != null) {
-            pkt.put("a", aB64);
-            pkt.put("as", seq);
-        }
-        Fb.db().collection("chats").document("pkmedia_" + pkBattleId + "_b").set(pkt, SetOptions.merge());
+    private void sendPkGuest(String kind, String data) {
+        LiveRelayClient relay = pkGuestRelay;
+        if (relay != null && !isEnded) relay.send(kind, data, ++coHostSeqOut);
     }
 
     private void stopLocalPkGuestStreaming() {
         isMePkGuest = false;
+        if (pkGuestRelay != null) { pkGuestRelay.close(); pkGuestRelay = null; }
         if (pkGuestEngine != null) {
             pkGuestEngine.releaseAll();
             pkGuestEngine = null;
@@ -3758,6 +3303,11 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
     }
 
     private void cleanupPkListeners() {
+        if (pkOpponentRelay != null) {
+            pkOpponentRelay.close();
+            pkOpponentRelay = null;
+        }
+        if (isEnded || isFinishing() || isDestroyed()) uiHandler.removeCallbacks(pollPkRoom);
         subscribedPkBattleId = "";
         if (pkRtdbARef != null && pkRtdbAListener != null) {
             try { pkRtdbARef.removeEventListener(pkRtdbAListener); } catch (Throwable ignored) { }
@@ -3927,7 +3477,15 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
     }
 
     @Override
+    protected void onStop() {
+        // Leaving the screen is the last event that must reach the room document.
+        publishHostHeartbeat();
+        super.onStop();
+    }
+
+    @Override
     protected void onDestroy() {
+        if (liveRelay != null) liveRelay.close();
         uiHandler.removeCallbacksAndMessages(null);
         if (liveDocReg != null) { liveDocReg.remove(); liveDocReg = null; }
         if (chatColReg != null) { chatColReg.remove(); chatColReg = null; }

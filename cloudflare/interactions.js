@@ -1,4 +1,5 @@
-import { commentsAPI, reactorsAPI, commentSelect, normalized, legacyCommentCount, legacyPage } from './comment-api.js';
+import { commentsAPI, reactorsAPI, commentSelect, normalized, legacyCommentCount, legacyCommentCountsStatement, legacyPage } from './comment-api.js';
+import { requestAccountReads } from './app-documents.js';
 import { authorizePost } from './firebase-post-access.js';
 const json = (body, status = 200) => Response.json(body, {
   status, headers: { 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' },
@@ -27,6 +28,88 @@ async function body(request) {
   if (!data || Array.isArray(data) || typeof data !== 'object') throw Error();
   return data;
 }
+// The actor has at most one reaction per resource. An uncorrelated scalar
+// lookup is evaluated once per statement, rather than joining the same actor
+// row once for each nonzero type. Both reads stay in the same D1 snapshot.
+const reactionTypesSql = `COALESCE((SELECT json_group_array(json_object('type', s.type, 'count', s.total, 'mine', CASE WHEN
+      (SELECT type FROM friendbook_cf_reactions WHERE resource=?2 AND uid=?1) = s.type THEN 1 ELSE 0 END))
+      FROM (SELECT type, total FROM friendbook_cf_reaction_totals WHERE resource = ?2 AND total > 0 ORDER BY type) s), '[]')`;
+
+// Shared by explicit post details and the bounded Home response; no writes here.
+function engagementStatement(db, resource, uid, blocked, useTotals = true) {
+  // Seek each blocked author instead of scanning the resource's entire comment
+  // history to subtract a usually tiny subset. DISTINCT prevents double counts.
+  const blockedCount = `(SELECT COUNT(*) FROM (SELECT DISTINCT value FROM json_each(?3)) blocked
+      CROSS JOIN friendbook_cf_comments c INDEXED BY idx_cf_comment_resource_author
+        ON c.resource=?2 AND c.uid=blocked.value
+      LEFT JOIN friendbook_cf_comment_details d ON d.resource=c.resource AND d.id=c.id
+      WHERE COALESCE(d.removed,0)=0)`;
+  const count = useTotals ? `COALESCE((SELECT total FROM friendbook_cf_visible_comment_totals WHERE resource=?2),0)
+        ${blocked.length ? `- ${blockedCount}` : ''}` : `(SELECT COUNT(*) FROM friendbook_cf_comments c
+      LEFT JOIN friendbook_cf_comment_details d ON d.resource=c.resource AND d.id=c.id
+      WHERE c.resource=?2 AND COALESCE(d.removed,0)=0
+        AND c.uid NOT IN (SELECT value FROM json_each(?3)))`;
+  return db.prepare(`SELECT
+    ${reactionTypesSql} AS types_json,
+    ${count} AS total_comments,
+    COALESCE((SELECT json_group_array(json_object(
+      'id', p.id, 'resource', p.resource, 'uid', p.uid, 'text', p.text, 'parent_id', p.parent_id,
+      'created_at', p.created_at, 'historical_unattributed', p.historical_unattributed,
+      'created_at_known', p.created_at_known, 'media_url', p.media_url, 'mentions', p.mentions,
+      'name', p.name, 'photo', p.photo, 'edited', p.edited, 'removed', p.removed,
+      'likes', p.likes, 'mine', p.mine
+    )) FROM (${commentSelect.replace('r.uid=?', 'r.uid=?1')} WHERE c.resource = ?2 AND COALESCE(d.removed, 0) = 0
+      AND c.uid NOT IN (SELECT value FROM json_each(?3))
+      ORDER BY c.created_at DESC, c.id DESC LIMIT 2) p), '[]') AS preview_json`)
+    .bind(uid, resource, JSON.stringify(blocked || []));
+}
+
+export async function engagementSummary(db, resource, uid, owner, blocked = [], preloaded = null) {
+  const canonicalSummary = async () => {
+    try {
+      return await engagementStatement(db,resource,uid,blocked).first();
+    } catch (error) {
+      if (!/no such (table: friendbook_cf_visible_comment_totals|index: idx_cf_comment_resource_author)/.test(String(error))) throw error;
+      return engagementStatement(db,resource,uid,blocked,false).first();
+    }
+  };
+  const legacySummary = async () => {
+    const count = preloaded ? preloaded.count : await legacyCommentCount(db,resource,blocked);
+    return {count,preview:count ? await legacyPage(db,resource,uid,blocked,[Number.MAX_SAFE_INTEGER,'']) : []};
+  };
+  const [combined,legacy] = await Promise.all([preloaded ? preloaded.canonical : canonicalSummary(),legacySummary()]);
+  const typesList = JSON.parse(combined?.types_json || '[]');
+  const previewRows = JSON.parse(combined?.preview_json || '[]');
+  const preview = [...previewRows.map(row => normalized(row, uid)), ...legacy.preview]
+    .sort((a,b)=>(b.createdAt||0)-(a.createdAt||0) || (a.id<b.id?1:a.id>b.id?-1:0)).slice(0,2);
+  return {
+    owner: owner,
+    types: typesList,
+    comments: Number(combined?.total_comments || 0) + legacy.count,
+    preview,
+  };
+}
+
+export const MAX_FEED_ENGAGEMENT_PAGE = 20;
+
+// A small authorized Home page can fetch summary rows in one D1 round trip.
+// Preserve the existing individual read path for incomplete schemas and failures.
+export async function batchEngagementReads(db, resources, uid, blocked) {
+  if (resources.length < 2 || resources.length > MAX_FEED_ENGAGEMENT_PAGE || typeof db.batch !== 'function') return new Map();
+  try {
+    const rows=await db.batch([
+      ...resources.map(resource=>engagementStatement(db,resource,uid,blocked)),
+      legacyCommentCountsStatement(db,resources,blocked),
+    ]);
+    const counts=rows.at(-1)?.results;
+    if(rows.length!==resources.length+1 || rows.some(row=>row.success===false)
+        || rows.slice(0,-1).some(row=>!row.results?.[0]) || !counts || counts.length!==resources.length)return new Map();
+    const bySlot=new Map(counts.map(row=>[row.slot,row.n]));
+    if(bySlot.size!==resources.length || resources.some((_,i)=>!bySlot.has(i)))return new Map();
+    return new Map(resources.map((resource,i)=>[resource,{canonical:rows[i].results[0],count:Number(bySlot.get(i))||0}]));
+  } catch { return new Map(); }
+}
+
 export async function interactions(request, env, identity, match, authorize = authorizePost) {
   // BOTH a deployment gate and independently verified resource migration are required.
   if (env.D1_INTERACTIONS_ENABLED !== 'true') return json({ error: 'D1 interactions not enabled' }, 503);
@@ -35,18 +118,23 @@ export async function interactions(request, env, identity, match, authorize = au
   let id; try { id = identifier(encodedId); } catch { return json({ error: 'Invalid resource' }, 400); }
   const resource = `${collection}/${id}`;
   let db;const context={};
+  const accountReads=requestAccountReads(identity);
   try {
     db = env.DB.withSession('first-primary');
-    const ready = await db.prepare('SELECT state FROM friendbook_cf_interaction_resources WHERE resource = ?').bind(resource).first();
+    // Keep a primary-first session, but overlap the independent readiness and access reads.
+    const [ready,allowed] = await Promise.all([
+      db.prepare('SELECT state FROM friendbook_cf_interaction_resources WHERE resource = ?').bind(resource).first(),
+      authorize({...identity,db}, collection, id, undefined, context, accountReads),
+    ]);
     if (ready && ready.state !== 'verified') return json({ error: 'Resource migration not verified' }, 503);
-    // Authorization and engagement reads must use the same primary-first D1
-    // session; a stale replica must not make a freshly created post disappear.
-    if (!await authorize({...identity,db}, collection, id, undefined, context)) return json({ error: 'Forbidden' }, 403);
+    if (!allowed) return json({ error: 'Forbidden' }, 403);
     if (!ready) {
-      await db.prepare("INSERT INTO friendbook_cf_interaction_resources(resource, state) VALUES (?, 'verified') ON CONFLICT(resource) DO NOTHING")
-        .bind(resource).run();
-      // Another request can establish a staging row between the read and insert.
-      const current = await db.prepare('SELECT state FROM friendbook_cf_interaction_resources WHERE resource = ?').bind(resource).first();
+      // Keep the insert-or-observe check atomic and in one D1 round trip.
+      const [, observed] = await db.batch([
+        db.prepare("INSERT INTO friendbook_cf_interaction_resources(resource, state) VALUES (?, 'verified') ON CONFLICT(resource) DO NOTHING").bind(resource),
+        db.prepare('SELECT state FROM friendbook_cf_interaction_resources WHERE resource = ?').bind(resource),
+      ]);
+      const current = observed.results?.[0];
       if (!current || current.state !== 'verified') return json({ error: 'Resource migration not verified' }, 503);
     }
   } catch { return json({ error: 'Source authorization or database unavailable' }, 503); }
@@ -57,51 +145,38 @@ export async function interactions(request, env, identity, match, authorize = au
   try {
     if (kind === 'reactors') return await reactorsAPI(request,db,resource,context);
     if (kind === 'comments') {
+      context.reactionTotals=async()=>JSON.parse((await db.prepare(`SELECT ${reactionTypesSql} AS types_json`).bind(identity.uid,resource).first()).types_json);
       return await commentsAPI(request,db,identity,resource,data,context);
     }
     if (kind === 'reactions') {
       if (request.method === 'PUT') {
         if (Object.keys(data).some(k => k !== 'type') || (data.type !== null && !types.has(data.type))) return json({ error: 'Invalid reaction' }, 400);
         // Set desired state, not toggle: a retried request cannot double-increment.
-        await db.batch([
+        // Missing history already means a known timestamp to reactorsAPI. Keep
+        // only legacy explicit unknown markers, and transition them atomically
+        // with the reaction when the user performs a fresh action.
+        const writes = [
           db.prepare(`INSERT INTO friendbook_cf_reactions(resource,uid,type,updated_at)
-            VALUES (?,?,?,?) ON CONFLICT(resource,uid) DO UPDATE SET type=excluded.type,updated_at=excluded.updated_at`)
+            VALUES (?,?,?,?) ON CONFLICT(resource,uid) DO UPDATE SET type=excluded.type,updated_at=excluded.updated_at
+            WHERE friendbook_cf_reactions.type IS NOT excluded.type OR EXISTS (
+              SELECT 1 FROM friendbook_cf_reaction_history h WHERE h.resource=excluded.resource AND h.uid=excluded.uid AND h.timestamp_known=0
+            )`)
             .bind(resource, identity.uid, data.type, Date.now()),
-          db.prepare(`INSERT INTO friendbook_cf_reaction_history(resource,uid,timestamp_known)
-            VALUES (?,?,1) ON CONFLICT(resource,uid) DO UPDATE SET timestamp_known=1`)
+          db.prepare(`UPDATE friendbook_cf_reaction_history SET timestamp_known=1
+            WHERE resource=? AND uid=? AND timestamp_known=0`)
             .bind(resource, identity.uid)
-        ]);
+        ];
+        if (new URL(request.url).searchParams.get('response') === 'reaction') {
+          // One D1 batch: the acknowledgement cannot fail in a separate comment read
+          // after committing the reaction. Older clients still receive the full summary.
+          const results = await db.batch([...writes, db.prepare(`SELECT ${reactionTypesSql} AS types_json`)
+            .bind(identity.uid, resource)]);
+          return json({ reactionOnly: true, owner: context.owner,
+            types: JSON.parse(results[2].results[0].types_json) });
+        }
+        await db.batch(writes);
       }
-      const combined = await db.prepare(`SELECT
-        COALESCE((SELECT json_group_array(json_object('type', s.type, 'count', s.total, 'mine', CASE WHEN r.type = s.type THEN 1 ELSE 0 END))
-          FROM (SELECT resource, type, total FROM friendbook_cf_reaction_totals WHERE resource = ?2 AND total > 0 ORDER BY type) s
-          LEFT JOIN friendbook_cf_reactions r ON r.resource = s.resource AND r.uid = ?1), '[]') AS types_json,
-        (SELECT COUNT(*) FROM friendbook_cf_comments c
-          LEFT JOIN friendbook_cf_comment_details d ON d.resource = c.resource AND d.id = c.id
-          WHERE c.resource = ?2 AND COALESCE(d.removed, 0) = 0
-            AND c.uid NOT IN (SELECT value FROM json_each(?3))) AS total_comments,
-        COALESCE((SELECT json_group_array(json_object(
-          'id', p.id, 'resource', p.resource, 'uid', p.uid, 'text', p.text, 'parent_id', p.parent_id,
-          'created_at', p.created_at, 'historical_unattributed', p.historical_unattributed,
-          'created_at_known', p.created_at_known, 'media_url', p.media_url, 'mentions', p.mentions,
-          'name', p.name, 'photo', p.photo, 'edited', p.edited, 'removed', p.removed,
-          'likes', p.likes, 'mine', p.mine
-        )) FROM (${commentSelect.replace('r.uid=?', 'r.uid=?1')} WHERE c.resource = ?2 AND COALESCE(d.removed, 0) = 0
-          AND c.uid NOT IN (SELECT value FROM json_each(?3))
-          ORDER BY c.created_at DESC, c.id DESC LIMIT 2) p), '[]') AS preview_json`)
-        .bind(identity.uid, resource, JSON.stringify(context.blocked || [])).first();
-      const typesList = JSON.parse(combined?.types_json || '[]');
-      const previewRows = JSON.parse(combined?.preview_json || '[]');
-      const legacyPreview = await legacyPage(db,resource,identity.uid,context.blocked||[],[Number.MAX_SAFE_INTEGER,'']);
-      const preview = [...previewRows.map(row => normalized(row, identity.uid)), ...legacyPreview]
-        .sort((a,b)=>(b.createdAt||0)-(a.createdAt||0) || (a.id<b.id?1:a.id>b.id?-1:0)).slice(0,2);
-      const payload = {
-        owner: context.owner,
-        types: typesList,
-        comments: Number(combined?.total_comments || 0) + await legacyCommentCount(db,resource,context.blocked),
-        preview,
-      };
-      return json(payload);
+      return json(await engagementSummary(db, resource, identity.uid, context.owner, context.blocked || []));
     }
   } catch { return json({ error: 'D1 interactions unavailable' }, 503); }
 }

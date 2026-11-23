@@ -13,17 +13,22 @@ class IntermittentDataTests(unittest.TestCase):
  def test_feed_and_candidate_timeouts_ignore_stale_callbacks(self):
   home=(ROOT/'main/HomeFragment.java').read_text()
   friends=(ROOT/'friends/FriendsFragment.java').read_text()
-  self.assertGreaterEqual(home.count('feedGeneration++;loadingPosts=false;pageError=true;updatePagingUi();'),2)
+  first=home.split('private void startPostsQuery',1)[1].split('private void consumePostsSnapshot',1)[0]
+  self.assertIn('loadingPosts=false;pageError=true;updatePagingUi();releaseHomeSecondary();',first)
+  self.assertIn('if(!offline && !snapshot.isEmpty()) lastDoc=',first)
+  self.assertIn('if(snapshot.getMetadata().isFromCache()){\n                pageError=true;updatePagingUi();return;',home)
+  self.assertNotIn('feedGeneration++',first)
+  self.assertNotIn('Ui.toast',first)
+  self.assertIn('feedGeneration++;loadingPosts=false;pageError=true;updatePagingUi();',home)
   self.assertIn('if(!current(token,me) || !checkingUsers.containsAll(ids))return;',friends)
   self.assertIn('checkingUsers.removeAll(ids);failedCandidates.addAll(ids);requestRender();',friends)
- def test_reel_engagement_refreshes_visible_item_without_recursive_cached_render(self):
+ def test_reel_engagement_avoids_periodic_reads_and_recursive_cached_render(self):
   reactions=(ROOT/'post/D1Reactions.java').read_text()
   reels=(ROOT/'reels/ReelsFragment.java').read_text()
   self.assertIn('fetch(context.getApplicationContext(),collection,reel.id,false,render)',reactions)
   self.assertIn('if(renderCached)ready.run()',reactions)
-  self.assertIn('findViewHolderForAdapterPosition(pager.getCurrentItem())',reels)
-  self.assertIn('engagementHandler.removeCallbacks(engagementRefresh)',reels)
-  self.assertIn('if (!isResumed()) return;',reels)
+  self.assertNotIn('engagementRefresh',reels)
+  self.assertIn('D1Reactions.reel(',reels)
  def test_token_rejection_retries_once_not_all_failures(self):
   doc=(ROOT/'d1/documents/D1DocumentTransport.java').read_text()
   self.assertIn('Code.UNAUTHENTICATED',doc)

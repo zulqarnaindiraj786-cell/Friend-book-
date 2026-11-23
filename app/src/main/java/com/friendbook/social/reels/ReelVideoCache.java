@@ -1,15 +1,10 @@
 package com.friendbook.social.reels;
 
 import android.content.Context;
-import android.net.Uri;
 
-import com.bumptech.glide.Glide;
 import com.friendbook.social.core.FastCache;
-import com.friendbook.social.core.Fb;
 import com.friendbook.social.core.Prefs;
 import com.friendbook.social.models.Models;
-import com.friendbook.social.d1.documents.DocumentSnapshot;
-import com.friendbook.social.d1.documents.Query;
 
 import java.io.BufferedInputStream;
 import java.io.BufferedOutputStream;
@@ -20,32 +15,21 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
-import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.atomic.AtomicBoolean;
 
-/**
- * ⚡ ReelVideoCache — Instant Short-Video Streaming, Poster & Lookahead Disk Cache Engine:
- * 1. Rewrites Cloudinary video URLs into fast-start progressive H.264 MP4 streams (720p / 480p Eco)
- *    so uncached streams start decoding in <180ms instead of downloading raw 60 MB camera files.
- * 2. Derives instant first-frame JPEG poster URLs so Reels NEVER show a black screen while preparing.
- * 3. Pre-downloads upcoming Reels (N+1, N+2, N+3) into a persistent 240 MB LRU SSD cache so swiping
- *    plays directly from local FileDescriptor in ~15ms with zero buffering.
- * 4. Seeds newly uploaded Reels directly from the local device URI so a user's own Reel plays in 0.0ms.
- */
+/** Bounded disk cache for exact playback renditions, with one unmetered-Wi-Fi lookahead. */
 public final class ReelVideoCache {
 
     private static final String DIR_NAME = "reels_fast_cache";
     private static final long MAX_CACHE_BYTES = 240L * 1024L * 1024L; // 240 MB persistent LRU cache
     private static final long MAX_PREFETCH_FILE_BYTES = 45L * 1024L * 1024L; // cap single prefetch safety
-    private static final AtomicBoolean STARTUP_WARMED = new AtomicBoolean(false);
 
-    private static final ExecutorService PREFETCH_POOL = Executors.newFixedThreadPool(3, r -> {
+    private static final ExecutorService PREFETCH_POOL = Executors.newSingleThreadExecutor(r -> {
         Thread t = new Thread(r, "reel-turbo-prefetch");
         t.setDaemon(true);
         t.setPriority(Thread.NORM_PRIORITY - 1);
@@ -65,53 +49,75 @@ public final class ReelVideoCache {
         return dir;
     }
 
-    /** Stable identity key for a video URL (ignores transient CDN transform segments). */
-    public static String cacheKey(String rawUrl) {
-        if (rawUrl == null || rawUrl.isEmpty()) return "";
-        String norm = rawUrl.trim();
-        // Strip Cloudinary transform block if already injected so key stays stable across network modes
-        int upIdx = norm.indexOf("/video/upload/");
-        if (upIdx > 0 && norm.contains("cloudinary.com")) {
-            String after = norm.substring(upIdx + "/video/upload/".length());
-            int vIdx = after.indexOf("/v");
-            if (vIdx > 0 && vIdx + 2 < after.length() && Character.isDigit(after.charAt(vIdx + 2))) {
-                norm = norm.substring(0, upIdx + "/video/upload/".length()) + after.substring(vIdx + 1);
-            }
-        }
+    /** Exact stream identity: different resolutions must never share a cached file. */
+    public static String cacheKey(String streamUrl) {
+        if (streamUrl == null || streamUrl.isEmpty()) return "";
+        String url = streamUrl.trim();
         try {
-            MessageDigest md = MessageDigest.getInstance("SHA-1");
-            byte[] dig = md.digest(norm.getBytes(StandardCharsets.UTF_8));
-            StringBuilder sb = new StringBuilder(40);
+            MessageDigest md = MessageDigest.getInstance("SHA-256");
+            byte[] dig = md.digest(url.getBytes(StandardCharsets.UTF_8));
+            StringBuilder sb = new StringBuilder("v2-");
             for (byte b : dig) {
                 sb.append(Character.forDigit((b >> 4) & 0xF, 16));
                 sb.append(Character.forDigit(b & 0xF, 16));
             }
             return sb.toString();
-        } catch (Throwable t) {
-            return String.valueOf(Math.abs(norm.hashCode()));
+        } catch (java.security.NoSuchAlgorithmException error) {
+            throw new IllegalStateException("SHA-256 unavailable", error);
         }
     }
 
-    /**
-     * Preserves the uploaded video's exact original frame (aspect ratio / resolution) and frame rate (FPS).
-     * Only applies lightweight progressive MP4 remux if the user explicitly enabled Data Saver / 2G mode.
-     */
+    /** Choose a lightweight rendition on weak links without rewriting stored URLs. */
     public static String optimizeStreamUrl(Context c, String rawUrl) {
         if (rawUrl == null || rawUrl.isEmpty()) return "";
         String u = rawUrl.trim();
-        if (u.startsWith("file:") || u.startsWith("content:")) return u;
-        int idx = u.indexOf("/video/upload/");
-        if (idx > 0 && u.contains("cloudinary.com")) {
-            boolean explicitEco = c != null && (Prefs.dataSaver(c) || FastCache.isSlow2G(c));
-            if (explicitEco) {
-                String prefix = u.substring(0, idx + "/video/upload/".length());
-                String rest = u.substring(idx + "/video/upload/".length());
-                if (!rest.startsWith("f_mp4") && !rest.startsWith("vc_")) {
-                    return prefix + "f_mp4,vc_h264,ac_aac,q_auto:good/" + rest;
-                }
-            }
-        }
-        return u;
+        if (c == null) return u;
+        FastCache.NetTier tier = FastCache.netTier(c);
+        boolean weak = tier == FastCache.NetTier.NET_2G || tier == FastCache.NetTier.NET_3G || Prefs.dataSaver(c) || Prefs.turbo2g(c);
+        if (weak) return lowBandwidthUrl(u);
+        return tier == FastCache.NetTier.NET_4G ? mobileBandwidthUrl(u) : u;
+    }
+
+    static boolean preferLiteStartup(Context context) {
+        FastCache.NetTier tier = FastCache.netTier(context);
+        return tier == FastCache.NetTier.NET_2G || tier == FastCache.NetTier.NET_3G
+                || Prefs.dataSaver(context) || Prefs.turbo2g(context);
+    }
+
+    static String startupUrl(Context context, String url) {
+        return preferLiteStartup(context) ? lowBandwidthUrl(url) : startup480Url(url);
+    }
+
+    static String startup480Url(String url) {
+        return boundedCloudinaryUrl(url, "h_480,c_limit,br_650k,f_mp4,vc_h264,ac_aac,q_auto:eco");
+    }
+
+    static String upgrade720Url(String url) {
+        return boundedCloudinaryUrl(url, "h_720,c_limit,br_1200k,f_mp4,vc_h264,ac_aac,q_auto:good");
+    }
+
+    static boolean canUpgrade(Context context) {
+        return !Prefs.dataSaver(context) && !Prefs.turbo2g(context)
+                && (FastCache.netTier(context)==FastCache.NetTier.WIFI || FastCache.netTier(context)==FastCache.NetTier.NET_4G);
+    }
+
+    static String lowBandwidthUrl(String url) {
+        return boundedCloudinaryUrl(url, "h_144,c_limit,br_95k,f_mp4,vc_h264,ac_aac,q_auto:eco");
+    }
+
+    static String mobileBandwidthUrl(String url) {
+        return boundedCloudinaryUrl(url, "h_360,c_limit,br_420k,f_mp4,vc_h264,ac_aac,q_auto:eco");
+    }
+
+    private static String boundedCloudinaryUrl(String url, String transform) {
+        try {
+            java.net.URI parsed = java.net.URI.create(url);
+            if (!"https".equalsIgnoreCase(parsed.getScheme()) || !"res.cloudinary.com".equalsIgnoreCase(parsed.getHost())
+                    || parsed.getRawQuery()!=null || parsed.getRawFragment()!=null || parsed.getRawUserInfo()!=null) return url;
+            String path=parsed.getRawPath();
+            if (!path.matches("/[A-Za-z0-9_-]+/video/upload/v[0-9]+/[A-Za-z0-9_./%-]+\\.mp4")) return url;
+            return url.replace("/video/upload/", "/video/upload/" + transform + "/");
+        } catch (IllegalArgumentException error) { return url; }
     }
 
     /**
@@ -158,7 +164,7 @@ public final class ReelVideoCache {
     /** Returns the ready local cached MP4 file if fully downloaded, or null if not yet cached. */
     public static File getCachedFile(Context c, String rawVideoUrl) {
         if (c == null || rawVideoUrl == null || rawVideoUrl.isEmpty()) return null;
-        String key = cacheKey(rawVideoUrl);
+        String key = cacheKey(startupUrl(c, rawVideoUrl));
         if (key.isEmpty()) return null;
         File f = new File(cacheDir(c), key + ".mp4");
         if (f.exists() && f.isFile() && f.length() > 1024L) {
@@ -170,82 +176,23 @@ public final class ReelVideoCache {
         return null;
     }
 
-    /**
-     * Copies a just-uploaded local Uri directly into the Reels SSD cache under its remote URL key
-     * so the creator's new Reel plays in 0.0ms without re-downloading from the cloud!
-     */
-    public static void seedLocalUriToCache(final Context c, final Uri localUri, final String remoteVideoUrl) {
-        if (c == null || localUri == null || remoteVideoUrl == null || remoteVideoUrl.isEmpty()) return;
-        final Context appCtx = c.getApplicationContext();
-        PREFETCH_POOL.execute(() -> {
-            String key = cacheKey(remoteVideoUrl);
-            if (key.isEmpty()) return;
-            File dest = new File(cacheDir(appCtx), key + ".mp4");
-            if (dest.exists() && dest.length() > 1024L) return;
-            File tmp = new File(cacheDir(appCtx), key + ".seed.part");
-            try (InputStream in = appCtx.getContentResolver().openInputStream(localUri);
-                 FileOutputStream fos = new FileOutputStream(tmp);
-                 BufferedOutputStream out = new BufferedOutputStream(fos, 64 * 1024)) {
-                if (in == null) return;
-                byte[] buf = new byte[64 * 1024];
-                long total = 0L;
-                int n;
-                while ((n = in.read(buf)) != -1) {
-                    out.write(buf, 0, n);
-                    total += n;
-                    if (total > MAX_PREFETCH_FILE_BYTES) {
-                        out.close();
-                        //noinspection ResultOfMethodCallIgnored
-                        tmp.delete();
-                        return;
-                    }
-                }
-                out.flush();
-                if (tmp.length() > 1024L) {
-                    //noinspection ResultOfMethodCallIgnored
-                    tmp.renameTo(dest);
-                    trimCacheIfNeeded(cacheDir(appCtx));
-                } else {
-                    //noinspection ResultOfMethodCallIgnored
-                    tmp.delete();
-                }
-            } catch (Throwable ignored) {
-                //noinspection ResultOfMethodCallIgnored
-                tmp.delete();
-            }
-        });
-    }
-
-    /**
-     * Pre-warms the current Reel + next 3 Reels (and poster thumbnails) in parallel background threads.
-     */
-    public static void prefetchWindow(Context c, List<Models.Reel> reels, int centerIndex) {
-        if (c == null || reels == null || reels.isEmpty()) return;
-        Context appCtx = c.getApplicationContext();
-        int start = Math.max(0, centerIndex);
-        int end = Math.min(reels.size() - 1, start + 3);
-        for (int i = start; i <= end; i++) {
-            Models.Reel r = reels.get(i);
-            if (r == null || r.videoUrl == null || r.videoUrl.isEmpty()) continue;
-            String thumb = deriveThumbUrl(r.videoUrl, r.thumbUrl);
-            if (!thumb.isEmpty()) {
-                try {
-                    Glide.with(appCtx).load(thumb).preload();
-                } catch (Throwable ignored) { }
-            }
-            prefetchSingle(appCtx, r.videoUrl);
-        }
-    }
+    private static volatile String wantedWarmKey="";
+    public static void cancelUpcomingWarm() { wantedWarmKey=""; }
 
     /** Asynchronously downloads a single Reel video into the persistent SSD cache if not cached yet. */
-    public static void prefetchSingle(final Context c, final String rawVideoUrl) {
-        if (c == null || rawVideoUrl == null || rawVideoUrl.isEmpty()) return;
+    private static void prefetchSingle(final Context c, final String rawVideoUrl, final Runnable onReady) {
+        if (!canPrefetch(c) || rawVideoUrl == null || rawVideoUrl.isEmpty()) return;
         if (rawVideoUrl.startsWith("file:") || rawVideoUrl.startsWith("content:")) return;
         final Context appCtx = c.getApplicationContext();
-        final String key = cacheKey(rawVideoUrl);
+        final String streamUrl = startupUrl(appCtx, rawVideoUrl);
+        final String key = cacheKey(streamUrl);
         if (key.isEmpty()) return;
+        wantedWarmKey=key;
         File existing = new File(cacheDir(appCtx), key + ".mp4");
-        if (existing.exists() && existing.length() > 1024L) return;
+        if (existing.exists() && existing.length() > 1024L) {
+            notifyReady(key, onReady);
+            return;
+        }
         if (IN_FLIGHT.putIfAbsent(key, Boolean.TRUE) != null) return;
 
         PREFETCH_POOL.execute(() -> {
@@ -254,24 +201,15 @@ public final class ReelVideoCache {
             File part = new File(dir, key + ".part");
             HttpURLConnection conn = null;
             try {
-                if (dest.exists() && dest.length() > 1024L) return;
-                String streamUrl = optimizeStreamUrl(appCtx, rawVideoUrl);
+                if (!key.equals(wantedWarmKey) || !canPrefetch(appCtx) || (dest.exists() && dest.length() > 1024L)) return;
                 conn = (HttpURLConnection) new URL(streamUrl).openConnection();
                 conn.setInstanceFollowRedirects(true);
                 conn.setConnectTimeout(15000);
                 conn.setReadTimeout(45000);
                 conn.setRequestProperty("Accept", "video/mp4,video/*,*/*");
+                conn.setRequestProperty("Accept-Encoding", "identity");
                 int code = conn.getResponseCode();
-                if (code < 200 || code >= 300) {
-                    // Fallback to raw URL if transformed URL returned 4xx
-                    conn.disconnect();
-                    conn = (HttpURLConnection) new URL(rawVideoUrl).openConnection();
-                    conn.setInstanceFollowRedirects(true);
-                    conn.setConnectTimeout(15000);
-                    conn.setReadTimeout(45000);
-                    code = conn.getResponseCode();
-                }
-                if (code >= 200 && code < 300) {
+                if (code == HttpURLConnection.HTTP_OK) {
                     long contentLen = conn.getContentLengthLong();
                     if (contentLen > MAX_PREFETCH_FILE_BYTES) return;
                     try (InputStream in = new BufferedInputStream(conn.getInputStream(), 64 * 1024);
@@ -281,6 +219,7 @@ public final class ReelVideoCache {
                         long total = 0L;
                         int n;
                         while ((n = in.read(buf)) != -1) {
+                            if(!key.equals(wantedWarmKey)) { part.delete(); return; }
                             out.write(buf, 0, n);
                             total += n;
                             if (total > MAX_PREFETCH_FILE_BYTES) {
@@ -292,15 +231,10 @@ public final class ReelVideoCache {
                         }
                         out.flush();
                     }
-                    if (part.exists() && part.length() > 1024L) {
-                        if (dest.exists()) {
-                            //noinspection ResultOfMethodCallIgnored
-                            dest.delete();
-                        }
-                        //noinspection ResultOfMethodCallIgnored
-                        part.renameTo(dest);
+                    if (key.equals(wantedWarmKey) && completeDownload(contentLen,part.length()) && part.renameTo(dest)) {
                         Prefs.recordBytes(appCtx, dest.length(), Math.max(0L, dest.length() * 2));
                         trimCacheIfNeeded(dir);
+                        notifyReady(key, onReady);
                     } else {
                         //noinspection ResultOfMethodCallIgnored
                         part.delete();
@@ -318,43 +252,32 @@ public final class ReelVideoCache {
         });
     }
 
-    /**
-     * Called AFTER the active Reel has already started rendering on screen so there is zero bandwidth
-     * contention during initial start: caches the active Reel + next 2 upcoming Reels into local SSD.
-     */
-    public static void warmUpcomingAfterPlay(Context c, List<Models.Reel> reels, int currentIndex) {
-        if (c == null || reels == null || reels.isEmpty()) return;
-        Context appCtx = c.getApplicationContext();
-        int start = Math.max(0, currentIndex);
-        int end = Math.min(reels.size() - 1, start + 2);
-        for (int i = start; i <= end; i++) {
-            Models.Reel r = reels.get(i);
-            if (r == null || r.videoUrl == null || r.videoUrl.isEmpty()) continue;
-            String thumb = deriveThumbUrl(r.videoUrl, r.thumbUrl);
-            if (!thumb.isEmpty()) {
-                try {
-                    Glide.with(appCtx).load(thumb).preload();
-                } catch (Throwable ignored) { }
-            }
-            if (!Prefs.dataSaver(appCtx)) {
-                prefetchSingle(appCtx, r.videoUrl);
-            }
-        }
+    private static boolean canPrefetch(Context c) {
+        if (c == null || Prefs.dataSaver(c) || Prefs.turbo2g(c) || FastCache.netTier(c)!=FastCache.NetTier.WIFI) return false;
+        android.net.ConnectivityManager cm=c.getSystemService(android.net.ConnectivityManager.class);
+        if (cm==null || cm.isActiveNetworkMetered()) return false;
+        android.net.Network network=cm.getActiveNetwork();
+        android.net.NetworkCapabilities caps=network==null?null:cm.getNetworkCapabilities(network);
+        return caps!=null && caps.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_VALIDATED);
     }
 
-    /**
-     * Silently warms the top Reels in the background shortly after app startup so the very first
-     * tap on the Reels tab starts playing in ~15ms with zero cold-network wait!
-     */
-    /**
-     * QUOTA: nothing is downloaded at launch any more. The old version queried the top 3 Reels and
-     * pulled several video files on every cold start, even for a user who never opened Reels —
-     * pure bandwidth and read waste. Startup now only trims the cache; bytes are fetched when the
-     * user actually opens a Reel.
-     */
-    public static void warmStartupReels(final Context c) {
-        if (c == null || Prefs.dataSaver(c) || !STARTUP_WARMED.compareAndSet(false, true)) return;
-        trimCacheIfNeeded(cacheDir(c.getApplicationContext()));
+    static boolean completeDownload(long expected, long actual) {
+        return expected > 1024L && expected <= MAX_PREFETCH_FILE_BYTES && actual == expected;
+    }
+
+    private static void notifyReady(String key, Runnable callback) {
+        if (callback == null) return;
+        new android.os.Handler(android.os.Looper.getMainLooper()).post(() -> {
+            if (key.equals(wantedWarmKey)) callback.run();
+        });
+    }
+
+    /** Never duplicate the playing stream. At most one next Reel is warmed on unmetered Wi-Fi. */
+    public static void warmUpcomingAfterPlay(Context c, List<Models.Reel> reels, int currentIndex, Runnable onReady) {
+        if (!canPrefetch(c) || reels==null || currentIndex<0 || currentIndex>=reels.size()-1) return;
+        Models.Reel next=reels.get(currentIndex+1);
+        if (next==null || next.videoUrl==null || !next.videoUrl.matches("(?i)https://[^?#]+\\.mp4")) return;
+        prefetchSingle(c,next.videoUrl,onReady);
     }
 
     private static synchronized void trimCacheIfNeeded(File dir) {

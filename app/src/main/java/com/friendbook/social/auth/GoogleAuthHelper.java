@@ -37,7 +37,6 @@ import com.friendbook.social.core.Admin;
 import com.friendbook.social.core.Fb;
 import com.friendbook.social.core.Notify;
 import com.friendbook.social.core.Prefs;
-import com.friendbook.social.core.Presence;
 import com.friendbook.social.core.Ui;
 import com.friendbook.social.main.MainActivity;
 import com.friendbook.social.settings.SessionsActivity;
@@ -480,7 +479,6 @@ public final class GoogleAuthHelper {
         u.put("contactInfoPrivacy", "Only me");
         u.put("friendsListPrivacy", "Public");
         u.put("lookupPrivacy", "Everyone");
-        u.put("isOnline", true);
         // Privileged flags are server-owned; email alone cannot grant them.
         u.put("isAdmin", false);
         u.put("isVerified", false);
@@ -579,28 +577,10 @@ public final class GoogleAuthHelper {
             code = Admin.extractRefCode(Prefs.pendingReferral(a));
         }
         if (code == null || code.isEmpty() || code.equals(newUid)) return;
-        final String refBy = code;
-        Prefs.setPendingReferral(a, "");
-        Fb.db().collection("users").document(refBy).get().addOnSuccessListener(d -> {
-            if (!d.exists()) return;
-            Map<String, Object> r = new HashMap<>();
-            r.put("refBy", refBy);
-            r.put("refTo", newUid);
-            r.put("status", "completed");
-            r.put("date", FieldValue.serverTimestamp());
-            r.put("createdAt", FieldValue.serverTimestamp());
-            Fb.db().collection("referrals").document(refBy + "_" + newUid).set(r);
-
-            Map<String, Object> n = new HashMap<>();
-            n.put("toUserId", refBy);
-            n.put("fromUserId", newUid);
-            n.put("fromUserName", newName);
-            n.put("fromUserPhotoUrl", newPhoto == null ? "" : newPhoto);
-            n.put("type", "referral");
-            n.put("text", "joined friendbook via your invite 🎉 (referral credit +1)");
-            n.put("isRead", false);
-            n.put("createdAt", FieldValue.serverTimestamp());
-            Fb.db().collection("notifications").add(n);
+        if (!newUid.equals(Fb.uid())) return;
+        final String referredBy = code;
+        Fb.db().claimReferral(referredBy).addOnSuccessListener(result -> {
+            if (newUid.equals(Fb.uid())) Prefs.setPendingReferral(a, "");
         });
     }
 
@@ -634,7 +614,7 @@ public final class GoogleAuthHelper {
 
     private static void openMain(Activity a) {
         Fb.startMeListener();
-        Presence.init();
+
         a.startActivity(new Intent(a, MainActivity.class));
         a.finishAffinity();
     }

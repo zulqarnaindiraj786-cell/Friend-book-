@@ -1,0 +1,25 @@
+name: Diagnose production Cloudflare connectivity
+on:
+  push:
+    branches: ['arena/7c7ddb7b-friend-book']
+    paths: ['.github/workflows/production-health.yml']
+permissions: {}
+jobs:
+  health:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Probe Worker and storage without writing user data
+        run: |
+          set -eu
+          failed=0
+          for endpoint in health health/r2; do
+            file=$(mktemp)
+            status=$(curl -sS --max-time 15 -o "$file" -w '%{http_code}' "https://rough-firefly-dd7b.zulqarnaindiraj786.workers.dev/$endpoint") || failed=1
+            echo "::notice::$endpoint HTTP $status"
+            if [ "$status" != 200 ] || ! jq -e '.ok == true' "$file" >/dev/null; then
+              echo "::error::$endpoint failed: HTTP $status"
+              failed=1
+            fi
+          done
+          exit "$failed"

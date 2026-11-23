@@ -75,7 +75,14 @@ public final class PushDeliveryWorker extends Worker {
                     .putString(register ? "registration" : "last_send", outcome)
                     .putLong("updated_at", System.currentTimeMillis()).apply();
             android.util.Log.i("FriendBookPush", outcome);
-            if (response.status >= 200 && response.status < 300) return Result.success();
+            if (response.status >= 200 && response.status < 300) {
+                // Some devices may accept while another transiently fails. The
+                // gateway deduplicates accepted devices on a bounded retry.
+                if ("message".equals(body.optJSONObject("data") == null ? "" : body.optJSONObject("data").optString("type"))
+                        && response.data.optInt("failed") > 0)
+                    return PushRetryPolicy.shouldRetry(false, 503, getRunAttemptCount()) ? Result.retry() : Result.failure();
+                return Result.success();
+            }
             return PushRetryPolicy.shouldRetry(register, response.status, getRunAttemptCount(), response.data.optString("error"))
                     ? Result.retry() : Result.failure();
         } catch (Exception e) {

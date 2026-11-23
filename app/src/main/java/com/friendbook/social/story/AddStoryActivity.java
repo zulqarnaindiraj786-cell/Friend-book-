@@ -59,7 +59,7 @@ public class AddStoryActivity extends Activity {
     @Override
     protected void onCreate(Bundle b) {
         super.onCreate(b);
-        getWindow().setStatusBarColor(Color.BLACK);
+        com.friendbook.social.core.Ui.statusBar(getWindow(), Color.BLACK);
         storyPrivacy = Prefs.storyPrivacy(this);
 
         LinearLayout root = Ui.col(this);

@@ -57,6 +57,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         default boolean automaticPaging(){return false;}
         default boolean isLoadingMore(){return false;}
         default boolean hasPageError(){return false;}
+        default void onPostDeleted(String id) { }
         default void openFindFriends() { }
         default void openReelsTab(Models.Reel featuredReel) { }
         default void loadMoreStories() { }
@@ -78,12 +79,53 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     /** When >= 0 (in PostDetailActivity for a Sponsored Ad), renders ONLY that 1 real AdVH and ZERO PostVH! */
     public int standaloneAdSlotOrdinal = -1;
 
-    public FeedAdapter(Activity a, Host h) {
+    private final com.friendbook.social.core.AnchoredBannerPool feedBanners;
+    private final java.util.Set<PostVH> attachedBannerPosts = new java.util.LinkedHashSet<>();
+    public void setFeedBannersVisible(boolean visible) {
+        if (feedBanners == null) return;
+        feedBanners.setActive(visible);
+        if (visible) for (PostVH holder : attachedBannerPosts) showFeedBanner(holder);
+    }
+
+    private void showFeedBanner(PostVH holder) {
+        View anchor = holder.inlineCommentsBox.getVisibility() == View.VISIBLE ? holder.inlineCommentsBox : holder.itemView;
+        feedBanners.show(holder.feedBanner, holder.bannerPostId, anchor);
+    }
+
+    public void refreshFeedBannerVisibility() {
+        if (feedBanners != null) feedBanners.refreshVisibleSlots();
+    }
+
+    private boolean nativeAllowedByHost = true;
+    private final com.friendbook.social.core.AdsConfig.ChangeListener nativePlacementListener =
+            (id, enabled) -> applyAdsConfig(id, enabled && nativeAllowedByHost);
+
+    @Override public void onAttachedToRecyclerView(@NonNull RecyclerView recyclerView) {
+        super.onAttachedToRecyclerView(recyclerView);
+        if (feedBanners == null) {
+            com.friendbook.social.core.AdsConfig.addPlacementListener(nativePlacementListener);
+            recyclerView.post(() -> {
+                if (recyclerView.getAdapter() == this) nativePlacementListener.onAdsConfigChanged(
+                        com.friendbook.social.core.AdsConfig.feedNativeId(), com.friendbook.social.core.AdsConfig.nativeAdsEnabled());
+            });
+        }
+    }
+
+    @Override public void onDetachedFromRecyclerView(@NonNull RecyclerView recyclerView) {
+        com.friendbook.social.core.AdsConfig.removePlacementListener(nativePlacementListener);
+        super.onDetachedFromRecyclerView(recyclerView);
+    }
+
+    public FeedAdapter(Activity a, Host h) { this(a,h,false); }
+
+    public FeedAdapter(Activity a, Host h, boolean homeBanners) {
         this.activity = a;
         this.host = h;
+        feedBanners = homeBanners ? new com.friendbook.social.core.AnchoredBannerPool(a,
+                com.friendbook.social.core.AnchoredBannerPool.Placement.FEED) : null;
+        adsEnabled = adsEnabled && com.friendbook.social.core.ConsentManager.canRequestAds(a);
         setHasStableIds(true);
-        com.friendbook.social.core.AdsConfig.preloadFeedBatchNow(a, com.friendbook.social.core.AdsConfig.AD_POOL_SIZE);
-        com.friendbook.social.core.AdsConfig.warmUpPools(a);
+        if (!homeBanners) com.friendbook.social.core.AdsConfig.preloadFeedBatchNow(a, com.friendbook.social.core.AdsConfig.AD_POOL_SIZE);
     }
 
     @Override
@@ -101,14 +143,16 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         if (idx >= 0 && idx < posts.size()) {
             Models.Post p = posts.get(idx);
             if (p != null && p.id != null && !p.id.isEmpty()) {
-                return (((long) p.id.hashCode()) << 20) ^ idx;
+                long id = 0xcbf29ce484222325L;
+                for (int i = 0; i < p.id.length(); i++) id = (id ^ p.id.charAt(i)) * 0x100000001b3L;
+                return id & Long.MAX_VALUE;
             }
         }
         return position;
     }
 
     public void setPosts(List<Models.Post> list) {
-        if (list == null) list = new ArrayList<>();
+        list = uniquePosts(list, new java.util.HashSet<>());
         // ⚡ Anti-Jump In-Place Diff: if post IDs & order are identical, NEVER call notifyDataSetChanged()!
         if (!posts.isEmpty() && posts.size() == list.size()) {
             boolean sameOrder = true;
@@ -140,11 +184,29 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                 return;
             }
         }
+        List<Long> before=rowIds();
+        int oldFirst=posts.isEmpty()?-1:offset();
         posts.clear();
-        java.util.Set<String> existing=new java.util.HashSet<>();
-        for(Models.Post post:posts) if(post!=null) existing.add(post.id);
-        for(Models.Post post:list) if(post!=null && existing.add(post.id)) posts.add(post);
-        notifyDataSetChanged();
+        posts.addAll(list);
+        dispatchRowDiff(before,false);
+        if(showHeader && !posts.isEmpty() && (oldFirst<0 || before.get(oldFirst)!=getItemId(offset())))
+            notifyItemChanged(offset(), "DISCOVERY_SECTION");
+    }
+
+    private List<Long> rowIds() {
+        List<Long> ids=new ArrayList<>();
+        for(int i=0;i<getItemCount();i++) ids.add(getItemId(i));
+        return ids;
+    }
+
+    private void dispatchRowDiff(List<Long> before, boolean unchangedPosts) {
+        List<Long> after=rowIds();
+        androidx.recyclerview.widget.DiffUtil.calculateDiff(new androidx.recyclerview.widget.DiffUtil.Callback(){
+            public int getOldListSize(){return before.size();}
+            public int getNewListSize(){return after.size();}
+            public boolean areItemsTheSame(int a,int b){return before.get(a).equals(after.get(b));}
+            public boolean areContentsTheSame(int a,int b){return unchangedPosts || before.get(a)<0;}
+        }).dispatchUpdatesTo(this);
     }
 
     private static boolean sameReactionsSignature(Models.Post a, Models.Post b) {
@@ -217,28 +279,23 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         return posts;
     }
 
-    /** Refresh only currently visible post cards; no full feed redraw or media restart. */
-    public void refreshVisibleEngagement(RecyclerView list) {
-        if(list==null || !com.friendbook.social.core.D1Client.enabled("posts"))return;
-        for(int i=0;i<list.getChildCount();i++) {
-            View child=list.getChildAt(i); RecyclerView.ViewHolder holder=list.getChildViewHolder(child);
-            if(!(holder instanceof PostVH))continue;
-            PostVH vh=(PostVH)holder;Object tag=vh.itemView.getTag();if(!(tag instanceof String))continue;
-            Models.Post post=null;for(Models.Post p:posts)if(p!=null && tag.equals(p.id)){post=p;break;}
-            if(post==null)continue; final Models.Post selected=post;
-            D1Reactions.loadPost(activity,selected,()->{
-                if(!selected.id.equals(vh.itemView.getTag()))return;
-                renderReactionBar(activity,vh,selected,Reactions.resolveCurrentUserReaction(selected),
-                        com.friendbook.social.core.FastCache.getReactionTotal(selected.id,selected.likes));
-                bindInlineComments(activity,vh,selected);
-            });
-        }
+    /** Home receives engagement with the page; detail adapters still hydrate on demand. */
+    public boolean feedEngagementInPage;
+
+    private static List<Models.Post> uniquePosts(List<Models.Post> list, java.util.Set<String> seen) {
+        List<Models.Post> unique=new ArrayList<>();
+        if(list!=null)for(Models.Post post:list)if(post!=null && seen.add(post.id))unique.add(post);
+        return unique;
     }
 
     public void addPosts(List<Models.Post> list) {
         if (list == null || list.isEmpty()) return;
+        java.util.Set<String> existing=new java.util.HashSet<>();
+        for(Models.Post post:posts)existing.add(post.id);
+        List<Models.Post> page=uniquePosts(list,existing);
+        if(page.isEmpty())return;
         int oldItemCount = getItemCount();
-        posts.addAll(list);
+        posts.addAll(page);
         int newItemCount = getItemCount();
         if (newItemCount > oldItemCount) {
             int insertStart = Math.max(0, oldItemCount - footerCount());
@@ -298,7 +355,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     }
 
     public void setLives(java.util.List<java.util.Map<String, Object>> lives) {
-        if ((lives == null || lives.isEmpty()) && activeLives.isEmpty()) return;
+        if ((lives == null || lives.isEmpty()) ? activeLives.isEmpty() : activeLives.equals(lives)) return;
         activeLives.clear();
         if (lives != null) activeLives.addAll(lives);
         if (showHeader) notifyItemChanged(0);
@@ -315,17 +372,29 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     private boolean adsEnabled = com.friendbook.social.core.AdsConfig.nativeAdsEnabled();
 
     public void setAdsConfig(String id, boolean enabled) {
+        if (feedBanners != null) {
+            for (PostVH holder : attachedBannerPosts) showFeedBanner(holder);
+            return;
+        }
+        nativeAllowedByHost = enabled;
+        applyAdsConfig(id, enabled);
+    }
+
+    private void applyAdsConfig(String id, boolean enabled) {
         String cleanId = com.friendbook.social.core.AdsConfig.isRealProductionUnit(id)
                 ? id.trim()
                 : com.friendbook.social.core.AdsConfig.FEED_NATIVE_ID;
-        boolean nextEnabled = enabled && !cleanId.isEmpty();
+        boolean nextEnabled = enabled && !cleanId.isEmpty()
+                && com.friendbook.social.core.ConsentManager.canRequestAds(activity);
         if (cleanId.equals(nativeAdUnitId) && nextEnabled == adsEnabled) {
             notifyAdSlotsOnly();
             return;
         }
+        List<Long> before=rowIds();
         nativeAdUnitId = cleanId;
         adsEnabled = nextEnabled;
-        notifyDataSetChanged();
+        if (nextEnabled) com.friendbook.social.core.AdsConfig.ensureFeedPoolReplenished(activity);
+        dispatchRowDiff(before,true);
     }
 
     /** Never rebind or resize Ad slots mid-scroll — slots bind cleanly inside onBindViewHolder with zero layout jump! */
@@ -335,8 +404,11 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
 
     /** Triggers fresh Native Ad requests on Feed refresh — rotates in preloaded ads from pool. */
     public void refreshSponsoredAds() {
+        if (!adsActive()) return;
         com.friendbook.social.core.AdsConfig.clearFeedSlotAds(null);
-        notifyDataSetChanged();
+        for (int slot = 0; slot < getItemCount() - offset() - footerCount(); slot++)
+            if (isAdSlot(slot)) notifyItemChanged(offset() + slot);
+        com.friendbook.social.core.AdsConfig.ensureFeedPoolReplenished(activity);
     }
 
     public void clearCachedNativeAds() {
@@ -344,7 +416,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     }
 
     private boolean adsActive() {
-        return adsEnabled
+        return feedBanners == null && adsEnabled
                 && nativeAdUnitId != null
                 && !nativeAdUnitId.isEmpty();
     }
@@ -550,7 +622,10 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                 return;
             }
             try {
-                bindPost((PostVH) h, posts.get(idx));
+                PostVH holder = (PostVH) h;
+                holder.bannerPostId = posts.get(idx).id;
+                bindPost(holder, posts.get(idx));
+                if (feedBanners != null && attachedBannerPosts.contains(holder)) showFeedBanner(holder);
                 bindFirstPostDiscoverySection(activity, (PostVH) h, idx);
             } catch (Throwable t) {
                 android.util.Log.e("HomeFeed", "bindPost failed for "
@@ -823,6 +898,25 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         String n = Fb.myName();
         int i = n.indexOf(' ');
         return i > 0 ? n.substring(0, i) : n;
+    }
+
+    @Override public void onViewAttachedToWindow(@NonNull RecyclerView.ViewHolder holder) {
+        super.onViewAttachedToWindow(holder);
+        if (feedBanners != null && holder instanceof PostVH) {
+            PostVH post = (PostVH) holder;
+            attachedBannerPosts.add(post);
+            showFeedBanner(post);
+            post.itemView.post(this::refreshFeedBannerVisibility);
+        }
+    }
+
+    @Override public void onViewDetachedFromWindow(@NonNull RecyclerView.ViewHolder holder) {
+        if (feedBanners != null && holder instanceof PostVH) {
+            PostVH post = (PostVH) holder;
+            attachedBannerPosts.remove(post);
+            feedBanners.detach(post.feedBanner);
+        }
+        super.onViewDetachedFromWindow(holder);
     }
 
     @Override
@@ -1116,6 +1210,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         vh.image.setOnTouchListener(null);
         vh.mediaWrap.setOnClickListener(null);
         vh.playBadge.setVisibility(View.GONE);
+        vh.playBadge.setOnClickListener(null);
         vh.playBadge.setTextSize(44);
         vh.pageBadge.setVisibility(View.GONE);
         int targetMediaH = textOnlyPhotoHidden ? Ui.dp(c, 92)
@@ -1162,7 +1257,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                     ? ImageView.ScaleType.FIT_CENTER
                     : ImageView.ScaleType.CENTER_CROP);
             vh.playBadge.setBackgroundColor(0x99000000);
-            Ui.imgFeedModerated(c, vh.image, fImg, "posts", p.id, p.authorId, p.content, null);
+            loadRetryableFeedPhoto(c, vh, p, fImg);
             int album = p.mediaUrls != null ? p.mediaUrls.size() : 0;
             if (album > 1) {
                 vh.pageBadge.setVisibility(View.VISIBLE);
@@ -1184,7 +1279,15 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             vh.playBadge.setBackgroundColor(0x66000000);
             vh.playBadge.setTextSize(15);
             vh.playBadge.setText("Tap to watch Reel");
-            vh.mediaWrap.setOnClickListener(v -> {
+            View.OnClickListener watchReel = v -> {
+                if (!java.util.Objects.equals(p.mediaUrl, com.friendbook.social.core.R2VideoClient.fullPlaybackUrl(p.mediaUrl))) {
+                    Intent full = new Intent(c, FullscreenMediaActivity.class);
+                    full.putExtra("type", "video");
+                    full.putExtra("url", p.mediaUrl);
+                    full.putExtra("post_id", p.id);
+                    c.startActivity(full);
+                    return;
+                }
                 Intent i = new Intent(c, com.friendbook.social.reels.ReelPlayerActivity.class);
                 i.putExtra("reel_id", p.id);
                 i.putExtra("is_post", true);
@@ -1197,7 +1300,10 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                 i.putExtra("comments", p.comments);
                 i.putExtra("shares", p.shares);
                 c.startActivity(i);
-            });
+            };
+            vh.playBadge.setOnClickListener(watchReel);
+            vh.image.setOnClickListener(watchReel);
+            vh.mediaWrap.setOnClickListener(watchReel);
         }
 
         // ---------- ⚡ 0.0ms Instant Reaction & Counter Render + Exact Subcollection Sync ----------
@@ -1209,7 +1315,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         String myReact = Reactions.resolveCurrentUserReaction(p);
         renderReactionBar(c, vh, p, myReact, totalLikes);
         bindInlineComments(c, vh, p);
-        if (com.friendbook.social.core.D1Client.enabled("posts")) {
+        if (!feedEngagementInPage && com.friendbook.social.core.D1Client.enabled("posts")) {
             D1Reactions.loadPost(c, p, () -> {
                 if (!p.id.equals(vh.itemView.getTag())) return;
                 renderReactionBar(c, vh, p, Reactions.resolveCurrentUserReaction(p),
@@ -1226,6 +1332,21 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
      * 💬 Authentic friendbook Inline Multi-User Comments Preview + Quick Comment Pill right on Home Feed!
      * Uses pre-built ViewHolder rows (ZERO removeAllViews() / ZERO new View() during scroll!).
      */
+    private void loadRetryableFeedPhoto(Context context, PostVH holder, Models.Post post, String url) {
+        Ui.imgFeed(context, holder.image, url, () -> {
+            if (holder.boundPhotoPost != post || !java.util.Objects.equals(holder.boundPhotoUrl, url)) return;
+            holder.playBadge.setTextSize(14);
+            holder.playBadge.setBackgroundColor(0xCC182438);
+            holder.playBadge.setText("Photo couldn’t load · Tap to retry");
+            holder.playBadge.setVisibility(View.VISIBLE);
+            holder.playBadge.setOnClickListener(v -> {
+                if (holder.boundPhotoPost != post || !java.util.Objects.equals(holder.boundPhotoUrl, url)) return;
+                holder.playBadge.setVisibility(View.GONE);
+                loadRetryableFeedPhoto(context, holder, post, url);
+            });
+        });
+    }
+
     private void bindInlineComments(Context c, PostVH vh, Models.Post p) {
         if (vh.inlineCommentsBox == null) return;
         if (!showInlineComments || !Prefs.inlineFeedComments(c)) {
@@ -1649,32 +1770,12 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                         .addOnFailureListener(e -> Ui.toast(activity, e.getMessage()));
             }
             else if (t.contains("Save post")) toggleSave(p, false);
-            else if (t.contains("Delete post (moderator)")) {
-                Fb.getUser(p.authorId).addOnSuccessListener(u -> {
-                    if (com.friendbook.social.core.Admin.isProtectedStaff(u)) {
-                        Ui.toast(activity, "Admin posts cannot be removed by a moderator");
-                        return;
-                    }
-                    deletePost(p);
-                });
-            }
+            else if (t.contains("Delete post (moderator)")) deletePost(p, true);
             else if (t.contains("Ban user (moderator)")) {
-                Fb.getUser(p.authorId).addOnSuccessListener(u -> {
-                    if (com.friendbook.social.core.Admin.isProtectedStaff(u)) {
-                        Ui.toast(activity, "Admin accounts cannot be banned");
-                        return;
-                    }
-                    Ui.confirm(activity, "🛡 Ban " + p.authorName + "?",
-                            "This user will be banned from using friendbook.",
-                            "Ban User", () -> Fb.db().collection("users").document(p.authorId)
-                                    .set(Fb.map("banned", true), com.friendbook.social.d1.documents.SetOptions.merge())
-                                    .addOnSuccessListener(x -> {
-                                        Notify.sendOfficialTeamMessage(p.authorId, "ban",
-                                                "Your account was suspended by a friendbook Moderator.", false);
-                                        Ui.toast(activity, "Banned " + p.authorName + " 🚫");
-                                    })
-                                    .addOnFailureListener(e -> Ui.toast(activity, e.getMessage())));
-                });
+                Ui.confirm(activity, "Ban " + p.authorName + "?", "This user will be banned from using friendbook.",
+                        "Ban User", () -> Fb.db().moderate("ban_user", "users", p.authorId)
+                                .addOnSuccessListener(x -> Ui.toast(activity, "User banned"))
+                                .addOnFailureListener(e -> Ui.toast(activity, "Couldn't ban this account.")));
             }
             else if (t.contains("Edit post")) { if (host != null) host.editPost(p); }
             else if (t.contains("Who can see")) changePrivacyDialog(p);
@@ -1689,8 +1790,8 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                 java.util.Iterator<Models.Post> it = posts.iterator();
                 while (it.hasNext()) if (p.authorId.equals(it.next().authorId)) it.remove();
                 notifyDataSetChanged();
-            } else if (t.contains("Delete post (admin)")) deletePost(p);
-            else if (t.contains("Delete")) deletePost(p);
+            } else if (t.contains("Delete post (admin)")) deletePost(p, true);
+            else if (t.contains("Delete")) deletePost(p, false);
             else if (t.contains("Copy link")) copyText("friendbook://post/" + p.id);
             else if (t.contains("Copy text")) copyText(p.content);
             else if (t.contains("Share to other")) {
@@ -1743,11 +1844,13 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                 .addOnFailureListener(e -> Ui.toast(activity, "Couldn't update saved posts. Please try again."));
     }
 
-    private void deletePost(Models.Post p) {
+    private void deletePost(Models.Post p, boolean moderation) {
         Ui.confirm(activity, "Delete post?", "This can't be undone.", "Delete", () -> {
-            Fb.db().collection("posts").document(p.id).delete()
+            (moderation ? Fb.db().moderate("delete_content", "posts", p.id)
+                    : Fb.db().collection("posts").document(p.id).delete())
                     .addOnSuccessListener(v -> {
                         removePostById(p.id);
+                        if (host != null) host.onPostDeleted(p.id);
                         com.friendbook.social.core.FastCache.removeFeedPost(activity, p.id);
                         Ui.toast(activity, "Post deleted");
                     })
@@ -1943,7 +2046,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             LinearLayout col = (LinearLayout) itemView;
             col.setLayoutParams(new RecyclerView.LayoutParams(-1, -2));
 
-            // 1. Authentic friendbook Composer Row FIRST (Avatar+Green Dot · "What's on your mind?" · Photo)
+            // 1. Authentic friendbook Composer Row FIRST (Avatar · "What's on your mind?" · Photo)
             LinearLayout row = Ui.row(c);
             row.setBackgroundColor(Ui.card(c));
             row.setGravity(Gravity.CENTER_VERTICAL);
@@ -1953,11 +2056,6 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             int s = Ui.dp(c, 42);
             composeAvatar = new ImageView(c);
             avWrap.addView(composeAvatar, new FrameLayout.LayoutParams(s, s));
-            View onlineDot = new View(c);
-            onlineDot.setBackground(Ui.roundStroke(c, Ui.GREEN, 7, Ui.card(c), 2));
-            int ds = Ui.dp(c, 13);
-            FrameLayout.LayoutParams dlp = new FrameLayout.LayoutParams(ds, ds, Gravity.BOTTOM | Gravity.END);
-            avWrap.addView(onlineDot, dlp);
             avWrap.setOnClickListener(v -> {
                 if (host != null && Fb.uid() != null) host.openProfile(Fb.uid());
             });
@@ -2610,7 +2708,15 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         void loadFreshFeedNativeAd(final String rawUnitId, final int slotOrdinal, final boolean preserveExistingSlotAd) {
             this.inDetailScreen = preserveExistingSlotAd;
             final Context ctx = itemView.getContext();
-            if (this.boundSlotOrdinal == slotOrdinal && currentNativeAd != null) {
+            if (!com.friendbook.social.core.AdsConfig.nativeAdsEnabled()
+                    || !com.friendbook.social.core.ConsentManager.canRequestAds(ctx)) {
+                ++requestSeq;
+                destroyCurrentAd();
+                collapse();
+                return;
+            }
+            if (this.boundSlotOrdinal == slotOrdinal
+                    && com.friendbook.social.core.AdsConfig.isCurrentFeedSlotAd(slotOrdinal, currentNativeAd)) {
                 if (boundNativeAdViewTarget != currentNativeAd) {
                     expand(ctx);
                     populateNativeAdView(currentNativeAd, ctx);
@@ -2645,9 +2751,18 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             com.friendbook.social.core.AdsConfig.registerFeedSlotWaiter(slotOrdinal, readyAd -> {
                 if (mySeq != requestSeq) return;
                 adRequestInFlight = false;
-                if (readyAd == null || currentNativeAd != null) {
-                    collapse();
+                if (readyAd == null || currentNativeAd != null || !com.friendbook.social.core.AdsConfig.nativeAdsEnabled()
+                        || !com.friendbook.social.core.ConsentManager.canRequestAds(ctx)) {
                     return;
+                }
+                // Do not grow an already-bound zero-height slot during a gesture or
+                // above the reading anchor. The ad remains assigned for the next bind.
+                if (!(itemView.getParent() instanceof RecyclerView)) return;
+                RecyclerView list=(RecyclerView)itemView.getParent();
+                if (list.getScrollState()!=RecyclerView.SCROLL_STATE_IDLE) return;
+                if (list.getLayoutManager() instanceof androidx.recyclerview.widget.LinearLayoutManager) {
+                    int first=((androidx.recyclerview.widget.LinearLayoutManager)list.getLayoutManager()).findFirstVisibleItemPosition();
+                    if (getBindingAdapterPosition()<=first) return;
                 }
                 currentNativeAd = readyAd;
                 expand(ctx);
@@ -2745,6 +2860,8 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         ImageView reactBadgeIv, likeIcon, commentIcon, shareIcon;
         TextView name, meta, more, closeBtn, content;
         TextView extraReactsTv, likeEmojiTv, likeTxt, commentTxt, shareTxt;
+        final FrameLayout feedBanner;
+        String bannerPostId;
         TextView tagSummary, commentsSummary;
         TextView sharedName, sharedContent, playBadge, pageBadge;
         LinearLayout like, comment, share, reactSummaryWrap;
@@ -3034,6 +3151,10 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             inlineCommentsBox.addView(inlineQuickRow);
 
             card.addView(inlineCommentsBox, new LinearLayout.LayoutParams(-1, -2));
+
+            feedBanner = new FrameLayout(c);
+            feedBanner.setVisibility(View.GONE);
+            card.addView(feedBanner, new LinearLayout.LayoutParams(-1, -2));
 
             // friendbook gap between posts
             View gap = new View(c);

@@ -19,7 +19,8 @@ public class D1HttpTransportTest {
  private Thread responder;
  private volatile boolean stopped;
  private URL url;
- private final AtomicInteger calls=new AtomicInteger();
+ private final AtomicInteger calls=new AtomicInteger(), connections=new AtomicInteger();
+ private volatile boolean keepAlive;
  private final AtomicReference<String> method=new AtomicReference<>(),auth=new AtomicReference<>(),body=new AtomicReference<>();
  private volatile int status=200;private volatile String response="{\"ok\":true}";
  @Before public void start()throws Exception{
@@ -27,8 +28,10 @@ public class D1HttpTransportTest {
   responder=new Thread(()->{
    while(!stopped){
     try(Socket socket=server.accept()){
+     connections.incrementAndGet();
      socket.setSoTimeout(5000);
-     InputStream in=socket.getInputStream();String request=line(in);if(request==null)continue;
+     do {
+     InputStream in=socket.getInputStream();String request=line(in);if(request==null)break;
      calls.incrementAndGet();method.set(request.split(" ")[0]);
      int length=0;String header;
      while((header=line(in))!=null&&!header.isEmpty()){
@@ -42,8 +45,9 @@ public class D1HttpTransportTest {
      body.set(received.toString("UTF-8"));
      byte[] bytes=response.getBytes(StandardCharsets.UTF_8);
      String headers="HTTP/1.1 "+status+" Fixture\r\nContent-Type: application/json\r\nContent-Length: "+bytes.length+
-      "\r\nConnection: close\r\n"+(status==302?"Location: /redirect-target\r\n":"")+"\r\n";
+      "\r\nConnection: "+(keepAlive?"keep-alive":"close")+"\r\n"+(status==503?"Retry-After: 0\r\n":"")+(status==302?"Location: /redirect-target\r\n":"")+"\r\n";
      OutputStream out=socket.getOutputStream();out.write(headers.getBytes(StandardCharsets.US_ASCII));out.write(bytes);out.flush();
+     } while(keepAlive && !stopped);
     }catch(IOException expectedOnCloseOrOversize){}
    }
   });
@@ -55,7 +59,7 @@ public class D1HttpTransportTest {
   while((c=in.read())!=-1){if(c=='\n')return out.toString("US-ASCII").replace("\r","");out.write(c);}
   return out.size()==0?null:out.toString("US-ASCII");
  }
- @After public void stop()throws Exception{stopped=true;server.close();responder.join(6000);assertFalse(responder.isAlive());}
+ @After public void stop()throws Exception{stopped=true;keepAlive=false;server.close();responder.join(6000);assertFalse(responder.isAlive());}
  private void rejected()throws Exception{
   try{D1HttpTransport.send(url,"POST","synthetic-token",new JSONObject().put("text","fixture"));fail("Expected rejection");}
   catch(IOException expected){}
@@ -65,6 +69,12 @@ public class D1HttpTransportTest {
   assertTrue(D1HttpTransport.send(url,"PUT","synthetic-token",data).getBoolean("ok"));
   assertEquals("PUT",method.get());assertEquals("Bearer synthetic-token",auth.get());
   assertEquals("سلام",new JSONObject(body.get()).getString("text"));assertEquals(1,calls.get());
+ }
+ @Test public void consecutiveRequestsReuseTheConnection()throws Exception{
+  keepAlive=true;
+  assertTrue(D1HttpTransport.send(url,"GET","synthetic-token",null).getBoolean("ok"));
+  assertTrue(D1HttpTransport.send(url,"GET","synthetic-token",null).getBoolean("ok"));
+  assertEquals(2,calls.get());assertEquals(1,connections.get());
  }
  @Test public void failedWriteHasNoRetryOrFallback()throws Exception{status=503;rejected();assertEquals(1,calls.get());}
  @Test public void redirectsDoNotForwardCredentialsOrRepeatWrites()throws Exception{status=302;rejected();assertEquals(1,calls.get());}

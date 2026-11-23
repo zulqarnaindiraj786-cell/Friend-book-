@@ -16,7 +16,9 @@ class ProfileFeedScope(unittest.TestCase):
   self.assertIn('checkedCandidates.clear();candidateFriends.clear();candidateIncoming.clear();candidateOutgoing.clear();failedCandidates.clear();userCache.clear();',s)
   self.assertIn('loadingProfiles=new HashSet<>()',s)
   self.assertIn('Fb.getUserFresh(uid)',s)
-  self.assertIn('if(selected==SEC_REQUESTS && !suggestions.isEmpty())checkCandidates(me,token)',s)
+  self.assertIn('this::loadInlineSuggestions',s)
+  self.assertNotIn('ensureUser(req.fromUid)',s)
+  self.assertNotIn('suggestionPager.start()',s.split('private void loadInlineSuggestions',1)[0])
  def test_offline_page_does_not_replace_confirmed_rows(self):
   s=(ROOT/'core/CursorPager.java').read_text()
   self.assertIn('if(cursor==null && !offline)records.clear()',s)

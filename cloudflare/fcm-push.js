@@ -1,3 +1,5 @@
+import { readRow } from './firestore-documents.js';
+import { readD1DocumentFields, toFirestoreFields } from './app-documents.js';
 // Cloudflare Worker FCM gateway (/functions/v1/send-fcm-notification, /functions/v1/bulk-mentions).
 // Firebase keeps ONLY Auth (token verification in worker.js) + FCM delivery.
 // Device tokens + push claims live in D1; event payloads are derived from D1
@@ -23,8 +25,13 @@ function b64url(bytes) {
 }
 let cachedToken = '';
 let tokenUntil = 0;
-async function googleToken(env) {
+let tokenRefresh;
+export async function googleToken(env) {
   if (cachedToken && Date.now() < tokenUntil) return cachedToken;
+  if (!tokenRefresh) tokenRefresh=refreshGoogleToken(env).finally(()=>{tokenRefresh=null;});
+  return tokenRefresh;
+}
+async function refreshGoogleToken(env) {
   const raw = env.FIREBASE_ADMIN_SERVICE_ACCOUNT;
   if (!raw) throw new Error('FCM_NOT_CONFIGURED');
   let sa;
@@ -58,7 +65,7 @@ async function googleToken(env) {
 
 async function d1Doc(db, path) {
   try {
-    const row = await db.prepare('SELECT document_json FROM friendbook_cf_firestore_documents WHERE path = ?').bind(path).first();
+    const row = await readRow(db,path);
     if (!row?.document_json) return null;
     const parsed = JSON.parse(row.document_json);
     // Decode timestamp wrappers to millis for freshness checks.
@@ -71,30 +78,22 @@ async function d1Doc(db, path) {
     return null;
   }
 }
-async function d1Query(db, parent, filters) {
-  try {
-    const rows = await db.prepare('SELECT doc_id, document_json FROM friendbook_cf_firestore_documents WHERE parent_path = ?').bind(parent).all();
-    const docs = [];
-    for (const row of rows?.results || []) {
-      try {
-        const parsed = JSON.parse(row.document_json);
-        const out = { id: row.doc_id };
-        for (const [k, v] of Object.entries(parsed || {})) {
-          out[k] = v && typeof v === 'object' && v.__type === 'timestamp' ? v.millis : v;
-        }
-        docs.push(out);
-      } catch { /* skip malformed */ }
-    }
-    if (!Array.isArray(filters) || !filters.length) return docs;
-    return docs.filter(d => filters.every(f => {
-      const actual = d[f.field];
-      if (f.op === '==') return actual === f.value;
-      if (f.op === 'array-contains') return Array.isArray(actual) && actual.includes(f.value);
-      return false;
-    }));
-  } catch {
-    return [];
-  }
+async function pushProfile(db, uid, viewerProfile) {
+  const fields=viewerProfile===undefined ? await readD1DocumentFields(db,`users/${uid}`) : toFirestoreFields(viewerProfile);
+  if (!fields) return null;
+  const strings=key=>(fields[key]?.arrayValue?.values||[]).map(x=>x.stringValue).filter(x=>typeof x==='string');
+  return {displayName:fields.displayName?.stringValue, name:fields.name?.stringValue,
+    banned:fields.banned?.booleanValue===true, deactivated:fields.deactivated?.booleanValue===true,
+    blocked:strings('blocked'), blockedUsers:strings('blockedUsers')};
+}
+
+async function highlightFriends(db, actor) {
+  // Both legs use indexed equality; never scan the whole friends collection.
+  const [low,high]=await Promise.all([
+    db.prepare('SELECT uid_high AS uid FROM friendbook_cf_trusted_friendships WHERE uid_low=? ORDER BY uid_high LIMIT 80').bind(actor).all(),
+    db.prepare('SELECT uid_low AS uid FROM friendbook_cf_trusted_friendships WHERE uid_high=? ORDER BY uid_low LIMIT 80').bind(actor).all(),
+  ]);
+  return [...(low.results||[]),...(high.results||[])].map(row=>row.uid);
 }
 function blockedList(u) {
   return [...(Array.isArray(u?.blockedUsers) ? u.blockedUsers : []), ...(Array.isArray(u?.blocked) ? u.blocked : [])];
@@ -104,48 +103,156 @@ function fresh(ts) {
   return Number.isFinite(ms) && Date.now() - ms <= 86400000 && ms <= Date.now() + 30000;
 }
 
-async function sendToDevices(env, db, actor, target, data, event) {
-  const devices = await db.prepare('SELECT device_id, token FROM friendbook_cf_fcm_devices WHERE user_id = ?').bind(target).all()
-    .then(r => r?.results || []).catch(() => []);
+export function buildFcmMessage(target, data) {
+  return { ...target, data: Object.fromEntries(Object.entries(data).map(([key,value])=>[key,typeof value==='string'?value:''])), android: { priority: 'HIGH', ttl: data.type==='incoming_call'?'40s':'86400s' } };
+}
+
+async function sendFcm(env, access, message) {
+  const send = bearer => fetch(`https://fcm.googleapis.com/v1/projects/${PROJECT}/messages:send`, {
+    method:'POST', headers:{Authorization:`Bearer ${bearer}`, 'Content-Type':'application/json'},
+    body:JSON.stringify({message}), signal:AbortSignal.timeout(8000),
+  });
+  let response=await send(access);
+  if(response.status===401) {
+    await response.body?.cancel().catch(()=>{});
+    if(cachedToken===access){cachedToken='';tokenUntil=0;}
+    response=await send(await googleToken(env));
+  }
+  return response;
+}
+
+// Both stores are checked atomically in the insert. The migration's legacy
+// trigger performs the inverse check for old Workers during rollout/rollback.
+// A missing v2 table is the pre-migration schema; all other failures fail closed.
+export async function claimFcmDevice(db, eventKey, now) {
+  let table='friendbook_cf_fcm_device_claims_v2', result;
+  try {
+    result=await db.prepare(`INSERT INTO friendbook_cf_fcm_device_claims_v2(event_key, created_at)
+      SELECT ?1, ?2 WHERE NOT EXISTS (SELECT 1 FROM friendbook_cf_fcm_device_claims WHERE event_key=?1)
+      ON CONFLICT(event_key) DO NOTHING`).bind(eventKey,now).run();
+  } catch(error) {
+    if (!/no such table: friendbook_cf_fcm_device_claims_v2\b/i.test(String(error))) throw error;
+    table='friendbook_cf_fcm_device_claims';
+    result=await db.prepare(`INSERT INTO friendbook_cf_fcm_device_claims(event_key, created_at)
+      VALUES (?, ?) ON CONFLICT(event_key) DO NOTHING`).bind(eventKey,now).run();
+  }
+  if (!result?.success || ![0,1].includes(result.meta?.changes)) throw new Error('claim metadata unavailable');
+  return {acquired:result.meta.changes===1,table};
+}
+
+async function sendToDevices(env, db, actor, target, data, event, deviceId = null) {
+  const devices = await (deviceId
+    ? db.prepare('SELECT device_id, token FROM friendbook_cf_fcm_devices WHERE user_id = ? AND device_id = ?').bind(target,deviceId)
+    : db.prepare('SELECT device_id, token FROM friendbook_cf_fcm_devices WHERE user_id = ?').bind(target)).all()
+    .then(r => r?.results || []);
   if (!devices.length) return { status: 409, body: { error: 'RECIPIENT_NOT_REGISTERED', accepted: 0 } };
   const access = await googleToken(env);
   let accepted = 0, duplicate = 0, invalid = 0, failed = 0;
-  for (const device of devices) {
-    const claimKey = `fcm:${event}:${device.device_id}`;
-    // RETURNING identifies the sole winning insert across Worker isolates.
-    // Never use isolate-local memory to decide whether a persisted claim is new.
-    let claim;
-    try {
-      claim=await db.prepare(`INSERT INTO friendbook_cf_push_claims(event_key, actor, created_at)
-        VALUES (?, ?, ?) ON CONFLICT(event_key) DO NOTHING RETURNING event_key`).bind(claimKey,actor,Date.now()).first();
-    } catch { failed++; continue; }
-    if (!claim) { duplicate++; continue; }
-    try {
-      const r = await fetch(`https://fcm.googleapis.com/v1/projects/${PROJECT}/messages:send`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${access}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: { token: device.token, data, android: { priority: 'HIGH', ttl: '86400s' } } }),
-        signal: AbortSignal.timeout(15000),
-      });
-      const result = await r.json().catch(() => ({}));
-      if (r.ok && result.name) { accepted++; continue; }
-      const code = result.error?.details?.find(x => x.errorCode)?.errorCode;
-      if (code === 'UNREGISTERED') {
-        await db.prepare('DELETE FROM friendbook_cf_fcm_devices WHERE device_id = ? AND token = ?').bind(device.device_id, device.token).run().catch(() => {});
-        invalid++;
-      } else {
-        if (r.status === 401) { cachedToken = ''; tokenUntil = 0; }
+  const reasons = new Set();
+  let index = 0;
+  await Promise.all(Array.from({length:Math.min(3, devices.length)}, async () => {
+    while (index < devices.length) {
+      const device = devices[index++];
+      const claimKey = `fcm:${event}:${device.device_id}`;
+      // D1 changes identifies the winner. Release only the store acquired by
+      // this attempt if FCM fails; never delete the other store's claim.
+      let claim;
+      try {
+        claim=await claimFcmDevice(db,claimKey,Date.now());
+        if (!claim.acquired) { duplicate++; continue; }
+      } catch { reasons.add("D1_CLAIM_FAILED"); failed++; continue; }
+      const release=()=>db.prepare(`DELETE FROM ${claim.table} WHERE event_key = ?`).bind(claimKey).run();
+      try {
+        const r = await sendFcm(env, access, buildFcmMessage({token:device.token}, data));
+        const result = await r.json().catch(() => ({}));
+        if (r.ok && result.name) { accepted++; continue; }
+        const code = result.error?.details?.find(x => x.errorCode)?.errorCode;
+        if (code === 'UNREGISTERED') {
+          await release();
+          await db.prepare('DELETE FROM friendbook_cf_fcm_devices WHERE device_id = ? AND token = ?').bind(device.device_id, device.token).run().catch(() => {});
+          invalid++;
+        } else {
+          reasons.add(code === 'SENDER_ID_MISMATCH' ? 'SENDER_ID_MISMATCH'
+            : [400,401,403,404,429,500,503].includes(r.status) ? `FCM_HTTP_${r.status}` : 'FCM_PROVIDER_ERROR');
+          failed++;
+          await release().catch(() => {});
+        }
+      } catch {
+        reasons.add("FCM_NETWORK_ERROR");
         failed++;
-        await db.prepare('DELETE FROM friendbook_cf_push_claims WHERE event_key = ?').bind(claimKey).run().catch(() => {});
+        await release().catch(() => {});
       }
-    } catch {
-      failed++;
-      await db.prepare('DELETE FROM friendbook_cf_push_claims WHERE event_key = ?').bind(claimKey).run().catch(() => {});
     }
-  }
-  if (failed) return { status: 503, body: { error: 'FCM_DELIVERY_FAILED', accepted, failed, invalid } };
+  }));
+  if (failed) return { status: 503, body: { error: 'FCM_DELIVERY_FAILED', accepted, failed, invalid, ...(event.startsWith('selftest_') ? { reasons:[...reasons] } : {}) } };
   if (!accepted && !duplicate) return { status: 409, body: { error: 'NO_VALID_RECIPIENT_DEVICE', accepted, invalid } };
   return { status: 200, body: { provider: 'fcm', accepted, duplicate, invalid, note: 'FCM acceptance is not a device receipt' } };
+}
+
+// Called only with an authorized chat/message pair after the D1 commit.
+export async function pushCommittedChat(env, identity, chatId, messageId, chat, message, send=sendToDevices) {
+  const actor=identity.uid, db=env.DB;
+  const sender=await pushProfile(db,actor,identity.viewerProfile);
+  if(!sender || sender.banned || sender.deactivated)return;
+  await Promise.all([...new Set(chat.participants)].filter(target=>target!==actor && validId(target)).map(async target=>{
+    for(let attempt=0;attempt<2;attempt++)try {
+      const recipient=await pushProfile(db,target);
+      if(!recipient || recipient.banned || recipient.deactivated || blockedList(recipient).includes(actor))return;
+      const event=`message_${chatId}_${messageId}_${target}`;
+      const result=await send(env,db,actor,target,{type:'message',chatId,isGroup:String(chat.isGroup===true),
+        toUserId:target,fromUserId:actor,eventId:event,
+        title:String(sender.displayName||sender.name||'friendbook').slice(0,100),
+        body:String(message.text||'Sent an attachment').slice(0,500)},event);
+      if(result.status<500)return;
+    }catch { /* Retry once; successful per-device claims are retained. */ }
+  }));
+}
+
+export async function pushIncomingCall(env,call) {
+  const {chatId,callId,callerId,calleeId,callerName}=call;
+  const event=`call_${chatId}_${callId}`;
+  return sendToDevices(env,env.DB,callerId,calleeId,{type:'incoming_call',chatId,callId,
+    toUserId:calleeId,fromUserId:callerId,eventId:event,title:callerName||'FriendBook',body:'Incoming call · Tap to open'},event);
+}
+
+// Scheduled delivery only: the outbox can be populated only by the admin broadcast
+// transaction. A due-time lease makes parallel maintenance runs safe.
+export async function drainBroadcastPush(env, now = Date.now(), send = sendToDevices) {
+  const db=env.DB;
+  if (!db) return;
+  const {results=[]}=await db.prepare(`SELECT notification_id,recipient_uid,created_at,next_attempt_at,attempts
+    FROM friendbook_cf_broadcast_push WHERE next_attempt_at<=? ORDER BY next_attempt_at,notification_id LIMIT 64`).bind(now).all();
+  let cursor=0;
+  await Promise.all(Array.from({length:Math.min(8,results.length)},async()=>{
+    while (cursor<results.length) {
+      const row=results[cursor++];
+      const id=row.notification_id;
+      if (row.created_at<now-86400000 || row.attempts>=8) {
+        await db.prepare('DELETE FROM friendbook_cf_broadcast_push WHERE notification_id=? AND next_attempt_at=?')
+          .bind(id,row.next_attempt_at).run();
+        continue;
+      }
+      const next=now+Math.min(3600000,300000*2**Math.min(row.attempts,4));
+      const claim=await db.prepare(`UPDATE friendbook_cf_broadcast_push SET attempts=attempts+1,next_attempt_at=?
+        WHERE notification_id=? AND next_attempt_at=? RETURNING notification_id`).bind(next,id,row.next_attempt_at).first();
+      if (!claim) continue;
+      const discard=()=>db.prepare('DELETE FROM friendbook_cf_broadcast_push WHERE notification_id=? AND next_attempt_at=?').bind(id,next).run();
+      const note=await d1Doc(db,`notifications/${id}`);
+      if (!note || note.fromUserId!=='friendbook_team' || note.type!=='announcement' || note.toUserId!==row.recipient_uid) {
+        // Do not send without a matching persisted inbox event; stale jobs expire.
+        continue;
+      }
+      const target=row.recipient_uid, event=`notification_${id}`;
+      try {
+        const result=await send(env,db,'friendbook_team',target,{
+          type:'message',notificationId:id,chatId:`team_${target}`,isGroup:'false',
+          toUserId:target,fromUserId:'friendbook_team',eventId:event,title:'friendbook Team',
+          body:String(note.text || (note.mediaType==='video'?'Sent a video':'Sent a photo')).slice(0,500),
+        },event);
+        if (result.status===200 || result.status===409) await discard();
+      } catch { /* Retry on the next due maintenance run. */ }
+    }
+  }));
 }
 
 export async function fcmGateway(request, env, identity) {
@@ -179,15 +286,16 @@ export async function fcmGateway(request, env, identity) {
       }
       await db.prepare(
         `INSERT INTO friendbook_cf_fcm_devices(device_id, user_id, token, updated_at) VALUES (?, ?, ?, ?)
-         ON CONFLICT(device_id) DO UPDATE SET user_id = excluded.user_id, token = excluded.token, updated_at = excluded.updated_at`
+         ON CONFLICT(device_id) DO UPDATE SET user_id = excluded.user_id, token = excluded.token, updated_at = excluded.updated_at
+         WHERE friendbook_cf_fcm_devices.user_id IS NOT excluded.user_id
+            OR friendbook_cf_fcm_devices.token IS NOT excluded.token`
       ).bind(body.device_id, actor, body.token, Date.now()).run();
       return json({ registered: true, provider: 'fcm' });
     }
     if (action === 'status') {
       await googleToken(env);
-      const devices = await db.prepare('SELECT device_id, updated_at FROM friendbook_cf_fcm_devices WHERE user_id = ?').bind(actor).all()
-        .then(r => r?.results || []).catch(() => []);
-      return json({ provider: 'fcm', project: PROJECT, registered_devices: devices.length, server_configured: true, google_oauth_verified: true });
+      const count = await db.prepare('SELECT COUNT(*) AS total FROM friendbook_cf_fcm_devices WHERE user_id = ?').bind(actor).first();
+      return json({ provider: 'fcm', project: PROJECT, registered_devices: Number(count?.total || 0), server_configured: true, google_oauth_verified: true });
     }
     if (isBulk) return await bulkMention(body, actor, db, env);
     // send / self_test
@@ -199,19 +307,27 @@ export async function fcmGateway(request, env, identity) {
     if (!['send', 'self_test'].includes(action)) return json({ error: 'INVALID_ACTION' }, 400);
     let data, event, title, message;
     if (action === 'self_test') {
+      if (body.device_id != null && !validId(body.device_id)) return json({error:'INVALID_DEVICE'},400);
       event = `selftest_${actor}_${Math.floor(Date.now() / 60000)}`;
       title = 'friendbook push test';
       message = 'Direct FCM reached your phone. Notification permission and delivery are working.';
       data = { type: 'push_test', toUserId: actor, fromUserId: actor, eventId: event, title, body: message };
     } else {
-      const sender = await d1Doc(db, `users/${actor}`);
-      const recipient = await d1Doc(db, `users/${target}`);
+      const messageEvent=input.type==='message' && validId(input.chatId) && validId(input.messageId);
+      // These scoped reads are independent. Start together, but expose nothing
+      // and send no push until profile, block and chat membership checks pass.
+      const messageRead=messageEvent ? Promise.all([d1Doc(db,`chats/${input.chatId}`),
+        d1Doc(db,`chats/${input.chatId}/messages/${input.messageId}`)]).then(rows=>({rows}),error=>({error})) : null;
+      let sender, recipient;
+      try { [sender,recipient]=await Promise.all([pushProfile(db,actor,identity.viewerProfile),pushProfile(db,target)]); }
+      catch { return json({error:'FCM_PROFILE_UNAVAILABLE'},503); }
       if (!sender || !recipient) return json({ error: 'INVALID_OR_UNAVAILABLE_EVENT' }, 400);
-      if (sender.banned || recipient.banned) return json({ error: 'Unavailable account' }, 403);
+      if (sender.banned || recipient.banned || sender.deactivated || recipient.deactivated) return json({ error: 'Unavailable account' }, 403);
       if (blockedList(recipient).includes(actor)) return json({ skipped: 'blocked' });
-      if (input.type === 'message' && validId(input.chatId) && validId(input.messageId)) {
-        const chat = await d1Doc(db, `chats/${input.chatId}`);
-        const m = await d1Doc(db, `chats/${input.chatId}/messages/${input.messageId}`);
+      if (messageEvent) {
+        const read=await messageRead;
+        if(read.error)return json({error:'FCM_MESSAGE_UNAVAILABLE'},503);
+        const [chat,m]=read.rows;
         if (!m || !chat || m.senderId !== actor || !chat.participants?.includes(actor) || !chat.participants?.includes(target) || m.isDeleted) {
           return json({ error: 'Forbidden event' }, 403);
         }
@@ -232,7 +348,12 @@ export async function fcmGateway(request, env, identity) {
       title = String(sender.displayName || sender.name || 'friendbook').slice(0, 100);
       Object.assign(data, { toUserId: target, fromUserId: actor, eventId: event, title, body: message });
     }
-    const result = await sendToDevices(env, db, actor, target, data, event);
+    const result = await sendToDevices(env, db, actor, target, data, event, action === 'self_test' ? body.device_id : null);
+    // A persisted inbox event still exists, but there is no eligible device to
+    // notify. A terminal acknowledgement stops old clients re-reading the
+    // sender, event, recipient and empty device list on every retry.
+    if (action==='send' && result.status===409 && ['RECIPIENT_NOT_REGISTERED','NO_VALID_RECIPIENT_DEVICE'].includes(result.body.error))
+      return json({provider:'fcm',accepted:0,skipped:result.body.error});
     return json(result.body, result.status);
   } catch (error) {
     const code = error instanceof Error ? error.message : 'INVALID_REQUEST';
@@ -278,10 +399,9 @@ async function bulkMention(body, actor, db, env) {
     }
   }
   if (tags.has('bulk:highlight')) {
-    const friends = await d1Query(db, 'friends', [{ field: 'participants', op: 'array-contains', value: actor }]);
-    for (const f of friends) {
-      for (const uid of Array.isArray(f.participants) ? f.participants : []) {
-        if (validId(uid) && candidates.size < 80) { candidates.add(uid); highlightIds.add(uid); }
+    for (const uid of await highlightFriends(db,actor)) {
+      if (validId(uid) && (candidates.has(uid) || candidates.size < 80)) {
+        candidates.add(uid); highlightIds.add(uid);
       }
     }
   }
@@ -298,11 +418,11 @@ async function bulkMention(body, actor, db, env) {
   }
   if (!eligible.length) return json({ inbox: 0, accepted: 0, note: 'No eligible recipients' });
   const event = `${body.post_id}:${body.comment_id || 'post'}`;
-  // Daily limit: one bulk event per actor per 24h (D1 claim).
   const dayKey = `bulk:${actor}:${event}`;
-  const prior = await db.prepare('SELECT event_key FROM friendbook_cf_push_claims WHERE event_key = ?').bind(dayKey).first().catch(() => null);
-  if (prior) return json({ error: 'BULK_DAILY_LIMIT', cooldown_hours: 24 }, 429);
-  await db.prepare('INSERT INTO friendbook_cf_push_claims(event_key, actor, created_at) VALUES (?, ?, ?)').bind(dayKey, actor, Date.now()).run().catch(() => {});
+  try {
+    if (!await claimBulkEvent(db,dayKey,actor,Date.now()))
+      return json({ error: 'BULK_DAILY_LIMIT', cooldown_hours: 24 }, 429);
+  } catch { return json({ error: 'Bulk claim unavailable' }, 503); }
   let inbox = 0, accepted = 0, failed = 0;
   for (const uid of eligible.slice(0, 20)) {
     const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`${actor}:${event}:${uid}`));
@@ -339,3 +459,11 @@ async function bulkMention(body, actor, db, env) {
 }
 
 // Atomic push-claim handling is validated by the FCM gateway tests.
+
+// One atomic statement: retries cannot repeat notification fan-out after losing the claim.
+export async function claimBulkEvent(db,key,actor,now) {
+  const result=await db.prepare(`INSERT INTO friendbook_cf_push_claims(event_key,actor,created_at)
+    VALUES (?,?,?) ON CONFLICT(event_key) DO NOTHING`).bind(key,actor,now).run();
+  if (!result?.success || ![0,1].includes(result.meta?.changes)) throw new Error('Bulk claim metadata unavailable');
+  return result.meta.changes===1;
+}

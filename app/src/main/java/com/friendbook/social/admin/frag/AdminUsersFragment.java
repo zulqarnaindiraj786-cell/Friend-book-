@@ -154,9 +154,8 @@ public class AdminUsersFragment extends Fragment {
             opts.add(u.isModerator
                     ? "➖ Remove App Moderator"
                     : "🛡 Make App Moderator (Posts & Ban only)");
-            opts.add(u.isAdmin ? "➖ Remove FULL Admin" : "👑 Make FULL Admin");
             opts.add(u.banned ? "✅ Unban user" : "🚫 Ban user");
-            opts.add("🗑 Delete user data");
+            opts.add(u.deactivated ? "Reactivate account" : "Deactivate account");
         }
         String[] arr = opts.toArray(new String[0]);
         Ui.choose(a, u.displayName + "\n" + u.email, arr, w -> {
@@ -171,10 +170,6 @@ public class AdminUsersFragment extends Fragment {
                 Admin.setGlobalModerator(a, u.uid, u.displayName, true);
             else if (sel.contains("Remove App Moderator"))
                 Admin.setGlobalModerator(a, u.uid, u.displayName, false);
-            else if (sel.contains("Make FULL Admin"))
-                Fb.db().collection("users").document(u.uid).update("isAdmin", true);
-            else if (sel.contains("Remove FULL Admin"))
-                Fb.db().collection("users").document(u.uid).update("isAdmin", false);
             else if (sel.contains("Unban"))
                 Fb.db().moderate("unban_user", "users", u.uid)
                         .addOnSuccessListener(v -> Ui.toast(a, "User unbanned ✓"))
@@ -184,9 +179,15 @@ public class AdminUsersFragment extends Fragment {
                         "Ban", () -> Fb.db().moderate("ban_user", "users", u.uid)
                                 .addOnSuccessListener(v -> Ui.toast(a, "User banned ✓"))
                                 .addOnFailureListener(e -> Ui.toast(a, "Couldn't ban user. Please retry.")));
-            else if (sel.contains("Delete user data"))
-                Ui.confirm(a, "Delete " + u.displayName + "'s profile?", "Removes the Firestore profile doc.",
-                        "Delete", () -> Fb.db().collection("users").document(u.uid).delete());
+            else if (sel.equals("Reactivate account"))
+                Fb.db().moderate("reactivate_user", "users", u.uid)
+                        .addOnSuccessListener(v -> Ui.toast(a, "Account reactivated"))
+                        .addOnFailureListener(e -> Ui.toast(a, "Could not reactivate account"));
+            else if (sel.equals("Deactivate account"))
+                Ui.confirm(a, "Deactivate " + u.displayName + "?", "Blocks app access and preserves existing data.",
+                        "Deactivate", () -> Fb.db().moderate("deactivate_user", "users", u.uid)
+                                .addOnSuccessListener(v -> Ui.toast(a, "Account deactivated"))
+                                .addOnFailureListener(e -> Ui.toast(a, "Could not deactivate account")));
         });
     }
 }

@@ -1,45 +1,37 @@
 package com.friendbook.social.core;
+
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.content.Intent;
-import org.json.JSONObject;
+import com.friendbook.social.BuildConfig;
+import com.google.android.play.core.install.model.UpdateAvailability;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.robolectric.Robolectric;
 import org.robolectric.RobolectricTestRunner;
 import org.robolectric.Shadows;
 import org.robolectric.annotation.Config;
-import org.robolectric.shadows.ShadowAlertDialog;
 import static org.junit.Assert.*;
+
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk=28,application=android.app.Application.class)
 public class AppUpdatesTest {
- private JSONObject policy()throws Exception{return new JSONObject().put("packageName","com.friendbook.social").put("versionCode",999).put("versionName","9.9.9").put("apkUrl",AppUpdates.APK);}
- @Test public void rejectsForeignPackagesLinksAndMalformedVersions()throws Exception{
-  assertTrue(AppUpdates.valid(policy()));
-  assertFalse(AppUpdates.valid(policy().put("packageName","other.app")));
-  assertFalse(AppUpdates.valid(policy().put("apkUrl","https://evil.invalid/app.apk")));
-  assertFalse(AppUpdates.valid(policy().put("versionCode",1.5)));
-  assertFalse(AppUpdates.valid(policy().put("versionCode",0)));
-  assertFalse(AppUpdates.valid(policy().put("versionCode","999")));
-  assertFalse(AppUpdates.valid(policy().put("versionName","<script>")));
- }
- @Test public void optionalNoticeOpensOnlyOfficialApkWithoutClearingData()throws Exception{
-  Activity activity=Robolectric.buildActivity(Activity.class).setup().get();
-  activity.getSharedPreferences("user_data_fixture",0).edit().putString("draft","retained").commit();
-  AppUpdates.show(activity,policy());
-  android.app.AlertDialog dialog=(android.app.AlertDialog)ShadowAlertDialog.getLatestAlertDialog();
-  assertNotNull(dialog);assertTrue(dialog.isShowing());
-  dialog.getButton(android.app.AlertDialog.BUTTON_POSITIVE).performClick();
-  Shadows.shadowOf(android.os.Looper.getMainLooper()).idle();
-  Intent intent=Shadows.shadowOf(activity).getNextStartedActivity();
-  assertEquals(Intent.ACTION_VIEW,intent.getAction());assertEquals(AppUpdates.APK,intent.getDataString());
-  assertEquals("retained",activity.getSharedPreferences("user_data_fixture",0).getString("draft",null));
- }
- @Test public void laterKeepsAppUsableAndDoesNotLaunchAnInstaller()throws Exception{
-  Activity activity=Robolectric.buildActivity(Activity.class).setup().get();AppUpdates.show(activity,policy());
-  android.app.AlertDialog dialog=(android.app.AlertDialog)ShadowAlertDialog.getLatestAlertDialog();
-  dialog.getButton(android.app.AlertDialog.BUTTON_NEGATIVE).performClick();
-  Shadows.shadowOf(android.os.Looper.getMainLooper()).idle();
-  assertNull(Shadows.shadowOf(activity).getNextStartedActivity());assertFalse(activity.isFinishing());
- }
+    @Test public void onlyNewerPlayAvailableVersionRequiresUpdate() {
+        int installed=BuildConfig.VERSION_CODE;
+        assertTrue(AppUpdates.requiresUpdate(UpdateAvailability.UPDATE_AVAILABLE, installed+1));
+        assertFalse(AppUpdates.requiresUpdate(UpdateAvailability.UPDATE_AVAILABLE, installed));
+        assertFalse(AppUpdates.requiresUpdate(UpdateAvailability.UNKNOWN, installed+1));
+        assertFalse(AppUpdates.requiresUpdate(UpdateAvailability.UPDATE_NOT_AVAILABLE, installed+1));
+    }
+
+    @Test public void requiredUpdateHasNoSkipAndOpensOfficialPlayListing() {
+        Activity activity=Robolectric.buildActivity(Activity.class).setup().get();
+        AlertDialog dialog=AppUpdates.showRequired(activity);
+        assertEquals(android.view.View.GONE, dialog.getButton(AlertDialog.BUTTON_NEGATIVE).getVisibility());
+        dialog.getButton(AlertDialog.BUTTON_POSITIVE).performClick();
+        Intent intent=Shadows.shadowOf(activity).getNextStartedActivity();
+        assertEquals(Intent.ACTION_VIEW,intent.getAction());
+        assertEquals("https://play.google.com/store/apps/details?id=com.friendbook.social",intent.getDataString());
+        assertTrue(dialog.isShowing());
+    }
 }

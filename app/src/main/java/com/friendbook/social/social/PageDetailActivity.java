@@ -67,11 +67,6 @@ public class PageDetailActivity extends Activity implements FeedAdapter.Host {
         root.setBackgroundColor(Ui.bg(this));
 
         LinearLayout bar = Ui.pageBar(this, "Page");
-        TextView qrBtn = Ui.roundChip(this, "QR", Ui.inputBg(this), Ui.txt(this), 13);
-        Ui.pad(qrBtn, 10, 5, 10, 5);
-        qrBtn.setOnClickListener(v -> Ui.showQrDialog(this, pageName, "Official Page on friendbook",
-                com.friendbook.social.core.AdsConfig.OFFICIAL_WEBSITE_URL + "/?page=" + pageId));
-        bar.addView(qrBtn);
         root.addView(bar);
 
         ScrollView sv = new ScrollView(this);
@@ -140,7 +135,7 @@ public class PageDetailActivity extends Activity implements FeedAdapter.Host {
             Intent s = new Intent(Intent.ACTION_SEND);
             s.setType("text/plain");
             s.putExtra(Intent.EXTRA_TEXT, "Follow " + pageName + " on friendbook!\n"
-                    + com.friendbook.social.core.AdsConfig.OFFICIAL_WEBSITE_URL + "/?page=" + pageId);
+                    + com.friendbook.social.core.AdsConfig.PLAY_STORE_URL);
             startActivity(Intent.createChooser(s, "Share Page"));
         });
         actions.addView(shareBtn, sp);

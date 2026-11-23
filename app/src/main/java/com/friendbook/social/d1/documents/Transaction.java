@@ -91,15 +91,6 @@ public class Transaction {
         if (operations.isEmpty()) return;
         JSONArray ops = new JSONArray(operations);
         D1DocumentTransport.transaction(ops);
-        for (int i = 0; i < ops.length(); i++) {
-            JSONObject o = ops.optJSONObject(i);
-            if (o != null) {
-                String p = o.optString("path", "");
-                if (!p.isEmpty()) {
-                    firestore.invalidateDoc(p);
-                    firestore.notifyDocListeners(p);
-                }
-            }
-        }
+        firestore.notifyCommittedPaths(ops);
     }
 }

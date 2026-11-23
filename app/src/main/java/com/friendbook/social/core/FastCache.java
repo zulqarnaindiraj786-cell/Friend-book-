@@ -589,10 +589,10 @@ public final class FastCache {
 
     public static void preloadFeedForOffline(Activity a, Runnable onDone) {
         if (a == null) return;
-        Ui.toast(a, "📥 Caching latest 30 posts & mini thumbnails for offline reading…");
+        Ui.toast(a, "📥 Caching latest 10 posts & mini thumbnails for offline reading…");
         Fb.db().collection("posts")
                 .orderBy("createdAt", Query.Direction.DESCENDING)
-                .limit(30)
+                .limit(10)
                 .get()
                 .addOnSuccessListener(snap -> {
                     List<Models.Post> list = new ArrayList<>();
@@ -832,6 +832,20 @@ public final class FastCache {
             }
             o.put("reactionsMap", rxJson);
         }
+        JSONArray previews=new JSONArray();
+        for(Models.Comment c:p.detailPreview()){
+            if(c==null || c.id==null || c.id.isEmpty())continue;
+            JSONObject preview=new JSONObject();
+            preview.put("id",c.id).put("authorId",c.authorId).put("authorName",c.authorName)
+                    .put("authorPhoto",c.authorPhoto).put("content",c.content).put("imageUrl",c.imageUrl)
+                    .put("parentId",c.parentId).put("createdAt",c.createdAt).put("likes",c.likes)
+                    .put("pinned",c.pinned).put("edited",c.edited).put("canonicalStored",c.canonicalStored)
+                    .put("reactions",new JSONObject(c.reactions)).put("mentions",new JSONArray(c.mentions));
+            previews.put(preview);
+            if(previews.length()==2)break;
+        }
+        if(previews.length()>0)o.put("commentPreview",previews);
+        o.put("pinnedCommentId",p.pinnedCommentId);
         return o;
     }
 
@@ -890,6 +904,13 @@ public final class FastCache {
             }
             if (p.reactionsMap.size() > p.likes) p.likes = p.reactionsMap.size();
         }
+        p.pinnedCommentId=o.optString("pinnedCommentId", "");
+        JSONArray previews=o.optJSONArray("commentPreview");
+        if(previews!=null)for(int i=0;i<Math.min(2,previews.length());i++)try{
+            JSONObject row=previews.getJSONObject(i);
+            Models.Comment c=Models.Comment.fromMap(row.getString("id"),D1Client.map(row));
+            c.postId=p.id;c.canonicalStored=row.optBoolean("canonicalStored");p.savedDetailPreview.add(c);
+        }catch(org.json.JSONException ignored){}
         return p;
     }
 }

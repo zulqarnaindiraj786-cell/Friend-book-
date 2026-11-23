@@ -29,7 +29,7 @@ class ClientPushHooksTest(unittest.TestCase):
         for part in ['NetworkType.CONNECTED', 'uid.equals(Fb.uid())', 'ExistingWorkPolicy.KEEP', 'getRunAttemptCount() < 8', '"friend_post_" + id + "_" + to', 'Tasks.await(ref.create(n)' ]:
             self.assertIn(part, worker)
         chat = (JAVA/'chat/ChatActivity.java').read_text()
-        self.assertEqual(chat.count('FCMPush.message(chatId, msgRef.getId())'), 3)
+        self.assertEqual(chat.count('FCMPush.message(chatId, msgRef.getId(), isGroupChat ? null : peerId)'), 3)
         self.assertIn('FCMPush.friendPost(docRef.getId())', (JAVA/'post/CreatePostActivity.java').read_text())
 
     def test_gateway_is_authenticated_and_legacy_devices_do_not_need_fgs(self):

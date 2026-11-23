@@ -416,7 +416,7 @@ public class GroupChatInfoActivity extends Activity {
             if (snap == null || isFinishing()) return;
             for (DocumentSnapshot d : snap.getDocuments()) {
                 Models.User u = Models.User.fromDoc(d);
-                if (room.participants.contains(u.uid) || u.banned) continue;
+                if (u.uid==null || u.uid.isEmpty() || room.participants.contains(u.uid) || u.banned || u.deactivated) continue;
                 LinearLayout row = Ui.row(this);
                 row.setGravity(Gravity.CENTER_VERTICAL);
                 Ui.pad(row, 4, 7, 4, 7);
@@ -460,11 +460,11 @@ public class GroupChatInfoActivity extends Activity {
                     patch.put("participants", FieldValue.arrayUnion(newUids.toArray()));
                     patch.put("participantNames", names);
                     patch.put("participantPhotos", photos);
-                    Fb.db().collection("chats").document(chatId).set(patch, SetOptions.merge())
+                    Fb.db().collection("chats").document(chatId).update(patch)
                             .addOnSuccessListener(x -> {
                                 postSystemMessage("➕ " + Fb.myName() + " added " + sb);
                                 Ui.toast(this, "Added " + newUids.size() + " member(s) ✓");
-                            });
+                            }).addOnFailureListener(error -> Ui.toast(this, "Could not add members: " + error.getMessage()));
                 })
                 .setNegativeButton("Cancel", null)
                 .show();

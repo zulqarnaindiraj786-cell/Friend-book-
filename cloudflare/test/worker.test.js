@@ -76,28 +76,19 @@ test('real RSA verification rejects wrong project, issuer, expiry, signature and
   const other = await generateKeyPair('RS256');
   await assert.rejects(verifyFirebaseToken(await sign({}, other.privateKey), claims.aud, keys));
 });
-test('realtime presence routes require verified Firebase identity and return fresh online state', async () => {
-  const now = Date.now();
-  const app = createWorker(async () => 'verified-user');
-  const env = { FIREBASE_PROJECT_ID: 'friendbook-17551', REALTIME_WS_ENABLED: 'true', DB: { prepare(sql) {
-    return { bind(id) { return { first: async () => {
-      if (sql.includes('friendbook_cf_presence')) return {online:1,visible:1,last_seen:now-5000};
-      if (sql.includes('friendbook_cf_trusted_friendships')) return {friend_path:'friends/verified'};
-      if (sql.includes('document_json')) return {document_json:JSON.stringify(id.startsWith('chats/') ? {participants:['verified-user','peer-1']} : {displayName:'User'})};
-      return null;
-    } }; } };
-  } } };
-  assert.equal((await call('/v1/presence/me', env)).status, 401);
-  const me = await call('/v1/presence/me', env, { Authorization: 'Bearer test' }, 'GET', app);
-  assert.equal(me.status, 200);
-  const body = await me.json();
-  assert.equal(body.uid, 'verified-user');
-  assert.equal(body.online, true);
-  const contact = await call('/v1/presence/contact/peer-1', env, { Authorization: 'Bearer test' }, 'GET', app);
-  assert.equal(contact.status, 200);
-  assert.equal((await contact.json()).uid, 'peer-1');
-  assert.equal((await call('/v1/presence/typing/room', env, { Authorization: 'Bearer test' }, 'GET', app)).status, 200);
-  const outsider = createWorker(async () => 'outsider');
-  assert.equal((await call('/v1/presence/typing/room', env, { Authorization: 'Bearer test' }, 'GET', outsider)).status, 403);
-  assert.equal((await call('/v1/presence/socket', env, { Authorization: 'Bearer test' }, 'GET', app)).status, 426);
+test('retired routes do not access D1', async () => {
+  let reads=0;
+  const app=createWorker(async () => 'verified-user');
+  const env={FIREBASE_PROJECT_ID:'friendbook-17551', DB:{prepare(){reads++; throw Error('unexpected D1');}}};
+  for (const route of ['/v1/presence/me','/v1/presence/contact/peer','/v1/presence/typing/room','/v1/presence/socket'])
+    assert.equal((await call(route,env,{Authorization:'Bearer test'},'GET',app)).status,404);
+  assert.equal(reads,0);
+});
+
+test('Android public config keeps only its public boolean and rejects missing settings', async () => {
+  const response=await call('/v1/android-config',{ADS_ENABLED_V3:'false',OTHER_SETTING:'not public'});
+  assert.equal(response.status,200);
+  assert.deepEqual(await response.json(),{ads_enabled_v3:false});
+  assert.equal((await call('/v1/android-config')).status,503);
+  assert.equal((await call('/v1/android-config',{}, {},'POST')).status,405);
 });

@@ -1,0 +1,13 @@
+# D1 quota follow-up: 2026-11-22
+
+The screenshots show dashboard account totals rising from 97.63k reads / 8.35k writes at 05:13 to 165.6k reads / 10.53k writes at 05:23 (about +67.97k reads and +2.18k writes; counters may lag or be rounded). At 05:23 those totals were 3.31% of 5M daily reads and 10.53% of 100k daily writes. This rate warrants investigation, but the screenshots cannot attribute activity to a user, an endpoint, a migration, or a specific deployment.
+
+The read-only database audit 44966461294 at about 00:24 UTC returned a five-minute sample with 164 read rows across its reported top shapes and zero writes; its daily adaptive query aggregate was 52,543 reads / 6,011 writes. This is not the dashboard's account-wide daily total and is not a matched before/after comparison. The quiet five-minute sample could reflect sampling, analytics delays, traffic stopping or other factors; it doesn't prove a fix or rule out spikes. The longer sample still identified point lookups, Feed/Reels, engagement, chat membership, and document writes. Avoid production load tests to manufacture a comparison.
+
+## Changes in this batch
+
+* Feed and Reels bounded pages now reuse paths already fetched in their canonical window when determining whether a legacy row is shadowed. Unknown paths are still checked through bounded primary-key queries, including rows with changed privacy/author or timestamp. A 100-item request splits checks into 90-path chunks to stay within D1 binding limits. User access checks, privacy, legacy precedence, cursor order and page sizes are preserved.
+* Repeating an already-recorded story view or identical story reaction no longer writes the canonical and mirror documents or temporary guard rows, provided the existing canonical document is unchanged. The normal authorization, expiry and validation checks still run. Real changes retain atomic guards and both writes; legacy-only records still use the original promotion path.
+* Notification pages use the same shadow helper as before. Their behavior is unchanged and covered by the existing stale-recipient/read/order tests.
+
+Tests cover mirror-only pages without extra shadow checks; legacy-only 100-item windows; stale private mirrors, cursors, historical exceptions; unchanged story operations; and competing story/block updates. Offline SQLite changed-row and query-count results exclude D1 index maintenance and aren't billed D1 rows. These changes target particular recurring costs, not all possible app queries or writes. No claimed production savings or Free-plan capacity guarantee is justified until matching live windows are measured; no production synthetic load was generated.

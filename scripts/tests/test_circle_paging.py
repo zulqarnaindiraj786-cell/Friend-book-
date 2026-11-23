@@ -4,7 +4,7 @@ JAVA=Path('app/src/main/java/com/friendbook/social')
 class CirclePaging(unittest.TestCase):
     def test_story_cache_and_live_results_apply_same_policy(self):
         s=(JAVA/'main/HomeFragment.java').read_text()
-        for token in ['storyAllowed(story)','renderLoadedStories()','snapshot.size()==10','pymkLoaded','pymkLoading']:
+        for token in ['storyAllowed(story)','renderLoadedStories()','snapshot.size()==10','pymkCandidates.size() < 10','actor.equals(notesActor)']:
             self.assertIn(token,s)
         s=(JAVA/'story/StoryViewerActivity.java').read_text()
         for token in ['allowedStory(story)','StoryAudience.visible','count().get(com.friendbook.social.d1.documents.AggregateSource.SERVER)']:
@@ -15,5 +15,5 @@ class CirclePaging(unittest.TestCase):
             self.assertIn(token,s)
     def test_cached_revalidation_does_not_repaint_unchanged_rows(self):
         s=(JAVA/'core/CursorPager.java').read_text()
-        for token in ['CachedPage(first,records.size()>size || more)','more=cached.more;emit("")','sameData(lastDelivered,docs)','Objects.equals(a.get(i).getData(),b.get(i).getData())','more=true;next()']:
+        for token in ['CachedPage(first,records.size()>size || more)','more=cached.more;emit("")','sameData(lastDelivered,docs)','Objects.equals(a.get(i).getData(),b.get(i).getData())','if (!observed) next()', 'acceptObservedFirstPage(QuerySnapshot page)']:
             self.assertIn(token,s)

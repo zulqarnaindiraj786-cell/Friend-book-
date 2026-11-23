@@ -13,10 +13,9 @@ import android.os.Looper;
 
 import com.friendbook.social.core.Fb;
 import com.friendbook.social.core.Prefs;
-import com.friendbook.social.core.Presence;
 import com.friendbook.social.core.Ui;
 
-/** Application class: boots Firebase, presence, wellbeing timer and shake-to-report detector. */
+/** Application class: boots Firebase, wellbeing timer and shake-to-report detector. */
 public class App extends Application implements SensorEventListener {
 
     public static App instance;
@@ -27,13 +26,9 @@ public class App extends Application implements SensorEventListener {
     private boolean hasLast;
 
     private int startedCount = 0;
-    private int resumedCount = 0;
+    private volatile int resumedCount = 0;
+    private long backgroundSince = -5000L;
     private final Handler timeHandler = new Handler(Looper.getMainLooper());
-    private final Runnable deferredOffline = () -> {
-        if (startedCount <= 0) {
-            Presence.goOffline();
-        }
-    };
     private final Runnable timeTick = new Runnable() {
         @Override
         public void run() {
@@ -63,20 +58,12 @@ public class App extends Application implements SensorEventListener {
         com.friendbook.social.core.SoundEffects.warmUp(this);
         com.friendbook.social.core.FastCache.init(this);
         Fb.init(this);
-        // 🔐 App Check with Play Integrity — MONITOR mode first (won't block users)
-        // TODO: Switch to enforce after verifying in Firebase Console (App Check > Apps > friendbook > Enforce)
-        com.google.firebase.appcheck.FirebaseAppCheck.getInstance()
-                .installAppCheckProviderFactory(
-                        com.google.firebase.appcheck.playintegrity.PlayIntegrityAppCheckProviderFactory.getInstance());
         com.friendbook.social.push.PushManager.init(this);
         com.friendbook.social.core.ConsentManager.ensureInitialized(this);
         installCrashReporter();
-        // Defer non-critical presence & me network sync to idle handler so cold-launch frame #1 paints in 0ms
-        Looper.myQueue().addIdleHandler(() -> {
-            Presence.init();
-            Fb.startMeListener();
-            return false;
-        });
+        // A push or background worker can create the Application without an
+        // Activity. Do not start profile listeners here;
+        // the first started Activity below owns foreground startup.
 
         // Track real foreground time + apply friendbook zero-lag screen transitions
         registerActivityLifecycleCallbacks(new ActivityLifecycleCallbacks() {
@@ -90,6 +77,8 @@ public class App extends Application implements SensorEventListener {
                     timeHandler.postDelayed(timeTick, 30_000L);
                 }
                 resumedCount++;
+                if (resumedCount==1 && android.os.SystemClock.elapsedRealtime()-backgroundSince>=3000L)
+                    com.friendbook.social.d1.documents.D1DocumentStore.getInstance().refreshOnForeground();
                 com.friendbook.social.core.SoundEffects.warmUp(App.this);
             }
             @Override public void onActivityPaused(Activity a) {
@@ -98,6 +87,7 @@ public class App extends Application implements SensorEventListener {
                 }
                 resumedCount = Math.max(0, resumedCount - 1);
                 if (resumedCount == 0) {
+                    backgroundSince=android.os.SystemClock.elapsedRealtime();
                     timeHandler.removeCallbacks(timeTick);
                     com.friendbook.social.core.SoundEffects.stopAll();
                 }
@@ -108,31 +98,14 @@ public class App extends Application implements SensorEventListener {
                 }
             }
             @Override public void onActivityStarted(Activity a) {
-                timeHandler.removeCallbacks(deferredOffline);
                 if (startedCount == 0 && Fb.uid() != null) {
-                    Presence.init();
+                    Fb.ensureMeFresh();
                 }
                 startedCount++;
-                if (android.os.Build.VERSION.SDK_INT >= 36) {
-                    android.view.View content = a.findViewById(android.R.id.content);
-                    if (content != null && content.getTag(com.friendbook.social.R.id.activityMainRoot) == null) {
-                        content.setTag(com.friendbook.social.R.id.activityMainRoot, Boolean.TRUE);
-                        androidx.core.view.ViewCompat.setOnApplyWindowInsetsListener(content, (v, insets) -> {
-                            androidx.core.graphics.Insets bars = insets.getInsets(
-                                    androidx.core.view.WindowInsetsCompat.Type.systemBars()
-                                            | androidx.core.view.WindowInsetsCompat.Type.ime());
-                            v.setPadding(bars.left, bars.top, bars.right, bars.bottom);
-                            return insets;
-                        });
-                    }
-                }
+                com.friendbook.social.core.ActivityInsets.apply(a);
             }
             @Override public void onActivityStopped(Activity a) {
                 startedCount = Math.max(0, startedCount - 1);
-                if (startedCount == 0) {
-                    timeHandler.removeCallbacks(deferredOffline);
-                    timeHandler.postDelayed(deferredOffline, 500L);
-                }
             }
             @Override public void onActivitySaveInstanceState(Activity a, Bundle b) { }
             @Override public void onActivityDestroyed(Activity a) { }

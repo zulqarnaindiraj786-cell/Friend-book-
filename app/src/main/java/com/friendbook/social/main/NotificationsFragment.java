@@ -29,7 +29,6 @@ import com.friendbook.social.models.Models;
 import com.friendbook.social.post.PostDetailActivity;
 import com.friendbook.social.profile.ProfileActivity;
 import com.friendbook.social.d1.documents.DocumentSnapshot;
-import com.friendbook.social.d1.documents.ListenerRegistration;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -39,7 +38,6 @@ import java.util.List;
 public class NotificationsFragment extends Fragment {
 
     private NotifAdapter adapter;
-    private ListenerRegistration reg;
     private com.friendbook.social.core.CursorPager pager;
     private androidx.swiperefreshlayout.widget.SwipeRefreshLayout swipe;
     private TextView moreButton;
@@ -103,7 +101,7 @@ public class NotificationsFragment extends Fragment {
         swipe.addView(rv);
         swipe.setOnRefreshListener(() -> {
             initialLoaded = false;
-            startPages();
+            startPages(true);
         });
         root.addView(swipe, new LinearLayout.LayoutParams(-1, 0, 1));
         root.addView(moreButton);
@@ -157,9 +155,8 @@ public class NotificationsFragment extends Fragment {
         if (!hidden) {
             MainActivity.clearNotificationsBadgeNow();
             if (adapter != null) startPages();
-        } else if (reg != null) {
-            reg.remove();
-            reg = null;
+        } else {
+            stopPages();
         }
     }
 
@@ -171,37 +168,41 @@ public class NotificationsFragment extends Fragment {
         }
         String me = Fb.uid();
         if (me == null || isHidden()) return;
-        if (!initialLoaded || !java.util.Objects.equals(loadedActor, me)) {
+        if (pager == null || !java.util.Objects.equals(loadedActor, me)) {
             startPages();
         }
     }
-    private void startPages() {
-        if(pager!=null)pager.close();String me=Fb.uid();if(me==null)return;
+    private void startPages() { startPages(false); }
+    private void startPages(boolean full) {
+        stopPages();
+        String me=Fb.uid();if(me==null)return;
+        if (loadedActor != null && !me.equals(loadedActor)) { data.clear(); adapter.notifyDataSetChanged(); }
         loadedActor = me;
         initialLoaded = true;
         com.friendbook.social.d1.documents.Query query=Fb.db().collection("notifications").whereEqualTo("toUserId",me);
         if(unreadOnly)query=query.whereEqualTo("isRead",false);
         query = query.orderBy("createdAt", com.friendbook.social.d1.documents.Query.Direction.DESCENDING);
-        // STEP 7: notifications never auto-refresh. The list is read when the user opens the tab
-        // or pulls to refresh, and stays exactly as-is until then. No snapshot listener, no timer.
         pager=new com.friendbook.social.core.CursorPager(query,20,"notifications:"+unreadOnly,(docs,more,loading,error)->{
             android.app.Activity act=getActivity();if(act==null || adapter==null)return;
             if(loading){moreButton.setText("Loading…");moreButton.setEnabled(false);return;}
             if(swipe!=null)swipe.setRefreshing(false);
-            data.clear();for(DocumentSnapshot doc:docs){Models.Notif n=Models.Notif.fromDoc(doc);if(allowedByPrefs(act,n.type))data.add(n);}
-            Collections.sort(data,(a,b)->Long.compare(b.createdAt,a.createdAt));
-            if(!unreadOnly && !data.isEmpty())com.friendbook.social.core.FastCache.saveNotifications(data);
-            adapter.notifyDataSetChanged();
+            List<Models.Notif> next=new ArrayList<>();
+            for(DocumentSnapshot doc:docs){Models.Notif n=Models.Notif.fromDoc(doc);if(allowedByPrefs(act,n.type))next.add(n);}
+            next.sort(java.util.Comparator.comparingLong((Models.Notif n)->n.createdAt).reversed().thenComparing(n->n.id,java.util.Comparator.reverseOrder()));
+            if (!next.isEmpty() || error.isEmpty()) adapter.replace(next);
+            if(!unreadOnly)com.friendbook.social.core.FastCache.saveNotifications(data);
             empty.setText(error.isEmpty() ? "No notifications yet.\nLikes, comments and friend requests appear here." : error);
             empty.setVisibility(data.isEmpty()?View.VISIBLE:View.GONE);
             moreButton.setText(!error.isEmpty()?"Retry notifications":more?"Load 20 more":"All loaded");
             moreButton.setEnabled(!loading && (more || !error.isEmpty()));
-        });pager.start();
+        });
+        if(full)pager.startFullRefresh(); else pager.startDelta();
     }
 
     private void setUnreadOnly(boolean on) {
         if (unreadOnly == on && initialLoaded) return;
         unreadOnly = on;
+        if (adapter != null) adapter.replace(java.util.Collections.emptyList());
         initialLoaded = false;
         android.app.Activity a = getActivity();
         if (a == null) return;
@@ -209,7 +210,6 @@ public class NotificationsFragment extends Fragment {
         chipAll.setTextColor(on ? Ui.sub(a) : 0xFFFFFFFF);
         chipUnread.setBackground(Ui.round(a, on ? Ui.BLUE : Ui.inputBg(a), 10));
         chipUnread.setTextColor(on ? 0xFFFFFFFF : Ui.sub(a));
-        if (reg != null) { reg.remove(); reg = null; }
         startPages(); // Reset cursor and cache key when the filter changes.
     }
 
@@ -239,9 +239,12 @@ public class NotificationsFragment extends Fragment {
     @Override
     public void onStop() {
         super.onStop();
-        if (reg != null) { reg.remove(); reg = null; }
-        if(pager!=null){pager.close();pager=null;}
+        stopPages();
         initialLoaded = false;
+    }
+
+    private void stopPages() {
+        if(pager!=null){pager.close();pager=null;}
     }
 
     private void open(Models.Notif n) {
@@ -337,6 +340,17 @@ public class NotificationsFragment extends Fragment {
     }
 
     class NotifAdapter extends RecyclerView.Adapter<NotifAdapter.VH> {
+
+        void replace(List<Models.Notif> next) {
+            List<Models.Notif> before = new ArrayList<>(data);
+            androidx.recyclerview.widget.DiffUtil.DiffResult diff=androidx.recyclerview.widget.DiffUtil.calculateDiff(new androidx.recyclerview.widget.DiffUtil.Callback() {
+                public int getOldListSize(){return before.size();}
+                public int getNewListSize(){return next.size();}
+                public boolean areItemsTheSame(int a,int b){return before.get(a).id.equals(next.get(b).id);}
+                public boolean areContentsTheSame(int a,int b){return false;}
+            },false);
+            data.clear();data.addAll(next);diff.dispatchUpdatesTo(this);
+        }
 
         @Override public int getItemCount() { return data.size(); }
 

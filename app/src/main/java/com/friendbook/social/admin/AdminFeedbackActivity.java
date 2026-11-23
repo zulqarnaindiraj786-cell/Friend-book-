@@ -109,7 +109,7 @@ public class AdminFeedbackActivity extends Activity {
             h.text.setText(Format.str(m, "text"));
             h.meta.setText(Format.str(m, "app") + " · " + Format.ago(Format.ts(m == null ? null : m.get("createdAt"))));
             h.del.setOnClickListener(v -> {
-                d.getReference().delete()
+                Fb.db().moderate("delete_content", "feedback", d.getId())
                         .addOnSuccessListener(ignored -> Ui.toast(AdminFeedbackActivity.this, "Archived"))
                         .addOnFailureListener(error -> Ui.toast(AdminFeedbackActivity.this, "Couldn't archive feedback. Please try again."));
             });

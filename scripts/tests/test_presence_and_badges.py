@@ -24,47 +24,28 @@ class PresenceBadgeTest(unittest.TestCase):
         self.assertIn('document(n.id).update("isRead", true)', source)
         self.assertIn('markAll.setOnClickListener(v -> markAllReadReal())', source)
         self.assertNotIn('markFriendRequestsSeen', (JAVA/'friends/FriendsFragment.java').read_text())
-    def test_cloudflare_websocket_presence_replaces_rtdb(self):
-        """Presence now uses Cloudflare WebSocket + Firestore heartbeat, RTDB only for activeCall."""
-        source=(JAVA/'core/Presence.java').read_text()
-        # Cloudflare WebSocket presence
-        self.assertIn('CloudPresenceSocket', source)
-        self.assertIn('foreground(activeStatusVisible)', source)
-        self.assertIn('cloudSocket.background()', source)
-        # D1-backed document heartbeat persists profile presence.
-        self.assertIn('FIRESTORE_HEARTBEAT', source)
-        self.assertIn('writeFirestore(uid, true)', source)
-        # Call signaling is also stored in the D1-backed chat document; RTDB is absent.
-        self.assertNotIn('.info/serverTimeOffset', source)
-        self.assertIn('D1-backed chats document', source)
-        self.assertIn('startCallSignal', source)
-        self.assertIn('setCallSignal', source)
-        # Old RTDB presence patterns REMOVED
-        self.assertNotIn('onDisconnect().updateChildren(status(false)', source)
-        self.assertNotIn('disconnectArmed', source)
-        self.assertNotIn('statusRef', source)
-        self.assertNotIn('connListener', source)
-        self.assertNotIn('m.put("lastSeen", ServerValue.TIMESTAMP)', source)
-    def test_active_strip_uses_live_presence_not_cached_flags(self):
+    def test_removed_status_code_and_call_wiring(self):
+        for file in JAVA.rglob('*.java'):
+            text=file.read_text().lower()
+            self.assertNotIn('presence', text, str(file))
+            self.assertNotIn('typing', text, str(file))
+        chat=(JAVA/'chat/ChatActivity.java').read_text()
+        self.assertIn('CallActivity.maybeHandleIncomingFromRoomDoc', chat)
+        self.assertIn('RealtimeSoundGate(System.currentTimeMillis())', chat)
+        self.assertIn('setOnRefreshListener', chat)
+        for file in ['chat/NewChatActivity.java', 'live/LivePkAndGiftsUi.java']:
+            self.assertNotIn('Active now', (JAVA/file).read_text())
+
+    def test_background_start_does_not_start_profile_listener(self):
+        source=(JAVA/'App.java').read_text()
+        before=method(source,'public void onCreate()').split('registerActivityLifecycleCallbacks',1)[0]
+        self.assertNotIn('Fb.startMeListener()',before)
+        self.assertNotIn('Fb.ensureMeFresh()',before)
+        self.assertIn('Fb.ensureMeFresh()',method(source,'public void onActivityStarted(Activity a)'))
+
+    def test_manual_inbox_is_on_demand(self):
         source=(JAVA/'chat/ConversationsActivity.java').read_text()
-        strip=method(source,'private void renderActiveNow()')
-        self.assertIn('Boolean.TRUE.equals(onlineUsers.get(u.uid))',strip)
-        self.assertIn('if (!online) continue',strip)
-        self.assertNotIn('u.isOnline', strip)
-        self.assertNotIn('online && r.unread == 0',source)
-        self.assertIn('h.dot.setVisibility(online ? View.VISIBLE : View.GONE)',source)
-        self.assertIn('h.lastActive.setVisibility(!online && seen > 0',source)
-        # STEP 7 + QUOTA: the chat list derives presence from the user documents it already reads.
-        # No watcher handle, no per-row extra read, and nothing polls in the background.
-        self.assertIn('Presence.isUserOnlineDoc(ud)', source)
-        self.assertNotIn('Presence.watch(', source)
-        self.assertNotIn('Presence.peek(', source)
-        self.assertIn('onlineUsers.clear(); lastSeenUsers.clear();', method(source,'protected void onStop()'))
-    def test_chat_profile_use_the_shared_presence_policy(self):
-        # STEP 7: both screens use the shared one-shot presence read (no 30s polling watcher).
-        for file in ['chat/ChatActivity.java','profile/ProfileActivity.java']:
-            source = (JAVA/file).read_text()
-            self.assertIn('Presence.peek(', source)
-            self.assertNotIn('Presence.watch(', source)
-            self.assertIn('Presence.formatActiveStatus(', source)
+        self.assertNotIn('addSnapshotListener',source)
+        self.assertNotIn('Fb.getUser(',source)
+        self.assertIn('inboxSwipe.setOnRefreshListener',source)
 if __name__=='__main__':unittest.main()

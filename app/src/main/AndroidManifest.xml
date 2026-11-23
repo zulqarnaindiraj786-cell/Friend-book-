@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
@@ -11,6 +12,10 @@
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
     <uses-feature android:name="android.hardware.camera.front" android:required="false" />
+    <!-- Network access does not require a Wi-Fi radio, and portrait UI hints
+         must not exclude landscape-only devices from the Play catalog. -->
+    <uses-feature android:name="android.hardware.screen.portrait" android:required="false" tools:node="replace" />
+    <uses-feature android:name="android.hardware.wifi" android:required="false" tools:node="replace" />
 
     <application
         android:name="com.friendbook.social.App"
@@ -20,8 +25,8 @@
         android:hardwareAccelerated="true"
         android:largeHeap="true"
         android:label="friendbook"
-        android:icon="@mipmap/ic_friendbook_crown"
-        android:roundIcon="@mipmap/ic_friendbook_crown_round"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/AppTheme"
         android:usesCleartextTraffic="false">
@@ -35,8 +40,8 @@
             android:value="@string/privacy_policy_url"/>
 
         <activity android:name="com.friendbook.social.SplashActivity"
-            android:icon="@mipmap/ic_friendbook_crown"
-            android:roundIcon="@mipmap/ic_friendbook_crown_round"
+            android:icon="@mipmap/ic_launcher"
+            android:roundIcon="@mipmap/ic_launcher_round"
             android:screenOrientation="portrait"
             android:exported="true">
             <intent-filter>

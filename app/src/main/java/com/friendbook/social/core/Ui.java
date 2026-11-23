@@ -6,9 +6,7 @@ import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.Intent;
-import android.graphics.Canvas;
 import android.graphics.Color;
-import android.graphics.Paint;
 import android.graphics.Typeface;
 import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.Drawable;
@@ -36,7 +34,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 
-/** Programmatic UI toolkit with friendbook 525 look, dark mode, data-saver quality & QR/browser helpers. */
+/** Programmatic UI toolkit with friendbook 525 look, dark mode, data-saver quality & browser helpers. */
 public class Ui {
 
     public static final int BLUE = 0xFF1877F2;
@@ -369,7 +367,11 @@ public class Ui {
             iv.setImageResource(defRes);
             return;
         }
-        String fastUrl = optimizeImageUrl(c, url.trim(), true);
+        String avatarUrl = url.trim();
+        // Small circular avatars render at 240px; keep full-size profile media unchanged.
+        String fastUrl = isVersionedCloudinaryImage(avatarUrl)
+                ? avatarUrl.replace("/image/upload/", "/image/upload/w_240,c_limit,f_webp,q_auto:eco/")
+                : optimizeImageUrl(c, avatarUrl, true);
         Glide.with(c.getApplicationContext()).load(fastUrl)
                 .transform(SMART_AVATAR_CIRCLE_TRANSFORM)
                 .override(240, 240)
@@ -420,13 +422,15 @@ public class Ui {
                 hdUrl = cleanUrl.substring(0, idx + "/image/upload/".length()) + "w_960,c_limit,f_webp,q_auto:best/" + after;
             }
         }
-        Glide.with(c.getApplicationContext()).load(hdUrl)
+        if (FastCache.isSlow2G(c) || FastCache.netTier(c) == FastCache.NetTier.NET_3G || Prefs.dataSaver(c)) {
+            hdUrl = feedThumbnailUrl(cleanUrl);
+        }
+        photoWithOriginalFallback(Glide.with(c.getApplicationContext()).load(hdUrl)
                 .transform(SMART_AVATAR_CIRCLE_TRANSFORM)
                 .override(640, 640)
                 .dontAnimate()
                 .placeholder(defRes).error(defRes)
-                .diskCacheStrategy(DiskCacheStrategy.ALL)
-                .into(iv);
+                .diskCacheStrategy(DiskCacheStrategy.ALL), hdUrl, cleanUrl).into(iv);
     }
 
     private static final ColorDrawable PH_LIGHT = new ColorDrawable(0xFFF0F2F5);
@@ -437,25 +441,66 @@ public class Ui {
      * Uses explicit override(960, 1200) so Glide hits memory cache synchronously inside onBindViewHolder
      * in 0.02ms without waiting for ViewTreeObserver.OnPreDrawListener, while preserving full portrait photos!
      */
+    private static final java.util.regex.Pattern VERSIONED_CLOUDINARY_IMAGE =
+            java.util.regex.Pattern.compile("https://res\\.cloudinary\\.com/[A-Za-z0-9_-]+/image/upload/v[0-9]+/[^?#]+");
+
+    private static boolean isVersionedCloudinaryImage(String url) {
+        return url != null && VERSIONED_CLOUDINARY_IMAGE.matcher(url).matches();
+    }
+
+    static String feedThumbnailUrl(String url) {
+        if (!isVersionedCloudinaryImage(url)) return url;
+        return url.replace("/image/upload/", "/image/upload/w_480,c_limit,f_webp,q_auto:eco/");
+    }
+
+    /** Compact inline photo; callers retain the original URL for full-screen viewing. */
+    public static void imgPreview(Context c, ImageView iv, String url) {
+        boolean weak = FastCache.isSlow2G(c) || FastCache.netTier(c) == FastCache.NetTier.NET_3G;
+        String preview = weak && isVersionedCloudinaryImage(url)
+                ? url.replace("/image/upload/", "/image/upload/w_320,c_limit,f_webp,q_auto:eco/")
+                : feedThumbnailUrl(url);
+        img(c, iv, preview);
+    }
+
     public static void imgFeed(Context c, ImageView iv, String url) {
+        imgFeed(c, iv, url, null);
+    }
+
+    public static void imgFeed(Context c, ImageView iv, String url, Runnable onFailed) {
         Drawable ph = Prefs.dark(c) ? PH_DARK : PH_LIGHT;
-        if (url == null || url.isEmpty()) { iv.setImageDrawable(ph); return; }
-        String fastUrl = optimizeImageUrl(c, url, false);
+        if (url == null || url.isEmpty()) {
+            Glide.with(c.getApplicationContext()).clear(iv);
+            iv.setImageDrawable(ph);
+            return;
+        }
+        String original = url.trim();
+        String fastUrl = feedThumbnailUrl(original);
+        if (isVersionedCloudinaryImage(original) && (FastCache.isSlow2G(c)
+                || FastCache.netTier(c) == FastCache.NetTier.NET_3G || Prefs.dataSaver(c))) {
+            fastUrl = original.replace("/image/upload/", "/image/upload/w_320,c_limit,f_webp,q_auto:eco/");
+        }
         Prefs.recordBytes(c, 38_000L, 162_000L);
-        if (Prefs.fullPhotoDisplay(c)) {
-            Glide.with(c.getApplicationContext()).load(fastUrl)
-                    .override(960, 1200)
-                    .fitCenter()
-                    .dontAnimate()
-                    .diskCacheStrategy(DiskCacheStrategy.ALL)
-                    .placeholder(ph).error(ph).into(iv);
+        com.bumptech.glide.RequestBuilder<Drawable> request = Glide.with(c.getApplicationContext()).load(fastUrl)
+                .override(480, 640).dontAnimate().diskCacheStrategy(DiskCacheStrategy.ALL).placeholder(ph).error(ph);
+        if (Prefs.fullPhotoDisplay(c)) request.fitCenter(); else request.centerCrop();
+        if (onFailed == null) {
+            photoWithOriginalFallback(request, fastUrl, original).into(iv);
         } else {
-            Glide.with(c.getApplicationContext()).load(fastUrl)
-                    .override(960, 1200)
-                    .centerCrop()
-                    .dontAnimate()
-                    .diskCacheStrategy(DiskCacheStrategy.ALL)
-                    .placeholder(ph).error(ph).into(iv);
+            com.bumptech.glide.request.RequestListener<Drawable> failure = new com.bumptech.glide.request.RequestListener<Drawable>() {
+                @Override public boolean onLoadFailed(com.bumptech.glide.load.engine.GlideException e, Object model,
+                        com.bumptech.glide.request.target.Target<Drawable> target, boolean first) {
+                    iv.post(onFailed);
+                    return false;
+                }
+                @Override public boolean onResourceReady(Drawable image, Object model,
+                        com.bumptech.glide.request.target.Target<Drawable> target, com.bumptech.glide.load.DataSource source, boolean first) {
+                    return false;
+                }
+            };
+            request.timeout(10_000);
+            if (!fastUrl.equals(original)) request.error(request.clone().load(original).listener(failure));
+            else request.listener(failure);
+            request.into(iv);
         }
     }
 
@@ -470,16 +515,22 @@ public class Ui {
         imgFeed(c, iv, url);
     }
 
+    private static com.bumptech.glide.RequestBuilder<Drawable> photoWithOriginalFallback(
+            com.bumptech.glide.RequestBuilder<Drawable> request, String optimized, String original) {
+        // One retry of the exact stored URL if the CDN derivative fails; never race the two downloads.
+        request.timeout(10_000);
+        if (!optimized.equals(original)) request.error(request.clone().load(original));
+        return request;
+    }
+
     public static void img(Context c, ImageView iv, String url) {
         Drawable ph = round(c, inputBg(c), 0);
         if (url == null || url.isEmpty()) { iv.setImageDrawable(ph); return; }
         String fastUrl = optimizeImageUrl(c, url, false);
         Prefs.recordBytes(c, 36_000L, 164_000L);
-        Glide.with(c.getApplicationContext()).load(fastUrl)
-                .centerCrop()
-                .dontAnimate()
-                .diskCacheStrategy(DiskCacheStrategy.ALL)
-                .placeholder(ph).error(ph).into(iv);
+        photoWithOriginalFallback(Glide.with(c.getApplicationContext()).load(fastUrl)
+                .centerCrop().dontAnimate().diskCacheStrategy(DiskCacheStrategy.ALL)
+                .placeholder(ph).error(ph), fastUrl, url.trim()).into(iv);
     }
 
     public static void imgFit(Context c, ImageView iv, String url) {
@@ -579,9 +630,21 @@ public class Ui {
         return bar;
     }
 
-    public static void statusBar(Window w, int color) {
-        w.setStatusBarColor(color);
-        w.setNavigationBarColor(color == 0 ? Color.BLACK : color);
+    public static void statusBar(Window window, int color) {
+        boolean light = Color.luminance(color) > 0.5;
+        androidx.core.view.WindowInsetsControllerCompat controller = androidx.core.view.WindowCompat.getInsetsController(window, window.getDecorView());
+        controller.setAppearanceLightStatusBars(android.os.Build.VERSION.SDK_INT >= 35 ? light
+                : legacyBarIsLight(window, android.R.attr.statusBarColor, light));
+        controller.setAppearanceLightNavigationBars(android.os.Build.VERSION.SDK_INT >= 35 ? light
+                : legacyBarIsLight(window, android.R.attr.navigationBarColor, light));
+        window.setBackgroundDrawable(new ColorDrawable(color));
+    }
+
+    private static boolean legacyBarIsLight(Window window, int attr, boolean fallback) {
+        android.util.TypedValue value = new android.util.TypedValue();
+        if (!window.getContext().getTheme().resolveAttribute(attr,value,true)
+                || value.type<android.util.TypedValue.TYPE_FIRST_COLOR_INT || value.type>android.util.TypedValue.TYPE_LAST_COLOR_INT) return fallback;
+        return Color.luminance(value.data)>0.5;
     }
 
     public static void statusBarWhite(Activity a) {
@@ -646,22 +709,6 @@ public class Ui {
         }
     }
 
-    public static View onlineDot(Context c) {
-        final int d = dp(c, 13);
-        View v = new View(c) {
-            @Override
-            protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
-                setMeasuredDimension(d, d);
-            }
-        };
-        GradientDrawable g = circle(GREEN);
-        g.setSize(d, d);
-        g.setStroke(dp(c, 2), card(c));
-        v.setBackground(g);
-        v.setLayoutParams(new ViewGroup.LayoutParams(d, d));
-        return v;
-    }
-
     /** Split a list of docs into chunks for whereIn queries (max 10 per query). */
     public static <T> List<List<T>> chunks(List<T> in, int size) {
         List<List<T>> out = new ArrayList<>();
@@ -718,81 +765,6 @@ public class Ui {
         }
     }
 
-    public static void showQrDialog(Context c, String title, String link) {
-        showQrDialog(c, title, "Scan or share on friendbook", link);
-    }
-
-    /** Visual QR share card dialog (deterministic matrix + copy/share link). */
-    public static void showQrDialog(Context c, String title, String subtitle, String link) {
-        LinearLayout box = col(c);
-        box.setGravity(Gravity.CENTER_HORIZONTAL);
-        pad(box, 20, 16, 20, 8);
-
-        View qr = new View(c) {
-            final Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
-            @Override
-            protected void onDraw(Canvas canvas) {
-                super.onDraw(canvas);
-                int w = getWidth(), h = getHeight();
-                int n = 21;
-                float cell = Math.min(w, h) / (float) (n + 4);
-                float ox = (w - cell * n) / 2f, oy = (h - cell * n) / 2f;
-                p.setColor(Color.WHITE);
-                canvas.drawRoundRect(0, 0, w, h, dp(c, 14), dp(c, 14), p);
-                p.setColor(BLUE);
-                long seed = link == null ? 42 : link.hashCode() * 2654435761L;
-                for (int r = 0; r < n; r++) {
-                    for (int col = 0; col < n; col++) {
-                        boolean finder = (r < 7 && col < 7) || (r < 7 && col >= n - 7) || (r >= n - 7 && col < 7);
-                        boolean on;
-                        if (finder) {
-                            int fr = r < 7 ? r : r - (n - 7);
-                            int fc = col < 7 ? col : col - (n - 7);
-                            on = fr == 0 || fr == 6 || fc == 0 || fc == 6
-                                    || (fr >= 2 && fr <= 4 && fc >= 2 && fc <= 4);
-                        } else {
-                            long mix = seed ^ (r * 131L + col * 977L + (r * col * 31L));
-                            on = ((mix >>> ((r + col) & 15)) & 1L) == 1L;
-                        }
-                        if (on) {
-                            canvas.drawRect(ox + col * cell, oy + r * cell,
-                                    ox + (col + 1) * cell - 1, oy + (r + 1) * cell - 1, p);
-                        }
-                    }
-                }
-            }
-        };
-        int qs = dp(c, 190);
-        box.addView(qr, new LinearLayout.LayoutParams(qs, qs));
-
-        TextView t = tvBold(c, title, 17, txt(c));
-        t.setPadding(0, dp(c, 12), 0, dp(c, 2));
-        box.addView(t);
-        if (subtitle != null && !subtitle.isEmpty()) {
-            TextView s = tv(c, subtitle, 12, sub(c));
-            box.addView(s);
-        }
-        TextView urlTv = tv(c, link, 12, BLUE);
-        urlTv.setPadding(0, dp(c, 6), 0, 0);
-        box.addView(urlTv);
-
-        new AlertDialog.Builder(c)
-                .setView(box)
-                .setPositiveButton("📤 Share", (d, w) -> {
-                    Intent s = new Intent(Intent.ACTION_SEND);
-                    s.setType("text/plain");
-                    s.putExtra(Intent.EXTRA_TEXT, title + "\n" + link);
-                    c.startActivity(Intent.createChooser(s, "Share QR link"));
-                })
-                .setNeutralButton("📋 Copy link", (d, w) -> {
-                    ClipboardManager cm = (ClipboardManager) c.getSystemService(Context.CLIPBOARD_SERVICE);
-                    if (cm != null) cm.setPrimaryClip(ClipData.newPlainText("link", link));
-                    toast(c, "Link copied 🔗");
-                })
-                .setNegativeButton("Close", null)
-                .show();
-    }
-
     /** Copy text to clipboard & show crisp confirmation toast. */
     public static void copy(Context c, String text) {
         if (c == null) return;
@@ -817,17 +789,7 @@ public class Ui {
         if (a == null) return;
         Window w = a.getWindow();
         if (w == null) return;
-        boolean dark = isDark(a);
-        w.setStatusBarColor(card(a));
-        w.setNavigationBarColor(dark ? bg(a) : Color.WHITE);
-        View decor = w.getDecorView();
-        int flags = decor.getSystemUiVisibility();
-        if (!dark && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
-            flags |= View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
-        } else if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
-            flags &= ~View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
-        }
-        decor.setSystemUiVisibility(flags);
+        statusBar(w, card(a));
     }
 
     /**

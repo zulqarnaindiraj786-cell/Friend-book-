@@ -304,7 +304,12 @@ class CloudflareViewCounterGuards(unittest.TestCase):
         self.assertIn('retryNow.setOnClickListener(v -> { reelsLoadFailed = false; resetVideoPages(); });', reels)
         self.assertIn('reelsWatchdog.postDelayed(() -> {', reels)
         self.assertIn('}, 15_000L);', reels)
-        self.assertIn('if (loadAttempts < 3) { loadAttempts++; loadNextVideos(); }', reels)
+        paging = reels.split('private void loadNextVideos()', 1)[1].split('@Override public void onResume()', 1)[0]
+        self.assertNotIn('if (!pagingVideos ||', paging)
+        self.assertIn('watchdogGen++;\n            pagingVideos=false;', paging)
+        self.assertEqual(paging.count('generation!=videoGeneration || wdGen!=watchdogGen'), 3)
+        self.assertIn('if (!pageFailed[0] && loadAttempts < 3) { loadAttempts++; loadNextVideos(); }', reels)
+        self.assertNotIn('CloudflareStore.list("reels", 10', reels)
         # The page-load listener must settle its source even when the page cannot be applied: this
         # early return is what kept pagingVideos true and the spinner visible forever.
         self.assertIn('}\n                done.run();\n            }).addOnFailureListener(', reels)

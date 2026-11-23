@@ -2,7 +2,7 @@
 name: Deploy FriendBook Cloudflare Worker (D1 ON)
 on:
   push:
-    branches: [main, 'arena/15a53658-friend-book', 'arena/f6bf61bd-friend-book']
+    branches: [main, 'arena/15a53658-friend-book', 'arena/f6bf61bd-friend-book', 'arena/7c7ddb7b-friend-book']
     paths:
       - 'worker.js'
       - 'wrangler.toml'
@@ -26,7 +26,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   deploy:
-    if: (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/arena/15a53658-friend-book' || github.ref == 'refs/heads/arena/f6bf61bd-friend-book') && !contains(github.event.head_commit.message, '[no-deploy]')
+    if: (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/arena/15a53658-friend-book' || github.ref == 'refs/heads/arena/f6bf61bd-friend-book' || (github.ref == 'refs/heads/arena/7c7ddb7b-friend-book' && github.event_name == 'push' && contains(github.event.head_commit.message, '[deploy-cloudflare-production]'))) && !contains(github.event.head_commit.message, '[no-deploy]')
     runs-on: ubuntu-latest
     timeout-minutes: 360
     steps:
@@ -35,7 +35,7 @@ jobs:
         with:
           node-version: '22'
           cache: npm
-      - name: Require existing resources and active Cloudflare D1/R2/Realtime configuration
+      - name: Require existing resources and active Cloudflare D1/R2 configuration
         run: |
           python3 - <<'PY'
           import pathlib, re, tomllib
@@ -45,7 +45,6 @@ jobs:
           assert cfg['vars']['D1_INTERACTIONS_ENABLED'] == 'true'
           assert cfg['vars']['VIDEO_R2_ENABLED'] == 'true'
           assert cfg['vars']['VIDEO_R2_RETENTION_VERIFIED'] == 'true'
-          assert cfg['vars']['REALTIME_WS_ENABLED'] == 'true'
           assert cfg['vars']['FIREBASE_PROJECT_ID'] == 'friendbook-17551'
           assert cfg['d1_databases'] == [{
               'binding': 'DB', 'database_name': 'friendbook-db',
@@ -55,7 +54,7 @@ jobs:
           android = pathlib.Path('app/build.gradle').read_text()
           gates = re.findall(r"buildConfigField\s+['\"]boolean['\"]\s*,\s*['\"]D1_INTERACTIONS_ENABLED['\"]\s*,\s*['\"]([^'\"]+)['\"]", android)
           assert gates in (['true'], ['false']), 'Android D1 gate must be valid'
-          print('Existing Worker + DB verified; Cloudflare D1, Realtime Presence, and R2 Video enabled.')
+          print('Existing Worker + DB verified; Cloudflare D1 and R2 Video enabled.')
           PY
       - run: npm ci --ignore-scripts
       - run: npm test
@@ -63,6 +62,8 @@ jobs:
         run: |
           python3 cloudflare/test/schema_test.py
           python3 cloudflare/test/migration_test.py
+          python3 cloudflare/test/index_plan_test.py
+          python3 -m unittest scripts.tests.test_fcm_claim_migration_gate scripts.tests.test_d1_account_usage_analytics scripts.tests.test_retired_table_preflight scripts.tests.test_verify_retired_drop scripts.tests.test_retired_migration_gate
       - name: Verify Save Forever R2 configuration (no R2 object deletion)
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -111,6 +112,22 @@ jobs:
           set +x
           python3 -c 'import json,os,sys; d=json.loads(os.environ["FIREBASE_ADMIN_SERVICE_ACCOUNT"]); sys.exit(0 if d.get("type")=="service_account" and d.get("project_id")=="friendbook-17551" and d.get("private_key") and d.get("client_email") else 1)'
           printf '%s' "$FIREBASE_ADMIN_SERVICE_ACCOUNT" | npx wrangler secret put FIREBASE_ADMIN_SERVICE_ACCOUNT
+          # Validate the send API without a real device, user payload or delivery.
+          node --input-type=module <<'JS'
+          import { googleToken, buildFcmMessage } from './cloudflare/fcm-push.js';
+          try {
+            const access = await googleToken(process.env);
+            const r = await fetch('https://fcm.googleapis.com/v1/projects/friendbook-17551/messages:send', {
+              method: 'POST', headers: { Authorization: `Bearer ${access}`, 'Content-Type': 'application/json' },
+              body: JSON.stringify({ validate_only:true, message:buildFcmMessage({topic:'friendbook_validation_only'}, {type:'push_test', eventId:'validation_probe', title:'friendbook push test', body:'Validation only'}) }),
+              signal: AbortSignal.timeout(12000),
+            });
+            const body = await r.json();
+            const reason = body.error?.details?.map(d=>d.reason).find(x=>['SERVICE_DISABLED','IAM_PERMISSION_DENIED','ACCESS_TOKEN_SCOPE_INSUFFICIENT'].includes(x));
+            console.log(`FCM validate-only: HTTP ${r.status}${reason ? ' ' + reason : ''}`);
+            console.log(`${r.ok ? '::notice::' : '::warning::'}FCM payload validation HTTP ${r.status}${reason ? ' ' + reason : ''}`);
+          } catch { console.warn('::warning::FCM validation probe could not reach the send API.'); }
+          JS
 
       - name: Diagnose Cloudflare auth and apply pending D1 migrations
         id: d1_diagnostics
@@ -118,6 +135,7 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: '92f3d04598822de2e49e14561218d090'
           WRANGLER_SEND_METRICS: 'false'
+          HEAD_COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
         run: |
           set +e
           mkdir -p "$RUNNER_TEMP/d1-migration-diagnostics"
@@ -136,9 +154,148 @@ jobs:
           npx wrangler d1 list 2>&1 | tee -a "$log"
           d1_list_status=${PIPESTATUS[0]}
           printf '%s\n' "d1_list_exit_code=$d1_list_status" | tee -a "$log"
+          pending=$(npx wrangler d1 migrations list friendbook-db --remote 2>&1)
+          if [ "$?" -ne 0 ]; then
+            echo 'Cannot inspect pending migrations; refusing deployment.' | tee -a "$log"
+            echo "whoami_status=$whoami_status" >> "$GITHUB_OUTPUT"
+            echo "d1_list_status=$d1_list_status" >> "$GITHUB_OUTPUT"
+            echo 'migration_status=pending-list-failed' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Never let destructive table removal ride along on any branch's deployment.
+          if printf '%s\n' "$pending" | grep -q '0086_remove_unused_status_tables.sql'; then
+            printf '%s\n' "$pending" > "$RUNNER_TEMP/retired-pending.txt"
+            if [[ "$HEAD_COMMIT_MESSAGE" != *'[drop-retired-status]'* ]] || ! python3 scripts/loadtest/retired_migration_gate.py "$RUNNER_TEMP/retired-pending.txt" || ! python3 scripts/loadtest/d1_account_usage_analytics.py --retired-drop-budget || ! python3 scripts/loadtest/retired_table_preflight.py || ! python3 scripts/loadtest/d1_account_usage_analytics.py --retired-drop-budget; then
+              echo 'Retired-table removal preflight failed; no migration attempted.' | tee -a "$log"
+              echo "whoami_status=$whoami_status" >> "$GITHUB_OUTPUT"
+              echo "d1_list_status=$d1_list_status" >> "$GITHUB_OUTPUT"
+              echo 'migration_status=retired-table-preflight-failed' >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          fi
+          if [ "$GITHUB_REF" = refs/heads/arena/7c7ddb7b-friend-book ]; then
+            if printf '%s\n' "$pending" | grep -Eq '00([012][0-9]|3[0-3])_[a-z_]+\.sql'; then
+              echo 'Remote schema must already be at migration 0033; refusing to replay older migrations.' | tee -a "$log"
+              echo "whoami_status=$whoami_status" >> "$GITHUB_OUTPUT"
+              echo "d1_list_status=$d1_list_status" >> "$GITHUB_OUTPUT"
+              echo 'migration_status=baseline-not-ready' >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            # The incremental FCM bridge makes only an empty table and trigger;
+            # never mix it with an unexpected index build or backfill. Explicit
+            # opt-in is required, and account analytics must retain a reserve.
+            if printf '%s\n' "$pending" | grep -q '0085_fcm_claims_incremental.sql' || [[ "$HEAD_COMMIT_MESSAGE" == *'[fcm-bridge-only]'* ]]; then
+              printf '%s\n' "$pending" > "$RUNNER_TEMP/fcm-pending.txt"
+              if [[ "$HEAD_COMMIT_MESSAGE" != *'[fcm-bridge-only]'* ]] || ! python3 scripts/loadtest/fcm_claim_migration_gate.py pending "$RUNNER_TEMP/fcm-pending.txt" \
+                || ! python3 scripts/loadtest/d1_account_usage_analytics.py --fcm-metadata-budget; then
+                echo 'FCM metadata-only safety gate failed; no migration attempted.' | tee -a "$log"
+                echo "whoami_status=$whoami_status" >> "$GITHUB_OUTPUT"
+                echo "d1_list_status=$d1_list_status" >> "$GITHUB_OUTPUT"
+                echo 'migration_status=fcm-metadata-preflight-failed' >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
+            fi
+            if printf '%s\n' "$pending" | grep -q '0073_chat_membership_source_seek.sql'; then
+              # Limit the one-off index build rather than unexpectedly consuming
+              # a large fraction of the free daily quota. Aggregate only; no IDs.
+              count_file="$RUNNER_TEMP/chat-membership-count.json"
+              npx wrangler d1 execute friendbook-db --remote --json --command 'SELECT COUNT(*) AS n FROM (SELECT 1 FROM friendbook_cf_chat_participants LIMIT 5001)' > "$count_file" 2>> "$log"
+              count_status=$?
+              count=$(python3 -c 'import json,sys; x=json.load(open(sys.argv[1])); assert x[0]["success"]; print(int(x[0]["results"][0]["n"]))' "$count_file" 2>/dev/null)
+              if [ "$count_status" -ne 0 ] || ! [[ "$count" =~ ^[0-9]+$ ]] || [ "$count" -gt 5000 ]; then
+                echo 'Chat index build preflight failed or exceeds 5000 membership entries; no migration attempted.' | tee -a "$log"
+                echo "whoami_status=$whoami_status" >> "$GITHUB_OUTPUT"
+                echo "d1_list_status=$d1_list_status" >> "$GITHUB_OUTPUT"
+                echo 'migration_status=chat-index-preflight-failed' >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
+              echo "Chat index preflight: $count membership entries (bounded count only)." | tee -a "$log"
+            fi
+            if printf '%s\n' "$pending" | grep -q '0078_follow_trigger_cost.sql'; then
+              python3 scripts/loadtest/follow_fast_exception_preflight.py --require-index-build-safe 2>&1 | tee -a "$log"
+              preflight_status=${PIPESTATUS[0]}
+              if [ "$preflight_status" -ne 0 ]; then
+                echo 'Follow trigger rebuild preflight failed; no migration attempted.' | tee -a "$log"
+                echo "whoami_status=$whoami_status" >> "$GITHUB_OUTPUT"
+                echo "d1_list_status=$d1_list_status" >> "$GITHUB_OUTPUT"
+                echo 'migration_status=follow-trigger-preflight-failed' >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
+            fi
+            if printf '%s\n' "$pending" | grep -q '0077_user_follow_membership.sql'; then
+              # The derived index is deliberately bounded before backfill; this
+              # is not a prediction of D1 billing or capacity at future scale.
+              python3 scripts/loadtest/follow_membership_preflight.py --require-index-build-safe 2>&1 | tee -a "$log"
+              preflight_status=${PIPESTATUS[0]}
+              if [ "$preflight_status" -ne 0 ]; then
+                echo 'Follow membership preflight failed; no migration attempted.' | tee -a "$log"
+                echo "whoami_status=$whoami_status" >> "$GITHUB_OUTPUT"
+                echo "d1_list_status=$d1_list_status" >> "$GITHUB_OUTPUT"
+                echo 'migration_status=follow-index-preflight-failed' >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
+            fi
+            if printf '%s\n' "$pending" | grep -q '0084_friend_guard_exceptions.sql'; then
+              # One bounded aggregate only. Refuse truncated/large data, invalid
+              # JSON, excessive exceptions, unknown D1 read cost, or low/delayed
+              # account headroom; never infer a hard billing guarantee.
+              python3 scripts/loadtest/d1_account_usage_analytics.py --preflight-budget 2>&1 | tee -a "$log"
+              before_status=${PIPESTATUS[0]}
+              if [ "$before_status" -eq 0 ]; then
+                python3 scripts/loadtest/friend_guard_index_preflight.py --require-index-build-safe 2>&1 | tee -a "$log"
+                friend_status=${PIPESTATUS[0]}
+              else
+                friend_status=1
+              fi
+              if [ "$friend_status" -eq 0 ]; then
+                python3 scripts/loadtest/d1_account_usage_analytics.py --preflight-budget 2>&1 | tee -a "$log"
+                after_status=${PIPESTATUS[0]}
+              else
+                after_status=1
+              fi
+              if [ "$before_status" -ne 0 ] || [ "$friend_status" -ne 0 ] || [ "$after_status" -ne 0 ]; then
+                echo 'Friendship index preflight failed; no migration attempted.' | tee -a "$log"
+                echo "whoami_status=$whoami_status" >> "$GITHUB_OUTPUT"
+                echo "d1_list_status=$d1_list_status" >> "$GITHUB_OUTPUT"
+                echo 'migration_status=friend-index-preflight-failed' >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
+            fi
+            if printf '%s\n' "$pending" | grep -q '0076_legacy_comment_page_indexes.sql'; then
+              # Only aggregate bounded comment data; refuse an unexpectedly large
+              # index build or exception-heavy data rather than consume quota blindly.
+              python3 scripts/loadtest/legacy_comment_preflight.py --require-index-build-safe 2>&1 | tee -a "$log"
+              preflight_status=${PIPESTATUS[0]}
+              if [ "$preflight_status" -ne 0 ]; then
+                echo 'Comment index preflight failed; no migration attempted.' | tee -a "$log"
+                echo "whoami_status=$whoami_status" >> "$GITHUB_OUTPUT"
+                echo "d1_list_status=$d1_list_status" >> "$GITHUB_OUTPUT"
+                echo 'migration_status=comment-index-preflight-failed' >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
+            fi
+          fi
           npx wrangler d1 migrations apply friendbook-db --remote 2>&1 | tee -a "$log"
           migration_status=${PIPESTATUS[0]}
           printf '%s\n' "migration_exit_code=$migration_status" | tee -a "$log"
+          if [ "$migration_status" -eq 0 ] && printf '%s\n' "$pending" | grep -q '0086_remove_unused_status_tables.sql'; then
+            python3 -m scripts.loadtest.verify_retired_drop 2>&1 | tee -a "$log"
+            if [ "${PIPESTATUS[0]}" -ne 0 ]; then
+              echo 'Schema verification failed after migration; no Worker deployment attempted.' | tee -a "$log"
+              migration_status='retired-schema-check-failed'
+            fi
+          fi
+          if [ "$migration_status" = 0 ]; then
+            # Verify on every deployment, not only the initial rollout: a later
+            # deployment must not bypass a missing or altered bridge. Read
+            # schema metadata only, never claims or application records.
+            schema="$RUNNER_TEMP/fcm-bridge-schema.json"
+            npx wrangler d1 execute friendbook-db --remote --json --command "SELECT type,name,sql FROM sqlite_master WHERE name IN ('friendbook_cf_fcm_device_claims','friendbook_cf_fcm_device_claims_v2','cf_fcm_claims_legacy_bridge') LIMIT 3" > "$schema" 2>> "$log"
+            if [ "$?" -ne 0 ] || ! python3 scripts/loadtest/fcm_claim_migration_gate.py schema "$schema"; then
+              echo 'FCM bridge schema verification failed; old Worker remains deployed.' | tee -a "$log"
+              migration_status='fcm-schema-check-failed'
+            fi
+          fi
           echo "whoami_status=$whoami_status" >> "$GITHUB_OUTPUT"
           echo "d1_list_status=$d1_list_status" >> "$GITHUB_OUTPUT"
           echo "migration_status=$migration_status" >> "$GITHUB_OUTPUT"
@@ -207,8 +364,8 @@ jobs:
           mkdir -p /tmp/deploy-logs
           rm -f /tmp/deploy-logs/*.log /tmp/wrangler.toml.shipped
           cp wrangler.toml /tmp/wrangler.toml.bak
-          VARS_R2_ON="--var D1_INTERACTIONS_ENABLED:true --var VIDEO_R2_ENABLED:true --var VIDEO_R2_RETENTION_VERIFIED:true --var REALTIME_WS_ENABLED:true"
-          VARS_R2_OFF="--var D1_INTERACTIONS_ENABLED:true --var VIDEO_R2_ENABLED:false --var VIDEO_R2_RETENTION_VERIFIED:false --var REALTIME_WS_ENABLED:true"
+          VARS_R2_ON="--var D1_INTERACTIONS_ENABLED:true --var VIDEO_R2_ENABLED:true --var VIDEO_R2_RETENTION_VERIFIED:true"
+          VARS_R2_OFF="--var D1_INTERACTIONS_ENABLED:true --var VIDEO_R2_ENABLED:false --var VIDEO_R2_RETENTION_VERIFIED:false"
 
           # Removes ONLY the Analytics Engine block. D1, R2, KV, crons and vars all stay, so a refused
           # AE binding can never cost another binding the way the old truncation fallback did.
@@ -394,6 +551,45 @@ jobs:
           BODY+=$'\n```'
           gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --body "$BODY"
 
+      - name: Verify production D1 push claim insert and duplicate handling
+        if: github.event_name == 'push' && contains(github.event.head_commit.message, '[verify-production-d1-write]')
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: '92f3d04598822de2e49e14561218d090'
+        run: |
+          key="validation_only_${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}"
+          sql="INSERT INTO friendbook_cf_fcm_device_claims(event_key,created_at) VALUES ('$key',0) ON CONFLICT(event_key) DO NOTHING"
+          cleanup() { npx wrangler d1 execute friendbook-db --remote --command "DELETE FROM friendbook_cf_fcm_device_claims WHERE event_key='$key'" --json >/dev/null; }
+          trap cleanup EXIT
+          for expected in 1 0; do
+            if ! npx wrangler d1 execute friendbook-db --remote --command "$sql" --json > "$RUNNER_TEMP/fcm-claim-write.json"; then
+              echo '::error::Production D1 rejected the synthetic claim write.'; exit 1
+            fi
+            node -e 'const r=require(process.argv[1])[0];const n=r?.meta?.changes;console.log(`::notice::D1 claim expected ${process.argv[2]}, got ${n} (success=${r?.success})`);if(!r?.success||Number(n)!==Number(process.argv[2]))process.exit(1)' "$RUNNER_TEMP/fcm-claim-write.json" "$expected"
+          done
+          cleanup
+          trap - EXIT
+
+      - name: Audit copied D1 collection coverage without exporting user data
+        if: github.event_name == 'push' && contains(github.event.head_commit.message, '[d1-feed-audit]')
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          SQL="SELECT collection, SUM(native) AS canonical_rows, SUM(legacy) AS legacy_only_rows FROM (
+            SELECT collection_id AS collection, COUNT(*) AS native, 0 AS legacy FROM friendbook_cf_firestore_documents GROUP BY collection_id
+            UNION ALL
+            SELECT a.collection, 0, COUNT(*) FROM friendbook_cf_documents a WHERE NOT EXISTS (
+              SELECT 1 FROM friendbook_cf_firestore_documents f WHERE f.path=a.path
+            ) GROUP BY a.collection
+          ) GROUP BY collection ORDER BY collection;"
+          npx wrangler d1 execute friendbook-db --remote --command "$SQL" --json > d1-feed-coverage.json
+          { echo '### D1 data coverage (aggregate rows only)'; echo '```json'; cat d1-feed-coverage.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: github.event_name == 'push' && contains(github.event.head_commit.message, '[d1-feed-audit]')
+        with:
+          name: d1-feed-coverage
+          path: d1-feed-coverage.json
       - name: Verify read-only Worker and D1 connectivity
         run: |
           curl --fail --silent --show-error --max-time 30 --retry 4 --retry-all-errors --retry-delay 3 \
@@ -416,14 +612,15 @@ jobs:
           code=$(curl --silent --show-error --max-time 30 -o /tmp/friendbook-auth.json -w '%{http_code}' \
             https://rough-firefly-dd7b.zulqarnaindiraj786.workers.dev/v1/me)
           test "$code" = 401
+          # Presence routes are retired for good: they must answer 404, never 401/200.
           pcode=$(curl --silent --show-error --max-time 30 -o /tmp/friendbook-presence.json -w '%{http_code}' \
             https://rough-firefly-dd7b.zulqarnaindiraj786.workers.dev/v1/presence/me)
-          test "$pcode" = 401
+          test "$pcode" = 404
           vcode=$(curl --silent --show-error --max-time 30 -X POST -o /tmp/friendbook-video.json -w '%{http_code}' \
             https://rough-firefly-dd7b.zulqarnaindiraj786.workers.dev/v1/videos)
           test "$vcode" = 401
-          echo 'Unauthenticated profile, presence, and video requests rejected (401).'
-          echo 'Deployment passed; D1 interactions are explicitly verified ON, with Realtime Presence + R2 Video routes active.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Unauthenticated profile and video requests rejected (401); retired presence routes answer 404.'
+          echo 'Deployment passed; D1 interactions are explicitly verified ON, with retired presence routes gone and R2 Video routes active.' >> "$GITHUB_STEP_SUMMARY"
       - name: Copy Firebase Firestore to D1 with per-collection checkpoints
         if: github.event_name == 'push' && contains(github.event.head_commit.message, '[firestore-copy]')
         env:

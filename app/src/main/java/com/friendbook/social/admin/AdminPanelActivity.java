@@ -61,6 +61,15 @@ public class AdminPanelActivity extends Activity {
         TextView recovery = Ui.btnGrey(this, "Review legacy group / chat recovery");
         recovery.setOnClickListener(v -> showRecoveryKind());
         root.addView(recovery);
+        TextView tools = Ui.btnGrey(this, "More admin tools");
+        tools.setOnClickListener(v -> new AlertDialog.Builder(this).setTitle("Admin tools")
+                .setItems(new String[]{"Official Broadcast", "Reports", "Feedback", "Content", "AdMob"}, (dialog, action) -> {
+                    Class<?>[] screens = {OfficialBroadcastActivity.class, AdminReportsActivity.class,
+                            AdminFeedbackActivity.class, AdminContentActivity.class, AdMobSettingsActivity.class};
+                    startActivity(new android.content.Intent(this, screens[action]));
+                }).show());
+        root.addView(tools);
+
         root.addView(Ui.divider(this));
 
         container = new FrameLayout(this);

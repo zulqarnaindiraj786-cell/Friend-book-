@@ -1,0 +1,87 @@
+# Bounded user-only promotion; no values or identities in logs.
+# Preview run 45021216684 passed on both current candidates before enabling apply.
+name: Legacy user promotion
+on:
+  push:
+    branches: [arena/7c7ddb7b-friend-book]
+    paths: [.github/workflows/legacy-user-backfill.yml, scripts/loadtest/backfill_legacy_users.mjs, cloudflare/test/legacy-user-backfill.test.js]
+permissions:
+  contents: read
+concurrency:
+  group: friendbook-cloudflare-production
+  cancel-in-progress: false
+jobs:
+  promotion:
+    if: contains(github.event.head_commit.message, '[legacy-user-preview]') || contains(github.event.head_commit.message, '[legacy-user-backfill]') || contains(github.event.head_commit.message, '[legacy-root-preview]') || contains(github.event.head_commit.message, '[legacy-request-preview]') || contains(github.event.head_commit.message, '[legacy-request-backfill]') || contains(github.event.head_commit.message, '[legacy-friend-preview]') || contains(github.event.head_commit.message, '[legacy-friend-backfill]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: node --test cloudflare/test/legacy-user-backfill.test.js
+      - name: Check account reserve and compare representations
+        if: contains(github.event.head_commit.message, '[legacy-user-preview]') || contains(github.event.head_commit.message, '[legacy-user-backfill]')
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          set -e
+          python3 scripts/loadtest/d1_account_usage_analytics.py --notification-inspection-budget
+          node scripts/loadtest/backfill_legacy_users.mjs
+      - name: Preview all legacy-only root representations (read-only)
+        if: contains(github.event.head_commit.message, '[legacy-root-preview]')
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          set -e
+          python3 scripts/loadtest/d1_account_usage_analytics.py --notification-inspection-budget
+          node scripts/loadtest/backfill_legacy_users.mjs --preview-roots
+          python3 scripts/loadtest/d1_account_usage_analytics.py --notification-inspection-budget
+      - name: Compare bounded friend-request candidates (read-only)
+        if: contains(github.event.head_commit.message, '[legacy-request-preview]') || contains(github.event.head_commit.message, '[legacy-request-backfill]')
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          set -e
+          python3 scripts/loadtest/d1_account_usage_analytics.py --notification-inspection-budget
+          node scripts/loadtest/backfill_legacy_users.mjs --friend-requests
+      # Preview 45022529063 checked the two current candidates without mutation.
+      - name: Execute bounded friend-request promotion
+        if: contains(github.event.head_commit.message, '[legacy-request-backfill]')
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          set -e
+          python3 scripts/loadtest/d1_account_usage_analytics.py --user-backfill-budget
+          node scripts/loadtest/backfill_legacy_users.mjs --friend-requests --apply
+          python3 scripts/loadtest/d1_account_usage_analytics.py --user-backfill-budget
+      - name: Compare bounded friendship candidates (read-only)
+        if: contains(github.event.head_commit.message, '[legacy-friend-preview]') || contains(github.event.head_commit.message, '[legacy-friend-backfill]')
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          set -e
+          python3 scripts/loadtest/d1_account_usage_analytics.py --notification-inspection-budget
+          node scripts/loadtest/backfill_legacy_users.mjs --friends
+      # Preview 45022699325 checked the current candidate without mutation.
+      - name: Execute bounded friendship promotion
+        if: contains(github.event.head_commit.message, '[legacy-friend-backfill]')
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          set -e
+          python3 scripts/loadtest/d1_account_usage_analytics.py --user-backfill-budget
+          node scripts/loadtest/backfill_legacy_users.mjs --friends --apply
+          python3 scripts/loadtest/d1_account_usage_analytics.py --user-backfill-budget
+      - name: Execute the explicitly requested, bounded user promotion
+        if: contains(github.event.head_commit.message, '[legacy-user-backfill]')
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          set -e
+          python3 scripts/loadtest/d1_account_usage_analytics.py --user-backfill-budget
+          node scripts/loadtest/backfill_legacy_users.mjs --apply
+          python3 scripts/loadtest/d1_account_usage_analytics.py --user-backfill-budget
