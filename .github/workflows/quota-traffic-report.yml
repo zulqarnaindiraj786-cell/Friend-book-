@@ -1,4 +1,4 @@
-# Post-rollout report: bounded inbox and fixed-vocabulary write-family attribution.
+# Post-rollout report: adaptive shared activity seek versus membership sort.
 name: Analytics-only quota traffic report
 on:
   push:

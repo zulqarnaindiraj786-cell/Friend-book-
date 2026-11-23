@@ -48,3 +48,9 @@ Second verification: https://github.com/zulqarnaindiraj786-cell/Friend-book-/act
 ## Acceptance limits
 
 This fixes the expensive/dense inbox path with a bounded adaptive alternative; it does **not** promise every query can avoid a membership scan. Sparse/unsupported/cold cases still legitimately use that plan. A shared attempt may add bounded overhead on its first failure. Production query analytics must establish how often the faster plan is selected and the real workload's read/write balance. Full-day <=100k reads / <=5k writes remains unverified; index build/probe usage is included in today's consumption, not hidden as app savings. No merge, Android rebuild or Play upload is part of this work.
+
+## Successful runtime rollout
+
+Source 67ddcea deployed in https://github.com/zulqarnaindiraj786-cell/Friend-book-/actions/runs/45182701357 SUCCESS, completed 2026-11-23T13:19:39Z. Full regressions, exact production-config compilation, code-only deployment, resource/binding/cron preservation and health/auth smoke checks all passed. New index was already independently gated and installed; runtime deploy did not sweep migrations. APK/AAB unchanged and PR remains unmerged.
+
+The strict daily-verification boundary is now 2026-11-23T13:19:39Z. Sanitized analytics distinguishes `inbox_shared_activity_seek` from `inbox_activity_sort`; actual selection frequency, matched workload savings and completed-day acceptance still require observations. Quiet rolling windows must not be described as proof.
