@@ -105,3 +105,61 @@ No further production mutation beyond the one pending-request index. Remaining
 work: ordinary-traffic cleanup UPDATE telemetry after the index, write attribution
 by action/index/trigger, and comparable app-session rates excluding rollout and
 diagnostic SQL. Keep PR unmerged and cron */15 unchanged.
+
+## Second targeted production fix: canonical owner-index write amplification
+
+Source `fbce88e8931927cec98bc4c6c3ea45cce2e02e1e`.
+Production rollout https://github.com/zulqarnaindiraj786-cell/Friend-book-/actions/runs/45116959466
+and independent Worker compile/validation
+https://github.com/zulqarnaindiraj786-cell/Friend-book-/actions/runs/45116966062
+both **PASS**. PR #36 remains OPEN, mergedAt=null.
+
+Applied only migration `0089_remove_redundant_global_owner_index.sql`:
+removed `idx_friendbook_cf_firestore_owner`, an owner-only global index maintained
+on canonical inserts/deletes and applicable owner-assignment updates. Runtime
+path-based authorization uses the primary key. Live chat uses the more selective
+`idx_cf_live_chat_sender_time(parent_path,owner_uid,create_time DESC)` partial
+index, which remains intact. The global collection/update index remains intact
+because the real chat list uses it; it must NOT be dropped as supposedly unused.
+
+Production verification compiled but did not execute an INSERT. Compiled
+`IdxInsert` opcode count (including all trigger programs) changed 60 -> 59.
+This demonstrates removal of an index-maintenance operation, **not** 60/59 billed
+writes or a measured percentage/daily saving. Both scoped live throttle query
+plans were identical before/after, as were path authorization and chat list
+plans. No user rows were read or mutated by these EXPLAIN probes.
+
+Reported one-time retirement cost: **591 reads / 1 write**, document changes=0.
+Schema-inspection statements have their own small metadata read costs; the 591
+number is the DROP statement alone, not the whole workflow. No Worker deploy,
+Android release, schedule changes, table deletion or application-data deletion.
+Rollback index definition is recorded in the migration (rebuilding costs quota).
+
+Validation: **235 Worker tests, 344 Python tests**, schema 2, migrations 3 and
+index-plan 4 tests; Worker dry-run bundle; 48-workload offline replay all PASS.
+The replay initially failed because its comment fixture seeded mirror-only rows
+while the app intentionally reads canonical comments only. Corrected fixtures
+to canonical rows and added a newer mirror-only sentinel that must stay hidden.
+No read fallback or UNION arm was introduced. Network is disabled in the replay.
+Retry workloads for receipts, story views, profile merges, saved posts, friend
+requests, reactions, comments, FCM registration, notification read/create all
+retain zero logical row changes in this local replay. These are not D1 billing
+measurements or proof every possible retry is free.
+
+First rollout attempt 45116935402 failed in local tests before reaching any
+production mutation: Python SQLite reused a cached EXPLAIN after the schema
+change. Fixed by disabling statement caching in the local regression and using
+stage-specific EXPLAIN text in the production probe. Latest gates above passed;
+failed gates were not bypassed.
+
+## Remaining acceptance gap (explicit)
+
+There are now two targeted production quota fixes, not a proven end-to-end
+quota guarantee. No matched ordinary-usage session or full UTC-day follow-up
+proves <=100k reads / <=5k writes. Historical cumulative counters cannot fall
+retroactively, and aggregate account usage also includes administrative work.
+Unlimited traffic cannot be promised a fixed quota while preserving all writes.
+Further changes must be justified against current action mix, measured production
+costs and a defined usage budget—not repeated expensive diagnostic table scans.
+Signed Android 2.10.33/175 is unchanged by these schema fixes; its previous signed
+build proof remains applicable. This turn did not rebuild Android or publish Play.
