@@ -6,6 +6,7 @@ import android.net.Uri;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.robolectric.RobolectricTestRunner;
+import org.robolectric.annotation.Config;
 import org.robolectric.RuntimeEnvironment;
 
 import java.io.File;
@@ -19,6 +20,7 @@ import static org.junit.Assert.assertTrue;
 
 /** STEP 6: a photo/video URL is downloaded once and then served from local disk. */
 @RunWith(RobolectricTestRunner.class)
+@Config(sdk = 28, application = android.app.Application.class, manifest = Config.NONE)
 public class MediaDiskCacheTest {
 
     private Context ctx() {
