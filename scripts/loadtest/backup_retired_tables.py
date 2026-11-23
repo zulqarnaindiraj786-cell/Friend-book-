@@ -24,41 +24,57 @@ def existing_tables():
     return [name for name in TABLES if name in found]
 
 
+def backup_pages(table):
+    """Seek by rowid without repeatedly scanning preceding pages.
+
+    The synthetic cursor is never written to the backup or its checksum.
+    First-page selection has no lower bound so negative rowids are preserved.
+    """
+    if table not in TABLES:
+        raise ValueError('Unexpected backup table')
+    cursor_key = '__friendbook_backup_rowid'
+    last = None
+    while True:
+        where = '' if last is None else ' WHERE rowid > ?'
+        args = (PAGE,) if last is None else (last, PAGE)
+        page, _ = remote_query(
+            f'SELECT rowid AS {cursor_key}, * FROM {table}'
+            f'{where} ORDER BY rowid LIMIT ?', args)
+        if not page:
+            return
+        clean = []
+        for source in page:
+            row = dict(source)
+            cursor = row.pop(cursor_key)
+            if not isinstance(cursor, int) or isinstance(cursor, bool) or (last is not None and cursor <= last):
+                raise ValueError('Invalid backup cursor')
+            last = cursor
+            clean.append(row)
+        yield clean
+        if len(page) < PAGE:
+            return
+
+
 def checksum_pages(table):
     """Stable checksum over rowid order plus the row count."""
     digest = hashlib.sha256()
     rows = 0
-    offset = 0
-    while True:
-        page, _ = remote_query(f'SELECT * FROM {table} ORDER BY rowid LIMIT ? OFFSET ?', (PAGE, offset))
-        if not page:
-            break
-        # json.dumps with sorted keys is deterministic for identical row sets.
+    for page in backup_pages(table):
         for row in page:
             digest.update(json.dumps(row, sort_keys=True, separators=(',', ':')).encode())
             digest.update(b'\n')
         rows += len(page)
-        offset += len(page)
-        if len(page) < PAGE:
-            break
     return rows, digest.hexdigest()
 
 
 def write_backup(table, directory):
     path = directory / f'{table}.jsonl'
     rows = 0
-    offset = 0
     with path.open('w', encoding='utf-8') as handle:
-        while True:
-            page, _ = remote_query(f'SELECT * FROM {table} ORDER BY rowid LIMIT ? OFFSET ?', (PAGE, offset))
-            if not page:
-                break
+        for page in backup_pages(table):
             for row in page:
                 handle.write(json.dumps(row, sort_keys=True, separators=(',', ':')) + '\n')
             rows += len(page)
-            offset += len(page)
-            if len(page) < PAGE:
-                break
     return rows
 
 
