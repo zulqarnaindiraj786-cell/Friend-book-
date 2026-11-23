@@ -1,4 +1,4 @@
-# Code-only rollout: redundant list reads and profile-only no-op writes; preserve content timestamps.
+# Code-only rollout: bounded inbox documents and atomic direct-room guard-write removal.
 name: Deploy quota fixes without database migrations
 on:
   push:

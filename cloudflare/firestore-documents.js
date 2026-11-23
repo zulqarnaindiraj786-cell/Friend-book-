@@ -309,6 +309,85 @@ export async function readProfileMutationSnapshot(db,uid) {
   return {accountRow, profileRow:normalizeRootStorageRow(accountRow)};
 }
 
+// Match decodeValue + the historical inbox projection exactly (including zero
+// falling through to the next timestamp representation).
+function inboxActivity(data) {
+  const millis=value=>typeof value==='number' && Number.isFinite(value) ? value
+    : value?.__type==='timestamp' && Number.isFinite(value.millis) ? value.millis : 0;
+  return millis(data.lastMessageTime)||millis(data.lastMessageTimeMs)||millis(data.lastMessageAt);
+}
+const inboxSqlMillis=field=>`CASE
+  WHEN json_type(f.document_json,'$.${field}') IN ('integer','real')
+    AND abs(CAST(json_extract(f.document_json,'$.${field}') AS REAL))<=1.7976931348623157e308
+    THEN json_extract(f.document_json,'$.${field}')
+  WHEN json_extract(f.document_json,'$.${field}.__type')='timestamp'
+    AND json_type(f.document_json,'$.${field}.millis') IN ('integer','real')
+    AND abs(CAST(json_extract(f.document_json,'$.${field}.millis') AS REAL))<=1.7976931348623157e308
+    THEN CASE WHEN abs(CAST(json_extract(f.document_json,'$.${field}.millis') AS REAL))<9.223372036854776e18
+      THEN CAST(json_extract(f.document_json,'$.${field}.millis') AS INTEGER)
+      ELSE json_extract(f.document_json,'$.${field}.millis') END ELSE 0 END`;
+const inboxSqlActivity=`COALESCE(${['lastMessageTime','lastMessageTimeMs','lastMessageAt'].map(f=>`NULLIF((${inboxSqlMillis(f)}),0)`).join(',')},0)`;
+
+// Bound document materialization, not just the final HTTP response. No derived
+// per-member activity table or message-write fanout is introduced. SQLite still
+// sorts matching membership candidates: this is NOT a bounded-scan claim.
+async function boundedInboxPage(db,uid,spec,requestUserReads) {
+  if(spec?.parent!=='chats' || !Number.isInteger(spec.limit) || spec.limit<1 || spec.limit>100
+    || spec.limitToLast || spec.orderBy?.length!==1 || spec.orderBy[0]?.field!=='inboxActivityAt'
+    || !['ASCENDING','DESCENDING'].includes(spec.orderBy[0].direction)
+    || (spec.filters||[]).some(f=>f.field!=='participants' || f.op!=='array-contains' || f.value!==uid))return null;
+  for(const key of ['startAfter','startAt','endBefore','endAt']) {
+    const c=spec[key];
+    if(c!==undefined && (!Array.isArray(c) || c.length>2
+      || (c.length && (typeof c[0]!=='number' || !Number.isFinite(c[0])))
+      || (c.length===2 && (typeof c[1]!=='string' || /[^\x20-\x7e]/.test(c[1])))))return null;
+  }
+  const desc=spec.orderBy[0].direction==='DESCENDING', direction=desc?'DESC':'ASC';
+  const predicates=[],bindings=[uid];
+  function bound(cursor,start,inclusive) {
+    if(!cursor?.length)return;
+    const op=(start!==desc)?'>':'<';
+    if(cursor.length===1){predicates.push(`inbox_activity ${op}${inclusive?'=':''} ?`);bindings.push(cursor[0]);}
+    else {predicates.push(`(inbox_activity ${op} ? OR (inbox_activity=? AND doc_id ${op}${inclusive?'=':''} ?))`);bindings.push(cursor[0],cursor[0],cursor[1]);}
+  }
+  bound(spec.startAfter,true,false);bound(spec.startAt,true,true);
+  bound(spec.endBefore,false,false);bound(spec.endAt,false,true);
+  const allowed=[];let after=null,batches=0;
+  while(allowed.length<spec.limit) {
+    // A badly stale membership index must not cause repeated whole-inbox sorts.
+    if(batches++===4)return null;
+    const extra=after?` AND (inbox_activity ${desc?'<':'>'} ? OR (inbox_activity=? AND doc_id ${desc?'<':'>'} ?))`:'';
+    const size=after?Math.max(20,spec.limit-allowed.length):spec.limit;
+    let result;
+    try {
+      result=await db.prepare(`WITH quota_inbox_candidates AS (
+        SELECT f.*, ${inboxSqlActivity} AS inbox_activity
+        FROM friendbook_cf_chat_participants m INDEXED BY idx_cf_chat_participant_source
+        JOIN friendbook_cf_firestore_documents f ON f.path=m.chat_path
+        WHERE m.participant_uid=? AND m.source=1)
+        SELECT * FROM quota_inbox_candidates WHERE 1=1 ${predicates.map(p=>' AND '+p).join('')}${extra}
+        ORDER BY inbox_activity ${direction},doc_id ${direction} LIMIT ?`)
+        .bind(...bindings,...(after?[after.time,after.time,after.id]:[]),size).all();
+    } catch(error) {
+      if(/no such (?:index: idx_cf_chat_participant_source|table: friendbook_cf_chat_participants)/.test(String(error)))return null;
+      throw error;
+    }
+    const rows=result.results||[];
+    // SQLite UTF-8 and JS UTF-16 can disagree amongst non-ASCII ID ties.
+    // ASCII candidates cannot be displaced by those ties; otherwise preserve
+    // the full compatibility evaluator rather than silently skipping a room.
+    if(rows.some(row=>/[^\x20-\x7e]/.test(row.doc_id) || row.parent_path!=='chats'
+      || row.path!==`chats/${row.doc_id}` || !isDocumentPath(row.path)))return null;
+    const docs=rows.map(row=>rowToDocument({...row,[canonicalRootSnapshot]:true}));
+    if(docs.some((doc,i)=>inboxActivity(doc.data)!==rows[i].inbox_activity))return null;
+    const visible=await visibleDocuments(db,uid,'chats',prefilterRaw(docs,'chats',spec.filters),requestUserReads);
+    allowed.push(...visible.map(doc=>({...doc,data:{...doc.data,inboxActivityAt:inboxActivity(doc.data)}})));
+    if(rows.length<size)break;
+    const tail=rows.at(-1);after={time:tail.inbox_activity,id:tail.doc_id};
+  }
+  return applyQuery(allowed,spec);
+}
+
 // A bounded fast path for ordinary canonical chat pages. Unusual historical timestamp
 // formats, root-message bridges, filters and complex cursors use the full evaluator.
 const chatRank = `CASE WHEN json_type(document_json,'$.createdAt') IN ('integer','real') THEN 2 ELSE 4 END`;
@@ -2543,15 +2622,27 @@ async function groupChatLedgerChanges(db,path,before,after) {
 
 async function writeChatRoot(db,path,doc,now,row,uid,{canonicalOnly=false}={}) {
   if (typeof db.batch!=='function') return json({error:'Atomic storage unavailable'},503);
-  const guards=await chatRootGuards(db,path,row), before=row?decodeValue(JSON.parse(row.document_json)):null;
+  const before=row?decodeValue(JSON.parse(row.document_json)):null;
+  // Existing canonical direct rooms have no group authority ledger. Enforce
+  // their authorized snapshot in the canonical upsert itself, so its mirror
+  // remains atomic without inserting/deleting a temporary guard row.
+  const inline=Boolean(row?.[canonicalRootSnapshot] && before?.isGroup!==true && doc.isGroup!==true);
+  const guards=inline?[]:await chatRootGuards(db,path,row);
   const ledger=await groupChatLedgerChanges(db,path,before,doc);
   const id=docIdOf(path), data=JSON.stringify(doc);
   if (data.length>1_800_000) return json({error:'Document too large'},413);
   const owner=ownerOf(doc,row?.owner_uid||uid), createTime=row?.create_time||now;
-  await db.batch([...guards,...ledger.guards,...ledger.writes,
-    db.prepare(`INSERT INTO friendbook_cf_firestore_documents(path,parent_path,collection_id,doc_id,owner_uid,document_json,create_time,update_time) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET owner_uid=excluded.owner_uid,document_json=excluded.document_json,update_time=excluded.update_time`).bind(path,'chats','chats',id,owner,data,createTime,now),
+  const canonical=inline ? db.prepare(`INSERT INTO friendbook_cf_firestore_documents
+    (path,parent_path,collection_id,doc_id,owner_uid,document_json,create_time,update_time)
+    VALUES (CASE WHEN (SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?1)=?2
+      AND (SELECT update_time FROM friendbook_cf_firestore_documents WHERE path=?1)=?3
+      THEN ?1 ELSE NULL END,'chats','chats',?4,?5,?6,?7,?8)
+    ON CONFLICT(path) DO UPDATE SET owner_uid=excluded.owner_uid,document_json=excluded.document_json,update_time=excluded.update_time`)
+    .bind(path,row.document_json,row.update_time,id,owner,data,createTime,now)
+    : db.prepare(`INSERT INTO friendbook_cf_firestore_documents(path,parent_path,collection_id,doc_id,owner_uid,document_json,create_time,update_time) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET owner_uid=excluded.owner_uid,document_json=excluded.document_json,update_time=excluded.update_time`).bind(path,'chats','chats',id,owner,data,createTime,now);
+  await db.batch([...guards,...ledger.guards,...ledger.writes,canonical,
     ...(canonicalOnly ? [] : [db.prepare(`INSERT INTO friendbook_cf_documents(path,collection,doc_id,owner_uid,document_json,updated_at) VALUES (?,?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET owner_uid=excluded.owner_uid,document_json=excluded.document_json,updated_at=excluded.updated_at`).bind(path,'chats',id,owner,JSON.stringify({...doc,id}),now)]),
-    db.prepare('DELETE FROM friendbook_cf_social_guards').bind()]);
+    ...(!inline || ledger.guards.length ? [db.prepare('DELETE FROM friendbook_cf_social_guards').bind()] : [])]);
   return json({exists:true,id,path,parent:'chats',collection:'chats',data:doc,createTime,updateTime:now});
 }
 
@@ -3265,6 +3356,8 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0, ct
           WHERE friendbook_cf_post_search MATCH ? AND s.source=1`).bind(match).all();
         rows=[...(canonical.results || [])];
       } else {
+        const inbox=await boundedInboxPage(db,uid,body,requestUserReads);
+        if(inbox!==null)return queryResponse(parent,inbox,body.knownRevisions);
         const people=await boundedNamePage(db,env,uid,body) ?? await boundedPeoplePage(db,env,uid,body) ?? await boundedRecentPeoplePage(db,env,uid,body);
         if (people!==null) return queryResponse(parent,people,body.knownRevisions);
         const page=parent==='notifications'?await boundedNotificationPage(db,uid,body):await boundedFeedPage(db,uid,body,requestUserReads);
@@ -3311,10 +3404,7 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0, ct
     // Inbox pagination must order all authorized rooms before taking ten, not
     // alphabetically page first and sort only the rows the client happened to receive.
     if(parent==='chats' && spec.orderBy?.some?.(order=>order?.field==='inboxActivityAt')) {
-      const millis=value=>typeof value==='number' && Number.isFinite(value) ? value
-        : value?.__type==='timestamp' && Number.isFinite(value.millis) ? value.millis : 0;
-      visible=visible.map(doc=>({...doc,data:{...doc.data,inboxActivityAt:
-        millis(doc.data.lastMessageTime)||millis(doc.data.lastMessageTimeMs)||millis(doc.data.lastMessageAt)}}));
+      visible=visible.map(doc=>({...doc,data:{...doc.data,inboxActivityAt:inboxActivity(doc.data)}}));
     }
     const result = applyQuery(visible, spec);
     return queryResponse(parent,await feedEngagement(db,env,uid,body,result,requestUserReads),body.knownRevisions);
