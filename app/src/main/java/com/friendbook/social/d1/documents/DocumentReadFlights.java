@@ -35,6 +35,11 @@ final class DocumentReadFlights<V> {
         return shared;
     }
 
+    /** A document mutation can change membership/order in any active query. */
+    synchronized void invalidateAll() {
+        active.clear();
+    }
+
     /** Detach pre-mutation flights; their existing consumers still complete normally. */
     synchronized void invalidate(String actor, String path) {
         active.remove(java.util.Arrays.asList(actor, path));

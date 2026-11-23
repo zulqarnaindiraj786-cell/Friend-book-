@@ -260,10 +260,13 @@ public class Query {
 
     /** Search results can use a short reuse window instead of indefinite list reuse. */
     public Task<QuerySnapshot> getCachedOrFetch(boolean force,long maxAgeMs) {
-        if (force || !hasFreshLocalPage(maxAgeMs)) return get(Source.SERVER);
+        if (force) return get(Source.SERVER);
+        // A non-forced cold/evicted page needs a network read, not an explicit
+        // freshness override: overlapping callers can share that pending work.
+        if (!hasFreshLocalPage(maxAgeMs)) return get(Source.DEFAULT);
         return get(Source.CACHE).continueWithTask(Runnable::run, task ->
                 task.isSuccessful() ? com.google.android.gms.tasks.Tasks.forResult(task.getResult())
-                        : get(Source.SERVER));
+                        : get(Source.DEFAULT));
     }
 
     public Task<QuerySnapshot> get(Source source) {
@@ -293,7 +296,11 @@ public class Query {
         };
         boolean firstFeedPage = "posts".equals(parentPath) && feedEngagement && limitValue != null
                 && startAfterValues == null && startAtValues == null && endBeforeValues == null && endAtValues == null;
-        return firstFeedPage ? firestore.runFeedFirstPage(fetch) : firestore.runAsync(fetch);
+        // Share the entire queued operation, not just overlapping HTTP I/O.
+        // The exact serialized request key includes collection, filters, order,
+        // cursor, limit and feed engagement. SERVER remains independent.
+        return firestore.queryReadFlights.read(actor, key, source == Source.DEFAULT,
+                () -> firstFeedPage ? firestore.runFeedFirstPage(fetch) : firestore.runAsync(fetch));
     }
 
     public boolean hasFreshLocalPage(long maxAgeMs) {

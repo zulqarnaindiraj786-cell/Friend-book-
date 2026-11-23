@@ -24,6 +24,7 @@ import java.util.concurrent.TimeUnit;
 public class D1DocumentStore {
     private static final D1DocumentStore INSTANCE = new D1DocumentStore();
     final DocumentReadFlights<DocumentSnapshot> documentReadFlights = new DocumentReadFlights<>();
+    final DocumentReadFlights<QuerySnapshot> queryReadFlights = new DocumentReadFlights<>();
     // Keep network work bounded: a cached pool can create one thread per slow request on flaky
     // mobile networks, which starves the UI and battery. Each listener has an
     // in-flight guard so slow polls cannot pile up every five seconds.
@@ -391,6 +392,7 @@ public class D1DocumentStore {
         if (path != null) {
             String actor=authenticatedUid();
             documentReadFlights.invalidate(actor,path);
+            queryReadFlights.invalidateAll();
             docCache.remove(scopedCacheKey(actor,path));
             docFetchedAt.remove(scopedCacheKey(actor,path));
             if(path.equals("users/"+actor))docCachedAt.remove(actor);
@@ -535,6 +537,9 @@ public class D1DocumentStore {
     public long postWriteVersion() { return postWriteVersion.get(); }
 
     void notifyCollectionListeners(String parentPath) {
+        // A push/commit may change a query's membership even without a known
+        // document path. New reads must not join pre-invalidation work.
+        queryReadFlights.invalidateAll();
         if ("posts".equals(parentPath)) postWriteVersion.incrementAndGet();
         // Invalidate locally without fetching hidden lists. Every cache-first collection needs
         // this, not just friends/groups; chat pages live in their own preferences namespace.
