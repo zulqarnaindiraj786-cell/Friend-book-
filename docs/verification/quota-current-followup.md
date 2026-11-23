@@ -48,3 +48,17 @@ All steps succeeded; CI job completed at provider-reported 2026-11-23T11:57:55Z.
 - PR #36 remains open/unmerged. No new Android release was needed for this server-only optimization.
 
 The source-only deployment warning above describes the earlier checkpoint and is superseded by this section. Full authenticated production comment behavior is covered by local tests, not by an authenticated live-user smoke test. Post-deployment billed savings and a full-day target pass are still unverified; prior strict daily FAIL remains historical evidence and must not be erased.
+
+## Latest analytics follow-up (run 45171406440)
+
+Analytics-only follow-up succeeded at provider-reported 2026-11-23T12:08:13Z. Reporter now emits up to ten sanitized shapes with separate engagement preview/count labels; no SQL literals, bindings or user data are exported. Seven reporter tests and all 372 Python tests pass.
+
+- 60 minutes 11:08:13–12:08:13Z: 9,565 query-analytics reads / 322 writes. This window straddles the rollout and is not a valid before/after comparison.
+- 15 minutes 11:53:13–12:08:13Z: 917 reads / 297 writes. Also straddles rollout. Its entire observed write subtotal is a legacy-mirror INSERT shape: 33 executions / 297 writes. Caller, resource and diagnostic-vs-user attribution are unknown. Do not disable mirror writes or drop indexes from this evidence alone.
+- Fully post-rollout five minutes 12:03:13–12:08:13Z: two canonical point lookups / two reads / zero writes. This is a low-activity sample, NOT evidence of measured savings or a full-day pass.
+
+The account-daily acceptance FAIL previously observed is not changed by these windows. No additional production code/schema change or SQL probe was performed for this measurement.
+
+The inspected current Android `ListenerPollingPolicy.intervalMs` returns Long.MAX_VALUE for every path. Thus historical SQL counts alone cannot establish that the current source has per-second polling. Installed APK versions remain unknown. Friendship candidate unions are security-sensitive, so they were not blindly removed.
+
+Attempted stable prerelease publication of the existing signed 2.10.34 build verified source/signature-test provenance and downloaded both build artifacts in CI, but GitHub release creation returned HTTP 403 in runs 45170291635 and 45170406219. No release was published or claimed. Signed build artifacts in run 45166501055 remain the available delivery mechanism, subject to artifact retention and GitHub access.
