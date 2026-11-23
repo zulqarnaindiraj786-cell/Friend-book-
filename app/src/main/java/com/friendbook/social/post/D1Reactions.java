@@ -88,9 +88,14 @@ public final class D1Reactions {
    if(summary.has("preview")){post.inlineComments.clear();try{for(Map<String,Object> row:D1Client.maps(summary.optJSONArray("preview")))post.inlineComments.add(Models.Comment.fromMap(Format.str(row,"id"),row));}catch(JSONException ignored){}}
   }
  }
- public static void reel(Context context,Models.Reel reel,Runnable render){
+ /** Cache-only paint: rendering a save/share/metadata change must not start HTTP. */
+ public static void hydrateReel(Models.Reel reel){
   String collection=reel.isFromPost?"posts":"reels";JSONObject summary=cached(collection,reel.id);
   if(summary!=null){reel.likes=total(summary);reel.comments=summary.optInt("comments",reel.comments);reel.reactions.clear();reel.likedBy.clear();String type=mine(summary);if(type!=null){reel.reactions.put(Fb.uid(),type);reel.likedBy.add(Fb.uid());}}
+ }
+ public static void reel(Context context,Models.Reel reel,Runnable render){
+  hydrateReel(reel);
+  String collection=reel.isFromPost?"posts":"reels";
   fetch(context.getApplicationContext(),collection,reel.id,false,render);
  }
  public static void apply(Context context,String collection,String id,String requested,boolean onlyAdd,Runnable render){

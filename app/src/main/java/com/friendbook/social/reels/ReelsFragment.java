@@ -1430,6 +1430,7 @@ public class ReelsFragment extends Fragment {
                 this.reel = updated;
                 renderCreatorAndCaption();
                 renderCounts();
+                refreshEngagement();
             }
 
             private void renderCreatorAndCaption() {
@@ -1533,6 +1534,7 @@ public class ReelsFragment extends Fragment {
 
                 renderCreatorAndCaption();
                 renderCounts();
+                refreshEngagement();
                 hydrateLegacyPostReelReactionsIfNeeded(r);
 
                 if (sameVideo) {
@@ -2109,10 +2111,21 @@ public class ReelsFragment extends Fragment {
                         });
             }
 
+            // Only explicit bind/resume/authoritative metadata refresh requests
+            // engagement. Async completion only paints cache; it cannot refetch.
+            private void refreshEngagement() {
+                if (reel == null || reel.id == null || reel.id.startsWith("local_uploading_")) return;
+                if (!com.friendbook.social.core.D1Client.enabled(reel.isFromPost?"posts":"reels")) return;
+                final Models.Reel current = reel;
+                com.friendbook.social.post.D1Reactions.reel(itemView.getContext(),current,()->{
+                    if (reel == current) renderCounts();
+                });
+            }
+
             private void renderCounts() {
                 if (reel == null) return;
                 Context c = itemView.getContext();
-                if(com.friendbook.social.core.D1Client.enabled(reel.isFromPost?"posts":"reels")){final Models.Reel current=reel;com.friendbook.social.post.D1Reactions.reel(c,current,()->{if(reel==current)renderCounts();});}
+                if(com.friendbook.social.core.D1Client.enabled(reel.isFromPost?"posts":"reels"))com.friendbook.social.post.D1Reactions.hydrateReel(reel);
                 String me = Fb.uid();
                 String myRx = resolveMyReelReaction(reel);
 
