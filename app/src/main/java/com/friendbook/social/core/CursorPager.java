@@ -59,6 +59,9 @@ public final class CursorPager {
                 more=cached.size()==size;
                 loading=false;emit("");loading=true;
             } else emit("");
+            // Rendering cached rows may close/replace this pager or change the
+            // account. Do not start a stale network request after that callback.
+            if(!active() || request!=requestGeneration)return;
             (full ? head.get(Source.SERVER) : head.refreshCachedHead(cached)).addOnSuccessListener(page -> {
                 if(!active() || request!=requestGeneration)return;
                 loading=false;
