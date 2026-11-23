@@ -63,6 +63,7 @@ public class CommentsAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
     private final Activity activity;
     private final Host host;
     private final List<Row> rows = new ArrayList<>();
+    private final CommentAuthorLookupGate authorLookups = new CommentAuthorLookupGate();
     private View headerView;
     private RecyclerView attachedList;
     private boolean showEmptyWhenNone = true;
@@ -329,14 +330,31 @@ public class CommentsAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
         String dispPhoto = (liveUser != null && liveUser.photoUrl != null && !liveUser.photoUrl.isEmpty())
                 ? liveUser.photoUrl : c.authorPhoto;
         if (liveUser == null && c.authorId != null && !c.authorId.isEmpty()) {
-            Fb.db().collection("users").document(c.authorId).get()
-                    .addOnSuccessListener(doc -> {
-                        if (doc != null && doc.exists()) {
-                            com.friendbook.social.models.Models.User u = com.friendbook.social.models.Models.User.fromDoc(doc);
-                            com.friendbook.social.core.FastCache.putUser(u);
-                            notifyDataSetChanged();
+            final String actor = Fb.uid(), authorId = c.authorId;
+            final long ticket = authorLookups.begin(actor, authorId, android.os.SystemClock.elapsedRealtime());
+            if (ticket >= 0) {
+                DocumentReference author = Fb.db().collection("users").document(authorId);
+                author.get(com.friendbook.social.d1.documents.Source.CACHE).<com.friendbook.social.d1.documents.DocumentSnapshot>continueWithTask(cached -> {
+                    if (!java.util.Objects.equals(actor, Fb.uid()))
+                        return com.google.android.gms.tasks.Tasks.forException(new java.io.IOException("Account changed"));
+                    if (cached.isSuccessful() && cached.getResult() != null && cached.getResult().exists())
+                        return com.google.android.gms.tasks.Tasks.forResult(cached.getResult());
+                    return author.get();
+                }).addOnSuccessListener(doc -> {
+                        if (!java.util.Objects.equals(actor, Fb.uid())) return;
+                        if (!authorLookups.finish(actor, authorId, ticket, true, android.os.SystemClock.elapsedRealtime())) return;
+                        // Missing profiles are terminal for this adapter, too.
+                        // Paint only this author's current rows, not the entire list.
+                        if (doc != null && doc.exists()) com.friendbook.social.core.FastCache.putUser(Models.User.fromDoc(doc));
+                        if (doc != null && doc.exists() && attachedList != null) {
+                            for (int i = 0; i < rows.size(); i++)
+                                if (authorId.equals(rows.get(i).c.authorId)) notifyItemChanged(i + headerOffset());
                         }
+                    }).addOnFailureListener(error -> {
+                        if (java.util.Objects.equals(actor, Fb.uid()))
+                            authorLookups.finish(actor, authorId, ticket, false, android.os.SystemClock.elapsedRealtime());
                     });
+            }
         }
 
         Ui.avatar(activity, h.av, dispPhoto);
