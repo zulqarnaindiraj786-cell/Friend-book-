@@ -14,6 +14,18 @@ final class ListenerPollingPolicy {
         return Long.MAX_VALUE;
     }
 
+    /**
+     * How long a cached snapshot may be painted without a network read.
+     * Live rooms and an open call room stay fresh; everything else is served
+     * from cache and refreshed only on an explicit open, refresh or push.
+     */
+    static long cacheFreshMs(String path) {
+        if (path == null) return 0;
+        if (path.equals("lives") || path.startsWith("lives/")) return 0;
+        if (path.startsWith("chats/") && path.indexOf('/', 6) < 0) return 0;
+        return 60_000;
+    }
+
     static boolean due(String path, boolean foreground, long elapsedMs) {
         return elapsedMs >= intervalMs(path, foreground);
     }

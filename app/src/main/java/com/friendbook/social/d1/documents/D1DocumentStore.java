@@ -111,8 +111,51 @@ public class D1DocumentStore {
         }
     }
 
-    private D1DocumentStore() {
-        poller.scheduleWithFixedDelay(this::pollActiveListeners, 5, 5, TimeUnit.SECONDS);
+    private final java.util.concurrent.atomic.AtomicBoolean tickerScheduled =
+            new java.util.concurrent.atomic.AtomicBoolean(false);
+
+    /** Nothing is scheduled until a screen that actually needs live signaling is open. */
+    private D1DocumentStore() { }
+
+    /** Arm the single signaling ticker only while something can use it. */
+    private void armSignalingTicker() {
+        if (!tickerScheduled.compareAndSet(false, true)) return;
+        try {
+            poller.schedule(this::signalingTick, 5, TimeUnit.SECONDS);
+        } catch (java.util.concurrent.RejectedExecutionException rejected) {
+            tickerScheduled.set(false);
+        }
+    }
+
+    private void signalingTick() {
+        try { pollActiveListeners(); }
+        finally {
+            tickerScheduled.set(false);
+            // Re-arm only when the app is still visible and a listener can still
+            // use a periodic read. A closed or backgrounded app owns no timer and
+            // therefore makes zero requests.
+            if (hasPeriodicCandidate()) armSignalingTicker();
+        }
+    }
+
+    private boolean hasPeriodicCandidate() {
+        boolean foreground = com.friendbook.social.App.isForeground();
+        if (!foreground) return false;
+        long now = android.os.SystemClock.elapsedRealtime();
+        if (!D1DocumentTransport.periodicAllowed(now)) return false;
+        for (CopyOnWriteArrayList<DocListenerEntry> list : docListeners.values()) {
+            for (DocListenerEntry e : list) {
+                if (e.active && e.actor.equals(authenticatedUid())
+                        && ListenerPollingPolicy.intervalMs(e.ref.getPath(), true) != Long.MAX_VALUE)
+                    return true;
+            }
+        }
+        for (QueryListenerEntry e : queryListeners) {
+            if (e.active && e.actor.equals(authenticatedUid())
+                    && ListenerPollingPolicy.intervalMs(e.query.parentPath, true) != Long.MAX_VALUE)
+                return true;
+        }
+        return false;
     }
 
     /** A single authenticated refresh when the process actually returns to foreground. */
@@ -326,10 +369,28 @@ public class D1DocumentStore {
         return path == null ? null : docCache.get(scopedCacheKey(authenticatedUid(), path));
     }
 
+    private final java.util.Map<String,Long> docFetchedAt = new java.util.concurrent.ConcurrentHashMap<>();
+
+    private void markDocFetched(String path) {
+        if (path != null) docFetchedAt.put(scopedCacheKey(authenticatedUid(), path),
+                android.os.SystemClock.elapsedRealtime());
+    }
+
+    /** True when a cached snapshot can be shown without touching the network. */
+    private boolean serveFromCacheOnly(String path) {
+        long freshMs = ListenerPollingPolicy.cacheFreshMs(path);
+        if (freshMs <= 0 || getCachedDoc(path) == null) return false;
+        Long fetchedAt = docFetchedAt.get(scopedCacheKey(authenticatedUid(), path));
+        if (fetchedAt == null) return false;
+        long now = android.os.SystemClock.elapsedRealtime();
+        return now >= fetchedAt && now - fetchedAt < freshMs;
+    }
+
     void invalidateDoc(String path) {
         if (path != null) {
             String actor=authenticatedUid();
             docCache.remove(scopedCacheKey(actor,path));
+            docFetchedAt.remove(scopedCacheKey(actor,path));
             if(path.equals("users/"+actor))docCachedAt.remove(actor);
         }
     }
@@ -343,7 +404,10 @@ public class D1DocumentStore {
         });
         DocumentSnapshot cached = getCachedDoc(ref.getPath());
         if (cached != null) mainHandler.post(() -> { if (entry.active && entry.actor.equals(authenticatedUid())) listener.onEvent(cached.asCached(), null); });
-        scheduleDocRead(entry);
+        // A recently fetched document is painted from cache; one authoritative read
+        // happens only when the cache is stale, missing, or explicitly invalidated.
+        if (!serveFromCacheOnly(ref.getPath())) scheduleDocRead(entry);
+        if (hasPeriodicCandidate()) armSignalingTicker();
         return () -> {
             entry.active = false;
             docListeners.computeIfPresent(ref.getPath(), (path, entries) -> {
@@ -376,6 +440,7 @@ public class D1DocumentStore {
                 finally {
                     entry.cacheReady = true;
                     scheduleQueryRead(entry);
+                    if (hasPeriodicCandidate()) armSignalingTicker();
                 }
             });
         } catch (java.util.concurrent.RejectedExecutionException busy) {
@@ -542,6 +607,8 @@ public class D1DocumentStore {
             DocumentSnapshot snap = entry.ref.parseSnapshot(response);
             if (!entry.actor.equals(authenticatedUid())) return;
             cacheDoc(entry.ref.getPath(), snap, entry.actor);
+            docFetchedAt.put(scopedCacheKey(entry.actor, entry.ref.getPath()),
+                    android.os.SystemClock.elapsedRealtime());
             // Timestamp equality is not sufficient: concurrent writes may share a
             // millisecond, and an identical result must clear a prior read error.
             boolean changed = entry.deliveryState.server(response.toString());
