@@ -749,7 +749,8 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
             friendIds.clear();
             friendIds.add(me);
             friendIds.addAll(cachedIds);
-            loadPymk();
+            restorePymkFromCache(me);
+            renderPymk();
             renderLoadedStories();
             return;
         }
