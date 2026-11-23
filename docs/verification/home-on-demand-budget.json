@@ -1,14 +1,14 @@
 {
-  "all_20_opens_cache_miss_daily_reads": 36965,
-  "assumptions": "20 opens: 1 cache miss, 19 cache hits; 60 friends; 2 explicit Home refreshes; cache not evicted/invalidated otherwise",
+  "all_20_opens_cache_miss_daily_reads": 28020,
+  "assumptions": "20 opens: 1 cache miss, 19 cache hits; 60 friends; 2 explicit Home refreshes; cache not evicted/invalidated otherwise; notification list: 5 opens + 5 older pages charged as misses, 200 sender lookups, 1 explicit mark-all of 40 unread",
   "baseline_daily_reads": 43630,
   "baseline_daily_writes": 1875,
   "cached_open_auth_allowance": 1,
   "cached_open_incremental_home_and_badge_documents": 0,
   "cold_open_documents_with_60_friends": 177,
   "cron_runs_per_day": 96,
-  "daily_reads": 19945,
-  "daily_writes": 1295,
+  "daily_reads": 11000,
+  "daily_writes": 1495,
   "measurement": "document-delivery estimate, not D1 rows_read telemetry",
   "read_limit": 100000,
   "reads_per_user_per_day": {
@@ -21,19 +21,18 @@
     "feed_listener": 0,
     "feed_pages": 200,
     "friend_graph": 60,
-    "notifications": 2250,
+    "notification_mark_all": 61,
+    "notification_pages": 100,
+    "notification_senders": 200,
+    "notifications": 100,
     "profiles": 80,
     "reactions": 0,
     "story_viewer": 100,
     "visible_discovery": 3
   },
-  "reads_per_user_total": 3893,
-  "reads_removed_pct": 54.3,
+  "reads_per_user_total": 2104,
+  "reads_removed_pct": 74.8,
   "top_read_consumers": [
-    {
-      "action": "notifications",
-      "reads": 2250
-    },
     {
       "action": "chat_threads",
       "reads": 516
@@ -41,6 +40,10 @@
     {
       "action": "chat_list",
       "reads": 300
+    },
+    {
+      "action": "feed_pages",
+      "reads": 200
     }
   ],
   "users": 5,
@@ -51,6 +54,7 @@
     "fcm_maintenance": 2,
     "live": 10,
     "messages": 30,
+    "notification_mark_all": 40,
     "notifications": 30,
     "posts_comments": 30,
     "presence": 0,
@@ -59,6 +63,6 @@
     "room_previews": 30,
     "settings": 5
   },
-  "writes_per_user_total": 259,
-  "writes_removed_pct": 30.9
+  "writes_per_user_total": 299,
+  "writes_removed_pct": 20.3
 }

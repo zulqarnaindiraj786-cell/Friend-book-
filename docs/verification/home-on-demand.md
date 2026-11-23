@@ -24,10 +24,34 @@ Repeat open: **0 extra Home/badge query documents**, plus 1 conservative auth al
 Two explicit refreshes/day are separately charged (158 documents). Cache eviction, writes or push
 invalidations can cause extra cache misses, so 136 is not a universal daily cap.
 
-Five-user scenario: **19,945 document reads / 1,295 row-write operations per day**.
-If all 20 opens miss cache: **36,965 estimated reads/day** under the script's other assumptions.
-The notification query was previously undercounted at 20; actual `limit(450)` is now charged:
-2,250 documents/user/day for five notification opens, now the largest bucket.
+Five-user revised scenario: **11,000 document reads / 1,495 row-write operations per day**.
+If all 20 app opens miss cache: **28,020 estimated reads/day** under the script's other assumptions.
+
+Correction to the previous report: `limit(450)` was inside the explicit **Mark all read** action,
+NOT the normal notification-open path. The old 2,250 notification-open reads/user/day number was
+an accounting error, not a measured leak. Do not claim its removal as a performance improvement.
+The normal list was already paginated at 20; its genuine repeated-read issue was `startDelta()`
+revalidating on tab opens and `next()` always querying the server.
+
+## Notification follow-up
+- First page remains 20; cache-hit opening (including empty list) does not revalidate in background.
+- Explicit pull bypasses cache; local committed writes invalidate stale query results.
+- Older exact cursor pages are cache-first too. Pagination requires real downward scroll reaching
+  the last visible row, or Load more. Scroll gate prevents repeated requests for the same boundary.
+- Notification RecyclerView prefetch disabled; deep links, All/Unread filters and sender ticks retained.
+- Mark all read only runs on button click. 20-row server batches use keyset continuation so already
+  marked prefixes aren't repeatedly scanned. Duplicate taps guarded; leaving tab/closing invalidates
+  callbacks and stops continuation. In-flight network requests cannot be undone.
+- Bulk failures unlock retry without falsely marking everything locally; success updates local state.
+- Per-item read success updates local state; repeated taps do not duplicate pending writes.
+- Shared CursorPager's new on-demand mode is opt-in; other screens retain existing behavior.
+
+Budget charges five notification opens and five older pages as cache misses: **200 list documents**,
+plus a conservative **200 unknown-sender lookups**. One explicit mark-all of 40 unread rows adds
+**61 reads** (40 rows + empty-tail allowance + refreshed head) and **40 writes** per user/day.
+Cache hits lower query delivery but cache invalidation/eviction and more activity raise it.
+Smaller mark-all batches bound request size; they do NOT eliminate the necessary total N row writes.
+These new assumptions differ from the earlier model, so daily-total differences are not measured savings.
 
 IMPORTANT: LIMIT bounds returned documents, not D1 scanned/index rows or engagement subqueries.
 Cron scan counts, write amplification and other activity costs remain assumptions. No production
@@ -36,8 +60,8 @@ See `home-on-demand-budget.json` and run `python3 -m scripts.loadtest.five_user_
 
 ## Verification
 - Worker: `npm test`: 234/234 passed.
-- Python: `python3 -m unittest discover -s scripts/tests`: 321 passed.
-- Android debug Java compilation + JVM tests: **PASS**, commit `8591263`,
-  https://github.com/zulqarnaindiraj786-cell/Friend-book-/actions/runs/45108319908
+- Python: `python3 -m unittest discover -s scripts/tests`: 325 passed.
+- Android debug Java compilation + JVM tests: **PASS**, notification commit `6b91a8d`:
+  https://github.com/zulqarnaindiraj786-cell/Friend-book-/actions/runs/45109014981
   New behavioral tests cover empty cache, forced refresh, invalidation and eviction.
   No device-level scrolling/visual test claimed.
