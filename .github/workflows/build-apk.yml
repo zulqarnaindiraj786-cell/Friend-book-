@@ -157,17 +157,23 @@ jobs:
           unset FB_KEYSTORE_B64 HIST_PW HIST_KEY_PW
           : "${FRIENDBOOK_RELEASE_KEY_ALIAS:?Missing release key alias}"
           : "${FRIENDBOOK_RELEASE_KEY_PASSWORD:?Missing release key password}"
-          set +e
+          set -e
           for VER in "15-robolectric-12650502-i7" "9-robolectric-4913185-2-i7"; do
             DIR="$HOME/.m2/repository/org/robolectric/android-all-instrumented/$VER"
             JAR="$DIR/android-all-instrumented-$VER.jar"
-            if [ ! -s "$JAR" ]; then
-              mkdir -p "$DIR"
-              curl -fsSL --retry 6 --retry-delay 3 --retry-all-errors \
-                "https://repo.maven.apache.org/maven2/org/robolectric/android-all-instrumented/$VER/android-all-instrumented-$VER.jar" \
-                -o "$JAR.tmp" && mv "$JAR.tmp" "$JAR"
+            URL="https://repo.maven.apache.org/maven2/org/robolectric/android-all-instrumented/$VER/android-all-instrumented-$VER.jar"
+            mkdir -p "$DIR"
+            curl -fsSL --connect-timeout 15 --max-time 120 --retry 3 --retry-max-time 180 --retry-delay 3 --retry-all-errors "$URL.sha512" -o "$JAR.sha512.tmp"
+            HASH="$(awk '{print $1}' "$JAR.sha512.tmp")"
+            [[ "$HASH" =~ ^[a-fA-F0-9]{128}$ ]]
+            if [ ! -f "$JAR" ] || ! printf '%s  %s\n' "$HASH" "$JAR" | sha512sum --check --status; then
+              curl -fsSL --connect-timeout 15 --max-time 120 --retry 3 --retry-max-time 180 --retry-delay 3 --retry-all-errors "$URL" -o "$JAR.tmp"
+              printf '%s  %s\n' "$HASH" "$JAR.tmp" | sha512sum --check --status
+              mv "$JAR.tmp" "$JAR"
             fi
+            rm "$JAR.sha512.tmp"
           done
+          set +e
           gradle testReleaseUnitTest bundleRelease assembleRelease --console=plain > build-release.log 2>&1
           RC=$?
           if [ "$RC" != "0" ]; then
@@ -268,15 +274,17 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          TAG="friendbook-2.10.33-signed-${GITHUB_SHA:0:8}"
+          VER=$(grep "versionName" app/build.gradle | head -n1 | sed -E "s/.*['\"]([^'\"]+)['\"].*/\1/")
+          VCODE=$(grep "versionCode" app/build.gradle | head -n1 | awk '{print $2}')
+          TAG="friendbook-${VER}-signed-${GITHUB_SHA:0:8}"
           if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" friendbook.apk friendbook-playstore.aab friendbook-mapping.txt friendbook-SHA256SUMS.txt --clobber
-          else
-            gh release create "$TAG" friendbook.apk friendbook-playstore.aab friendbook-mapping.txt friendbook-SHA256SUMS.txt \
-              --target "$GITHUB_SHA" --prerelease --latest=false \
-              --title 'friendbook 2.10.33 — Signed test APK + AAB' \
-              --notes 'Owner-requested signed test candidate from PR #36, versionCode 175. Includes on-demand quota fixes and Invite Friends. Not merged, not a production capacity pass, not published to Google Play. The production Latest release is unchanged.'
+            echo '::error::Candidate already exists; refusing to overwrite assets.'
+            exit 1
           fi
+          gh release create "$TAG" friendbook.apk friendbook-playstore.aab friendbook-mapping.txt friendbook-SHA256SUMS.txt \
+            --target "$GITHUB_SHA" --prerelease --latest=false \
+            --title "FriendBook ${VER} (${VCODE}) — consolidated signed quota candidate" \
+            --notes "Owner-requested consolidated signed APK and AAB from PR #36, source ${GITHUB_SHA}, versionCode ${VCODE}. Includes client quota fixes through ad-social retry/account isolation and server source through canonical profile audience. Release JVM tests and APK/AAB signatures verified by this build. Not merged, not uploaded to Google Play, not installed automatically, and not a completed-day quota/capacity guarantee. Production Latest release unchanged. SHA256 checksums and R8 mapping attached."
 
       # Publish the owner-requested release APK + Play Store AAB so in-app updates serve the new Cloudflare APK.
       - name: Publish Signed Release APK + Play Store AAB to GitHub Releases
