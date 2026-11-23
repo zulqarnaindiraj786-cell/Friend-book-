@@ -67,7 +67,7 @@ def safe_shape(sql):
     roots=[r for r in ('users','posts','comments','friends','friend_requests','chats','notifications','reels','lives')
            if re.search(r"\b(?:parent_path|collection|collection_id)\s*=\s*'"+r+"'",q)]
     features=[label for token,label in [('friendbook_cf_social_guards','transaction_guard'),
-        ('friendbook_cf_chat_participants','chat_membership'),('quota_inbox_candidates','inbox_activity_sort'),('friendbook_cf_comment','comment'),
+        ('friendbook_cf_chat_participants','chat_membership'),('quota_inbox_candidates','inbox_activity_sort'),('idx_cf_chat_activity_seek','inbox_shared_activity_seek'),('friendbook_cf_comment','comment'),
         ('idx_cf_friend_participant_0','indexed_friend_guard'),('where path','path_lookup'),('as preview_json','engagement_preview'),
         ('as total_comments','engagement_comment_total'),('as types_json','reaction_totals'),
         ('idx_cf_canonical_comment_page_','historical_comment_page'),

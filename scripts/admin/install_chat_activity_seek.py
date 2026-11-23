@@ -80,6 +80,13 @@ def main():
         plan=call(f"EXPLAIN QUERY PLAN SELECT path,doc_id FROM friendbook_cf_firestore_documents INDEXED BY {NAME} WHERE path='chats/'||doc_id ORDER BY {expression},doc_id DESC LIMIT ?",(64,))['results']
         details=[row['detail'] for row in plan]
         if not any(NAME in row for row in details) or any('TEMP B-TREE' in row for row in details):raise ValueError('Ordered shared seek plan not established')
+        # Force bounded canonical-document and membership reads, but return
+        # aggregates only: never send user document JSON/IDs to CI output.
+        bounded=call(f"SELECT COUNT(*) AS candidates, SUM(length(document_json)+has_member) AS forced_materialization FROM (SELECT f.document_json, EXISTS(SELECT 1 FROM friendbook_cf_chat_participants m WHERE m.participant_uid=? AND m.chat_path=f.path AND m.source=1) AS has_member FROM friendbook_cf_firestore_documents f INDEXED BY {NAME} WHERE f.path='chats/'||f.doc_id ORDER BY {expression},f.doc_id DESC LIMIT 64)",('__quota_shared_seek__',))
+        candidates=bounded['results'][0]['candidates']
+        if type(candidates) is not int or not 0<=candidates<=64:raise ValueError('Bounded read probe returned unexpected count')
+        report['bounded_read_probe']={'candidates':candidates,**{k:bounded['meta'][k] for k in ('rows_read','rows_written')}}
+        if bounded['meta']['rows_written']!=0:raise ValueError('Read-only probe unexpectedly wrote rows')
         report.update({'plan':details,'index_installed':True,'database_file_size':size})
     finally:
         report['operation_cost']={k:sum(row[k] for row in costs) for k in ('rows_read','rows_written')}

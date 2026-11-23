@@ -1,5 +1,5 @@
 import { inboxSqlActivity } from './inbox-activity-sql.js';
-import { recordInboxSortCost, tryInboxSeek, suspendInboxSeek } from './inbox-plan-hints.js';
+import { recordInboxSortCost, inboxSeekSize, suspendInboxSeek } from './inbox-plan-hints.js';
 import { writeAttribution } from './write-attribution.js';
 import { accountStatus } from './account-access.js';
 import { pushCommittedChat } from './fcm-push.js';
@@ -348,7 +348,8 @@ async function boundedInboxPage(db,uid,spec,requestUserReads) {
   // Only try the shared ordered stream after actual D1 metadata has shown
   // this actor's membership sort to be expensive. No extra count/probe query
   // for small inboxes. The hint never substitutes for current document ACLs.
-  if(tryInboxSeek(db,uid)) {
+  const seekSize=inboxSeekSize(db,uid,spec.limit);
+  if(seekSize) {
     try {
       const head=await db.prepare(`SELECT f.*, ${inboxSqlActivity} AS inbox_activity,
         EXISTS(SELECT 1 FROM friendbook_cf_chat_participants m WHERE m.participant_uid=?
@@ -357,18 +358,18 @@ async function boundedInboxPage(db,uid,spec,requestUserReads) {
         WHERE f.path='chats/'||f.doc_id
           ${predicates.map(p=>' AND '+p).join('')}
         ORDER BY inbox_activity ${direction},doc_id ${direction} LIMIT ?`)
-        .bind(uid,...bindings.slice(1),64).all();
+        .bind(uid,...bindings.slice(1),seekSize).all();
       const rows=head.results||[];
       if(rows.every(row=>/^[\x20-\x7e]+$/.test(row.doc_id) && row.path===`chats/${row.doc_id}` && isDocumentPath(row.path))) {
         const memberRows=rows.filter(row=>row.inbox_member===1);
         const docs=memberRows.map(row=>rowToDocument({...row,[canonicalRootSnapshot]:true}));
         if(docs.every((doc,i)=>inboxActivity(doc.data)===memberRows[i].inbox_activity)) {
           const visible=await visibleDocuments(db,uid,'chats',prefilterRaw(docs,'chats',spec.filters),requestUserReads);
-          if(visible.length>=spec.limit || rows.length<64)
+          if(visible.length>=spec.limit || rows.length<seekSize)
             return applyQuery(visible.map(doc=>({...doc,data:{...doc.data,inboxActivityAt:inboxActivity(doc.data)}})),spec);
         }
       }
-      // A sparse user's index attempt must not add 64 unrelated candidates to
+      // A sparse user's index attempt must not add a bounded unrelated head to
       // every request. Retain the exact membership query during cooldown.
       suspendInboxSeek(db,uid);
     } catch(error) {

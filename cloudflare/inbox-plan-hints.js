@@ -11,11 +11,19 @@ export function recordInboxSortCost(db,uid,meta,now=Date.now()) {
   map.delete(uid);map.set(uid,{cost:rows,expires:now+TTL,blockedUntil:0});
   if(map.size>MAX_ACTORS)map.delete(map.keys().next().value);
 }
-export function tryInboxSeek(db,uid,now=Date.now()) {
+export function inboxSeekSize(db,uid,limit,now=Date.now()) {
   const map=entries(db),hint=map.get(uid);
-  if(!hint)return false;
-  if(hint.expires<=now){map.delete(uid);return false;}
-  return hint.blockedUntil<=now && hint.cost>=256;
+  if(!hint)return 0;
+  if(hint.expires<=now){map.delete(uid);return 0;}
+  if(hint.blockedUntil>now || hint.cost<64)return 0;
+  // Budget at most four potential index/table/membership/ACL reads per
+  // candidate against the last measured sort cost. Never issue a head that
+  // cannot fill the requested page (except naturally exhausted streams).
+  const size=Math.min(64,Math.floor(hint.cost/4));
+  return size>=limit?size:0;
+}
+export function tryInboxSeek(db,uid,now=Date.now()) {
+  return inboxSeekSize(db,uid,1,now)>0;
 }
 export function suspendInboxSeek(db,uid,now=Date.now()) {
   const map=entries(db);map.delete(uid);

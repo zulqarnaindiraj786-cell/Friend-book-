@@ -5,14 +5,14 @@ import {DatabaseSync} from 'node:sqlite';
 import {readFileSync} from 'node:fs';
 import {createWorker} from '../../worker.js';
 
-function fixture(withIndex=false) {
+function fixture(withIndex=false,measuredCost=null) {
   const sql=new DatabaseSync(':memory:');
   for(const migration of ['0003_additive_interactions','0011_additive_app_documents','0014_additive_firestore_documents','0040_chat_participant_lookup','0073_chat_membership_source_seek'])
     sql.exec(readFileSync(new URL(`../migrations/${migration}.sql`,import.meta.url),'utf8'));
   if(withIndex)sql.exec(readFileSync(new URL('../migrations/0091_chat_activity_seek.sql',import.meta.url),'utf8'));
   const reads=[];
   const db={prepare(q){const stmt=sql.prepare(q);return {bind(...a){return {
-    async all(){const results=stmt.all(...a);reads.push({q,args:a,rows:results.length});return {results};},
+    async all(){const results=stmt.all(...a);reads.push({q,args:a,rows:results.length});return {results,...(measuredCost!==null && q.includes('WITH quota_inbox_candidates')?{meta:{rows_read:measuredCost}}:{})};},
     async first(){return stmt.get(...a)||null;},async run(){return stmt.run(...a);},
   };}};}};
   const add=(id,data)=>sql.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)')
@@ -111,6 +111,8 @@ test('shared activity index seeks a bounded head with parity and no per-member w
     // are no per-member row triggers, NOT that the new index is free to write.
     assert.equal(f.sql.prepare('SELECT total_changes() n').get().n-before,5); // old fixture membership trigger deletes/reinserts two edges
     assert.equal((await f.query({}))[0].id,'room0000');
+    f.sql.prepare("UPDATE friendbook_cf_firestore_documents SET document_json=json_set(document_json,'$.participants',json(?)) WHERE path='chats/room0000'").run(JSON.stringify(['alice','eve']));
+    assert.ok(!(await f.query({})).some(d=>d.id==='room0000'),'a performance hint never caches membership after revocation');
   } finally {f.sql.close();}
 });
 
@@ -135,4 +137,16 @@ test('missing seek index and Unicode ties preserve the exact compatibility resul
       f.expensive();assert.deepEqual(await f.query({}),await f.query({},true));
     } finally {f.sql.close();}
   }
+});
+
+
+test('shared seek warms only from actual membership-query metadata, without an extra count query',async()=>{
+  const f=fixture(true,2000);try {
+    for(let i=0;i<200;i++)f.add(`room${String(i).padStart(4,'0')}`,{participants:['alice','bob'],lastMessageTime:1000-i});
+    const first=await f.query({});
+    assert.equal(f.reads.filter(r=>r.q.includes('WITH quota_inbox_candidates')).length,1);
+    assert.ok(!f.reads.some(r=>r.q.includes('idx_cf_chat_activity_seek')));
+    f.reads.length=0;assert.deepEqual(await f.query({}),first);
+    assert.equal(f.reads.length,1);assert.ok(f.reads[0].q.includes('idx_cf_chat_activity_seek'));
+  } finally {f.sql.close();}
 });

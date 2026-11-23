@@ -120,3 +120,8 @@ class TrafficReport(unittest.TestCase):
         self.assertIn('chat_membership',shape['features'])
         self.assertIn('inbox_activity_sort',shape['features'])
         self.assertNotIn('SECRET',str(shape))
+
+    def test_shared_seek_has_its_own_sanitized_feature(self):
+        shape=p.safe_shape("SELECT * FROM friendbook_cf_firestore_documents f INDEXED BY idx_cf_chat_activity_seek WHERE f.path='SECRET'")
+        self.assertIn('inbox_shared_activity_seek',shape['features'])
+        self.assertNotIn('SECRET',str(shape))
