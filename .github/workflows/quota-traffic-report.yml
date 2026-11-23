@@ -1,4 +1,4 @@
-# Owner-requested spike diagnosis: prior 24 hours, not a post-fix acceptance certificate.
+# Refresh current 5m/60m consumers; mixed 24h is context, never a post-fix certificate.
 name: Analytics-only quota traffic report
 on:
   push:
