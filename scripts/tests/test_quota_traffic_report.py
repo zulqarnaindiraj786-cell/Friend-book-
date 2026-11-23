@@ -144,3 +144,17 @@ class TrafficReport(unittest.TestCase):
         result=p.parse_databases({'data':{'viewer':{'accounts':[{'d1QueriesAdaptiveGroups':[]}]}}})
         self.assertEqual(result['status'],'no_observations_available')
         with self.assertRaises(ValueError):p.parse_databases({'errors':[{'message':'no access'}]})
+
+    def test_cross_window_summary_keeps_other_database_usage_and_unknowns_distinct(self):
+        windows=[]
+        for minutes in (5,15,60):
+            windows.append({'minutes':minutes,'end':'end','all_query_totals':{'sum':{'rowsRead':7,'rowsWritten':2}},
+              'account_database_breakdown':{'status':'observations_available','may_be_truncated':False,
+               'databases':[{'primary_application':True,'rowsRead':7,'rowsWritten':2},
+                            {'primary_application':False,'rowsRead':9,'rowsWritten':4}]}})
+        result=p.cross_window_totals(windows)
+        self.assertEqual([r['minutes'] for r in result],[5,15,60])
+        self.assertEqual(result[2]['observed_other_database_subtotals'],{'rowsRead':9,'rowsWritten':4})
+        self.assertLess(len(str(result)),4000)
+        windows[0]['account_database_breakdown']={'status':'analytics_unavailable_not_zero','databases':[]}
+        self.assertIsNone(p.cross_window_totals(windows)[0]['observed_other_database_subtotals'])

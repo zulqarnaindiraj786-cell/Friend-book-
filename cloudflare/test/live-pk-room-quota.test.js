@@ -14,14 +14,16 @@ test('PK room poll shares authorization lookups only within each request',async 
  put('lives/b',{hostId:'bob',status:'live',privacy:'public'});
  sql.prepare("INSERT INTO friendbook_cf_live_pk(id,room_a,room_b,host_a,host_b,status,duration_sec,created_at,expires_at) VALUES (?,?,?,?,?,?,?,?,?)").run('battle','a','b','alice','bob','active',180,1,Date.now()+60000);
  const reads=[];
- const db={prepare(q){const stmt=sql.prepare(q);return{bind(...args){return{first:async()=>{if(q.includes('SELECT document_json FROM friendbook_cf_firestore_documents WHERE path = ?1'))reads.push(args[0]);return stmt.get(...args)||null;},all:async()=>({results:stmt.all(...args)}),run:async()=>stmt.run(...args)};}};}};
+ const db={prepare(q){const stmt=sql.prepare(q);return{bind(...args){return{first:async()=>{if(q.includes('FROM friendbook_cf_firestore_documents') && typeof args[0]==='string' && /^(users|lives)\//.test(args[0]))reads.push(args[0]);return stmt.get(...args)||null;},all:async()=>({results:stmt.all(...args)}),run:async()=>stmt.run(...args)};}};}};
  const app=createWorker(async t=>t),env={DB:db,FIREBASE_PROJECT_ID:'test'};
  const check=async()=>{reads.length=0;const response=await app.fetch(new Request('https://example.test/v1/live/pk',{method:'POST',headers:{authorization:'Bearer viewer','content-type':'application/json'},body:JSON.stringify({action:'room',room:'a'})}),env);assert.equal(response.status,200);return response.json();};
  assert.equal((await check()).id,'battle');
  assert.equal(reads.filter(v=>v==='lives/a').length,1);assert.equal(reads.filter(v=>v==='lives/b').length,1);
  assert.equal(reads.filter(v=>v==='users/alice').length,1);assert.equal(reads.filter(v=>v==='users/bob').length,1);
- assert.equal(reads.filter(v=>v==='users/viewer').length,2,'account gate plus one shared authorization read');
+ assert.equal(reads.filter(v=>v==='users/viewer').length,1,'reuse same-request account gate snapshot, never a cross-request cache');
  const update=sql.prepare('UPDATE friendbook_cf_firestore_documents SET document_json=? WHERE path=?');
+ update.run(JSON.stringify({displayName:'Renamed host'}),'users/alice');
+ assert.equal((await check()).name_a,'Renamed host','name refreshes on the next request without duplicate host reads');
  update.run(JSON.stringify({hostId:'alice',status:'live',privacy:'public',kickedUserIds:['viewer']}),'lives/a');
  assert.equal((await check()).status,'idle','kick is checked on the next poll');
  update.run(JSON.stringify({hostId:'alice',status:'live',privacy:'public'}),'lives/a');

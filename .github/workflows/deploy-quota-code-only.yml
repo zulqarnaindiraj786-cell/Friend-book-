@@ -1,4 +1,4 @@
-# Code-only rollout: repair portable bounded maintenance and remove invalid retired-view cleanup.
+# Code-only rollout: reuse same-request live PK profiles; maintenance repair remains included.
 name: Deploy quota fixes without database migrations
 on:
   push:

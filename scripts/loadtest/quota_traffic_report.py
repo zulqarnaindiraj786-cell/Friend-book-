@@ -160,6 +160,23 @@ def notice_lines(window):
     return lines
 
 
+def cross_window_totals(windows):
+    results=[]
+    for window in windows:
+        split=window.get('account_database_breakdown',{})
+        databases=split.get('databases',[])
+        known=split.get('status')=='observations_available'
+        def subtotal(primary):
+            return {metric:sum(row[metric] for row in databases if row['primary_application']==primary)
+                    for metric in ('rowsRead','rowsWritten')} if known else None
+        results.append({'minutes':window['minutes'],'end':window['end'],'primary_totals':window['all_query_totals'],
+                        'database_split_status':split.get('status','unavailable'),
+                        'observed_database_count':len(databases) if known else None,
+                        'may_be_truncated':split.get('may_be_truncated'),
+                        'observed_primary_database_subtotals':subtotal(True),'observed_other_database_subtotals':subtotal(False)})
+    return results
+
+
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output',type=Path)
@@ -188,6 +205,10 @@ def main():
             window['account_database_breakdown']={'status':'analytics_unavailable_not_zero','databases':[],'may_be_truncated':None}
             print('::warning::Account database split unavailable; do not interpret missing databases as zero usage.')
         report['windows'].append(window)
+    # CI can cap annotations per step: put ALL window totals first, rather
+    # than losing 15/60-minute evidence behind the five-minute shape notices.
+    print('::notice::Sanitized cross-window totals '+json.dumps(cross_window_totals(report['windows']),sort_keys=True))
+    for window in report['windows']:
         for line in notice_lines(window): print('::notice::'+line)
     if args.output:
         args.output.parent.mkdir(parents=True,exist_ok=True)

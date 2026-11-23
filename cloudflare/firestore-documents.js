@@ -6,7 +6,7 @@ import { pushCommittedChat } from './fcm-push.js';
 import { profileAudience } from './profile-audience.js';
 import { mapBounded } from './map-bounded.js';
 import { engagementSummary, batchEngagementReads, MAX_FEED_ENGAGEMENT_PAGE } from './interactions.js';
-import { requestAccountReads, readD1DocumentFields, toFirestoreFields } from './app-documents.js';
+import { requestAccountReads, readD1DocumentFields, toFirestoreFields, fromFirestoreValue } from './app-documents.js';
 import { callAccountsAllowed } from './call-access.js';
 import { authorizeLiveMedia, authorizeLiveRoom } from './live-access.js';
 import { canReadPayment, canCreateFreeReview, isPaymentAdmin } from './payment-access.js';
@@ -2739,7 +2739,7 @@ const LIVE_GIFTS=new Map(Object.entries({rose:['Rose','rose',1],heart:['Finger H
   airplane:['Private Jet','jet',299],lion:['Golden Lion','lion',500],universe:['Universe','rocket',1000]}));
 
 // PK invitations and transitions are separate from chat messages and client-owned fields.
-async function livePk(request,db,uid,now) {
+async function livePk(request,db,uid,now,identity) {
   let input;
   if (request.method!=='POST') return json({error:'Method not allowed'},405);
   try { input=await request.json(); } catch { return json({error:'Invalid JSON'},400); }
@@ -2754,11 +2754,13 @@ async function livePk(request,db,uid,now) {
       const row=await db.prepare(`SELECT * FROM friendbook_cf_live_pk WHERE status='active' AND expires_at>? AND (room_a=? OR room_b=?) LIMIT 1`).bind(now,input.room,input.room).first();
       // The four checks belong to one request. Share in-flight room/account
       // reads only here; the next poll rechecks fresh privacy and ban state.
-      const reads=new Map();
+      const reads=requestAccountReads(identity);
       if (!row || !await authorizeLiveMedia(db,row.room_a,uid,'watch',reads) || !await authorizeLiveMedia(db,row.room_b,uid,'watch',reads)
           || !await authorizeLiveMedia(db,row.room_a,row.host_a,'publish',reads) || !await authorizeLiveMedia(db,row.room_b,row.host_b,row.room_a===row.room_b?'watch':'publish',reads)) return json({status:'idle'});
-      const [a,b]=await Promise.all([readRow(db,`users/${row.host_a}`),readRow(db,`users/${row.host_b}`)]);
-      const name=r=>r ? String(decodeValue(JSON.parse(r.document_json)).displayName||'').slice(0,200) : '';
+      // Publish/watch ACLs already loaded both current host profiles. Reuse
+      // those same-request fields rather than fetching each host again for a name.
+      const [a,b]=await Promise.all([reads.get(`users/${row.host_a}`),reads.get(`users/${row.host_b}`)]);
+      const name=fields=>String(fromFirestoreValue(fields?.displayName)||'').slice(0,200);
       return json({...row,name_a:name(a)||'Host A',name_b:name(b)||'Host B'});
     }
     const load=id=>db.prepare('SELECT * FROM friendbook_cf_live_pk WHERE id=?').bind(id).first();
@@ -2998,7 +3000,7 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0, ct
 
   if (path === '/v1/firestore/claim-referral') return claimReferral(request,db,uid,now);
   if (path === '/v1/chat/call') return signalChatCall(request,db,uid,now);
-  if (path === '/v1/live/pk') return livePk(request,db,uid,now);
+  if (path === '/v1/live/pk') return livePk(request,db,uid,now,identity);
   if (path === '/v1/admin/recover-social') return recoverLegacySocial(request,env,uid,now);
   if (path === '/v1/admin/broadcast') return adminBroadcast(request,env,uid,now);
   if (path === '/v1/admin/moderation') return adminModeration(request,env,uid,now);
