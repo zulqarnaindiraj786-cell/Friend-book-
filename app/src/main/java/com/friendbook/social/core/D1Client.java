@@ -37,7 +37,28 @@ public final class D1Client {
         return request(collection,id,kind,method,body,
                 "reactions".equals(kind) && "PUT".equals(method) ? "?response=reaction" : null,true);
     }
+    private static final ProfileReadFlights<List<String>,String> READ_OPERATIONS=new ProfileReadFlights<>();
     private static Task<JSONObject> request(String collection,String id,String kind,String method,JSONObject body,String query,boolean interactive){
+        if(!"GET".equals(method) || body!=null){
+            // A read started before or during a write cannot satisfy a later read.
+            READ_OPERATIONS.invalidateAll();
+            Task<JSONObject> write=executeRequest(collection,id,kind,method,body,query,interactive);
+            write.addOnCompleteListener(Runnable::run,ignored->READ_OPERATIONS.invalidateAll());
+            return write;
+        }
+        final String actor=Fb.uid();
+        // Share before queueing/token acquisition, not only while HTTP overlaps.
+        // Interactive recovery reads retain their own priority/freshness lane.
+        List<String> key=Arrays.asList(actor,collection,id,kind,query,interactive?"interactive":"normal");
+        Task<String> shared=READ_OPERATIONS.read(key,()->executeRequest(collection,id,kind,method,body,query,interactive)
+                .continueWith(Runnable::run,completed->completed.getResult().toString()));
+        return shared.continueWith(Runnable::run,completed->{
+            if(!Objects.equals(actor,Fb.uid()))throw new IOException("Account changed");
+            // Never share mutable JSON instances between consumers.
+            return new JSONObject(completed.getResult());
+        });
+    }
+    private static Task<JSONObject> executeRequest(String collection,String id,String kind,String method,JSONObject body,String query,boolean interactive){
         TaskCompletionSource<JSONObject> result=new TaskCompletionSource<>();
         if(!enabled(collection)){result.setException(new IOException("D1 route is disabled"));return result.getTask();}
         FirebaseUser user=Fb.auth().getCurrentUser();final String actor=Fb.uid();

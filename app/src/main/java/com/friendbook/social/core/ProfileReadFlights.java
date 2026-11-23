@@ -10,6 +10,9 @@ import java.util.concurrent.Callable;
 final class ProfileReadFlights<K,V> {
     private final Map<K,Task<V>> active=new HashMap<>();
 
+    /** Detach pre-mutation operations without cancelling their current consumers. */
+    synchronized void invalidateAll() { active.clear(); }
+
     synchronized Task<V> read(K key,Callable<Task<V>> start) {
         Task<V> existing=active.get(key);
         if (existing!=null) return existing;
