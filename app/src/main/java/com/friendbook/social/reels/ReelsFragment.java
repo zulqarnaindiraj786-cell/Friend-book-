@@ -86,11 +86,11 @@ public class ReelsFragment extends Fragment {
     /** A load that neither succeeds nor fails (black-hole network) must not strand the spinner. */
     private final android.os.Handler reelsWatchdog = new android.os.Handler(android.os.Looper.getMainLooper());
     private final android.os.Handler engagementHandler = new android.os.Handler(android.os.Looper.getMainLooper());
+    /** One-shot on resume: no 8s polling loop for engagement counts. */
     private final Runnable engagementRefresh = new Runnable() {
         @Override public void run() {
             if (!isResumed()) return;
             if (!isHidden() && adapter!=null && pager!=null) adapter.refreshVisibleEngagement(pager);
-            engagementHandler.postDelayed(this, 8000L);
         }
     };
     private int watchdogGen;

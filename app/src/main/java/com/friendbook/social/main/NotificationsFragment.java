@@ -182,16 +182,8 @@ public class NotificationsFragment extends Fragment {
         com.friendbook.social.d1.documents.Query query=Fb.db().collection("notifications").whereEqualTo("toUserId",me);
         if(unreadOnly)query=query.whereEqualTo("isRead",false);
         query = query.orderBy("createdAt", com.friendbook.social.d1.documents.Query.Direction.DESCENDING);
-        if (reg == null) {
-            // Watch the latest page while the tab is open; the pager itself is one-shot.
-            final boolean[] first = {true};
-            reg = query.limit(20).addSnapshotListener((snapshot, error) -> {
-                if (snapshot == null) return;
-                if (first[0]) { first[0] = false; return; }
-                if (snapshot.getMetadata().isFromCache()) return;
-                if (!isHidden() && java.util.Objects.equals(me, Fb.uid())) startPages();
-            });
-        }
+        // STEP 7: notifications never auto-refresh. The list is read when the user opens the tab
+        // or pulls to refresh, and stays exactly as-is until then. No snapshot listener, no timer.
         pager=new com.friendbook.social.core.CursorPager(query,20,"notifications:"+unreadOnly,(docs,more,loading,error)->{
             android.app.Activity act=getActivity();if(act==null || adapter==null)return;
             if(loading){moreButton.setText("Loading…");moreButton.setEnabled(false);return;}

@@ -552,8 +552,9 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
                         adapter.setPeerPhoto(peerPhoto);
                     });
 
-            // Live Presence (Firestore + RTDB merged + 30s live age refresh, never wiped by typing!)
-            presence = Presence.watch(peerId, (online, lastSeen) -> {
+            // STEP 7: presence is read once when the chat opens — no 30s polling ticker.
+            // Reopening the chat (or the peer sending a message) refreshes it.
+            Presence.peek(peerId, (online, lastSeen) -> {
                 peerOnline = online;
                 peerLastSeen = lastSeen;
                 refreshPresenceText();

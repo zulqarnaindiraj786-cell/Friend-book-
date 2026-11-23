@@ -944,7 +944,8 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
                         incomingRequestId = hasIn ? snap.getDocuments().get(0).getId() : null;
                         computeFriendState();
                     });
-            presenceH = Presence.watch(uid, (online, lastSeen) -> {
+            // STEP 7: one-shot presence read on open instead of a 30s polling watcher.
+            Presence.peek(uid, (online, lastSeen) -> {
                 if (online) {
                     presenceT.setText("🟢 Active now");
                     presenceT.setVisibility(View.VISIBLE);

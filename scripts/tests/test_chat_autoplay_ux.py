@@ -4,8 +4,12 @@ JAVA=Path(__file__).resolve().parents[2]/'app/src/main/java/com/friendbook/socia
 class ChatAutoplayUx(unittest.TestCase):
     def test_ten_chats_and_ten_latest_and_older_messages(self):
         inbox=(JAVA/'chat/ConversationsActivity.java').read_text();chat=(JAVA/'chat/ChatActivity.java').read_text()
-        for token in ['cachedRooms++>=10','query.limit(10).addSnapshotListener','query.limit(10).get(com.friendbook.social.d1.documents.Source.SERVER)']:
+        # STEP 7 contract: the inbox page is a bounded one-shot read on open / pull-to-refresh.
+        for token in ['cachedRooms++>=10','query.limit(10).get(com.friendbook.social.d1.documents.Source.SERVER)']:
             self.assertIn(token,inbox)
+        # ... and it must NOT attach a live listener that refreshes the list behind the user's back.
+        self.assertNotIn('query.limit(10).addSnapshotListener',inbox)
+        self.assertIn('swipe.setOnRefreshListener',inbox)
         self.assertIn('.limitToLast(40)',chat);self.assertIn('startAfter(historyCursor)',chat);self.assertIn('older.limit(40)',chat)
     def test_metadata_does_not_render_again_and_read_dispatch_precedes_render(self):
         chat=(JAVA/'chat/ChatActivity.java').read_text();adapter=(JAVA/'chat/MessagesAdapter.java').read_text()

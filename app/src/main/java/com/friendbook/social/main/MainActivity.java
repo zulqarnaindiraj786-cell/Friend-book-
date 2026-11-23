@@ -560,6 +560,9 @@ public class MainActivity extends Activity {
         if (notifReg != null) notifReg.remove();
         notifReg = Fb.db().collection("notifications")
                 .whereEqualTo("toUserId", me).whereEqualTo("isRead", false)
+                // Bounded badge window: the pill never shows more than 99+, so reading every
+                // unread notification forever is pure waste. Push updates keep it current.
+                .limit(30)
                 .addSnapshotListener((snap, err) -> {
                     if (snap == null || !java.util.Objects.equals(me,Fb.uid())) return;
                     synchronized (currentUnreadNotifIds) {
@@ -597,6 +600,9 @@ public class MainActivity extends Activity {
         if (chatReg != null) chatReg.remove();
         chatReg = Fb.db().collection("chats")
                 .whereArrayContains("participants", me)
+                // Bounded room window: an account with 400 rooms must not re-read 400 rows every
+                // time one message lands. Recent rooms carry the unread that the badge shows.
+                .limit(60)
                 .addSnapshotListener((snap, err) -> {
                     if (snap == null || !java.util.Objects.equals(me,Fb.uid())) return;
                     int total = 0;

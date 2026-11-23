@@ -281,6 +281,43 @@ public class Presence {
         return h;
     }
 
+    /**
+     * One-shot presence read for list rows (chat list, friend list).
+     *
+     * Exactly one Firestore document read plus one Cloudflare presence fetch, then done: no
+     * snapshot listener, no 30s ticker, nothing that keeps running in the background. The chat list
+     * re-reads presence only when the user opens or pulls to refresh it.
+     */
+    public static void peek(final String uid, final PresenceCallback cb) {
+        if (uid == null || uid.isEmpty() || cb == null) return;
+        final Handle h = new Handle();
+        final boolean[] fsSeen = {false};
+        final boolean[] fsOnline = {false};
+        final long[] fsLastSeen = {0L};
+        final long[] revision = {0L};
+        final Runnable emit = () -> { if (!h.closed) cb.onPresence(fsOnline[0], fsLastSeen[0]); };
+        try {
+            Fb.db().collection("users").document(uid).get().addOnSuccessListener(d -> {
+                if (h.closed) return;
+                revision[0]++;
+                if (d == null || !d.exists()) { emit.run(); return; }
+                fsSeen[0] = !d.getMetadata().isFromCache();
+                Boolean show = d.getBoolean("showActiveStatus");
+                boolean allowed = (show == null || show)
+                        && !Boolean.TRUE.equals(d.getBoolean("deactivated"))
+                        && !Boolean.TRUE.equals(d.getBoolean("banned"));
+                fsOnline[0] = allowed && isUserOnlineDoc(d);
+                fsLastSeen[0] = allowed ? extractLastSeenMs(d) : 0L;
+                emit.run();
+            }).addOnFailureListener(e -> { });
+        } catch (Throwable ignored) { }
+        if (BuildConfig.CLOUDFLARE_PRESENCE_ENABLED) {
+            fetchCloudflarePresence(uid, h, fsSeen, fsOnline, fsLastSeen, revision, emit);
+        }
+        // Stop listening for late async results; nothing outlives a single list refresh.
+        H.postDelayed(h::close, 20_000L);
+    }
+
     private static void fetchCloudflarePresence(String uid, Handle h, boolean[] fsSeen, boolean[] fsOnline,
                                                 long[] fsLastSeen, long[] profileRevision, Runnable emit) {
         if (!BuildConfig.CLOUDFLARE_PRESENCE_ENABLED || h.closed || uid == null || !h.cfReadInFlight.compareAndSet(false, true)) return;

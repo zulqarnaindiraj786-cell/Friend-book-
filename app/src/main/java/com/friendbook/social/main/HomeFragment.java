@@ -78,10 +78,11 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
     private int feedGeneration;
     private long lastFeedFetch;
     private final android.os.Handler engagementHandler=new android.os.Handler(android.os.Looper.getMainLooper());
+    /** One-shot on open only. Engagement counts never poll on a timer: the reaction observer
+     *  already pushes changes for anything the user does, and reopening Home refreshes the rest. */
     private final Runnable engagementRefresh=new Runnable(){@Override public void run(){
         if(!isAdded())return;
         if(isVisible() && adapter!=null && rv!=null)adapter.refreshVisibleEngagement(rv);
-        engagementHandler.postDelayed(this,8000);
     }};
     private String feedAccount;
     private Query feedQuery, storyQuery;

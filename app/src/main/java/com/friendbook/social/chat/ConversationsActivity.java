@@ -49,7 +49,7 @@ public class ConversationsActivity extends Activity {
 
     private RecyclerView rv;
     private ConvAdapter adapter;
-    private ListenerRegistration reg, usersReg;
+    private ListenerRegistration reg;
     private LinearLayout activeRow, activeWrap;
     private TextView inboxTab, unreadTab, groupsTab, archiveTab, empty;
     private int tabMode = 0; // 0 = All Inbox, 1 = Unread Only, 3 = Groups Only, 2 = Archived
@@ -57,20 +57,24 @@ public class ConversationsActivity extends Activity {
     private String query = "";
     private final Map<String, Models.User> userCache = new HashMap<>();
     private boolean watchingPresence;
-    private final Map<String, Presence.Handle> activePresence = new HashMap<>();
+    private androidx.swiperefreshlayout.widget.SwipeRefreshLayout swipe;
+    private final Set<String> presenceAsked = new HashSet<>();
     private final Map<String, Boolean> onlineUsers = new HashMap<>();
     private final Map<String, Long> lastSeenUsers = new HashMap<>();
     private final Set<ConvAdapter.VH> boundHolders = new HashSet<>();
 
+    /**
+     * STEP 7: presence on the chat list is a one-shot read. Each user is resolved once per list
+     * refresh (open or pull-to-refresh) — no 30s polling watcher, nothing running in the background.
+     */
     private void ensurePresence(String uid) {
-        if (!watchingPresence || uid == null || uid.isEmpty() || Ui.TEAM_USER_ID.equals(uid) || uid.equals(Fb.uid()) || activePresence.containsKey(uid)) return;
-        Presence.Handle handle = Presence.watch(uid, (online, lastSeen) -> {
+        if (!watchingPresence || uid == null || uid.isEmpty() || Ui.TEAM_USER_ID.equals(uid) || uid.equals(Fb.uid()) || !presenceAsked.add(uid)) return;
+        Presence.peek(uid, (online, lastSeen) -> {
             if (!watchingPresence) return;
             onlineUsers.put(uid, online); lastSeenUsers.put(uid, lastSeen);
             renderActiveNow();
             for (ConvAdapter.VH holder : boundHolders) if (uid.equals(holder.boundUid)) renderRowPresence(holder, online, lastSeen);
         });
-        activePresence.put(uid, handle);
     }
     private void renderRowPresence(ConvAdapter.VH h, boolean online, long seen) {
         h.dot.setVisibility(online ? View.VISIBLE : View.GONE);
@@ -202,7 +206,15 @@ public class ConversationsActivity extends Activity {
         refreshChats.setPadding(Ui.dp(this,12),Ui.dp(this,8),Ui.dp(this,12),Ui.dp(this,8));
         refreshChats.setOnClickListener(v -> loadInboxPage(true)); refreshChats.setVisibility(View.GONE);
 
-        root.addView(rv, new LinearLayout.LayoutParams(-1, 0, 1));
+        // STEP 7: pull-to-refresh is the only way to get newer chats while staying in the list.
+        swipe = new androidx.swiperefreshlayout.widget.SwipeRefreshLayout(this);
+        swipe.setOnRefreshListener(() -> {
+            inboxGeneration++; inboxLoading = false; inboxCursor = null; inboxMore = true;
+            presenceAsked.clear();
+            loadInboxPage(true);
+        });
+        swipe.addView(rv);
+        root.addView(swipe, new LinearLayout.LayoutParams(-1, 0, 1));
         root.addView(inboxMoreButton);
         inboxSpinner=new android.widget.ProgressBar(this);inboxSpinner.setVisibility(View.GONE);inboxSpinner.setContentDescription("Loading more conversations");
         root.addView(inboxSpinner,new LinearLayout.LayoutParams(Ui.dp(this,26),Ui.dp(this,26)));
@@ -254,8 +266,10 @@ public class ConversationsActivity extends Activity {
         adapter.notifyDataSetChanged();
         // Dismiss only the outer icon badge; preserve every conversation's unread state.
         com.friendbook.social.main.MainActivity.clearMessagesBadgeNow();
-        // Live snapshot listener on users so Active Now strip updates green online dots in real time!
-        usersReg = Fb.db().collection("users").limit(45).addSnapshotListener((usnap, uerr) -> {
+        // STEP 7: the "Active now" strip is read once here (open / pull-to-refresh). No live
+        // listener on users, so the chat list never refreshes itself while the user reads it.
+        presenceAsked.clear();
+        Fb.db().collection("users").limit(45).get().addOnSuccessListener(usnap -> {
             if (isFinishing() || usnap == null || !java.util.Objects.equals(me,Fb.uid())) return;
             for (DocumentSnapshot ud : usnap) {
                 Models.User u = Models.User.fromDoc(ud);
@@ -322,17 +336,18 @@ public class ConversationsActivity extends Activity {
                     com.friendbook.social.core.FastCache.saveChats(toCache);
                     renderActiveNow();
                     applyFilter();
+            if (swipe != null) swipe.setRefreshing(false);
             inboxMoreButton.setText("Continue loading chats");
             inboxMoreButton.setVisibility(inboxMore && rooms.isEmpty()?View.VISIBLE:View.GONE);
         };
         java.util.function.Consumer<Exception> failed=error->{
             if(generation!=inboxGeneration)return;
-            inboxLoading=false;inboxSpinner.setVisibility(View.GONE);inboxMoreButton.setText("Retry loading chats");inboxMoreButton.setVisibility(View.VISIBLE);
+            inboxLoading=false;inboxSpinner.setVisibility(View.GONE);if(swipe!=null)swipe.setRefreshing(false);inboxMoreButton.setText("Retry loading chats");inboxMoreButton.setVisibility(View.VISIBLE);
         };
-        if(reset){
-            if(reg!=null)reg.remove();
-            reg=query.limit(10).addSnapshotListener(com.friendbook.social.d1.documents.MetadataChanges.INCLUDE,(snapshot,error)->{if(error!=null)failed.accept(error);else if(snapshot!=null)apply.accept(snapshot);});
-        }else query.limit(10).get(com.friendbook.social.d1.documents.Source.SERVER).addOnSuccessListener(apply::accept).addOnFailureListener(failed::accept);
+        // STEP 7: one-shot read. The inbox refreshes when the user opens it or pulls down;
+        // a live chat listener would refresh the list behind the user's back, so there is none.
+        if(reg!=null){reg.remove();reg=null;}
+        query.limit(10).get(com.friendbook.social.d1.documents.Source.SERVER).addOnSuccessListener(apply::accept).addOnFailureListener(failed::accept);
     }
 
     private void renderActiveNow() {
@@ -414,10 +429,8 @@ public class ConversationsActivity extends Activity {
         super.onStop();
         inboxGeneration++; inboxLoading=false;
         if (reg != null) reg.remove();
-        if (usersReg != null) usersReg.remove();
         watchingPresence = false;
-        for (Presence.Handle handle : activePresence.values()) handle.close();
-        activePresence.clear(); onlineUsers.clear(); lastSeenUsers.clear();
+        presenceAsked.clear(); onlineUsers.clear(); lastSeenUsers.clear();
         for (ConvAdapter.VH h : boundHolders) { h.dot.setVisibility(View.GONE); h.lastActive.setVisibility(View.GONE); }
         boundHolders.clear();
         renderActiveNow();
