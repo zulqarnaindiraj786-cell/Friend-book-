@@ -22,3 +22,7 @@ This proves avoided local preview traversal, not Cloudflare billed-row savings, 
 - `git diff --check`: passed.
 
 Code-only production rollout is requested in the accompanying marker commit. Its result must be checked separately; this document does not assert deployment success. No APK/AAB or PR merge.
+
+## Verified rollout outcome
+
+GitHub Actions run [45211522676](https://github.com/zulqarnaindiraj786-cell/Friend-book-/actions/runs/45211522676) completed **success** for `29d7ecfc9dcf12703e0df136e3c79093e5e4d058` (reported update 2026-11-23T16:01:09Z). Full regressions, schema/migration/index checks, replay, production dry-run, code-only deployment, resource/schedule preservation, health 200 and unauthenticated API 401 all passed. No D1 migration ran. This supersedes the pending-rollout status above, but does not establish representative production quota savings or completed-day acceptance.
