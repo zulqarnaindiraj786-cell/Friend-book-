@@ -274,3 +274,26 @@ is an acceptance target, not a verified provider subscription limit.
 
 Production verdict remains FAIL and future_quota_guarantee=false. No production
 SQL, mutations, application traffic, deployments or schedule changes this turn.
+
+## User-requested Cloudflare Worker reporting
+
+Deployed separate `friendbook-quota-monitor`; latest deployment45120921972
+sourcea51375267ecb0693cc25c11f57626060db8a3691 PASS. Details and exact limits:
+`docs/verification/quota-monitor.md`. Worker240/Python358 and both Worker
+compilations PASS. Remote metadata verifies only two encrypted secrets, no app
+storage bindings, and exactly15m cron. HTTPhealth200, unauth report401 and
+authenticated report200 verified in the successful run. Prior attempts failed
+smoke checks; not passed off as success. All changes are on the current branch.
+
+Live returned report05:57:26.510Z: account daily470,485reads/6,383writes,
+TARGET_EXCEEDED; recent15m3reads/0writes/3executions. No savings extrapolation.
+Monitor is observe_only, automatic_fix_actions=[], future_quota_guarantee=false.
+It logs aggregate reports every15m as configured; no cron invocation was directly
+observed in this deployment proof. It does not automatically repair source or
+quota. Main Worker/data/cron unchanged, PR36 unmerged. Reporter itself executes
+no D1 SQL or app requests; ordinary Workers/API/logging usage still applies.
+
+Runtime secrets encrypted; prefer dedicated analytics-read credential. Deployment
+fallback reuses existing connected Cloudflare credential, whose scopes are NOT
+proven read-only. This limitation is explicit in operator documentation. No secret
+values exposed, persisted in Git or included in report artifacts.
