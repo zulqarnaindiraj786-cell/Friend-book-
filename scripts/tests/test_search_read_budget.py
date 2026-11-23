@@ -25,3 +25,11 @@ class SearchReadBudget(unittest.TestCase):
         policy = (JAVA / 'core/SearchReadPolicy.java').read_text()
         self.assertIn('350L', policy)
         self.assertIn('30_000L', policy)
+
+    def test_people_prefix_uses_bounded_ordered_server_path(self):
+        search = (JAVA / 'friends/SearchActivity.java').read_text()
+        for term in ['q', 'cap']:
+            self.assertIn('orderBy("displayName",Query.Direction.ASCENDING).startAt('+term+').endAt('+term+'+"\\uf8ff")', search)
+        self.assertNotIn('whereGreaterThanOrEqualTo("displayName"', search)
+        self.assertIn('peopleA.next()', search)
+        self.assertIn('peopleB.next()', search)

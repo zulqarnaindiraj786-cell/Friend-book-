@@ -3311,3 +3311,32 @@ test('indexed friendship guards reject racing historical duplicates without part
   assert.equal((await call(remove)).status,200);
   sql.close();
 });
+
+test('Search ordered people head bounds common prefix reads instead of loading every match', async () => {
+  const sql=new DatabaseSync(':memory:');
+  for(const ddl of [resourcesSchema,appSchema,schema,
+    readFileSync(new URL('../migrations/0053_people_name_prefix.sql',import.meta.url),'utf8'),
+    readFileSync(new URL('../migrations/0061_legacy_people_cursor_prefix.sql',import.meta.url),'utf8')])sql.exec(ddl);
+  const put=sql.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)');
+  put.run('users/viewer','users','users','viewer','viewer','{"displayName":"Viewer"}',1,1);
+  for(let i=0;i<2000;i++){
+    const id=`u${String(i).padStart(4,'0')}`;
+    put.run(`users/${id}`,'users','users',id,id,JSON.stringify({displayName:`Am${String(i).padStart(4,'0')}`}),1,1);
+  }
+  let prefixRows=0;const plans=[];
+  const db={prepare(q){const stmt=sql.prepare(q);return{bind(...args){return{
+    first:async()=>stmt.get(...args)||null,
+    all:async()=>{const rows=stmt.all(...args);if(q.includes('idx_cf_users_display_name')){
+      prefixRows+=rows.length;plans.push(...sql.prepare('EXPLAIN QUERY PLAN '+q).all(...args).map(row=>row.detail));
+    }return{results:rows};},
+  };}};}};
+  const response=await createWorker(async token=>token).fetch(new Request('https://example.test/v1/firestore/query',{
+    method:'POST',headers:{authorization:'Bearer viewer','content-type':'application/json'},body:JSON.stringify({
+      parent:'users',orderBy:[{field:'displayName',direction:'ASCENDING'}],startAt:['Am'],endAt:['Am\uf8ff'],limit:10,
+    }),
+  }),{DB:db,FIREBASE_PROJECT_ID:'test'});
+  assert.equal(response.status,200);
+  assert.deepEqual((await response.json()).documents.map(doc=>doc.id),Array.from({length:10},(_,i)=>`u${String(i).padStart(4,'0')}`));
+  assert.equal(prefixRows,10,'first head must not materialize all 2000 matching profiles');
+  assert.match(plans.join('\n'),/SEARCH .*USING INDEX idx_cf_users_display_name/);
+});

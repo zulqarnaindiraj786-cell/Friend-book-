@@ -214,12 +214,12 @@ public class SearchActivity extends Activity implements UsersAdapter.Handler, Fe
         };
         String cap = q.isEmpty() ? q : Character.toUpperCase(q.charAt(0)) + q.substring(1);
         boolean same=cap.equals(q);
-        peopleA=new com.friendbook.social.core.CursorPager(Fb.db().collection("users").whereGreaterThanOrEqualTo("displayName",q).whereLessThanOrEqualTo("displayName",q+"\uf8ff"),same?20:10,"search-people:"+q,(docs,more,loading,error)->{
+        peopleA=new com.friendbook.social.core.CursorPager(Fb.db().collection("users").orderBy("displayName",Query.Direction.ASCENDING).startAt(q).endAt(q+"\uf8ff"),same?20:10,"search-people:"+q,(docs,more,loading,error)->{
             if(loading)return;
             firstSpelling.clear();for(DocumentSnapshot doc:docs)firstSpelling.put(doc.getId(),Models.User.fromDoc(doc));mergePeople.run();finishPeople.run();
             morePeople.setText(!error.isEmpty()?"Retry people":"More people");
         });
-        peopleB=same?null:new com.friendbook.social.core.CursorPager(Fb.db().collection("users").whereGreaterThanOrEqualTo("displayName",cap).whereLessThanOrEqualTo("displayName",cap+"\uf8ff"),10,"search-people:"+cap,(docs,more,loading,error)->{
+        peopleB=same?null:new com.friendbook.social.core.CursorPager(Fb.db().collection("users").orderBy("displayName",Query.Direction.ASCENDING).startAt(cap).endAt(cap+"\uf8ff"),10,"search-people:"+cap,(docs,more,loading,error)->{
             if(loading)return;
             secondSpelling.clear();for(DocumentSnapshot doc:docs)secondSpelling.put(doc.getId(),Models.User.fromDoc(doc));mergePeople.run();finishPeople.run();
         });
