@@ -43,3 +43,17 @@ Follow-up analytics https://github.com/zulqarnaindiraj786-cell/Friend-book-/acti
 This exact template is present in both `checksum_pages` and `write_backup` in `scripts/loadtest/backup_retired_tables.py` at historical commit `e305b41`. The classifier generates only the seven reviewed retired-table templates, requires exact normalized SQL including bind identities, and executes none of them. This proves a historical backup-template match, not a particular actor/run or active app presence polling. Current source replaced OFFSET with rowid seeks in **7f76bb4**; source tests already cover no OFFSET, sparse/negative rowids, checksum equivalence and cursor validation. An additional 5,000-row real SQLite regression now compares the entire historical/current row sets and requires current VM work below half of historical OFFSET work. VM steps are not D1 billed reads; this is prevention evidence, not newly realized production savings.
 
 Privacy diagnostics recognize only reviewed SQL tokens/table names, redact arbitrary identifiers and all values, and preserve only allowlisted quoted identifiers. This continuation made no production app changes or table scans. Rank 3 is no longer unidentified. The 151,719-read inventory's exact caller and other residual costs remain unresolved; no 100% acceptance claim.
+
+## Recent traffic separated from the historical engineering window
+
+Analytics-only workflow now requests **5, 60, 1440 minutes**, preserving privacy, fail-closed handling and no production SQL. Run https://github.com/zulqarnaindiraj786-cell/Friend-book-/actions/runs/45197094544 **SUCCESS**, end **2026-11-23T14:42:40Z**:
+
+- **5 minutes:** no observations available, totals `null`. This is not zero traffic or a latency guarantee.
+- **60 minutes:** **1,376 executions / 3,057 reads / 47 writes**. Twenty-six query shapes, not truncated. One observed primary DB, no observed other-DB reads/writes in the account split.
+- Recent largest read shapes: engagement summary **1,217 reads / 172 executions / 172 returned rows**, canonical point lookup **592 reads / 593 executions / 592 returned rows**.
+- Recent largest write shape: canonical upsert **40 writes / 10 executions / 10 reads**. Other observed writes are not automatically waste.
+- **1440 minutes:** **1,088,002 reads / 63,073 writes**, including the historical maintenance costs identified above; this shape list is truncated.
+
+The recent engagement summary implementation was reviewed: indexed visible totals, blocked-author indexed deductions where required, scalar actor-reaction lookup, and a two-comment preview bound. Its observed cost alone does not demonstrate an unnecessary loop. Necessary ACL reads and real updates remain intact. Recent aggregate data cannot establish installed Android version, screen visibility, representative user activity, or distinguish all callers. It must not be multiplied into a promised daily total or used as a completed-day pass. The latest hour also straddles the deployed fix boundary; it is not an isolated post-fix cohort.
+
+Validation: **283 Worker tests PASS; 401 Python tests PASS; diff check PASS**. Wrangler dry-run produced the Worker bundle and exited with `--dry-run: exiting now.` after the original shell command's collection timeout; no deployment was requested. Generated files stayed under `/tmp`, outside the repository. No app-source change, APK/AAB, migration, merge, or acceptance-boundary change occurred in this continuation. This is useful recent evidence, not a new root-cause fix or 100% completion.
