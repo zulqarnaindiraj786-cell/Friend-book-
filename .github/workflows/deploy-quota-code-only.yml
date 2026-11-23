@@ -1,4 +1,4 @@
-name: Deploy quota preview fix without database migrations
+name: Deploy quota fixes without database migrations
 on:
   push:
     branches: [arena/b52bc74d-friend-book]

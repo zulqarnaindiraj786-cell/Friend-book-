@@ -10,8 +10,9 @@ function unpack(raw) {
   return out;
 }
 export async function loadChat(db, chatId) {
-  let row = await db.prepare('SELECT document_json FROM friendbook_cf_firestore_documents WHERE path = ?').bind(`chats/${chatId}`).first();
-  if (!row) row = await db.prepare('SELECT document_json FROM friendbook_cf_documents WHERE path = ?').bind(`chats/${chatId}`).first();
+  // Mirrors may be stale or mirror-only. They must never authorize a room,
+  // and a missing canonical room must not incur a second lookup.
+  const row = await db.prepare('SELECT document_json FROM friendbook_cf_firestore_documents WHERE path = ?').bind(`chats/${chatId}`).first();
   if (!row) return null;
   return unpack(JSON.parse(row.document_json));
 }
