@@ -36,9 +36,9 @@ const legacyRowGuard=(blocked='?',resource='?')=>`json_valid(a.document_json)
  AND ${legacyAuthor} NOT IN (SELECT value FROM json_each(${blocked}))
  AND NOT EXISTS (SELECT 1 FROM friendbook_cf_comments c WHERE c.resource=${resource} AND c.id=a.doc_id)`;
 const legacyPredicate=(id='?',resource='?',blocked='?')=>`a.path IN (
-  SELECT a.path FROM friendbook_cf_documents a WHERE a.collection='comments' AND ${legacyField('postId')}=${id}
-  UNION SELECT a.path FROM friendbook_cf_documents a WHERE a.collection='comments' AND ${legacyField('post_id')}=${id}
-  UNION SELECT a.path FROM friendbook_cf_documents a WHERE a.collection='comments' AND ${legacyField('resource')}=${resource}
+  SELECT a.path FROM friendbook_cf_firestore_documents a WHERE a.parent_path='comments' AND ${legacyField('postId')}=${id}
+  UNION SELECT a.path FROM friendbook_cf_firestore_documents a WHERE a.parent_path='comments' AND ${legacyField('post_id')}=${id}
+  UNION SELECT a.path FROM friendbook_cf_firestore_documents a WHERE a.parent_path='comments' AND ${legacyField('resource')}=${resource}
  ) AND ${legacyRowGuard(blocked,resource)}`;
 const legacyWhere=legacyPredicate();
 function legacyBindings(resource,blocked) {
@@ -46,7 +46,7 @@ function legacyBindings(resource,blocked) {
   return [id,id,resource,JSON.stringify(blocked||[]),resource];
 }
 export function legacyCommentCountStatement(db,resource,blocked=[]) {
-  return db.prepare(`SELECT COUNT(*) AS n FROM friendbook_cf_documents a WHERE ${legacyWhere}`)
+  return db.prepare(`SELECT COUNT(*) AS n FROM friendbook_cf_firestore_documents a WHERE ${legacyWhere}`)
     .bind(...legacyBindings(resource,blocked));
 }
 // Keep the exact same per-resource indexed predicates, but group the small
@@ -59,7 +59,7 @@ export function legacyCommentCountsStatement(db,resources,blocked=[]) {
     const id=resource.slice(resource.indexOf('/')+1);
     bindings.push(resource,id);
     const res=`?${2+i*2}`,post=`?${3+i*2}`;
-    return `SELECT ${i} AS slot, COUNT(*) AS n FROM friendbook_cf_documents a WHERE ${legacyPredicate(post,res,'?1')}`;
+    return `SELECT ${i} AS slot, COUNT(*) AS n FROM friendbook_cf_firestore_documents a WHERE ${legacyPredicate(post,res,'?1')}`;
   });
   return db.prepare(selects.join(' UNION ALL ')).bind(...bindings);
 }
@@ -103,7 +103,7 @@ async function promoteLegacy(db,resource,id,uid,blocked,seen=new Set()) {
   const existing=await read();if(existing)return !existing.removed && !blocked.includes(existing.uid) ? existing : null;
   if(!validId(id) || seen.has(id) || seen.size>=20)return null;
   seen.add(id);
-  const source=await db.prepare("SELECT doc_id,document_json FROM friendbook_cf_documents WHERE path=? AND collection='comments'").bind(`comments/${id}`).first();
+  const source=await db.prepare("SELECT doc_id,document_json FROM friendbook_cf_firestore_documents WHERE path=? AND parent_path='comments'").bind(`comments/${id}`).first();
   const old=source && legacyComment(source,uid,resource);
   if(!old || blocked.includes(old.uid))return null;
   const doc=toPlainDocument(source.document_json,id);
@@ -117,7 +117,7 @@ async function promoteLegacy(db,resource,id,uid,blocked,seen=new Set()) {
   const hash=Array.from(new Uint8Array(digest),b=>b.toString(16).padStart(2,'0')).join('');
   const statements=[
     db.prepare(`INSERT INTO friendbook_cf_social_guards(ok) SELECT CASE WHEN
-      EXISTS(SELECT 1 FROM friendbook_cf_documents WHERE path=? AND collection='comments' AND document_json=?)
+      EXISTS(SELECT 1 FROM friendbook_cf_firestore_documents WHERE path=? AND parent_path='comments' AND document_json=?)
       AND NOT EXISTS(SELECT 1 FROM friendbook_cf_comments WHERE resource=? AND id=?) THEN 1 ELSE 0 END`)
       .bind(`comments/${id}`,source.document_json,resource,id),
     db.prepare('INSERT INTO friendbook_cf_comments(resource,id,uid,text,parent_id,created_at) VALUES(?,?,?,?,?,?)')
@@ -153,15 +153,15 @@ async function boundedLegacyPage(db,resource,uid,blocked,before,after) {
   if(typeof db.batch!=='function' || !Array.isArray(cursor) || cursor.length!==2 || !Number.isSafeInteger(cursor[0]) || cursor[0]<0
       || typeof cursor[1]!=='string' || (cursor[1]!=='' && !validId(cursor[1])))return null;
   const id=resource.slice(resource.indexOf('/')+1),forward=!!after;
-  const routes=[['postId','idx_cf_comment_page_post',id],['post_id','idx_cf_comment_page_post_legacy',id],
-    ['resource','idx_cf_comment_page_resource',resource]];
+  const routes=[['postId','idx_cf_canonical_comment_page_post',id],['post_id','idx_cf_canonical_comment_page_post_legacy',id],
+    ['resource','idx_cf_canonical_comment_page_resource',resource]];
   const direction=forward?'ASC':'DESC',op=forward?'>':'<';
   const range=forward?`(${legacySafeTime})>=?4`:`(${legacySafeTime}) BETWEEN 0 AND ?4`;
   try {
     const statements=routes.flatMap(([field,index,value])=>{
-      const common=`FROM friendbook_cf_documents a INDEXED BY ${index}
-        WHERE a.collection='comments' AND (${legacyField(field)})=?1 AND ${legacyRowGuard('?2','?3')}`;
-      const select='SELECT a.path,a.doc_id,a.document_json,a.updated_at';
+      const common=`FROM friendbook_cf_firestore_documents a INDEXED BY ${index}
+        WHERE a.parent_path='comments' AND (${legacyField(field)})=?1 AND ${legacyRowGuard('?2','?3')}`;
+      const select='SELECT a.path,a.doc_id,a.document_json,a.update_time AS updated_at';
       return [
         db.prepare(`${select} ${common} AND ${range}
           AND ((${legacySafeTime})${op}?4 OR ((${legacySafeTime})=?4 AND a.doc_id${op}?5))
@@ -194,7 +194,7 @@ async function boundedLegacyPage(db,resource,uid,blocked,before,after) {
     best.sort((a,b)=>(forward?-1:1)*((b.createdAt||0)-(a.createdAt||0) || (a.id<b.id?1:a.id>b.id?-1:0)));
     return best.slice(0,21);
   } catch(error) {
-    if(/no such index: idx_cf_comment_page_(?:post|post_legacy|resource)/.test(String(error)))return null;
+    if(/no such index: idx_cf_canonical_comment_page_(?:post|post_legacy|resource)/.test(String(error)))return null;
     throw error;
   }
 }
@@ -206,10 +206,10 @@ export async function legacyPage(db,resource,uid,blocked,before,after=null) {
   if(indexed!==null)return indexed;
   let storageCursor=null, best=[];
   for(let batch=0;batch<100;batch++) {
-    const extra=storageCursor?' AND (a.updated_at<? OR (a.updated_at=? AND a.path<?))':'';
+    const extra=storageCursor?' AND (a.update_time<? OR (a.update_time=? AND a.path<?))':'';
     const args=legacyBindings(resource,blocked);
     if(storageCursor)args.push(storageCursor.updated_at,storageCursor.updated_at,storageCursor.path);
-    const rows=(await db.prepare(`SELECT a.path,a.doc_id,a.document_json,a.updated_at FROM friendbook_cf_documents a WHERE ${legacyWhere}${extra} ORDER BY a.updated_at DESC,a.path DESC LIMIT 500`).bind(...args).all()).results||[];
+    const rows=(await db.prepare(`SELECT a.path,a.doc_id,a.document_json,a.update_time AS updated_at FROM friendbook_cf_firestore_documents a WHERE ${legacyWhere}${extra} ORDER BY a.update_time DESC,a.path DESC LIMIT 500`).bind(...args).all()).results||[];
     for(const row of rows) {
       const comment=legacyComment(row,uid,resource),time=comment?.createdAt||0;
       if(comment && (after ? time>after[0] || (time===after[0] && comment.id>after[1]) : time<before[0] || (time===before[0] && comment.id<before[1])))best.push(comment);
@@ -246,7 +246,7 @@ export async function commentsAPI(request, db, identity, resource, data, context
       if(!validId(single))return reply({error:'Invalid ID'},400);
       const row=await read(single);
       if(row)return !row.removed&&!(context.blocked||[]).includes(row.uid)?reply({comment:normalized(row,uid)}):reply({error:'Not found'},404);
-      const source=await db.prepare("SELECT doc_id,document_json FROM friendbook_cf_documents WHERE path=? AND collection='comments'").bind(`comments/${single}`).first();
+      const source=await db.prepare("SELECT doc_id,document_json FROM friendbook_cf_firestore_documents WHERE path=? AND parent_path='comments'").bind(`comments/${single}`).first();
       // A tombstone or promoted row may have appeared while the legacy row was read.
       const current=await read(single);
       if(current)return !current.removed&&!(context.blocked||[]).includes(current.uid)?reply({comment:normalized(current,uid)}):reply({error:'Not found'},404);
@@ -293,7 +293,7 @@ export async function commentsAPI(request, db, identity, resource, data, context
     // the same check as a separate round trip before every new comment.
     const [, , acknowledgement] = await db.batch([
       db.prepare(`INSERT INTO friendbook_cf_comments(resource,id,uid,text,parent_id,created_at)
-        SELECT ?,?,?,?,?,? WHERE NOT EXISTS (SELECT 1 FROM friendbook_cf_documents WHERE path=? AND collection='comments')
+        SELECT ?,?,?,?,?,? WHERE NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents WHERE path=? AND parent_path='comments')
         AND (? IS NULL OR EXISTS (SELECT 1 FROM friendbook_cf_comments c LEFT JOIN friendbook_cf_comment_details d ON d.resource=c.resource AND d.id=c.id
           WHERE c.resource=? AND c.id=? AND COALESCE(d.removed,0)=0))
         ON CONFLICT(resource,id) DO NOTHING`).bind(resource,data.id,uid,content.text,parent,Date.now(),`comments/${data.id}`,parent,resource,parent),
@@ -312,7 +312,7 @@ export async function commentsAPI(request, db, identity, resource, data, context
   if(data.op==='pin' && (context.owner!==uid || typeof data.pin!=='boolean'))return reply({error:'Forbidden'},403);
   let row=await read(data.id);
   if(!row) {
-    const source=await db.prepare("SELECT doc_id,document_json FROM friendbook_cf_documents WHERE path=? AND collection='comments'").bind(`comments/${data.id}`).first();
+    const source=await db.prepare("SELECT doc_id,document_json FROM friendbook_cf_firestore_documents WHERE path=? AND parent_path='comments'").bind(`comments/${data.id}`).first();
     const old=source && legacyComment(source,uid,resource);
     if(!old || (context.blocked||[]).includes(old.uid))return reply({error:'Not found'},404);
     if(data.op==='edit' && old.uid!==uid)return reply({error:'Forbidden'},403);
@@ -347,7 +347,7 @@ export async function reactorsAPI(request,db,resource,context={}) {
     const read=()=>db.prepare('SELECT c.id,c.uid,COALESCE(d.removed,0) AS removed FROM friendbook_cf_comments c LEFT JOIN friendbook_cf_comment_details d ON d.resource=c.resource AND d.id=c.id WHERE c.resource=? AND c.id=?').bind(resource,id).first();
     let row=await read();
     if(!row){
-      const source=await db.prepare("SELECT doc_id,document_json FROM friendbook_cf_documents WHERE path=? AND collection='comments'").bind(`comments/${id}`).first();
+      const source=await db.prepare("SELECT doc_id,document_json FROM friendbook_cf_firestore_documents WHERE path=? AND parent_path='comments'").bind(`comments/${id}`).first();
       row=await read();
       if(!row){
         const old=source&&legacyComment(source,'',resource);

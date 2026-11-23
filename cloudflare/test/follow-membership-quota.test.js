@@ -1,3 +1,4 @@
+import { canonicalSeed } from './fixtures/canonical.js';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {DatabaseSync} from 'node:sqlite';
@@ -11,8 +12,8 @@ const candidate=readFileSync(new URL('../migrations/0078_follow_trigger_cost.sql
 test('follow membership candidate matches full scan and maintains changes without rewriting on heartbeat',async t=>{
   const sql=new DatabaseSync(':memory:');t.after(()=>sql.close());
   for(const name of ['0003_additive_interactions.sql','0011_additive_app_documents.sql','0014_additive_firestore_documents.sql','0018_social_guards.sql'])sql.exec(migration(name));
-  const cur=sql.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)');
-  const old=sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)');
+  const cur=sql.prepare('INSERT OR REPLACE INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)');
+  const old=canonicalSeed(sql);
   const addCurrent=(id,doc)=>cur.run(`users/${id}`,'users','users',id,id,JSON.stringify(doc),1,1);
   const addOld=(id,doc)=>old.run(`users/${id}`,'users',id,id,JSON.stringify(doc),1);
   addCurrent('viewer',{uid:'viewer',followers:[],following:[]});
@@ -92,7 +93,7 @@ test('follow membership candidate matches full scan and maintains changes withou
   // Outer upserts override INSERT OR IGNORE inside triggers in SQLite. The
   // explicit trigger UPSERT must preserve existing edges and duplicate values.
   const withDuplicates=JSON.stringify({uid:'user0002',followers:[...members,'viewer','viewer','new']});
-  sql.prepare(`INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET document_json=excluded.document_json`)
+  sql.prepare(`INSERT OR REPLACE INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET document_json=excluded.document_json`)
     .run('users/user0002','users','users','user0002','user0002',withDuplicates,1,2);
   sql.prepare(`INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET document_json=excluded.document_json`)
     .run('users/user0002','users','user0002','user0002',withDuplicates,2);
@@ -129,7 +130,7 @@ test('follow membership candidate matches full scan and maintains changes withou
   // Unusual Unicode input and too many exceptional records use the complete scan.
   slow=await compare('viewer',{filters:[{field:'followers',op:'array-contains',value:'\u0639'}]});assert.ok(slow.scanned>1000);
   for(let i=0;i<65;i++)addOld(`wrapped${i}`,{fields:{uid:{stringValue:`wrapped${i}`},followers:{arrayValue:{values:[{stringValue:'viewer'}]}}}});
-  slow=await compare('viewer',{filters:[{field:'followers',op:'array-contains',value:'viewer'}]});assert.ok(slow.scanned>1000);
+  slow=await compare('viewer',{filters:[{field:'followers',op:'array-contains',value:'viewer'}]});assert.ok(slow.scanned<1000,'backfilled arrays no longer require a mirror exception scan');
   // Empty/incomplete migration state must use compatibility scans.
   sql.exec('DELETE FROM friendbook_cf_user_follow_index_state');
   const result=await compare('viewer',{filters:[{field:'followers',op:'array-contains',value:'viewer'}]});assert.ok(result.scanned>1000);

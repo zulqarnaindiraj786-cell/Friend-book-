@@ -286,21 +286,14 @@ export function appDocumentToFirestoreRow(row) {
 // Internal source marker; not serialized in any document response.
 const canonicalRootSnapshot=Symbol('canonicalRootSnapshot');
 async function readRootStorageRow(db,path) {
-  // Root point reads include the historical mirror in the same D1 request.
-  // A current row always wins, including when its data fails later validation.
-  return db.prepare(`SELECT path, parent_path, collection_id, doc_id, owner_uid, document_json, create_time, update_time,
-      NULL AS collection, NULL AS updated_at, 0 AS legacy_source
+  // One indexed canonical lookup; a mirror-only row is not a document.
+  return db.prepare(`SELECT path, parent_path, collection_id, doc_id, owner_uid, document_json, create_time, update_time
     FROM friendbook_cf_firestore_documents WHERE path = ?1
-    UNION ALL SELECT path, NULL, NULL, doc_id, owner_uid, document_json, NULL, NULL, collection, updated_at, 1
-    FROM friendbook_cf_documents WHERE path = ?1
-      AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents WHERE path = ?1)
     LIMIT 1`).bind(path).first();
 }
 function normalizeRootStorageRow(row) {
   if (!row) return null;
-  if (row.legacy_source === 1) return appDocumentToFirestoreRow(row);
-  const { legacy_source, collection, updated_at, ...canonical } = row;
-  return {...canonical,[canonicalRootSnapshot]:true};
+  return {...row,[canonicalRootSnapshot]:true};
 }
 
 export async function readRow(db, path) {
@@ -317,7 +310,7 @@ export async function readProfileMutationSnapshot(db,uid) {
 }
 
 // A bounded fast path for ordinary canonical chat pages. Unusual historical timestamp
-// formats, legacy mirrors, filters and complex cursors deliberately use the old merge.
+// formats, root-message bridges, filters and complex cursors use the full evaluator.
 const chatRank = `CASE WHEN json_type(document_json,'$.createdAt') IN ('integer','real') THEN 2 ELSE 4 END`;
 const chatTime = `CASE WHEN json_type(document_json,'$.createdAt') IN ('integer','real') THEN json_extract(document_json,'$.createdAt') ELSE json_extract(document_json,'$.createdAt.millis') END`;
 async function boundedChatRows(db,parent,spec) {
@@ -339,10 +332,10 @@ async function boundedChatRows(db,parent,spec) {
   const before=spec.endBefore ? parseCursor(spec.endBefore) : null;
   if ((spec.startAfter && (!after || spec.limitToLast)) || (spec.endBefore && !before))return null;
   const prefix=`${parts[1]}_`, upper=`${parts[1]}\``;
-  // Both compatibility probes are independent; keep one wait before the page read.
-  const [legacy,bad]=await Promise.all([
-    db.prepare(`SELECT 1 AS hit FROM friendbook_cf_documents WHERE collection='messages' AND doc_id>=? AND doc_id<?
-    UNION ALL SELECT 1 AS hit FROM friendbook_cf_documents WHERE collection='messages' AND json_extract(document_json,'$.chatId')=? LIMIT 1`).bind(prefix,upper,parts[1]).first(),
+  // Both compatibility probes are canonical-only; wait once before the page read.
+  const [rootMessages,bad]=await Promise.all([
+    db.prepare(`SELECT 1 AS hit FROM friendbook_cf_firestore_documents WHERE parent_path='messages' AND doc_id>=? AND doc_id<?
+    UNION ALL SELECT 1 AS hit FROM friendbook_cf_firestore_documents WHERE parent_path='messages' AND json_extract(document_json,'$.chatId')=? LIMIT 1`).bind(prefix,upper,parts[1]).first(),
   // Ensure SQLite's ordering matches the existing JS comparator exactly. Older or
   // malformed records must never be dropped simply to make the page smaller.
     db.prepare(`SELECT 1 AS hit FROM friendbook_cf_firestore_documents WHERE parent_path=? AND parent_path GLOB 'chats/*/messages' AND (
@@ -352,7 +345,7 @@ async function boundedChatRows(db,parent,spec) {
         AND json_type(document_json,'$.createdAt.millis')='integer' AND json_extract(document_json,'$.createdAt.millis') BETWEEN -9007199254740991 AND 9007199254740991)
     ),0)=0) LIMIT 1`).bind(parent).first(),
   ]);
-  if (legacy || bad) return null;
+  if (rootMessages || bad) return null;
   const descending=orders[0].direction==='DESCENDING';
   const takeLast=spec.limitToLast===true;
   // Ordinary older-message pages have a single descending cursor. SQLite may
@@ -406,18 +399,12 @@ async function filteredRequestRows(db,uid,filters) {
   const candidates=filters.find(f=>f.field===other && f.op==='in' && Array.isArray(f.value)
       && f.value.length>0 && f.value.length<=20 && f.value.every(v=>typeof v==='string'));
   const ids=peer?[peer.value]:candidates?.value || [];
-  const expr=(field,legacy)=>legacy
-    ? `(CASE WHEN json_type(document_json,'$.fields')='object' THEN json_extract(document_json,'$.fields.${field}.stringValue') ELSE json_extract(document_json,'$.${field}') END)`
-    : `json_extract(document_json,'$.${field}')`;
-  const predicate=legacy=>`${expr(own,legacy)}=? AND ${expr('status',legacy)}=?`
-    +(ids.length ? ` AND ${expr(other,legacy)} IN (${ids.map(()=>'?').join(',')})` : '');
+  const expr=field=>`json_extract(document_json,'$.${field}')`;
+  const predicate=`${expr(own)}=? AND ${expr('status')}=?`
+    +(ids.length ? ` AND ${expr(other)} IN (${ids.map(()=>'?').join(',')})` : '');
   const values=[uid,status.value,...ids];
-  const [canonical,legacy]=await Promise.all([
-    db.prepare(`SELECT * FROM friendbook_cf_firestore_documents WHERE parent_path='friend_requests' AND ${predicate(false)}`).bind(...values).all(),
-    db.prepare(`SELECT a.* FROM friendbook_cf_documents a WHERE a.collection='friend_requests' AND ${predicate(true)}
-      AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents f WHERE f.path=a.path)`).bind(...values).all(),
-  ]);
-  return [...(canonical.results||[]), ...(legacy.results||[]).map(appDocumentToFirestoreRow).filter(Boolean)];
+  const canonical=await db.prepare(`SELECT * FROM friendbook_cf_firestore_documents WHERE parent_path='friend_requests' AND ${predicate}`).bind(...values).all();
+  return [...(canonical.results||[])];
 }
 
 // Live chat polling normally asks for the last 100 messages. The compatibility
@@ -477,30 +464,23 @@ async function readCollectionRows(db, parent, uid, filters, spec, env) {
   if (membership && typeof db.batch==='function') {
     try {
       // Derived candidates are only a prefilter. The same JS privacy projection,
-      // filters, ordering and paging still run below. Read all sources in one
-      // D1 transaction so a concurrent mirror update cannot drop a match.
-      const [ready,current,old,unusualCurrent,unusualOld]=await db.batch([
+      // filters, ordering and paging still run below. Read index readiness and
+      // canonical candidates together in one D1 transaction.
+      const [ready,current,unusualCurrent]=await db.batch([
         db.prepare("SELECT ready FROM friendbook_cf_user_follow_index_state WHERE id=1").bind(),
         db.prepare(`SELECT f.* FROM friendbook_cf_user_follow_membership m
           JOIN friendbook_cf_firestore_documents f ON f.path=m.path
           WHERE m.member=? AND m.kind=? AND m.source=1 AND f.parent_path='users'`).bind(membership.value,membership.field),
-        db.prepare(`SELECT a.* FROM friendbook_cf_user_follow_membership m JOIN friendbook_cf_documents a ON a.path=m.path
-          WHERE m.member=? AND m.kind=? AND m.source=0 AND a.collection='users'
-          AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents f WHERE f.path=a.path AND f.parent_path='users')`).bind(membership.value,membership.field),
         db.prepare(`SELECT f.* FROM friendbook_cf_user_follow_membership m JOIN friendbook_cf_firestore_documents f ON f.path=m.path
           WHERE m.member='' AND m.kind='*' AND m.source=1 AND f.parent_path='users' LIMIT 65`).bind(),
-        db.prepare(`SELECT a.* FROM friendbook_cf_user_follow_membership m JOIN friendbook_cf_documents a ON a.path=m.path
-          WHERE m.member='' AND m.kind='*' AND m.source=0 AND a.collection='users'
-          AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents f WHERE f.path=a.path AND f.parent_path='users') LIMIT 65`).bind(),
       ]);
-      if ([ready,current,old,unusualCurrent,unusualOld].every(r=>r && r.success!==false && Array.isArray(r.results))
-          && ready.results.length===1 && ready.results[0].ready===1 && unusualCurrent.results.length<65 && unusualOld.results.length<65) {
-        const candidates=[...current.results,...unusualCurrent.results,...old.results,...unusualOld.results];
+      if ([ready,current,unusualCurrent].every(r=>r && r.success!==false && Array.isArray(r.results))
+          && ready.results.length===1 && ready.results[0].ready===1 && unusualCurrent.results.length<65) {
+        const candidates=[...current.results,...unusualCurrent.results];
         // Noncanonical paths can share IDs and rely on the original stable
         // source ordering; do not attempt to infer that ordering from an index.
         if (candidates.every(row=>typeof row.doc_id==='string' && row.path===`users/${row.doc_id}`)) {
-          return [...current.results,...unusualCurrent.results,...old.results.map(appDocumentToFirestoreRow).filter(Boolean),
-            ...unusualOld.results.map(appDocumentToFirestoreRow).filter(Boolean)];
+          return [...current.results,...unusualCurrent.results];
         }
       }
     } catch(error) {
@@ -513,23 +493,10 @@ async function readCollectionRows(db, parent, uid, filters, spec, env) {
     const requested=filters?.find(f=>f.field==='userId' && f.op==='==' && typeof f.value==='string')?.value;
     const owner=isPaymentAdmin(env,uid)?requested:uid;
     if (typeof owner==='string') {
-      const legacyUser=`CASE WHEN json_type(a.document_json,'$.fields')='object' THEN CASE
-        WHEN json_type(a.document_json,'$.fields.userId')='text' THEN json_extract(a.document_json,'$.fields.userId')
-        WHEN json_type(a.document_json,'$.fields.userId.stringValue')='text' THEN json_extract(a.document_json,'$.fields.userId.stringValue')
-        WHEN json_type(a.document_json,'$.fields.userId.stringValue') IS NOT NULL THEN 1 END
-        ELSE json_extract(a.document_json,'$.userId') END`;
       try {
-        const [canonical,legacy]=await Promise.all([
-          db.prepare(`SELECT * FROM friendbook_cf_firestore_documents INDEXED BY idx_cf_payments_user
-            WHERE parent_path='payments' AND json_extract(document_json,'$.userId')=?`).bind(owner).all(),
-          db.prepare(`SELECT a.* FROM friendbook_cf_documents a INDEXED BY idx_cf_legacy_payments_user
-            WHERE a.collection='payments' AND (${legacyUser})=?
-              AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents f WHERE f.path=a.path)
-            UNION ALL SELECT a.* FROM friendbook_cf_documents a INDEXED BY idx_cf_legacy_payments_user
-            WHERE a.collection='payments' AND (${legacyUser})=1
-              AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents f WHERE f.path=a.path)`).bind(owner).all(),
-        ]);
-        const rows=[...(canonical.results||[]),...(legacy.results||[]).map(appDocumentToFirestoreRow).filter(Boolean)];
+        const canonical=await db.prepare(`SELECT * FROM friendbook_cf_firestore_documents INDEXED BY idx_cf_payments_user
+            WHERE parent_path='payments' AND json_extract(document_json,'$.userId')=?`).bind(owner).all();
+        const rows=[...(canonical.results||[])];
         if(new Set(rows.map(row=>row.doc_id)).size===rows.length)return rows;
       } catch(error) {
         if (!/no such index: idx_cf_(?:legacy_)?payments_user/.test(String(error))) throw error;
@@ -544,15 +511,9 @@ async function readCollectionRows(db, parent, uid, filters, spec, env) {
       if (!ids.length) return [];
       const slots=ids.map(()=>'?').join(',');
       try {
-        const [canonical,legacy]=await Promise.all([
-          db.prepare(`SELECT * FROM friendbook_cf_firestore_documents INDEXED BY idx_cf_people_default_page
-            WHERE parent_path='users' AND doc_id IN (${slots})`).bind(...ids).all(),
-          db.prepare(`SELECT a.* FROM friendbook_cf_documents a INDEXED BY idx_cf_legacy_people_default_page
-            WHERE a.collection='users' AND a.doc_id IN (${slots}) AND NOT EXISTS (
-              SELECT 1 FROM friendbook_cf_firestore_documents f WHERE f.path=a.path AND f.parent_path='users'
-            )`).bind(...ids).all(),
-        ]);
-        const candidates=[...(canonical.results||[]),...(legacy.results||[]).map(appDocumentToFirestoreRow).filter(Boolean)];
+        const canonical=await db.prepare(`SELECT * FROM friendbook_cf_firestore_documents INDEXED BY idx_cf_people_default_page
+            WHERE parent_path='users' AND doc_id IN (${slots})`).bind(...ids).all();
+        const candidates=[...(canonical.results||[])];
         // Same path precedence and normal profile projection. For inconsistent
         // historical IDs, retain the old tie ordering via the generic path.
         if (new Set(candidates.map(row=>row.doc_id)).size===candidates.length) return candidates;
@@ -567,24 +528,11 @@ async function readCollectionRows(db, parent, uid, filters, spec, env) {
     // evaluator still applies them after profile projection and shadow handling.
     if (order?.field==='displayName' && order.direction!=='DESCENDING'
         && upper!==null && Array.isArray(spec.endAt) && spec.endAt.length===1 && spec.endAt[0]===lower+'\uf8ff') {
-      const legacyName=`CASE WHEN json_type(document_json,'$.fields')='object' THEN CASE
-    WHEN json_type(document_json,'$.fields.displayName')='text' THEN json_extract(document_json,'$.fields.displayName')
-    WHEN json_type(document_json,'$.fields.displayName.stringValue')='text' THEN json_extract(document_json,'$.fields.displayName.stringValue')
-    WHEN json_type(document_json,'$.fields.displayName.stringValue') IS NOT NULL THEN 1 END
-    ELSE json_extract(document_json,'$.displayName') END`;
       try {
-        const [canonical,legacy]=await Promise.all([
-          db.prepare(`SELECT * FROM friendbook_cf_firestore_documents INDEXED BY idx_cf_users_display_name
+        const canonical=await db.prepare(`SELECT * FROM friendbook_cf_firestore_documents INDEXED BY idx_cf_users_display_name
             WHERE parent_path='users' AND json_extract(document_json,'$.displayName')>=?
-            AND json_extract(document_json,'$.displayName')<?`).bind(lower,upper).all(),
-          db.prepare(`SELECT a.* FROM friendbook_cf_documents a INDEXED BY idx_cf_legacy_people_cursor_prefix
-            WHERE a.collection='users' AND (${legacyName})>=? AND (${legacyName})<? AND NOT EXISTS (
-              SELECT 1 FROM friendbook_cf_firestore_documents f WHERE f.path=a.path AND f.parent_path='users')
-            UNION ALL SELECT a.* FROM friendbook_cf_documents a INDEXED BY idx_cf_legacy_people_cursor_prefix
-            WHERE a.collection='users' AND (${legacyName})=1 AND NOT EXISTS (
-              SELECT 1 FROM friendbook_cf_firestore_documents f WHERE f.path=a.path AND f.parent_path='users')`).bind(lower,upper).all(),
-        ]);
-        const rows=[...(canonical.results||[]),...(legacy.results||[]).map(appDocumentToFirestoreRow).filter(Boolean)];
+            AND json_extract(document_json,'$.displayName')<?`).bind(lower,upper).all();
+        const rows=[...(canonical.results||[])];
         if (new Set(rows.map(row=>row.doc_id)).size===rows.length) return rows;
       } catch(error) {
         if (!/no such index: idx_cf_(?:users_display_name|legacy_people_cursor_prefix)/.test(String(error))) throw error;
@@ -596,23 +544,10 @@ async function readCollectionRows(db, parent, uid, filters, spec, env) {
     if (end!==null && hi===lo+'\uf8ff') {
       // Both primitive and Firestore-envelope names (including coerced
       // stringValue variants) must enter the same projection and filter path.
-      const legacyName=`CASE WHEN json_type(a.document_json,'$.fields')='object' THEN CASE
-        WHEN json_type(a.document_json,'$.fields.displayName')='text' THEN json_extract(a.document_json,'$.fields.displayName')
-        WHEN json_type(a.document_json,'$.fields.displayName.stringValue')='text' THEN json_extract(a.document_json,'$.fields.displayName.stringValue')
-        WHEN json_type(a.document_json,'$.fields.displayName.stringValue') IS NOT NULL THEN 1 END
-        ELSE json_extract(a.document_json,'$.displayName') END`;
       try {
-        const [canonical,legacy]=await Promise.all([
-          db.prepare(`SELECT * FROM friendbook_cf_firestore_documents INDEXED BY idx_cf_users_display_name
-            WHERE parent_path='users' AND json_extract(document_json,'$.displayName')>=? AND json_extract(document_json,'$.displayName')<?`).bind(lo,end).all(),
-          db.prepare(`SELECT a.* FROM friendbook_cf_documents a INDEXED BY idx_cf_legacy_people_cursor_prefix
-            WHERE a.collection='users' AND (${legacyName})>=? AND (${legacyName})<?
-              AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents f WHERE f.path=a.path)
-            UNION ALL SELECT a.* FROM friendbook_cf_documents a INDEXED BY idx_cf_legacy_people_cursor_prefix
-            WHERE a.collection='users' AND (${legacyName})=1
-              AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents f WHERE f.path=a.path)`).bind(lo,end).all(),
-        ]);
-        const rows=[...(canonical.results||[]),...(legacy.results||[]).map(appDocumentToFirestoreRow).filter(Boolean)];
+        const canonical=await db.prepare(`SELECT * FROM friendbook_cf_firestore_documents INDEXED BY idx_cf_users_display_name
+            WHERE parent_path='users' AND json_extract(document_json,'$.displayName')>=? AND json_extract(document_json,'$.displayName')<?`).bind(lo,end).all();
+        const rows=[...(canonical.results||[])];
         if(new Set(rows.map(row=>row.doc_id)).size===rows.length)return rows;
       } catch(error) {
         if (!/no such index: idx_cf_(?:users_display_name|legacy_people_cursor_prefix)/.test(String(error))) throw error;
@@ -621,23 +556,10 @@ async function readCollectionRows(db, parent, uid, filters, spec, env) {
   }
   if (parent==='lives' && filters?.some(f=>f.field==='status' && ((f.op==='==' && f.value==='live')
       || (f.op==='in' && Array.isArray(f.value) && f.value.length===1 && f.value[0]==='live')))) {
-    const legacyStatus=`CASE WHEN json_type(document_json,'$.fields')='object' THEN CASE
-    WHEN json_type(document_json,'$.fields.status')='text' THEN json_extract(document_json,'$.fields.status')
-    WHEN json_type(document_json,'$.fields.status.stringValue')='text' THEN json_extract(document_json,'$.fields.status.stringValue')
-    WHEN json_type(document_json,'$.fields.status.stringValue') IS NOT NULL THEN 1 END
-    ELSE json_extract(document_json,'$.status') END`;
     try {
-      const [canonical,legacy]=await Promise.all([
-        db.prepare(`SELECT * FROM friendbook_cf_firestore_documents INDEXED BY idx_cf_lives_status
-          WHERE parent_path='lives' AND json_extract(document_json,'$.status')='live'`).bind().all(),
-        db.prepare(`SELECT a.* FROM friendbook_cf_documents a INDEXED BY idx_cf_legacy_lives_status
-          WHERE a.collection='lives' AND (${legacyStatus}) IN ('live',1)`).bind().all(),
-      ]);
-      // Canonical live rooms already read above shadow their legacy copies.
-      // Check only unknown paths to preserve precedence when the current room
-      // is ended or its status no longer matches this discovery query.
-      await markWindowShadows(db,canonical,legacy,'lives');
-      const rows=[...(canonical.results||[]),...(legacy.results||[]).filter(row=>!row.shadowed).map(appDocumentToFirestoreRow).filter(Boolean)];
+      const canonical=await db.prepare(`SELECT * FROM friendbook_cf_firestore_documents INDEXED BY idx_cf_lives_status
+          WHERE parent_path='lives' AND json_extract(document_json,'$.status')='live'`).bind().all();
+      const rows=[...(canonical.results||[])];
       // Apply the raw predicate before authorizing the uncommon encoding bucket.
       return rows.filter(row=>rowToDocument(row).data.status==='live');
     } catch(error) {
@@ -658,32 +580,7 @@ async function readCollectionRows(db, parent, uid, filters, spec, env) {
         if (!String(error).includes('no such index: idx_cf_chat_participant_source')) throw error;
         hint=''; canonical=await queryCanonical(hint);
       }
-      const canonicalPaths=new Set((canonical.results||[]).map(row=>row.path));
-      let legacy;
-      if (!canonicalPaths.size) {
-        // With no canonical membership there can be no mirror to skip; retain
-        // the single legacy join, avoiding extra work for historical accounts.
-        legacy=await db.prepare(`SELECT a.* FROM friendbook_cf_chat_participants m ${hint}
-          JOIN friendbook_cf_documents a ON a.path=m.chat_path
-          WHERE m.participant_uid=? AND m.source=0`).bind(uid).all();
-      } else {
-        // Read only membership keys first. Most are mirrors of the canonical
-        // rows already obtained, and need no legacy document lookup at all.
-        const memberships=await db.prepare(`SELECT m.chat_path AS path FROM friendbook_cf_chat_participants m ${hint}
-          WHERE m.participant_uid=? AND m.source=0`).bind(uid).all();
-        const unknown=[...new Set((memberships.results||[]).map(row=>row.path).filter(path=>!canonicalPaths.has(path)))];
-        legacy={results:[]};
-        for(let offset=0;offset<unknown.length;offset+=90) {
-          const paths=unknown.slice(offset,offset+90);
-          const page=await db.prepare(`SELECT * FROM friendbook_cf_documents WHERE path IN (${paths.map(()=>'?').join(',')})`)
-            .bind(...paths).all();
-          legacy.results.push(...(page.results||[]));
-        }
-      }
-      // A canonical room can have removed this user and still shadow a stale
-      // legacy membership. Unknown paths must be checked before the ACL.
-      await markWindowShadows(db,canonical,legacy);
-      return [...(canonical?.results || []).map(row=>({...row,[canonicalRootSnapshot]:true})), ...(legacy?.results || []).filter(row=>!row.shadowed).map(appDocumentToFirestoreRow).filter(Boolean)];
+      return (canonical.results||[]).map(row=>({...row,[canonicalRootSnapshot]:true}));
     } catch (error) {
       if (!String(error).includes('no such table: friendbook_cf_chat_participants')) throw error;
     }
@@ -691,43 +588,26 @@ async function readCollectionRows(db, parent, uid, filters, spec, env) {
   if (parent === 'friends') {
     // Only a participant can see a friendship. Index the two positions instead
     // of loading every user's relationships and projecting them in JavaScript.
-    const [canonical,legacy] = await Promise.all([
-      db.prepare(`SELECT path,parent_path,collection_id,doc_id,owner_uid,document_json,create_time,update_time
+    const canonical=await db.prepare(`SELECT path,parent_path,collection_id,doc_id,owner_uid,document_json,create_time,update_time
       FROM friendbook_cf_firestore_documents WHERE parent_path='friends' AND json_extract(document_json,'$.participants[0]')=?
       UNION ALL SELECT path,parent_path,collection_id,doc_id,owner_uid,document_json,create_time,update_time
       FROM friendbook_cf_firestore_documents WHERE parent_path='friends' AND json_extract(document_json,'$.participants[1]')=?
-        AND json_extract(document_json,'$.participants[0]') IS NOT ?`).bind(uid,uid,uid).all(),
-      db.prepare(`SELECT a.path,a.collection,a.doc_id,a.owner_uid,a.document_json,a.updated_at FROM friendbook_cf_documents a
-      WHERE a.collection='friends' AND (CASE WHEN json_type(a.document_json,'$.fields')='object' THEN json_extract(a.document_json,'$.fields.participants.arrayValue.values[0].stringValue') ELSE json_extract(a.document_json,'$.participants[0]') END)=?
-      UNION ALL SELECT a.path,a.collection,a.doc_id,a.owner_uid,a.document_json,a.updated_at FROM friendbook_cf_documents a
-      WHERE a.collection='friends' AND (CASE WHEN json_type(a.document_json,'$.fields')='object' THEN json_extract(a.document_json,'$.fields.participants.arrayValue.values[1].stringValue') ELSE json_extract(a.document_json,'$.participants[1]') END)=?
-      AND (CASE WHEN json_type(a.document_json,'$.fields')='object' THEN json_extract(a.document_json,'$.fields.participants.arrayValue.values[0].stringValue') ELSE json_extract(a.document_json,'$.participants[0]') END) IS NOT ?`).bind(uid,uid,uid).all(),
-    ]);
+        AND json_extract(document_json,'$.participants[0]') IS NOT ?`).bind(uid,uid,uid).all();
     // Reuse canonical participant results to shadow their usual mirrors; a
     // nonmatching canonical row can still shadow a stale matching mirror.
-    await markWindowShadows(db,canonical,legacy);
-    return [...(canonical?.results || []), ...(legacy?.results || []).filter(row=>!row.shadowed).map(appDocumentToFirestoreRow).filter(Boolean)];
+
+    return [...(canonical?.results || [])];
   }
   if (parent === 'friend_requests') {
     const filtered=await filteredRequestRows(db,uid,filters);
     if (filtered!==null) return filtered;
     // Only participants can read requests, regardless of query filter supplied by the client.
-    const [canonical,legacy] = await Promise.all([
-      db.prepare(`SELECT path,parent_path,collection_id,doc_id,owner_uid,document_json,create_time,update_time
+    const canonical=await db.prepare(`SELECT path,parent_path,collection_id,doc_id,owner_uid,document_json,create_time,update_time
       FROM friendbook_cf_firestore_documents WHERE parent_path='friend_requests' AND json_extract(document_json,'$.fromUid')=?
       UNION ALL
       SELECT path,parent_path,collection_id,doc_id,owner_uid,document_json,create_time,update_time
-      FROM friendbook_cf_firestore_documents WHERE parent_path='friend_requests' AND json_extract(document_json,'$.toUid')=? AND json_extract(document_json,'$.fromUid') IS NOT ?`).bind(uid,uid,uid).all(),
-      db.prepare(`SELECT a.path,a.collection,a.doc_id,a.owner_uid,a.document_json,a.updated_at FROM friendbook_cf_documents a
-      WHERE a.collection='friend_requests' AND (CASE WHEN json_type(a.document_json,'$.fields')='object' THEN json_extract(a.document_json,'$.fields.fromUid.stringValue') ELSE json_extract(a.document_json,'$.fromUid') END)=?
-        AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents f WHERE f.path=a.path)
-      UNION ALL
-      SELECT a.path,a.collection,a.doc_id,a.owner_uid,a.document_json,a.updated_at FROM friendbook_cf_documents a
-      WHERE a.collection='friend_requests' AND (CASE WHEN json_type(a.document_json,'$.fields')='object' THEN json_extract(a.document_json,'$.fields.toUid.stringValue') ELSE json_extract(a.document_json,'$.toUid') END)=?
-        AND (CASE WHEN json_type(a.document_json,'$.fields')='object' THEN json_extract(a.document_json,'$.fields.fromUid.stringValue') ELSE json_extract(a.document_json,'$.fromUid') END) IS NOT ?
-        AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents f WHERE f.path=a.path)`).bind(uid,uid,uid).all(),
-    ]);
-    return [...(canonical?.results || []), ...(legacy?.results || []).map(appDocumentToFirestoreRow).filter(Boolean)];
+      FROM friendbook_cf_firestore_documents WHERE parent_path='friend_requests' AND json_extract(document_json,'$.toUid')=? AND json_extract(document_json,'$.fromUid') IS NOT ?`).bind(uid,uid,uid).all();
+    return [...(canonical?.results || [])];
   }
   if (parent==='stories' && !filters?.some(f=>f.field==='authorId' && f.op==='==')) {
     const expiry=filters?.find(f=>f.field==='expiresAt' && f.op==='>' && f.value?.__type==='timestamp' && Number.isSafeInteger(f.value.millis));
@@ -736,22 +616,10 @@ async function readCollectionRows(db, parent, uid, filters, spec, env) {
       CASE WHEN json_extract(document_json,'$.expiresAt.__type')='timestamp'
         AND json_type(document_json,'$.expiresAt.millis') IN ('integer','real')
         THEN json_extract(document_json,'$.expiresAt.millis') ELSE 'compat' END END`;
-      const historicalExpiry=`CASE WHEN json_type(document_json,'$.fields')='object' THEN
-      CASE WHEN json_type(document_json,'$.fields.expiresAt') IN ('object','array') THEN 'compat' END
-    ELSE (CASE WHEN json_type(document_json,'$.expiresAt') IN ('object','array') THEN
-      CASE WHEN json_extract(document_json,'$.expiresAt.__type')='timestamp'
-        AND json_type(document_json,'$.expiresAt.millis') IN ('integer','real')
-        THEN json_extract(document_json,'$.expiresAt.millis') ELSE 'compat' END END) END`;
       try {
-        const [canonical,legacy]=await Promise.all([
-          db.prepare(`SELECT * FROM friendbook_cf_firestore_documents INDEXED BY idx_cf_story_timestamp_expiry_lookup
-            WHERE parent_path='stories' AND (${modernExpiry})>?`).bind(expiry.value.millis).all(),
-          db.prepare(`SELECT a.* FROM friendbook_cf_documents a INDEXED BY idx_cf_legacy_story_timestamp_expiry_lookup
-            WHERE a.collection='stories' AND (${historicalExpiry})>? AND NOT EXISTS (
-              SELECT 1 FROM friendbook_cf_firestore_documents f WHERE f.path=a.path AND f.parent_path='stories'
-            )`).bind(expiry.value.millis).all(),
-        ]);
-        const rows=[...(canonical.results||[]),...(legacy.results||[]).map(appDocumentToFirestoreRow).filter(Boolean)];
+        const canonical=await db.prepare(`SELECT * FROM friendbook_cf_firestore_documents INDEXED BY idx_cf_story_timestamp_expiry_lookup
+            WHERE parent_path='stories' AND (${modernExpiry})>?`).bind(expiry.value.millis).all();
+        const rows=[...(canonical.results||[])];
         // SQLite sorts the text compatibility bucket after numeric timestamps.
         // Recheck it with the existing decoder and filter, before story ACL work.
         if (new Set(rows.map(row=>row.doc_id)).size===rows.length) return rows.filter(row=>{
@@ -770,19 +638,13 @@ async function readCollectionRows(db, parent, uid, filters, spec, env) {
     Array.isArray(filters) && filters.some(f=>f?.field===field && f.op==='==' && typeof f.value==='string'));
   if (indexedField) {
     const value=filters.find(f=>f.field===indexedField && f.op==='==' && typeof f.value==='string').value;
-    const [canonical,legacy] = await Promise.all([
-      db.prepare(`SELECT path,parent_path,collection_id,doc_id,owner_uid,document_json,create_time,update_time FROM friendbook_cf_firestore_documents
-      WHERE parent_path='${parent}' AND json_extract(document_json,'$.${indexedField}')=?`).bind(value).all(),
-      db.prepare(`SELECT a.path,a.collection,a.doc_id,a.owner_uid,a.document_json,a.updated_at FROM friendbook_cf_documents a
-      WHERE a.collection='${parent}' AND (CASE WHEN json_type(a.document_json,'$.fields')='object' THEN json_extract(a.document_json,'$.fields.${indexedField}.stringValue') ELSE json_extract(a.document_json,'$.${indexedField}') END)=?
-      AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents f WHERE f.path=a.path)`).bind(value).all(),
-    ]);
-    return [...(canonical?.results || []), ...(legacy?.results || []).map(appDocumentToFirestoreRow).filter(Boolean)];
+    const canonical=await db.prepare(`SELECT path,parent_path,collection_id,doc_id,owner_uid,document_json,create_time,update_time FROM friendbook_cf_firestore_documents
+      WHERE parent_path='${parent}' AND json_extract(document_json,'$.${indexedField}')=?`).bind(value).all();
+    return [...(canonical?.results || [])];
   }
   if (parent === 'notifications') {
     const unread = Array.isArray(filters) && filters.some(f=>f.field==='isRead' && f.op==='==' && f.value===false);
     const canonicalUnread = unread ? " AND json_type(document_json,'$.isRead')='false'" : '';
-    const legacyUnread = unread ? " AND (CASE WHEN json_type(a.document_json,'$.fields')='object' THEN json_type(a.document_json,'$.fields.isRead.booleanValue') ELSE json_type(a.document_json,'$.isRead') END)='false'" : '';
     // Authorization itself narrows the inbox before loading rows. Keep canonical
     // path precedence even when its recipient differs from a stale legacy mirror.
     // Both ordered indexes start with the same recipient key as the older
@@ -799,16 +661,8 @@ async function readCollectionRows(db, parent, uid, filters, spec, env) {
         return canonicalQuery('');
       }
     })();
-    const [canonical,legacy] = await Promise.all([
-      canonicalRead,
-      db.prepare(`SELECT a.path, a.collection, a.doc_id, a.owner_uid, a.document_json, a.updated_at
-      FROM friendbook_cf_documents a WHERE a.collection='notifications'
-        AND (CASE WHEN json_type(a.document_json,'$.fields')='object'
-          THEN json_extract(a.document_json,'$.fields.toUserId.stringValue')
-          ELSE json_extract(a.document_json,'$.toUserId') END)=?${legacyUnread}
-        AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents f WHERE f.path=a.path)`).bind(uid).all(),
-    ]);
-    return [...(canonical?.results || []), ...(legacy?.results || []).map(appDocumentToFirestoreRow).filter(Boolean)];
+    const canonical=await canonicalRead;
+    return [...(canonical?.results || [])];
   }
   const parts = splitPath(parent);
   // The alias is built only from fixed labels. Unlike bound values and numeric
@@ -825,20 +679,9 @@ async function readCollectionRows(db, parent, uid, filters, spec, env) {
   const canonicalRead = db.prepare(
     `SELECT path, parent_path, collection_id, doc_id, owner_uid, document_json, create_time, update_time FROM friendbook_cf_firestore_documents AS ${scanAlias} WHERE parent_path = ?`
   ).bind(parent).all();
-  // Root collections merge both stores. Nested collections never run a root scan.
-  const legacyRead = parts?.length === 1 ? db.prepare(
-    `SELECT path, collection, doc_id, owner_uid, document_json, updated_at FROM friendbook_cf_documents AS ${scanAlias} WHERE collection = ?`
-  ).bind(parent).all() : null;
-  const [firestoreRows, appRows] = await Promise.all([canonicalRead, legacyRead]);
+  const firestoreRows = await canonicalRead;
   const byPath = new Map((firestoreRows?.results || []).map(row => [row.path, row]));
-  // Prefer canonical rows over stale mirrors without changing privacy or ordering.
-  if (parts?.length === 1) {
-    for (const appRow of appRows?.results || []) {
-      if (byPath.has(appRow.path)) continue;
-      const row = appDocumentToFirestoreRow(appRow);
-      if (row) byPath.set(row.path, row);
-    }
-  } else if (parts?.length === 3 && parts[0] === 'chats' && parts[2] === 'messages') {
+  if (parts?.length === 3 && parts[0] === 'chats' && parts[2] === 'messages') {
     // Legacy CloudflareStore messages use either messages/{chatId}_{messageId} IDs or a chatId
     // field, while Android reads chats/{chatId}/messages/{messageId}. Restrict this bridge to
     // exact ID-prefix/chatId matches and a participant-checked chat query; native nested rows win.
@@ -847,13 +690,13 @@ async function readCollectionRows(db, parent, uid, filters, spec, env) {
     // characters, so this range exactly matches prefix + any valid message ID.
     // Exclude prefix rows from branch two to avoid duplicating a legacy message.
     const appRows = await db.prepare(
-      `SELECT path, collection, doc_id, owner_uid, document_json, updated_at
-       FROM friendbook_cf_documents
-       WHERE collection='messages' AND doc_id>=? AND doc_id<?
+      `SELECT path, parent_path, collection_id, doc_id, owner_uid, document_json, create_time, update_time
+       FROM friendbook_cf_firestore_documents
+       WHERE parent_path='messages' AND doc_id>=? AND doc_id<?
        UNION ALL
-       SELECT path, collection, doc_id, owner_uid, document_json, updated_at
-       FROM friendbook_cf_documents
-       WHERE collection='messages' AND json_extract(document_json,'$.chatId')=?
+       SELECT path, parent_path, collection_id, doc_id, owner_uid, document_json, create_time, update_time
+       FROM friendbook_cf_firestore_documents
+       WHERE parent_path='messages' AND json_extract(document_json,'$.chatId')=?
          AND NOT (doc_id>=? AND doc_id<?)`
     ).bind(prefix, upper, parts[1], prefix, upper).all();
     for (const appRow of appRows?.results || []) {
@@ -861,7 +704,7 @@ async function readCollectionRows(db, parent, uid, filters, spec, env) {
       if (!validSegment(messageId)) continue;
       const nestedPath = `${parent}/${messageId}`;
       if (byPath.has(nestedPath)) continue;
-      const row = appDocumentToFirestoreRow(appRow);
+      const row = appRow;
       if (row) byPath.set(nestedPath, { ...row, path:nestedPath, parent_path:parent, collection_id:'messages', doc_id:messageId });
     }
   }
@@ -1020,7 +863,7 @@ async function mutateProfile(db, uid, path, body, method, now, profileRow) {
         next=applyUpdate(before,{showActiveStatus:fields.showActiveStatus},now);
       }
       // A literal, unchanged PATCH does not need to rewrite canonical, mirror,
-      // and guard rows. Keep transforms and legacy promotion on the write path.
+      // and guard rows. Keep transforms on the guarded write path.
       if(method==='PATCH' && existing?.[canonicalRootSnapshot] && literalFields(fields)
           && existing.document_json===JSON.stringify(next)) return json(rowToDocument(existing));
       // Login/settings often repeat the same literal merge. Check the snapshot
@@ -1327,28 +1170,15 @@ async function boundedNamePage(db,env,uid,spec) {
       || !Number.isInteger(spec.limit) || spec.limit<1 || spec.limit>50) return null;
   const upper=prefix ? unicodePrefixUpper(prefix) : null;
   const bound=upper===null?'':' AND %NAME%<?';
-  const legacyName=`CASE WHEN json_type(document_json,'$.fields')='object' THEN CASE
-    WHEN json_type(document_json,'$.fields.displayName')='text' THEN json_extract(document_json,'$.fields.displayName')
-    WHEN json_type(document_json,'$.fields.displayName.stringValue')='text' THEN json_extract(document_json,'$.fields.displayName.stringValue')
-    WHEN json_type(document_json,'$.fields.displayName.stringValue') IS NOT NULL THEN 1 END
-    ELSE json_extract(document_json,'$.displayName') END`;
   try {
-    const [canonical,legacy,unusual]=await Promise.all([
-      db.prepare(`SELECT * FROM friendbook_cf_firestore_documents INDEXED BY idx_cf_users_display_name
+    const canonical=await db.prepare(`SELECT * FROM friendbook_cf_firestore_documents INDEXED BY idx_cf_users_display_name
         WHERE parent_path='users' AND json_extract(document_json,'$.displayName')>=?${bound.replace('%NAME%',"json_extract(document_json,'$.displayName')")}
           AND json_type(document_json,'$.displayName')='text'
-        ORDER BY json_extract(document_json,'$.displayName'),doc_id LIMIT ?`).bind(prefix,...(upper===null?[]:[upper]),spec.limit).all(),
-      db.prepare(`SELECT * FROM friendbook_cf_documents INDEXED BY idx_cf_legacy_people_cursor_prefix
-        WHERE collection='users' AND (${legacyName})>=?${bound.replace('%NAME%',`(${legacyName})`)} ORDER BY (${legacyName}),doc_id LIMIT ?`).bind(prefix,...(upper===null?[]:[upper]),spec.limit).all(),
-      db.prepare(`SELECT * FROM friendbook_cf_documents INDEXED BY idx_cf_legacy_people_cursor_prefix
-        WHERE collection='users' AND (${legacyName})=1 LIMIT 65`).bind().all(),
-    ]);
-    if ((unusual.results||[]).length>=65) return null;
-    const old={results:[...(legacy.results||[]),...(unusual.results||[])]};
-    const all=[...(canonical.results||[]),...old.results];
+        ORDER BY json_extract(document_json,'$.displayName'),doc_id LIMIT ?`).bind(prefix,...(upper===null?[]:[upper]),spec.limit).all();
+    const all=canonical.results||[];
     if (all.some(row=>row.path!==`users/${row.doc_id}`)) return null;
-    await markWindowShadows(db,canonical,old,'users');
-    const rows=[...(canonical.results||[]),...old.results.filter(row=>!row.shadowed).map(appDocumentToFirestoreRow).filter(Boolean)];
+
+    const rows=canonical.results||[];
     if(new Set(rows.map(row=>row.doc_id)).size!==rows.length)return null;
     const admin=isPaymentAdmin(env,uid), moderator=!admin && await verifiedModerator(db,uid);
     const docs=rows.map(rowToDocument).filter(Boolean).map(doc=>({...doc,
@@ -1366,23 +1196,18 @@ async function boundedNamePage(db,env,uid,spec) {
   }
 }
 
-// A mirrored first page need not probe canonical storage once per legacy row.
-// Read bounded heads, reuse canonical paths for shadow checks, and only return
-// when both source boundaries prove no omitted ID can enter the visible page.
+// Read a bounded canonical head; return only when its boundary proves no
+// omitted ID can enter the visible page.
 async function boundedPeopleHead(db,uid,spec,admin,moderator) {
   const size=spec.limit+1;
   try {
-    const [canonical,legacy]=await Promise.all([
-      db.prepare(`SELECT * FROM friendbook_cf_firestore_documents AS quota_people_head INDEXED BY idx_cf_people_default_page
-        WHERE parent_path='users' ORDER BY doc_id,path LIMIT ?`).bind(size).all(),
-      db.prepare(`SELECT * FROM friendbook_cf_documents AS quota_people_head INDEXED BY idx_cf_legacy_people_default_page
-        WHERE collection='users' ORDER BY doc_id,path LIMIT ?`).bind(size).all(),
-    ]);
-    const groups=[canonical.results||[],legacy.results||[]];
+    const canonical=await db.prepare(`SELECT * FROM friendbook_cf_firestore_documents AS quota_people_head INDEXED BY idx_cf_people_default_page
+        WHERE parent_path='users' ORDER BY doc_id,path LIMIT ?`).bind(size).all();
+    const groups=[canonical.results||[]];
     if(groups.some(rows=>rows.some(row=>!/^[-_a-zA-Z0-9]+$/.test(row.doc_id) || row.path!==`users/${row.doc_id}`)
         || new Set(rows.map(row=>row.doc_id)).size!==rows.length)) return null;
-    await markWindowShadows(db,canonical,legacy,'users');
-    const rows=[...groups[0],...groups[1].filter(row=>!row.shadowed).map(appDocumentToFirestoreRow).filter(Boolean)];
+
+    const rows=groups[0];
     if(new Set(rows.map(row=>row.doc_id)).size!==rows.length)return null;
     const docs=rows.map(rowToDocument).filter(Boolean).map(doc=>({...doc,
       data:profileReadView(doc.path,uid,doc.data,admin,moderator)})).filter(doc=>doc.data!==null);
@@ -1399,7 +1224,7 @@ async function boundedPeopleHead(db,uid,spec,admin,moderator) {
   }
 }
 
-// Feed fast path: fetch small indexed batches from each store, then authorize each
+// Feed fast path: fetch small indexed canonical batches, then authorize each
 // candidate before filling the visible page. Never LIMIT before privacy filtering.
 // Anything not provably equivalent falls back to the compatibility query engine.
 // The Home and conversation pickers request a small, unfiltered user page.
@@ -1414,21 +1239,16 @@ async function boundedPeoplePage(db,env,uid,spec) {
   const page=[];
   let after=null;
   for (let batch=0;batch<4;batch++) {
-    // Only overfetch once hidden or shadowed rows prove a refill is needed.
+    // Only overfetch once hidden rows prove a refill is needed.
     const size=batch===0 ? spec.limit : Math.max(16,spec.limit);
     const seek=after?' AND (doc_id,path)>(?,?)':'';
-    const bindings=after?[...after,...after,size+1]:[size+1];
+    const bindings=after?[...after,size+1]:[size+1];
     let results;
     try { ({results=[]}=await db.prepare(`WITH candidates AS (
-      SELECT path,parent_path,collection_id,doc_id,owner_uid,document_json,create_time,update_time,0 AS source
+      SELECT path,parent_path,collection_id,doc_id,owner_uid,document_json,create_time,update_time
       FROM friendbook_cf_firestore_documents INDEXED BY idx_cf_people_default_page WHERE parent_path='users'${seek}
-      UNION ALL
-      SELECT path,NULL,collection,doc_id,owner_uid,document_json,NULL,updated_at,1 AS source
-      FROM friendbook_cf_documents INDEXED BY idx_cf_legacy_people_default_page WHERE collection='users'${seek}
       ORDER BY doc_id,path LIMIT ?
-    ) SELECT c.*, CASE WHEN c.source=1 THEN EXISTS (
-      SELECT 1 FROM friendbook_cf_firestore_documents f WHERE f.path=c.path AND f.parent_path='users'
-    ) ELSE 0 END AS shadowed FROM candidates c ORDER BY doc_id,path`).bind(...bindings).all()); }
+    ) SELECT c.* FROM candidates c ORDER BY doc_id,path`).bind(...bindings).all()); }
     catch (error) {
       if (/no such index: idx_cf_(?:legacy_)?people_default_page/.test(String(error))) return null;
       throw error;
@@ -1436,12 +1256,9 @@ async function boundedPeoplePage(db,env,uid,spec) {
     // SQL and JS agree on ASCII order. Use the original path for unusual IDs or
     // inconsistent historical rows (including equal IDs crossing a batch boundary).
     if (results.some(row=>!/^[-_a-zA-Z0-9]+$/.test(row.doc_id) || row.path!==`users/${row.doc_id}`)) return null;
-    // A canonical/legacy pair can straddle the boundary. Consume both copies
-    // together before seeking strictly past their shared key.
-    const take=results[size]?.path===results[size-1]?.path && results.length>size ? size+1 : size;
+    const take=size;
     for (const row of results.slice(0,take)) {
-      if (row.shadowed) continue;
-      const doc=rowToDocument(row.source===0 ? row : appDocumentToFirestoreRow({...row,collection:row.collection_id,updated_at:row.update_time}));
+      const doc=rowToDocument(row);
       if (!doc) continue;
       const data=profileReadView(doc.path,uid,doc.data,admin,moderator);
       if (data===null) continue;
@@ -1480,67 +1297,45 @@ async function boundedRecentPeoplePage(db,env,uid,spec) {
     WHEN json_type(document_json,'$.createdAt')='object' AND json_extract(document_json,'$.createdAt.__type')='timestamp'
       AND json_type(document_json,'$.createdAt.millis')='integer' AND json_extract(document_json,'$.createdAt.millis') BETWEEN -9007199254740991 AND 9007199254740991 THEN 4
     ELSE -1 END`;
-  const historical=`CASE WHEN json_type(document_json,'$.fields')='object' THEN -1 ELSE (CASE WHEN doc_id GLOB '*[^ -~]*' OR path<>'users/'||doc_id THEN -1
-    WHEN json_type(document_json,'$.createdAt') IS NULL OR json_type(document_json,'$.createdAt')='null' THEN 0
-    WHEN json_type(document_json,'$.createdAt') IN ('integer','real') AND json_extract(document_json,'$.createdAt') BETWEEN -9007199254740991 AND 9007199254740991 THEN 2
-    WHEN json_type(document_json,'$.createdAt')='object' AND json_extract(document_json,'$.createdAt.__type')='timestamp'
-      AND json_type(document_json,'$.createdAt.millis')='integer' AND json_extract(document_json,'$.createdAt.millis') BETWEEN -9007199254740991 AND 9007199254740991 THEN 4
-    ELSE -1 END) END`;
   const time=`COALESCE(CASE WHEN json_type(document_json,'$.createdAt') IN ('integer','real') THEN json_extract(document_json,'$.createdAt')
     ELSE json_extract(document_json,'$.createdAt.millis') END,0)`;
   // Each standard stream is visibility-filtered before LIMIT. Its first N
   // candidates are sufficient for an N-item merged page; exceptions can only
   // displace those candidates, not require more lookahead.
   const size=spec.limit;
-  const stores=[
-    ['friendbook_cf_firestore_documents','idx_cf_recent_people',"parent_path='users'",modern,''],
-    ['friendbook_cf_documents','idx_cf_legacy_recent_people',"collection='users'",historical,
-      "AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents f WHERE f.path=a.path AND f.parent_path='users')"],
-  ];
-  const unpack=(rows,i)=>i===0 ? rows : rows.map(appDocumentToFirestoreRow).filter(Boolean);
+  const table='friendbook_cf_firestore_documents',index='idx_cf_recent_people',where="parent_path='users'",rank=modern;
   try {
-    const oddPromise=Promise.all(stores.map(async ([table,index,where,rank,shadow],i)=>{
+    const oddPromise=(async()=>{
       const {results=[]}=await db.prepare(`SELECT a.* FROM ${table} a INDEXED BY ${index}
-        WHERE ${where} AND (${rank})=-1 ${shadow} LIMIT ?`).bind(65).all();
-      return unpack(results,i);
-    }));
-    // Start with the canonical head. The Nth canonical profile is a safe lower
-    // bound for legacy profiles: anything older cannot enter this page. Split
-    // into rank equality ranges so SQLite can seek the expression index on time.
-    async function readStandard(i, floor) {
-      const [table,index,where,rank,shadow]=stores[i];
+        WHERE ${where} AND (${rank})=-1  LIMIT ?`).bind(65).all();
+      return results;
+    })();
+    // Split rank equality ranges so SQLite seeks the time expression index.
+    async function readStandard() {
       const rows=[];
       for(const group of [4,2,0]) {
-        if((cursor && group>cursor[0]) || (floor && group<floor[0]) || rows.length>=size)continue;
+        if((cursor && group>cursor[0]) || rows.length>=size)continue;
         const args=[group];
         const bounds=[];
         if(cursor && group===cursor[0]) {
           bounds.push(`(${time})<=? AND ((${time})<? OR doc_id<?)`);
           args.push(cursor[1],cursor[1],cursor[2]);
         }
-        if(floor && group===floor[0]) {
-          bounds.push(`(${time})>=? AND ((${time})>? OR doc_id>=?)`);
-          args.push(floor[1],floor[1],floor[2]);
-        }
         const visibility=!admin ? `AND (a.path=? OR (
           json_type(document_json,'$.banned') IS NOT 'true'
           AND json_type(document_json,'$.deactivated') IS NOT 'true'))` : '';
         if(visibility)args.push(`users/${uid}`);
         const {results=[]}=await db.prepare(`SELECT a.* FROM ${table} a INDEXED BY ${index}
-          WHERE ${where} AND (${rank})=? ${bounds.map(b=>'AND '+b).join(' ')} ${shadow} ${visibility}
+          WHERE ${where} AND (${rank})=? ${bounds.map(b=>'AND '+b).join(' ')}  ${visibility}
           ORDER BY (${time}) DESC,doc_id DESC LIMIT ?`).bind(...args,size-rows.length).all();
-        rows.push(...unpack(results,i));
+        rows.push(...results);
       }
       return rows;
     }
-    const [odd,canonical]=await Promise.all([oddPromise,readStandard(0,null)]);
-    const last=canonical.length===size?canonical.at(-1):null;
-    const value=last && rowToDocument(last)?.data.createdAt;
-    const floor=last ? [value==null?0:typeof value==='number'?2:4,value==null?0:typeof value==='number'?value:value.millis,last.doc_id] : null;
-    const normal=[canonical,await readStandard(1,floor)];
-    const unusual=odd.flat();
+    const [odd,canonical]=await Promise.all([oddPromise,readStandard()]);
+    const unusual=odd;
     if(unusual.length>64 || unusual.some(row=>row.path!==`users/${row.doc_id}`)) return null;
-    const standard=sortDocuments(normal.flat().map(rowToDocument),spec.orderBy).slice(0,size);
+    const standard=sortDocuments(canonical.map(rowToDocument),spec.orderBy).slice(0,size);
     const anchor=standard.at(-1);
     const anchorCursor=anchor && [anchor.data.createdAt??null,anchor.id];
     const extra=unusual.map(rowToDocument).filter(doc=>!anchorCursor || standard.length<size
@@ -1556,46 +1351,6 @@ async function boundedRecentPeoplePage(db,env,uid,spec) {
   }
 }
 
-// Mark legacy copies using the already-read canonical window first. A copy
-// outside that window may still exist and take precedence, so batch only those
-// unknown paths. Parent is restricted for Feed/Reels to match their prior
-// shadow predicate; notifications deliberately check any canonical path.
-async function markWindowShadows(db,canonical,legacy,parent=null) {
-  const canonicalPaths=new Set((canonical.results||[]).map(row=>row.path));
-  const legacyRows=legacy.results||[];
-  const unknown=[...new Set(legacyRows.map(row=>row.path).filter(path=>!canonicalPaths.has(path)))];
-  // Stay below D1's bound-variable limit even for a 100-item page.
-  for (let offset=0;offset<unknown.length;offset+=90) {
-    const slice=unknown.slice(offset,offset+90);
-    // Filtering parent_path in SQL can make SQLite choose the parent index and
-    // scan every post instead of seeking the handful of primary-key paths.
-    // Read the parent with each bounded point lookup and apply the same exact
-    // parent test here; notification lookups intentionally accept any parent.
-    const result=await db.prepare(`SELECT path${parent ? ',parent_path' : ''} FROM friendbook_cf_firestore_documents WHERE path IN (${slice.map(()=>'?').join(',')})`)
-      .bind(...slice).all();
-    for (const row of result.results||[]) if (!parent || row.parent_path===parent) canonicalPaths.add(row.path);
-  }
-  for (const row of legacyRows) row.shadowed=canonicalPaths.has(row.path);
-}
-
-// Merge raw indexed windows before applying shadow filtering. Equal canonical
-// keys win; stale legacy entries only advance the cursor and never render.
-function mergeMirroredWindow(canonical,legacy,spec,chunk) {
-  const nativeDocs=(canonical?.results||[]).map(rowToDocument).filter(Boolean);
-  const nativeById=new Map(nativeDocs.map(doc=>[doc.id,doc]));
-  // Select the raw legacy window before testing canonical precedence. An
-  // almost entirely mirrored collection must not be walked to find N
-  // legacy-only rows. Shadowed entries advance the cursor but never render.
-  const oldDocs=(legacy?.results||[]).flatMap(row=>{
-    const doc=rowToDocument(appDocumentToFirestoreRow(row));
-    if(!doc)return [];
-    const n=nativeById.get(doc.id);
-    if(n && compareDocumentToCursor(n,[doc.data.createdAt,doc.id],spec.orderBy)===0)return [];
-    return [{...doc,shadowed:Boolean(row.shadowed)}];
-  });
-  return sortDocuments([...nativeDocs,...oldDocs],spec.orderBy).slice(0,chunk);
-}
-
 async function boundedFeedPage(db,uid,spec,requestUserReads) {
   const root=spec?.parent;
   if (root!=='posts' && root!=='reels') return null;
@@ -1603,9 +1358,7 @@ async function boundedFeedPage(db,uid,spec,requestUserReads) {
   const author=filters.length===1 && filters[0]?.field==='authorId' && filters[0]?.op==='==' && typeof filters[0]?.value==='string' ? filters[0].value : null;
   const authorArgs=author===null?[]:[author];
   const authorField="json_extract(document_json,'$.authorId')";
-  const legacyAuthor="CASE WHEN json_type(document_json,'$.fields')='object' THEN json_extract(document_json,'$.fields.authorId.stringValue') ELSE json_extract(document_json,'$.authorId') END";
   const byAuthor=author===null?'':` AND ${authorField}=?`;
-  const byLegacyAuthor=author===null?'':` AND (${legacyAuthor})=?`;
   if ((root==='reels' && filters.length) || !Array.isArray(spec.orderBy) || spec.orderBy.length!==1
       || spec.orderBy[0]?.field!=='createdAt' || spec.orderBy[0]?.direction!=='DESCENDING'
       || (filters.length && author===null) || spec.limitToLast || spec.startAt || spec.endAt || spec.endBefore
@@ -1623,26 +1376,22 @@ async function boundedFeedPage(db,uid,spec,requestUserReads) {
     OR (json_type(document_json,'$.createdAt')='object' AND json_extract(document_json,'$.createdAt.__type')='timestamp'
       AND json_type(document_json,'$.createdAt.millis')='integer' AND json_extract(document_json,'$.createdAt.millis') BETWEEN -9007199254740991 AND 9007199254740991)),0)=0`;
   const canonicalException=`(doc_id GLOB '*[^ -~]*' OR path<>'${root}/'||doc_id OR ${standard})`;
-  const legacyException=`(doc_id GLOB '*[^ -~]*' OR path<>'${root}/'||doc_id OR json_type(document_json,'$.fields')='object' OR ${standard})`;
-  const legacyUnshadowed=`NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents f WHERE f.path=a.path AND f.parent_path='${root}')`;
   const exceptionIndex=root==='posts'?'feed_exceptions':'reels_feed_exceptions';
   // A few unusual timestamps (including on author pages) must not force
   // the fallback. Merge only matching exceptions into the normal keyset stream.
   let unusual;
   try {
-    unusual=await Promise.all([
+    unusual=await (
       db.prepare(`SELECT * FROM friendbook_cf_firestore_documents INDEXED BY idx_cf_${exceptionIndex}
-        WHERE parent_path='${root}'${byAuthor} AND ${canonicalException} LIMIT 129`).bind(...authorArgs).all(),
-      db.prepare(`SELECT a.* FROM friendbook_cf_documents a INDEXED BY idx_cf_legacy_${exceptionIndex}
-        WHERE a.collection='${root}'${byLegacyAuthor} AND ${legacyException} AND ${legacyUnshadowed} LIMIT 129`).bind(...authorArgs).all(),
-    ]);
+        WHERE parent_path='${root}'${byAuthor} AND ${canonicalException} LIMIT 129`).bind(...authorArgs).all()
+    );
   } catch(error) {
     if (/no such index: idx_cf_(?:legacy_)?(?:reels_)?feed_exceptions/.test(String(error))) return null;
     throw error;
   }
-  const [odd,old]=unusual.map(x=>x.results||[]);
-  if (odd.length+old.length>128 || [...odd,...old].some(row=>row.path!==`${root}/${row.doc_id}`)) return null;
-  const exceptions=applyQuery([...odd,...old.map(appDocumentToFirestoreRow)].map(rowToDocument).filter(Boolean),{...spec,limit:null});
+  const odd=unusual.results||[];
+  if (odd.length>128 || odd.some(row=>row.path!==`${root}/${row.doc_id}`)) return null;
+  const exceptions=applyQuery(odd.map(rowToDocument).filter(Boolean),{...spec,limit:null});
   const rank=`CASE WHEN json_type(a.document_json,'$.createdAt') IN ('integer','real') THEN 2 ELSE 4 END`;
   const time=`CASE WHEN json_type(a.document_json,'$.createdAt') IN ('integer','real') THEN json_extract(a.document_json,'$.createdAt') ELSE json_extract(a.document_json,'$.createdAt.millis') END`;
   const visible=[];
@@ -1672,29 +1421,22 @@ async function boundedFeedPage(db,uid,spec,requestUserReads) {
         batches=await Promise.all([
           seekWindow('a.path,a.parent_path,a.collection_id,a.doc_id,a.owner_uid,a.document_json,a.create_time,a.update_time',
             'friendbook_cf_firestore_documents',`idx_cf_${root}_feed_page`,`a.parent_path='${root}' AND NOT ${canonicalException}`),
-          seekWindow('a.path,a.collection,a.doc_id,a.owner_uid,a.document_json,a.updated_at',
-            'friendbook_cf_documents',`idx_cf_legacy_${root}_feed_page`,`a.collection='${root}' AND NOT COALESCE(${legacyException},0)`),
         ]);
       } else if (cursor && root==='posts' && author!==null) {
         // Profile pages use the existing author-prefixed indexes. Without an
         // explicit rank/time seek SQLite walks every newer post by that author
         // on each older page. Keep the old bounded query if an older schema has
-        // not yet installed either index; never bypass ACL or legacy shadows.
+        // not yet installed the index; never bypass ACL.
         try {
           batches=await Promise.all([
             seekWindow('a.path,a.parent_path,a.collection_id,a.doc_id,a.owner_uid,a.document_json,a.create_time,a.update_time',
               'friendbook_cf_firestore_documents','idx_cf_posts_author_page',`a.parent_path='posts'${byAuthor} AND NOT ${canonicalException}`,[author]),
-            seekWindow('a.path,a.collection,a.doc_id,a.owner_uid,a.document_json,a.updated_at',
-              'friendbook_cf_documents','idx_cf_legacy_posts_author_page',`a.collection='posts'${byLegacyAuthor} AND NOT COALESCE(${legacyException},0)`,[author]),
           ]);
         } catch (error) {
           if (!/no such index: idx_cf_(?:legacy_)?posts_author_page/.test(String(error))) throw error;
           batches=await Promise.all([
             db.prepare(`SELECT a.path,a.parent_path,a.collection_id,a.doc_id,a.owner_uid,a.document_json,a.create_time,a.update_time
               FROM friendbook_cf_firestore_documents a WHERE a.parent_path='posts'${byAuthor}${bound} AND NOT ${canonicalException}
-              ORDER BY ${rank} DESC,${time} DESC,a.doc_id DESC LIMIT ?`).bind(...args).all(),
-            db.prepare(`SELECT a.path,a.collection,a.doc_id,a.owner_uid,a.document_json,a.updated_at
-              FROM friendbook_cf_documents a WHERE a.collection='posts'${byLegacyAuthor}${bound} AND NOT COALESCE(${legacyException},0)
               ORDER BY ${rank} DESC,${time} DESC,a.doc_id DESC LIMIT ?`).bind(...args).all(),
           ]);
         }
@@ -1703,24 +1445,20 @@ async function boundedFeedPage(db,uid,spec,requestUserReads) {
           db.prepare(`SELECT a.path,a.parent_path,a.collection_id,a.doc_id,a.owner_uid,a.document_json,a.create_time,a.update_time
             FROM friendbook_cf_firestore_documents a ${author===null?`INDEXED BY idx_cf_${root}_feed_page`:''} WHERE a.parent_path='${root}'${byAuthor}${bound} AND NOT ${canonicalException}
             ORDER BY ${rank} DESC,${time} DESC,a.doc_id DESC LIMIT ?`).bind(...args).all(),
-          db.prepare(`SELECT a.path,a.collection,a.doc_id,a.owner_uid,a.document_json,a.updated_at
-              FROM friendbook_cf_documents a ${author===null?`INDEXED BY idx_cf_legacy_${root}_feed_page`:''}
-              WHERE a.collection='${root}'${byLegacyAuthor}${bound} AND NOT COALESCE(${legacyException},0)
-              ORDER BY ${rank} DESC,${time} DESC,a.doc_id DESC LIMIT ?`).bind(...args).all(),
         ]);
       }
     } catch(error) {
       if (/no such index: idx_cf_(?:legacy_)?(?:posts|reels)_feed_page/.test(String(error))) return null;
       throw error;
     }
-    const [canonical,legacy]=batches;
-    await markWindowShadows(db,canonical,legacy,root);
-    const docs=mergeMirroredWindow(canonical,legacy,spec,chunk);
+    const [canonical]=batches;
+
+    const docs=sortDocuments((canonical.results||[]).map(rowToDocument).filter(Boolean),spec.orderBy).slice(0,chunk);
     const last=docs.at(-1), value=last?.data.createdAt;
     const nextCursor=last?[typeof value==='number'?2:4,typeof value==='number'?value:value.millis,last.id]:null;
     const split=docs.length<chunk ? exceptions.length : exceptions.findIndex(doc=>
       compareDocumentToCursor(doc,[value,last.id],spec.orderBy)>0);
-    const merged=sortDocuments([...docs.filter(doc=>!doc.shadowed),...exceptions.splice(0,split<0?exceptions.length:split)],spec.orderBy);
+    const merged=sortDocuments([...docs,...exceptions.splice(0,split<0?exceptions.length:split)],spec.orderBy);
     // The same checks used by the normal document query; privacy is never inferred
     // from the client-supplied author, a stale legacy mirror, or the SQL sort key.
     let deniedBurst=1;
@@ -1747,9 +1485,7 @@ async function boundedNotificationPage(db,uid,spec) {
   if (recipient.length!==1 || unread.length>1 || filters.length!==recipient.length+unread.length) return null;
   const recipientArgs=[uid];
   const field="json_extract(document_json,'$.toUserId')";
-  const legacyField="CASE WHEN json_type(document_json,'$.fields')='object' THEN json_extract(document_json,'$.fields.toUserId.stringValue') ELSE json_extract(document_json,'$.toUserId') END";
   const byRecipient=` AND ${field}=?`;
-  const byLegacyRecipient=` AND (${legacyField})=?`;
   const unreadOnly=unread.length?" AND json_type(document_json,'$.isRead')='false'":'';
   const delta=spec?.limitToLast===true && !!spec.endBefore && !spec.startAfter;
   if (spec?.parent!=='notifications' || !Array.isArray(spec.orderBy) || spec.orderBy.length!==1
@@ -1774,45 +1510,32 @@ async function boundedNotificationPage(db,uid,spec) {
       return db.prepare(`SELECT 1 AS hit FROM ${table} a WHERE ${where} LIMIT 1`).bind(...args).first();
     }
   };
-  const [canonicalBad,legacyBad]=await Promise.all([
-    probe('friendbook_cf_firestore_documents','idx_cf_notif_exceptions',`parent_path='notifications'${byRecipient}
-      AND (doc_id GLOB '*[^ -~]*' OR path<>'notifications/'||doc_id OR ${standard})`,recipientArgs),
-    probe('friendbook_cf_documents','idx_cf_legacy_notif_exceptions',`collection='notifications'${byLegacyRecipient}
-      AND (doc_id GLOB '*[^ -~]*' OR path<>'notifications/'||doc_id OR json_type(document_json,'$.fields')='object' OR ${standard})
-      AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents f WHERE f.path=a.path)`,recipientArgs),
-  ]);
-  if (canonicalBad || legacyBad) return null;
+  const canonicalBad=await probe('friendbook_cf_firestore_documents','idx_cf_notif_exceptions',`parent_path='notifications'${byRecipient}
+      AND (doc_id GLOB '*[^ -~]*' OR path<>'notifications/'||doc_id OR ${standard})`,recipientArgs);
+  if (canonicalBad) return null;
   const rank=`CASE WHEN json_type(a.document_json,'$.createdAt') IN ('integer','real') THEN 2 ELSE 4 END`;
   const time=`CASE WHEN json_type(a.document_json,'$.createdAt') IN ('integer','real') THEN json_extract(a.document_json,'$.createdAt') ELSE json_extract(a.document_json,'$.createdAt.millis') END`;
   const chunk=spec.limit, direction=delta?'ASC':'DESC';
   const seekSpec=delta?{...spec,orderBy:[{field:'createdAt',direction:'ASCENDING'}]}:spec;
   const visible=[];
   const ordered=`ORDER BY ${rank} ${direction},${time} ${direction},a.doc_id ${direction} LIMIT ?`;
-  async function readStore(legacy,bound,args) {
-    if(!legacy)return db.prepare(`SELECT a.path,a.parent_path,a.collection_id,a.doc_id,a.owner_uid,a.document_json,a.create_time,a.update_time
+  async function readStore(bound,args) {
+    return db.prepare(`SELECT a.path,a.parent_path,a.collection_id,a.doc_id,a.owner_uid,a.document_json,a.create_time,a.update_time
       FROM friendbook_cf_firestore_documents a WHERE a.parent_path='notifications'${byRecipient}${unreadOnly}${bound}
       ${ordered}`).bind(...args).all();
-    // Defer canonical-shadow checks until both bounded windows are known.
-    // Most legacy rows are mirrors already present in the canonical window;
-    // probing each one again would spend a D1 read per notification.
-    return db.prepare(`SELECT a.path,a.collection,a.doc_id,a.owner_uid,a.document_json,a.updated_at
-        FROM friendbook_cf_documents a WHERE a.collection='notifications'${byLegacyRecipient}${unreadOnly}${bound}
-        ${ordered}`).bind(...args).all();
+
   }
-  async function readWindow(legacy) {
+  async function readWindow() {
     if(!delta) {
       const bound=cursor?` AND (${rank},${time},a.doc_id)<(?,?,?)`:'';
       if (cursor) {
         // Expose rank and time as independent index bounds. Timestamp pages
         // must also include older numeric rows; limit both branches before
         // merging so deep inbox pages do not walk the newer notifications.
-        const index=legacy ? (unread.length?'idx_cf_legacy_notif_unread':'idx_cf_legacy_notif_page')
-          : (unread.length?'idx_cf_notif_unread':'idx_cf_notif_page');
-        const columns=legacy?'a.path,a.collection,a.doc_id,a.owner_uid,a.document_json,a.updated_at'
-          :'a.path,a.parent_path,a.collection_id,a.doc_id,a.owner_uid,a.document_json,a.create_time,a.update_time';
-        const table=legacy?'friendbook_cf_documents':'friendbook_cf_firestore_documents';
-        const condition=legacy?`a.collection='notifications'${byLegacyRecipient}${unreadOnly}`
-          :`a.parent_path='notifications'${byRecipient}${unreadOnly}`;
+        const index=unread.length?'idx_cf_notif_unread':'idx_cf_notif_page';
+        const columns='a.path,a.parent_path,a.collection_id,a.doc_id,a.owner_uid,a.document_json,a.create_time,a.update_time';
+        const table='friendbook_cf_firestore_documents';
+        const condition=`a.parent_path='notifications'${byRecipient}${unreadOnly}`;
         try {
           const base=`SELECT ${columns},${rank} AS quota_notif_rank,${time} AS quota_notif_time FROM ${table} a INDEXED BY ${index} WHERE ${condition}`;
           const same=`${base} AND (${rank})=? AND (${time})<=? AND (${time},a.doc_id)<(?,?) ORDER BY ${time} DESC,a.doc_id DESC LIMIT ?`;
@@ -1826,7 +1549,7 @@ async function boundedNotificationPage(db,uid,spec) {
           // Safe with older schemas: retain the original unhinted query.
         }
       }
-      return readStore(legacy,bound,[...recipientArgs,...(cursor||[]),chunk]);
+      return readStore(bound,[...recipientArgs,...(cursor||[]),chunk]);
     }
     // The cache requests the first page after its anchor, not the newest
     // page in the burst. Explicit rank/time seeks avoid reading old inbox rows.
@@ -1836,18 +1559,15 @@ async function boundedNotificationPage(db,uid,spec) {
       const atAnchorRank=group===cursor[0];
       const bound=` AND (${rank})=?`+(atAnchorRank?` AND (${time})>=? AND ((${time})>? OR a.doc_id>?)`:'');
       const args=[...recipientArgs,group,...(atAnchorRank?[cursor[1],cursor[1],cursor[2]]:[]),chunk-results.length];
-      results.push(...((await readStore(legacy,bound,args)).results||[]));
+      results.push(...((await readStore(bound,args)).results||[]));
     }
     return {results};
   }
   for (;;) {
-    const [canonical,legacy]=await Promise.all([readWindow(false),readWindow(true)]);
-    // A differently ordered, read or owned canonical row outside the window
-    // still shadows the legacy copy; check only paths not in this window.
-    await markWindowShadows(db,canonical,legacy);
-    const docs=mergeMirroredWindow(canonical,legacy,seekSpec,chunk);
+    const canonical=await readWindow();
+    const docs=sortDocuments((canonical.results||[]).map(rowToDocument).filter(Boolean),seekSpec.orderBy).slice(0,chunk);
     if (!docs.length) break;
-    const allowed=docs.filter(doc=>!doc.shadowed && canReadNotification(doc.path,uid,doc.data));
+    const allowed=docs.filter(doc=>canReadNotification(doc.path,uid,doc.data));
     visible.push(...allowed);
     if (visible.length>=spec.limit) return sortDocuments(visible.slice(0,spec.limit),spec.orderBy);
     const last=docs[docs.length-1], value=last.data.createdAt;
@@ -1948,14 +1668,11 @@ async function acceptFriendBatch(db, uid, ops, now, indexedCandidates=false) {
   const guardPredicates=[],guardArgs=[];
   for (const row of snapshots) {
     // Canonical root reads already contain the exact JSON checked in the batch.
-    // Legacy-only rows still need the canonical/legacy promotion check.
     const canonical=row[canonicalRootSnapshot] ? row : await db.prepare('SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?').bind(row.path).first();
-    const legacy=canonical ? null : await db.prepare('SELECT document_json FROM friendbook_cf_documents WHERE path=?').bind(row.path).first();
-    if ((canonical && canonical.document_json!==row.document_json) || (!canonical && (!legacy || appDocumentToFirestoreRow({path:row.path,collection:row.collection_id,doc_id:row.doc_id,document_json:legacy.document_json})?.document_json!==row.document_json))) return json({error:'Request changed'},409);
-    guardPredicates.push(`((? = 1 AND (SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?) = ?)
-      OR (? = 0 AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents WHERE path=?)
-        AND (SELECT document_json FROM friendbook_cf_documents WHERE path=?) = ?))`);
-    guardArgs.push(canonical?1:0,row.path,row.document_json,canonical?1:0,row.path,row.path,legacy?.document_json || '');
+
+    if (!canonical || canonical.document_json!==row.document_json) return json({error:'Request changed'},409);
+    guardPredicates.push(`((SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?) = ?)`);
+    guardArgs.push(row.path,row.document_json);
   }
   // Check both native and historical array envelopes, with canonical rows winning over mirrors.
   if (!prior) {
@@ -1963,10 +1680,10 @@ async function acceptFriendBatch(db, uid, ops, now, indexedCandidates=false) {
     guardPredicates.push(duplicateGuard.sql);
     guardArgs.push(...duplicateGuard.args);
   }
-  // A create must not overwrite either table, even if the caller guesses an ID.
+  // A create must not overwrite a canonical row, even if its ID is guessed.
   guardPredicates.push(`NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents WHERE path=?)
-    AND NOT EXISTS (SELECT 1 FROM friendbook_cf_documents WHERE path=?)`);
-  guardArgs.push(friendOp.path,friendOp.path);
+   `);
+  guardArgs.push(friendOp.path);
   const guards=[db.prepare(`INSERT INTO friendbook_cf_social_guards(ok) SELECT CASE WHEN
     ${guardPredicates.map(p=>`(${p})`).join(' AND ')} THEN 1 ELSE 0 END`).bind(...guardArgs)];
   const next=[{...request,status:'accepted'},...users.map(u=>({...u,friendsCount:(u.friendsCount || 0)+(prior?0:1)})),...(prior?[]:[{participants:[uid,other],createdAt:{__type:'timestamp',millis:now}}])];
@@ -2038,12 +1755,10 @@ async function unfriendBatch(db,uid,ops,now,indexedCandidates=false) {
     // Keep the transaction guard; a second read of an already-canonical
     // snapshot before the batch cannot improve its race protection.
     const canonical=row[canonicalRootSnapshot] ? row : await db.prepare('SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?').bind(row.path).first();
-    const legacy=canonical?null:await db.prepare('SELECT document_json FROM friendbook_cf_documents WHERE path=?').bind(row.path).first();
-    if ((canonical && canonical.document_json!==row.document_json) || (!canonical && (!legacy || appDocumentToFirestoreRow({path:row.path,collection:row.collection_id,doc_id:row.doc_id,document_json:legacy.document_json})?.document_json!==row.document_json))) return json({error:'Friendship changed'},409);
-    const predicate=`((? = 1 AND (SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?) = ?)
-      OR (? = 0 AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents WHERE path=?)
-        AND (SELECT document_json FROM friendbook_cf_documents WHERE path=?) = ?))`;
-    const args=[canonical?1:0,row.path,row.document_json,canonical?1:0,row.path,row.path,legacy?.document_json||''];
+
+    if (!canonical || canonical.document_json!==row.document_json) return json({error:'Friendship changed'},409);
+    const predicate=`((SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?) = ?)`;
+    const args=[row.path,row.document_json];
     if(coalesce){guardPredicates.push(predicate);guardArgs.push(...args);}
     else guards.push(db.prepare(`INSERT INTO friendbook_cf_social_guards(ok) SELECT CASE WHEN ${predicate} THEN 1 ELSE 0 END`).bind(...args));
   }
@@ -2128,9 +1843,9 @@ async function reviewPayment(db,env,uid,paymentPath,update,profileOp,now) {
   const rows=profileRow?[payRow,profileRow]:[payRow], guards=[];
   for (const row of rows) {
     const canonical=await db.prepare('SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?').bind(row.path).first();
-    const legacy=canonical?null:await db.prepare('SELECT document_json FROM friendbook_cf_documents WHERE path=?').bind(row.path).first();
-    if ((canonical && canonical.document_json!==row.document_json) || (!canonical && (!legacy || appDocumentToFirestoreRow({path:row.path,collection:row.collection_id,doc_id:row.doc_id,document_json:legacy.document_json})?.document_json!==row.document_json))) return json({error:'Review changed'},409);
-    guards.push(db.prepare('INSERT INTO friendbook_cf_social_guards(ok) SELECT CASE WHEN (? = 1 AND (SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?) = ?) OR (? = 0 AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents WHERE path=?) AND (SELECT document_json FROM friendbook_cf_documents WHERE path=?) = ?) THEN 1 ELSE 0 END').bind(canonical?1:0,row.path,row.document_json,canonical?1:0,row.path,row.path,legacy?.document_json||''));
+
+    if (!canonical || canonical.document_json!==row.document_json) return json({error:'Review changed'},409);
+    guards.push(db.prepare('INSERT INTO friendbook_cf_social_guards(ok) SELECT CASE WHEN (SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?) = ? THEN 1 ELSE 0 END').bind(row.path,row.document_json));
   }
   const next=[{...payment,status:action,[`${prefix}By`]:uid,[`${prefix}At`]:{__type:'timestamp',millis:now}},...(profile?[profile]:[])];
   const writes=[];
@@ -2172,11 +1887,11 @@ async function writeGroup(db,uid,path,beforeRow,after,now) {
   const stmts=[];
   if (beforeRow) {
     const canonical=beforeRow[canonicalRootSnapshot] ? beforeRow : await db.prepare('SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?').bind(path).first();
-    const legacy=canonical?null:await db.prepare('SELECT document_json FROM friendbook_cf_documents WHERE path=?').bind(path).first();
-    if ((canonical && canonical.document_json!==beforeRow.document_json) || (!canonical && (!legacy || appDocumentToFirestoreRow({path,collection:'groups',doc_id:id,document_json:legacy.document_json})?.document_json!==beforeRow.document_json))) return json({error:'Group changed'},409);
-    stmts.push(db.prepare('INSERT INTO friendbook_cf_social_guards(ok) SELECT CASE WHEN ((? = 1 AND (SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?) = ?) OR (? = 0 AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents WHERE path=?) AND (SELECT document_json FROM friendbook_cf_documents WHERE path=?) = ?)) AND ((? IS NULL AND NOT EXISTS (SELECT 1 FROM friendbook_cf_trusted_groups WHERE group_path=?)) OR (? IS NOT NULL AND (SELECT owner_uid FROM friendbook_cf_trusted_groups WHERE group_path=?) = ?)) THEN 1 ELSE 0 END').bind(canonical?1:0,path,beforeRow.document_json,canonical?1:0,path,path,legacy?.document_json||'',owner,path,owner,path,owner));
+
+    if (!canonical || canonical.document_json!==beforeRow.document_json) return json({error:'Group changed'},409);
+    stmts.push(db.prepare('INSERT INTO friendbook_cf_social_guards(ok) SELECT CASE WHEN ((SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?) = ?) AND ((? IS NULL AND NOT EXISTS (SELECT 1 FROM friendbook_cf_trusted_groups WHERE group_path=?)) OR (? IS NOT NULL AND (SELECT owner_uid FROM friendbook_cf_trusted_groups WHERE group_path=?) = ?)) THEN 1 ELSE 0 END').bind(path,beforeRow.document_json,owner,path,owner,path,owner));
   } else {
-    stmts.push(db.prepare('INSERT INTO friendbook_cf_social_guards(ok) SELECT CASE WHEN NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents WHERE path=?) AND NOT EXISTS (SELECT 1 FROM friendbook_cf_documents WHERE path=?) THEN 1 ELSE 0 END').bind(path,path));
+    stmts.push(db.prepare('INSERT INTO friendbook_cf_social_guards(ok) SELECT CASE WHEN NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents WHERE path=?) THEN 1 ELSE 0 END').bind(path));
     stmts.push(db.prepare('INSERT INTO friendbook_cf_trusted_groups(group_path,owner_uid) VALUES (?,?)').bind(path,uid));
   }
   if (!after) {
@@ -2245,14 +1960,14 @@ async function writeGroupPost(db,uid,path,beforeRow,after,now) {
   for (const row of [groupRow,...(beforeRow?[beforeRow]:[])]) {
     // readRow already identified canonical snapshots. The transaction below
     // checks each exact snapshot and the trusted owner, so a second point read
-    // cannot improve race safety. Historical rows still use the legacy check.
+    // cannot improve race safety.
     const canonical=row[canonicalRootSnapshot] ? row : await db.prepare('SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?').bind(row.path).first();
-    const legacy=canonical?null:await db.prepare('SELECT document_json FROM friendbook_cf_documents WHERE path=?').bind(row.path).first();
-    if ((canonical && canonical.document_json!==row.document_json) || (!canonical && (!legacy || appDocumentToFirestoreRow({path:row.path,collection:row.collection_id,doc_id:row.doc_id,document_json:legacy.document_json})?.document_json!==row.document_json))) return json({error:'Group or post changed'},409);
-    guards.push(db.prepare('INSERT INTO friendbook_cf_social_guards(ok) SELECT CASE WHEN (? = 1 AND (SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?) = ?) OR (? = 0 AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents WHERE path=?) AND (SELECT document_json FROM friendbook_cf_documents WHERE path=?) = ?) THEN 1 ELSE 0 END').bind(canonical?1:0,row.path,row.document_json,canonical?1:0,row.path,row.path,legacy?.document_json||''));
+
+    if (!canonical || canonical.document_json!==row.document_json) return json({error:'Group or post changed'},409);
+    guards.push(db.prepare('INSERT INTO friendbook_cf_social_guards(ok) SELECT CASE WHEN (SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?) = ? THEN 1 ELSE 0 END').bind(row.path,row.document_json));
   }
   guards.push(db.prepare('INSERT INTO friendbook_cf_social_guards(ok) SELECT CASE WHEN (SELECT owner_uid FROM friendbook_cf_trusted_groups WHERE group_path=?)=? THEN 1 ELSE 0 END').bind(groupPath,owner));
-  if (!beforeRow) guards.push(db.prepare('INSERT INTO friendbook_cf_social_guards(ok) SELECT CASE WHEN NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents WHERE path=?) AND NOT EXISTS (SELECT 1 FROM friendbook_cf_documents WHERE path=?) THEN 1 ELSE 0 END').bind(path,path));
+  if (!beforeRow) guards.push(db.prepare('INSERT INTO friendbook_cf_social_guards(ok) SELECT CASE WHEN NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents WHERE path=?) THEN 1 ELSE 0 END').bind(path));
   const stmts=[...guards],coll=collectionIdOf(path),id=docIdOf(path);
   if (!after) {
     stmts.push(db.prepare('DELETE FROM friendbook_cf_firestore_documents WHERE path=?').bind(path));
@@ -2325,9 +2040,9 @@ async function followBatch(db,uid,ops,now) {
   const stmts=[];
   for (const row of rows) {
     const canonical=await db.prepare('SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?').bind(row.path).first();
-    const legacy=canonical?null:await db.prepare('SELECT document_json FROM friendbook_cf_documents WHERE path=?').bind(row.path).first();
-    if ((canonical && canonical.document_json!==row.document_json) || (!canonical && (!legacy || appDocumentToFirestoreRow({path:row.path,collection:row.collection_id,doc_id:row.doc_id,document_json:legacy.document_json})?.document_json!==row.document_json))) return json({error:'Follow state changed'},409);
-    stmts.push(db.prepare('INSERT INTO friendbook_cf_social_guards(ok) SELECT CASE WHEN (? = 1 AND (SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?) = ?) OR (? = 0 AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents WHERE path=?) AND (SELECT document_json FROM friendbook_cf_documents WHERE path=?) = ?) THEN 1 ELSE 0 END').bind(canonical?1:0,row.path,row.document_json,canonical?1:0,row.path,row.path,legacy?.document_json||''));
+
+    if (!canonical || canonical.document_json!==row.document_json) return json({error:'Follow state changed'},409);
+    stmts.push(db.prepare('INSERT INTO friendbook_cf_social_guards(ok) SELECT CASE WHEN (SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?) = ? THEN 1 ELSE 0 END').bind(row.path,row.document_json));
   }
   for(let i=0;i<2;i++) {
     const row=rows[i], id=docIdOf(row.path), doc=docs[i], owner=row.owner_uid||id;
@@ -2352,25 +2067,22 @@ async function chatDocumentGuard(db,path,row) {
     SELECT CASE WHEN (SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?)=? THEN 1 ELSE 0 END`)
     .bind(path,row.document_json);
   const canonical=await db.prepare('SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?').bind(path).first();
-  const legacy=!canonical && isRootDocument(path) ? await db.prepare('SELECT document_json FROM friendbook_cf_documents WHERE path=?').bind(path).first() : null;
+
   if (!row) {
-    if (canonical || legacy) throw new Error('Document changed');
-    return db.prepare('INSERT INTO friendbook_cf_social_guards(ok) SELECT CASE WHEN NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents WHERE path=?) AND NOT EXISTS (SELECT 1 FROM friendbook_cf_documents WHERE path=?) THEN 1 ELSE 0 END').bind(path,path);
+    if (canonical) throw new Error('Document changed');
+    return db.prepare('INSERT INTO friendbook_cf_social_guards(ok) SELECT CASE WHEN NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents WHERE path=?) THEN 1 ELSE 0 END').bind(path);
   }
-  if ((canonical && canonical.document_json!==row.document_json) || (!canonical && (!legacy || appDocumentToFirestoreRow({path,collection:collectionIdOf(path),doc_id:docIdOf(path),document_json:legacy.document_json})?.document_json!==row.document_json))) throw new Error('Document changed');
-  return db.prepare('INSERT INTO friendbook_cf_social_guards(ok) SELECT CASE WHEN (? = 1 AND (SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?) = ?) OR (? = 0 AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents WHERE path=?) AND (SELECT document_json FROM friendbook_cf_documents WHERE path=?) = ?) THEN 1 ELSE 0 END').bind(canonical?1:0,path,row.document_json,canonical?1:0,path,path,legacy?.document_json||'');
+  if (!canonical || canonical.document_json!==row.document_json) throw new Error('Document changed');
+  return db.prepare('INSERT INTO friendbook_cf_social_guards(ok) SELECT CASE WHEN (SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?) = ? THEN 1 ELSE 0 END').bind(path,row.document_json);
 }
 // Validate a group of independent path snapshots in one atomic guard row.
-// For an absent nested document also refuse the old mirror path, as before.
+// Absence and exact JSON are checked against the same authoritative table.
 function chatSnapshotGroupGuard(db, snapshots) {
   return db.prepare(`INSERT INTO friendbook_cf_social_guards(ok)
     SELECT CASE WHEN NOT EXISTS (
       SELECT 1 FROM json_each(?) j WHERE
         (SELECT f.document_json FROM friendbook_cf_firestore_documents f WHERE f.path=json_extract(j.value,'$[0]'))
           IS NOT json_extract(j.value,'$[1]')
-        OR (json_extract(j.value,'$[1]') IS NULL AND EXISTS (
-          SELECT 1 FROM friendbook_cf_documents a WHERE a.path=json_extract(j.value,'$[0]')
-        ))
     ) THEN 1 ELSE 0 END`).bind(`[${snapshots.join(',')}]`);
 }
 // Moderation authority comes exclusively from the configured verified UID list.
@@ -2502,9 +2214,7 @@ async function claimReferral(request,db,uid,now) {
     await db.batch([guard,await chatDocumentGuard(db,signup.path,signup),await chatDocumentGuard(db,referrer.path,referrer),
       db.prepare(`INSERT INTO friendbook_cf_social_guards(ok) SELECT NOT EXISTS(
         SELECT 1 FROM friendbook_cf_firestore_documents WHERE parent_path='referrals' AND json_extract(document_json,'$.refTo')=?
-        UNION ALL SELECT 1 FROM friendbook_cf_documents WHERE collection='referrals'
-        AND (CASE WHEN json_type(document_json,'$.fields')='object' THEN json_extract(document_json,'$.fields.refTo.stringValue') ELSE json_extract(document_json,'$.refTo') END)=?
-      )`).bind(uid,uid),
+      )`).bind(uid),
       db.prepare('INSERT INTO friendbook_cf_referral_claims(referred_uid,inviter_uid,created_at) VALUES (?,?,?)').bind(uid,inviter,now),
       ...broadcastWrites(db,path,{refBy:inviter,refTo:uid,status:'completed',date,createdAt:date},uid,null,now),
       db.prepare('DELETE FROM friendbook_cf_social_guards').bind()]);
@@ -2541,8 +2251,7 @@ async function adminBroadcast(request,env,uid,now) {
     const size=6;
     const recipientPage=async (indexed)=>db.prepare(`SELECT doc_id FROM (
       SELECT doc_id FROM (SELECT doc_id FROM friendbook_cf_firestore_documents ${indexed?'INDEXED BY idx_cf_people_default_page':''} WHERE parent_path='users' AND doc_id>? ORDER BY doc_id LIMIT ?)
-      UNION SELECT doc_id FROM (SELECT doc_id FROM friendbook_cf_documents ${indexed?'INDEXED BY idx_cf_legacy_people_default_page':''} WHERE collection='users' AND doc_id>? ORDER BY doc_id LIMIT ?)
-    ) ORDER BY doc_id LIMIT ?`).bind(cursor,size+1,cursor,size+1,size+1).all();
+    ) ORDER BY doc_id LIMIT ?`).bind(cursor,size+1,size+1).all();
     let recipients;
     try { ({results: recipients=[]}=await recipientPage(true)); }
     catch (error) {
@@ -2683,7 +2392,7 @@ async function storyEngagement(request,env,uid,now) {
       if(encoded.length>1_800_000)return json({error:'Document too large'},413);
       // Reopening a story or retrying an identical reaction must not rewrite
       // two indexed documents and temporary guards. Authorization and expiry
-      // checks above still run, and legacy-only rows still promote normally.
+      // checks above still run for every canonical snapshot.
       if(row[canonicalRootSnapshot] && encoded===row.document_json)return json({ok:true});
       const mirror=db.prepare(`INSERT INTO friendbook_cf_documents(path,collection,doc_id,owner_uid,document_json,updated_at) VALUES (?,?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET owner_uid=excluded.owner_uid,document_json=excluded.document_json,updated_at=excluded.updated_at`).bind(path,'stories',input.id,owner,JSON.stringify({...next,id:input.id}),now);
       if(row[canonicalRootSnapshot] && viewer[canonicalRootSnapshot] && author[canonicalRootSnapshot]) {
@@ -2739,7 +2448,6 @@ async function writeChatMessage(db,path,doc,now,existing,auth,uid,deleted=false)
       SELECT ?1,?2,?3,?4,?5,?6,?7,?7
       WHERE EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents WHERE path=?8 AND document_json=?9)
         AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents WHERE path=?1)
-        AND NOT EXISTS (SELECT 1 FROM friendbook_cf_documents WHERE path=?1)
       RETURNING path`).bind(path,parent,coll,id,ownerOf(doc,uid),serialized,now,auth.roomPath,auth.room.document_json).first();
     if (!inserted) throw new Error('Document changed');
     return json({exists:true,id,path,parent,collection:coll,data:doc,createTime:now,updateTime:now});
@@ -2800,26 +2508,21 @@ async function chatRootGuards(db,path,row) {
   if (!row) {
     statements.push(db.prepare(`INSERT INTO friendbook_cf_social_guards(ok)
       SELECT CASE WHEN NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents WHERE path=?)
-      AND NOT EXISTS (SELECT 1 FROM friendbook_cf_documents WHERE path=?)
+
       AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents WHERE parent_path=?)
       AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents WHERE parent_path='messages'
         AND doc_id>=? AND doc_id<? AND substr(doc_id,1,?)=?)
       AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents WHERE parent_path='messages' AND json_extract(document_json,'$.chatId')=?)
       AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents WHERE parent_path='messages' AND json_extract(document_json,'$.fields.chatId.stringValue')=?)
-      AND NOT EXISTS (SELECT 1 FROM friendbook_cf_documents WHERE collection='messages'
-        AND doc_id>=? AND doc_id<? AND substr(doc_id,1,?)=?)
-      AND NOT EXISTS (SELECT 1 FROM friendbook_cf_documents WHERE collection='messages' AND json_extract(document_json,'$.chatId')=?)
-      AND NOT EXISTS (SELECT 1 FROM friendbook_cf_documents WHERE collection='messages' AND json_extract(document_json,'$.fields.chatId.stringValue')=?)
-      THEN 1 ELSE 0 END`).bind(path,path,`${path}/messages`,
-        id+'_',id+'`',id.length+1,id+'_',id,id,
+      THEN 1 ELSE 0 END`).bind(path,`${path}/messages`,
         id+'_',id+'`',id.length+1,id+'_',id,id));
     return statements;
   }
   if (row[canonicalRootSnapshot]) return [chatSnapshotGroupGuard(db,[JSON.stringify([path,row.document_json])])];
   const canonical=await db.prepare('SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?').bind(path).first();
-  const legacy=canonical?null:await db.prepare('SELECT document_json FROM friendbook_cf_documents WHERE path=?').bind(path).first();
-  if ((canonical && canonical.document_json!==row.document_json) || (!canonical && (!legacy || appDocumentToFirestoreRow({path,collection:'chats',doc_id:id,document_json:legacy.document_json})?.document_json!==row.document_json))) throw new Error('Room changed');
-  statements.push(db.prepare('INSERT INTO friendbook_cf_social_guards(ok) SELECT CASE WHEN (? = 1 AND (SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?) = ?) OR (? = 0 AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents WHERE path=?) AND (SELECT document_json FROM friendbook_cf_documents WHERE path=?) = ?) THEN 1 ELSE 0 END').bind(canonical?1:0,path,row.document_json,canonical?1:0,path,path,legacy?.document_json||''));
+
+  if (!canonical || canonical.document_json!==row.document_json) throw new Error('Room changed');
+  statements.push(db.prepare('INSERT INTO friendbook_cf_social_guards(ok) SELECT CASE WHEN (SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?) = ? THEN 1 ELSE 0 END').bind(path,row.document_json));
   return statements;
 }
 async function groupChatLedgerChanges(db,path,before,after) {
@@ -3253,13 +2956,12 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0, ct
         const id=docIdOf(docPath), serialized=JSON.stringify(next);
         if (serialized.length>1_800_000) return json({error:'Document too large'},413);
         try {
-          // Validate absence in both stores inside the insert itself. A race
+          // Validate canonical absence inside the insert itself. A race
           // forces a NOT NULL failure and rolls back the entire batch, without
           // inserting and deleting a temporary guard row for every notification.
           await db.batch([
             db.prepare(`INSERT INTO friendbook_cf_firestore_documents(path,parent_path,collection_id,doc_id,owner_uid,document_json,create_time,update_time)
-              VALUES (CASE WHEN NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents WHERE path=?1)
-                AND NOT EXISTS (SELECT 1 FROM friendbook_cf_documents WHERE path=?1) THEN ?1 ELSE NULL END,
+              VALUES (CASE WHEN NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents WHERE path=?1) THEN ?1 ELSE NULL END,
                 'notifications','notifications',?2,?3,?4,?5,?5)`).bind(docPath,id,uid,serialized,now),
             db.prepare('INSERT INTO friendbook_cf_documents(path,collection,doc_id,owner_uid,document_json,updated_at) VALUES (?,?,?,?,?,?)').bind(docPath,'notifications',id,uid,JSON.stringify({...next,id}),now)
           ]);
@@ -3497,9 +3199,9 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0, ct
         if (!canCreateFriendRequest(uid, next)) return json({error:'Forbidden'},403);
         if (typeof db.batch !== 'function') return json({error:'Atomic storage unavailable'},503);
         const serialized=JSON.stringify(next);
-        // Check both stores inside the canonical insert in the same transaction
-        // as the mirror. A duplicate forces path NULL and rolls the batch back;
-        // no temporary guard row is needed. Canonical rows still shadow legacy.
+        // Check pending canonical requests inside the insert transaction.
+        // A duplicate forces path NULL and rolls the mirror batch back;
+        // no temporary guard row is needed.
         const create=db.prepare(`INSERT INTO friendbook_cf_firestore_documents
           (path,parent_path,collection_id,doc_id,owner_uid,document_json,create_time,update_time)
           VALUES (CASE WHEN
@@ -3507,13 +3209,8 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0, ct
             AND COALESCE(json_extract(document_json,'$.fromUid'),json_extract(document_json,'$.fields.fromUid.stringValue'))=?
             AND COALESCE(json_extract(document_json,'$.toUid'),json_extract(document_json,'$.fields.toUid.stringValue'))=?
             AND COALESCE(json_extract(document_json,'$.status'),json_extract(document_json,'$.fields.status.stringValue'))='pending')
-          AND NOT EXISTS (SELECT 1 FROM friendbook_cf_documents a WHERE a.collection='friend_requests'
-            AND COALESCE(json_extract(a.document_json,'$.fromUid'),json_extract(a.document_json,'$.fields.fromUid.stringValue'))=?
-            AND COALESCE(json_extract(a.document_json,'$.toUid'),json_extract(a.document_json,'$.fields.toUid.stringValue'))=?
-            AND COALESCE(json_extract(a.document_json,'$.status'),json_extract(a.document_json,'$.fields.status.stringValue'))='pending'
-            AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents f WHERE f.path=a.path))
           THEN ? ELSE NULL END,?,?,?,?,?,?,?)`)
-          .bind(uid,next.toUid,uid,next.toUid,docPath,parent,parent,id,uid,serialized,now,now);
+          .bind(uid,next.toUid,docPath,parent,parent,id,uid,serialized,now,now);
         try {
           await db.batch([
             create,
@@ -3563,14 +3260,9 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0, ct
       if (tag!==undefined && (parent!=='posts' || typeof tag!=='string' || !/^[#@][\p{L}\p{N}_]{1,80}$/u.test(tag))) return json({error:'Invalid post tag'},400);
       if (tag!==undefined) {
         const match=`"${tag}"`;
-        const [canonical,legacy]=await Promise.all([
-          db.prepare(`SELECT f.* FROM friendbook_cf_post_search s JOIN friendbook_cf_firestore_documents f ON f.path=s.path
-          WHERE friendbook_cf_post_search MATCH ? AND s.source=1`).bind(match).all(),
-          db.prepare(`SELECT a.* FROM friendbook_cf_post_search s JOIN friendbook_cf_documents a ON a.path=s.path
-          WHERE friendbook_cf_post_search MATCH ? AND s.source=0
-          AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents f WHERE f.path=a.path)`).bind(match).all(),
-        ]);
-        rows=[...(canonical.results || []), ...(legacy.results || []).map(appDocumentToFirestoreRow).filter(Boolean)];
+        const canonical=await db.prepare(`SELECT f.* FROM friendbook_cf_post_search s JOIN friendbook_cf_firestore_documents f ON f.path=s.path
+          WHERE friendbook_cf_post_search MATCH ? AND s.source=1`).bind(match).all();
+        rows=[...(canonical.results || [])];
       } else {
         const people=await boundedNamePage(db,env,uid,body) ?? await boundedPeoplePage(db,env,uid,body) ?? await boundedRecentPeoplePage(db,env,uid,body);
         if (people!==null) return queryResponse(parent,people,body.knownRevisions);
@@ -3879,8 +3571,7 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0, ct
         statements.push(db.prepare(`INSERT INTO friendbook_cf_firestore_documents
           (path,parent_path,collection_id,doc_id,owner_uid,document_json,create_time,update_time)
           VALUES (CASE WHEN EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents WHERE path=?1 AND document_json=?2)
-            AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents WHERE path=?3)
-            AND NOT EXISTS (SELECT 1 FROM friendbook_cf_documents WHERE path=?3) THEN ?3 ELSE NULL END,?4,?5,?6,?7,?8,?9,?9)`)
+            AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents WHERE path=?3) THEN ?3 ELSE NULL END,?4,?5,?6,?7,?8,?9,?9)`)
           .bind(roomPath,roomEntry.existingRow.document_json,messagePath,parentPath(messagePath),collectionIdOf(messagePath),docIdOf(messagePath),ownerOf(messageEntry.doc,uid),messageJson,now));
         const roomOwner=ownerOf(roomEntry.doc,roomEntry.existingRow.owner_uid||uid);
         statements.push(db.prepare(`UPDATE friendbook_cf_firestore_documents SET owner_uid=?,document_json=?,update_time=? WHERE path=?`)

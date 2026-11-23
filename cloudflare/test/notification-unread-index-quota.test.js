@@ -1,3 +1,4 @@
+import { canonicalSeed } from './fixtures/canonical.js';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {DatabaseSync} from 'node:sqlite';
@@ -8,8 +9,8 @@ test('unread page index handles compatibility fallback without reading another i
  const sql=new DatabaseSync(':memory:');t.after(()=>sql.close());
  const dir=new URL('../migrations/',import.meta.url),removal='0081_remove_redundant_unread_index.sql';
  for(const file of readdirSync(dir).filter(f=>f.endsWith('.sql')&&f!==removal).sort())sql.exec(readFileSync(new URL(file,dir),'utf8'));
- const c=sql.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES(?,?,?,?,?,?,?,?)');
- const a=sql.prepare('INSERT INTO friendbook_cf_documents VALUES(?,?,?,?,?,?)');
+ const c=sql.prepare('INSERT OR REPLACE INTO friendbook_cf_firestore_documents VALUES(?,?,?,?,?,?,?,?)');
+ const a=canonicalSeed(sql);
  for(const uid of ['alice','bob'])c.run('users/'+uid,'users','users',uid,uid,JSON.stringify({uid}),1,1);
  for(let i=0;i<1000;i++){
   const id='n'+String(i).padStart(4,'0'),to=i%10?'bob':'alice';
@@ -53,12 +54,12 @@ test('unread page index handles compatibility fallback without reading another i
  assert.deepEqual(await Promise.all(['alice','bob'].map(generic)),genericExpected);
  assert.deepEqual(await suite(),expected);
  assert.ok(plans.some(x=>x.q.includes('INDEXED BY idx_cf_notif_page') && x.plan.some(p=>p.includes('idx_cf_notif_page')&&p.includes('<expr>=?'))));
- assert.ok(plans.some(x=>x.q.includes('FROM friendbook_cf_documents a WHERE a.collection=\'notifications\'') && x.plan.some(p=>p.includes('idx_cf_legacy_notif_page')&&p.includes('<expr>=?'))));
+ assert.ok(!plans.some(x=>x.q.includes('FROM friendbook_cf_documents')),'inbox reads are canonical-only');
  sql.exec(readFileSync(new URL('0025_inbox_recipient_indexes.sql',dir),'utf8'));
  assert.ok(expected.slice(0,5).every(x=>x.body.documents.every(d=>d.data.toUserId==='bob')));
  const forced=()=>plans.filter(x=>x.q.includes('INDEXED BY idx_cf_notif_unread'));
  assert.ok(forced().length>=3);assert.ok(forced().every(x=>x.plan.some(p=>p.includes('idx_cf_notif_unread')&&p.includes('<expr>=?'))));
- sql.exec("DELETE FROM friendbook_cf_documents WHERE path='notifications/wrapped'");
+ sql.exec("DELETE FROM friendbook_cf_firestore_documents WHERE path='notifications/wrapped'");
  const standard=await suite();assert.deepEqual(standard.map(x=>x.body.documents?.length??x.body.count),[600,20,20,20,20,0,600,66]);
  const migration=readFileSync(new URL(removal,dir),'utf8');sql.exec(migration);sql.exec(migration);
  assert.equal(sql.prepare("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_cf_inbox_unread'").get(),undefined);

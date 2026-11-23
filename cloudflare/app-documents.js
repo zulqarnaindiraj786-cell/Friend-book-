@@ -105,8 +105,7 @@ export function requestAccountReads(identity) {
 }
 
 export function readPreferredDocumentJson(db, path) {
-  // Use one indexed lookup statement even for historical records. The legacy
-  // branch is eligible only when the canonical row does not exist.
+  // Historical records were backfilled: every lookup uses one canonical index.
   return db.prepare('SELECT document_json FROM friendbook_cf_firestore_documents WHERE path = ?1 LIMIT 1').bind(path).first();
 }
 
@@ -114,7 +113,7 @@ export async function readD1DocumentFields(db, path) {
   if (!db) return null;
   // Authorization and privacy fields must reflect the current D1 row, not a
   // stale per-isolate cache after another device changes a block or ban.
-  // Canonical records take precedence over the mirror. A failed read is not a
+  // Only canonical records are readable. A failed read is not a
   // missing record: treating it as missing can turn a transient outage into a
   // successful empty feed, overwriting good cached data on every client.
   const row = await readPreferredDocumentJson(db,path);

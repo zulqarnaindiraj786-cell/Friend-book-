@@ -16,7 +16,7 @@ async function scenario(t){
  f.sql.exec('CREATE TABLE IF NOT EXISTS friendbook_cf_firestore_documents(path TEXT PRIMARY KEY, document_json TEXT)');
  const putDoc=(path,value)=>{
   f.sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET document_json=excluded.document_json').run(path,path.split('/')[0],path.split('/').at(-1),value.authorId||value.uid||'',JSON.stringify(value),Date.now());
-  f.sql.prepare('INSERT INTO friendbook_cf_firestore_documents(path,document_json) VALUES (?,?) ON CONFLICT(path) DO UPDATE SET document_json=excluded.document_json').run(path,JSON.stringify(value));
+  f.sql.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET document_json=excluded.document_json').run(path,path.split('/')[0],path.split('/')[0],path.split('/').at(-1),value.authorId||value.uid||'',JSON.stringify(value),1,1);
  };
  putDoc('posts/p1',{authorId:'user1',privacy:'Public'});
  putDoc('users/user1',{displayName:'Fixture user',banned:false,blocked:[]});

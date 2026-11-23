@@ -1,3 +1,4 @@
+import { canonicalSeed } from './fixtures/canonical.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { fixture } from './fixtures/interaction-db.js';
@@ -115,7 +116,7 @@ test('comments are idempotent, reject conflicts, spoofed authors and cross-post 
 test('legacy root app comments are merged into authorized D1 comment pages without reviving removed rows', async t => {
   const f=fixture(); t.after(f.close);
   await call(f.env,'comments','POST',{id:'same',text:'canonical version'});
-  const insert=f.sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)');
+  const insert=canonicalSeed(f.sql);
   const add=(id,data)=>insert.run(`comments/${id}`,'comments',id,'user2',JSON.stringify(data),100);
   add('same',{id:'same',postId:'p1',authorId:'user2',authorName:'Legacy',content:'stale copy',createdAt:10});
   add('old',{id:'old',postId:'p1',authorId:'user2',authorName:'Legacy friend',content:'historical comment',createdAt:20});
@@ -326,15 +327,15 @@ test('legacy comment count uses the lookup indexes rather than scanning all root
   const {legacyCommentCount}=await import('../comment-api.js');
   let plan='';const db={prepare(query){const stmt=f.sql.prepare(query);return{bind(...args){plan=f.sql.prepare('EXPLAIN QUERY PLAN '+query).all(...args).map(row=>row.detail).join('\n');return{first:async()=>stmt.get(...args)||null};}};}};
   assert.equal(await legacyCommentCount(db,'posts/p1',[]),0);
-  for(const name of ['idx_cf_comment_lookup_post','idx_cf_comment_lookup_post_legacy','idx_cf_comment_lookup_resource'])assert.match(plan,new RegExp(name));
-  assert.match(plan,/SEARCH a USING INDEX sqlite_autoindex_friendbook_cf_documents_1 \(path=\?\)/);
+  for(const name of ['idx_cf_canonical_comment_page_post','idx_cf_canonical_comment_page_post_legacy','idx_cf_canonical_comment_page_resource'])assert.match(plan,new RegExp(name));
+  assert.match(plan,/SEARCH a USING INDEX sqlite_autoindex_friendbook_cf_firestore_documents_1 \(path=\?\)/);
 });
 
 test('grouped legacy counts match individual indexed counts, shadowing and blocked authors', async t => {
   const f=fixture();t.after(f.close);
   f.sql.exec(readFileSync(new URL('../migrations/0032_legacy_comment_lookup.sql',import.meta.url),'utf8'));
   const {legacyCommentCount,legacyCommentCountsStatement}=await import('../comment-api.js');
-  const add=f.sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)');
+  const add=canonicalSeed(f.sql);
   const row=(id,data)=>add.run(`comments/${id}`,'comments',id,'',JSON.stringify(data),1);
   row('one',{postId:'p0',authorId:'alice'});
   row('two',{post_id:'p0',uid:'bob'});
@@ -356,20 +357,26 @@ test('grouped legacy counts match individual indexed counts, shadowing and block
   }};}};
   await legacyCommentCountsStatement(db,resources,blocked).all();
   assert.equal(bindCount,41);assert.ok(queryLength<100000);
-  for(const name of ['idx_cf_comment_lookup_post','idx_cf_comment_lookup_post_legacy','idx_cf_comment_lookup_resource'])assert.match(plans.join('\n'),new RegExp(name));
-  assert.equal((plans.join('\n').match(/SEARCH a USING INDEX sqlite_autoindex_friendbook_cf_documents_1/g)||[]).length,20);
+  for(const name of ['idx_cf_canonical_comment_page_post','idx_cf_canonical_comment_page_post_legacy','idx_cf_canonical_comment_page_resource'])assert.match(plans.join('\n'),new RegExp(name));
+  assert.equal((plans.join('\n').match(/SEARCH a USING INDEX sqlite_autoindex_friendbook_cf_firestore_documents_1/g)||[]).length,20);
   // The replacement indexes must preserve the count path used by old Workers.
   f.sql.exec(readFileSync(new URL('../migrations/0076_legacy_comment_page_indexes.sql',import.meta.url),'utf8'));
   const upgraded=(await legacyCommentCountsStatement(db,resources,blocked).all()).results.map(row=>row.n);
   assert.deepEqual(upgraded,expected);
-  for(const name of ['idx_cf_comment_page_post','idx_cf_comment_page_post_legacy','idx_cf_comment_page_resource'])assert.match(plans.join('\n'),new RegExp(name));
+  for(const name of ['idx_cf_canonical_comment_page_post','idx_cf_canonical_comment_page_post_legacy','idx_cf_canonical_comment_page_resource'])assert.match(plans.join('\n'),new RegExp(name));
 });
 
 test('legacy D1 comments remain readable and support authorized replies and reactions without overwriting sources', async t => {
   const f=fixture();t.after(f.close);
   const original={postId:'p1',authorId:'user2',content:'old comment',createdAt:12,likes:3,reactions:{user2:'love'},likedBy:['user2']};
   const raw=JSON.stringify(original);
-  f.sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)').run('comments/old','comments','old','user2',raw,1);
+  canonicalSeed(f.sql).run('comments/old','comments','old','user2',raw,1);
+  f.sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)')
+    .run('comments/mirror-only','comments','mirror-only','user2',raw,1);
+  assert.equal((await call(f.env,'comments','GET',undefined,{query:'?id=mirror-only'})).status,404);
+  assert.equal((await call(f.env,'comments','PUT',{op:'react',id:'mirror-only',type:'like'})).status,404);
+  assert.equal(f.sql.prepare("SELECT id FROM friendbook_cf_comments WHERE id='mirror-only'").get(),undefined);
+
   const single=await call(f.env,'comments','GET',undefined,{query:'?id=old'});
   assert.equal(single.status,200);assert.equal((await single.json()).comment.content,'old comment');
   const reactors=await (await call(f.env,'reactors','GET',undefined,{query:'?commentId=old'})).json();
@@ -379,7 +386,7 @@ test('legacy D1 comments remain readable and support authorized replies and reac
   assert.equal((await call(f.env,'comments','POST',{id:'old',text:'shadow'})).status,409);
   const reply=await call(f.env,'comments','POST',{id:'reply',text:'hello',parentId:'old'});
   assert.equal(reply.status,200);assert.equal((await reply.json()).replyTo,'user2');
-  assert.equal(f.sql.prepare("SELECT document_json FROM friendbook_cf_documents WHERE path='comments/old'").get().document_json,raw);
+  assert.equal(f.sql.prepare("SELECT document_json FROM friendbook_cf_firestore_documents WHERE path='comments/old'").get().document_json,raw);
   assert.equal((await call(f.env,'comments','PUT',{op:'react',id:'old',type:'like'})).status,200);
   const after=await (await call(f.env,'comments','GET',undefined,{query:'?id=old'})).json();
   assert.equal(after.comment.likes,4);assert.equal(after.comment.reactions.user1,'like');
@@ -392,7 +399,7 @@ test('legacy D1 comments remain readable and support authorized replies and reac
 });
 
 test('legacy promotion fails safely for blocked or cyclic parents and changed source', async t => {
- const f=fixture();t.after(f.close);const add=(id,doc)=>f.sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)').run(`comments/${id}`,'comments',id,'user2',JSON.stringify(doc),1);
+ const f=fixture();t.after(f.close);const add=(id,doc)=>canonicalSeed(f.sql).run(`comments/${id}`,'comments',id,'user2',JSON.stringify(doc),1);
  add('blocked',{postId:'p1',authorId:'blocked',content:'x'});add('a',{postId:'p1',authorId:'user2',content:'a',parentId:'b'});add('b',{postId:'p1',authorId:'user2',content:'b',parentId:'a'});
  const auth=async(_a,_b,_c,_d,ctx)=>{ctx.blocked=['blocked'];return true;};
  assert.equal((await call(f.env,'comments','PUT',{op:'react',id:'blocked',type:'like'},{authorize:auth})).status,404);
@@ -400,7 +407,7 @@ test('legacy promotion fails safely for blocked or cyclic parents and changed so
  assert.equal(f.sql.prepare('SELECT COUNT(*) n FROM friendbook_cf_comments').get().n,0);
  add('change',{postId:'p1',authorId:'user2',content:'old'});
  const originalBatch=f.env.DB.batch;let race=true;
- f.env.DB.batch=async entries=>{if(race){race=false;f.sql.prepare("UPDATE friendbook_cf_documents SET document_json=? WHERE path='comments/change'").run(JSON.stringify({postId:'p1',authorId:'user2',content:'new'}));}return originalBatch(entries);};
+ f.env.DB.batch=async entries=>{if(race){race=false;f.sql.prepare("UPDATE friendbook_cf_firestore_documents SET document_json=? WHERE path='comments/change'").run(JSON.stringify({postId:'p1',authorId:'user2',content:'new'}));}return originalBatch(entries);};
  assert.equal((await call(f.env,'comments','PUT',{op:'react',id:'change',type:'like'})).status,503);
  assert.equal(f.sql.prepare("SELECT COUNT(*) n FROM friendbook_cf_comments WHERE id='change'").get().n,0);
  assert.equal((await call(f.env,'comments','PUT',{op:'react',id:'change',type:'like'})).status,200);
@@ -409,7 +416,7 @@ test('legacy promotion fails safely for blocked or cyclic parents and changed so
 
 test('legacy comment cursor does not drop records beyond first thousand storage updates', async t=>{
  const f=fixture();t.after(f.close);
- const insert=f.sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)');
+ const insert=canonicalSeed(f.sql);
  for(let i=0;i<1201;i++){
   const id='old_'+String(i).padStart(4,'0');
   // The last storage row is actually the newest comment; all other times tie.
@@ -426,7 +433,7 @@ test('Home returns authorized reaction state and comment previews with the bound
   const f=fixture();t.after(f.close);
   f.sql.exec(readFileSync(new URL('../migrations/0014_additive_firestore_documents.sql', import.meta.url),'utf8'));
   f.sql.exec(readFileSync(new URL('../migrations/0051_feed_exception_indexes.sql', import.meta.url),'utf8'));
-  const doc=f.sql.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)');
+  const doc=f.sql.prepare('INSERT OR REPLACE INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)');
   for(const uid of ['user1','author','other']) doc.run(`users/${uid}`,'users','users',uid,uid,JSON.stringify({uid,...(uid==='user1'?{blocked:['other']}:{})}),1,1);
   for(const [id,owner,privacy] of [['p1','author','public'],['p2','author','public'],['secret','author','only me']]) {
     doc.run(`posts/${id}`,'posts','posts',id,owner,JSON.stringify({authorId:owner,privacy,createdAt:1}),1,1);
@@ -482,7 +489,7 @@ test('a full 20-post Feed page batches engagement without individual summary req
 test('grouped Feed engagement equals individual summaries with blocked and legacy comments', async t=>{
   const f=fixture();t.after(f.close);
   f.sql.exec(readFileSync(new URL('../migrations/0032_legacy_comment_lookup.sql',import.meta.url),'utf8'));
-  const add=f.sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)');
+  const add=canonicalSeed(f.sql);
   for(const [id,post,author] of [['a','p1','allowed'],['b','p1','blocked'],['c','p2','allowed']]) {
     add.run(`comments/${id}`,'comments',id,author,JSON.stringify({postId:post,authorId:author,content:id,createdAt:10}),1);
   }
@@ -501,7 +508,7 @@ test('indexed historical comment pages preserve complete ordering, cursors and e
   const f=fixture();t.after(f.close);
   f.sql.exec(readFileSync(new URL('../migrations/0032_legacy_comment_lookup.sql',import.meta.url),'utf8'));
   f.sql.exec(readFileSync(new URL('../migrations/0076_legacy_comment_page_indexes.sql',import.meta.url),'utf8'));
-  const add=f.sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)');
+  const add=canonicalSeed(f.sql);
   for(let i=0;i<2000;i++) {
     const id=`n${String(i).padStart(4,'0')}`,doc={authorId:i%73===0?'blocked':'alice',createdAt:(i*97)%3200+1,content:id};
     doc[i%3===0?'postId':i%3===1?'post_id':'resource']=i%3===2?'posts/p1':'p1';
@@ -524,12 +531,12 @@ test('indexed historical comment pages preserve complete ordering, cursors and e
   const {legacyPage}=await import('../comment-api.js');
   let force=false,normalRows=0,fullRows=0,plans=[];
   const db={prepare(q){
-    if(force && q.includes('INDEXED BY idx_cf_comment_page_'))throw Error('no such index: idx_cf_comment_page_post');
+    if(force && q.includes('INDEXED BY idx_cf_canonical_comment_page_'))throw Error('no such index: idx_cf_canonical_comment_page_post');
     const stmt=f.sql.prepare(q);return{bind(...args){return {all:async()=>{
       const results=stmt.all(...args);
-      if(q.includes('INDEXED BY idx_cf_comment_page_')) {
+      if(q.includes('INDEXED BY idx_cf_canonical_comment_page_')) {
         normalRows+=results.length;plans.push(...f.sql.prepare('EXPLAIN QUERY PLAN '+q).all(...args).map(row=>row.detail));
-      } else if(q.includes('ORDER BY a.updated_at DESC'))fullRows+=results.length;
+      } else if(q.includes('ORDER BY a.update_time DESC'))fullRows+=results.length;
       return {results};
     }};}};
   },async batch(statements){return Promise.all(statements.map(statement=>statement.all()));}};
@@ -544,7 +551,7 @@ test('indexed historical comment pages preserve complete ordering, cursors and e
     assert.ok(result.fast.normalRows<=70,`index candidates ${result.fast.normalRows}`);
     assert.ok(result.actual.every(row=>row.uid!=='blocked'&&row.id!=='n1999'));
   }
-  for(const name of ['idx_cf_comment_page_post','idx_cf_comment_page_post_legacy','idx_cf_comment_page_resource']) {
+  for(const name of ['idx_cf_canonical_comment_page_post','idx_cf_canonical_comment_page_post_legacy','idx_cf_canonical_comment_page_resource']) {
     assert.match(plans.join('\n'),new RegExp(`SEARCH a USING INDEX ${name}`));
     assert.ok(plans.some(plan=>plan.includes(name) && plan.includes('<expr>>?') && plan.includes('<expr><?')),`time range seek for ${name}`);
     assert.ok(plans.some(plan=>plan.includes(name) && plan.includes('<expr>=? AND <expr>=?')),`exception bucket seek for ${name}`);
@@ -552,7 +559,7 @@ test('indexed historical comment pages preserve complete ordering, cursors and e
   // Exception overflow must fall back rather than silently discard old comments.
   for(let i=0;i<65;i++)add.run(`comments/old${i}`,'comments',`old${i}`,'alice',JSON.stringify({postId:'p1',authorId:'alice',createdAt:'1970-01-01T00:00:03Z'}),1);
   let result=await compare([Number.MAX_SAFE_INTEGER,'']);assert.ok(result.fast.fullRows>0);
-  f.sql.prepare("DELETE FROM friendbook_cf_documents WHERE doc_id LIKE 'old%'").run();
+  f.sql.prepare("DELETE FROM friendbook_cf_firestore_documents WHERE doc_id LIKE 'old%'").run();
   // Unusual document IDs stay on the complete JS sort path.
   add.run('comments/é','comments','é','alice',JSON.stringify({postId:'p1',authorId:'alice',createdAt:3000}),1);
   result=await compare([Number.MAX_SAFE_INTEGER,'']);assert.ok(result.fast.fullRows>0);
@@ -562,7 +569,7 @@ test('historical index pages match compatibility scan across randomized ties and
   const f=fixture();t.after(f.close);
   f.sql.exec(readFileSync(new URL('../migrations/0032_legacy_comment_lookup.sql',import.meta.url),'utf8'));
   f.sql.exec(readFileSync(new URL('../migrations/0076_legacy_comment_page_indexes.sql',import.meta.url),'utf8'));
-  const insert=f.sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)');
+  const insert=canonicalSeed(f.sql);
   let seed=982143;
   const random=n=>{seed=(Math.imul(seed,1664525)+1013904223)>>>0;return seed%n;};
   for(let i=0;i<700;i++) {
@@ -577,7 +584,7 @@ test('historical index pages match compatibility scan across randomized ties and
     if(i%47===0)f.sql.prepare('INSERT INTO friendbook_cf_comments VALUES (?,?,?,?,?,?)').run('posts/p1',id,'alice','promoted',null,1);
   }
   const {legacyPage}=await import('../comment-api.js');
-  const db=f.env.DB,compat={prepare(q){if(q.includes('INDEXED BY idx_cf_comment_page_'))throw Error('no such index: idx_cf_comment_page_post');return db.prepare(q);},batch:q=>db.batch(q)};
+  const db=f.env.DB,compat={prepare(q){if(q.includes('INDEXED BY idx_cf_canonical_comment_page_'))throw Error('no such index: idx_cf_canonical_comment_page_post');return db.prepare(q);},batch:q=>db.batch(q)};
   for(let i=0;i<45;i++) {
     const cursor=[random(55),`v${String(random(700)).padStart(4,'0')}`];
     for(const after of [null,cursor]) {
@@ -585,7 +592,7 @@ test('historical index pages match compatibility scan across randomized ties and
     }
   }
   // Missing migration on an actual SQLite schema safely returns the full scan.
-  f.sql.exec('DROP INDEX idx_cf_comment_page_post');
+  f.sql.exec('DROP INDEX idx_cf_canonical_comment_page_post');
   assert.deepEqual(await legacyPage(db,'posts/p1','viewer',['blocked'],[30,'v0300']),await legacyPage(compat,'posts/p1','viewer',['blocked'],[30,'v0300']));
 });
 

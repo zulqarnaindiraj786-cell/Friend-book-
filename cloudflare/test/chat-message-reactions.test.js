@@ -84,13 +84,13 @@ test('repeated own message reactions skip writes only after checking fresh autho
   f.sql.close();
 });
 
-test('legacy-only chat rooms retain the guarded message update path',async()=>{
+test('mirror-only chat rooms cannot authorize message reactions',async()=>{
   const f=fixture();
   f.sql.prepare("DELETE FROM friendbook_cf_firestore_documents WHERE path='chats/direct'").run();
   f.sql.prepare('INSERT INTO friendbook_cf_documents VALUES(?,?,?,?,?,?)').run('chats/direct','chats','direct','alice',JSON.stringify({participants:['alice','bob']}),1);
   const before=f.sql.prepare('SELECT total_changes() AS n').get().n;
-  assert.equal((await f.patch('bob','direct',{'reactions.bob':'❤️'})).status,200);
-  assert.equal(f.doc('direct').reactions.bob,'❤️');
-  assert.ok(f.sql.prepare('SELECT total_changes() AS n').get().n-before>1,'legacy guard path remains active');
+  assert.equal((await f.patch('bob','direct',{'reactions.bob':'❤️'})).status,403);
+  assert.equal(f.doc('direct').reactions.bob,undefined);
+  assert.equal(f.sql.prepare('SELECT total_changes() AS n').get().n,before,'mirror-only authorization never writes');
   f.sql.close();
 });

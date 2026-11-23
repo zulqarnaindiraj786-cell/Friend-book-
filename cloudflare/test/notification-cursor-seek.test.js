@@ -1,3 +1,4 @@
+import { canonicalSeed } from './fixtures/canonical.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
@@ -9,8 +10,8 @@ const migration=n=>readFileSync(new URL(`../migrations/${n}`,import.meta.url),'u
 test('numeric and timestamp notification cursors seek without losing privacy, unread state or legacy rows',async()=>{
   const sql=new DatabaseSync(':memory:');
   for(const n of ['0003_additive_interactions.sql','0011_additive_app_documents.sql','0014_additive_firestore_documents.sql','0055_notification_page_indexes.sql'])sql.exec(migration(n));
-  const f=sql.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)');
-  const l=sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)');
+  const f=sql.prepare('INSERT OR REPLACE INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)');
+  const l=canonicalSeed(sql);
   for(const uid of ['alice','bob','eve'])f.run(`users/${uid}`,'users','users',uid,uid,JSON.stringify({uid}),1,1);
   for(let i=0;i<160;i++){
     const id=`n${String(i).padStart(3,'0')}`,time=Math.floor((i%80)/4)-15;
@@ -56,7 +57,7 @@ test('numeric and timestamp notification cursors seek without losing privacy, un
   const beforePromotion=await Promise.all(specs.map(spec=>query(spec,false,true)));
   const oldRows=sql.prepare(`SELECT l.* FROM friendbook_cf_documents l WHERE l.collection='notifications'
     AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents f WHERE f.path=l.path)`).all();
-  assert.ok(oldRows.length>0);
+  assert.equal(oldRows.length,0,'historical seeds are canonical before reads');
   const promotedPaths=new Set(oldRows.map(row=>row.path));
   for (const page of beforePromotion) for (const doc of page)
     if (promotedPaths.has(doc.path)) doc.data.id=doc.id; // The documented facade change.

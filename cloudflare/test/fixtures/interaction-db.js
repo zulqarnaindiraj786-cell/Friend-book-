@@ -9,6 +9,8 @@ export function fixture() {
   sql.exec(readFileSync(new URL('../../migrations/0006_additive_comment_history.sql', import.meta.url), 'utf8'));
   sql.exec(readFileSync(new URL('../../migrations/0008_additive_legacy_comment_totals.sql', import.meta.url), 'utf8'));
   sql.exec(readFileSync(new URL('../../migrations/0011_additive_app_documents.sql', import.meta.url), 'utf8'));
+  sql.exec(readFileSync(new URL('../../migrations/0014_additive_firestore_documents.sql', import.meta.url), 'utf8'));
+  sql.exec(readFileSync(new URL('../../migrations/0087_canonical_comment_page_indexes.sql', import.meta.url), 'utf8'));
   sql.exec(readFileSync(new URL('../../migrations/0018_social_guards.sql', import.meta.url), 'utf8'));
   sql.exec(readFileSync(new URL('../../migrations/0050_comment_totals.sql', import.meta.url), 'utf8'));
   sql.exec("INSERT INTO friendbook_cf_interaction_resources VALUES ('posts/p1','verified'),('posts/p2','staging')");

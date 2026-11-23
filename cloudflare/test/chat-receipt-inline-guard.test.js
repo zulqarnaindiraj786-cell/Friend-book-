@@ -59,9 +59,9 @@ test('direct receipt rejects changed or removed message and membership without p
 
 test('legacy rooms keep the existing guarded receipt path and other message changes stay forbidden',async()=>{
   const f=fixture({legacyRoom:true});
-  assert.equal((await f.receive('bob',{isSeen:true,text:'tampered'})).status,403);
-  assert.equal((await f.receive()).status,200);assert.ok(f.guards()>0);
-  assert.equal(f.get('chats/room/messages/m').isSeen,true);
+  assert.equal((await f.receive('bob',{isSeen:true,text:'tampered'})).status,404);
+  assert.equal((await f.receive()).status,404);assert.equal(f.guards(),0);
+  assert.equal(f.get('chats/room/messages/m').isSeen,false);
   f.sql.close();
 });
 

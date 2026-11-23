@@ -1,3 +1,4 @@
+import {canonicalSeed} from './fixtures/canonical.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
@@ -8,8 +9,8 @@ const migration=n=>readFileSync(new URL(`../migrations/${n}`,import.meta.url),'u
 function fixture() {
   const sql=new DatabaseSync(':memory:');
   for(const n of ['0003_additive_interactions.sql','0011_additive_app_documents.sql','0014_additive_firestore_documents.sql','0018_social_guards.sql','0023_friend_request_lookup_indexes.sql'])sql.exec(migration(n));
-  const canonical=sql.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES(?,?,?,?,?,?,?,?)');
-  const legacy=sql.prepare('INSERT INTO friendbook_cf_documents VALUES(?,?,?,?,?,?)');
+  const canonical=sql.prepare('INSERT OR REPLACE INTO friendbook_cf_firestore_documents VALUES(?,?,?,?,?,?,?,?)');
+  const legacy=canonicalSeed(sql);
   for(const uid of ['alice','bob','carol'])canonical.run(`users/${uid}`,'users','users',uid,uid,JSON.stringify({uid}),1,1);
   let beforeBatch=null, inserts=0, guards=0;
   const db={prepare(q){const stmt=sql.prepare(q);return {bind(...a){return {
@@ -57,7 +58,7 @@ test('transactional duplicates and mirror errors roll back, without swallowing s
     const response=await f.send();assert.equal(response.status,kind==='mirror-failure'?503:409,kind);
     const c=f.sql.prepare("SELECT count(*) n FROM friendbook_cf_firestore_documents WHERE parent_path='friend_requests'").get().n;
     const l=f.sql.prepare("SELECT count(*) n FROM friendbook_cf_documents WHERE collection='friend_requests'").get().n;
-    assert.equal(c,kind==='canonical'?1:0,kind);assert.equal(l,kind==='legacy'?1:0,kind);
+    assert.equal(c,kind==='mirror-failure'?0:1,kind);assert.equal(l,0,kind);
     f.sql.close();
   }
 });

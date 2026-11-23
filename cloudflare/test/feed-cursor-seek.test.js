@@ -1,3 +1,4 @@
+import { canonicalSeed } from './fixtures/canonical.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
@@ -8,8 +9,8 @@ const migration=n=>readFileSync(new URL(`../migrations/${n}`,import.meta.url),'u
 for(const root of ['posts','reels']) test(`${root} keyset seeks preserve both time ranks, ties, ACL and mirrors`,async()=>{
   const sql=new DatabaseSync(':memory:');
   for(const n of ['0003_additive_interactions.sql','0011_additive_app_documents.sql','0014_additive_firestore_documents.sql','0029_feed_page_indexes.sql','0051_feed_exception_indexes.sql',...(root==='reels'?['0063_reel_page_indexes.sql']:[])])sql.exec(migration(n));
-  const canonical=sql.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)');
-  const legacy=sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)');
+  const canonical=sql.prepare('INSERT OR REPLACE INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)');
+  const legacy=canonicalSeed(sql);
   for(const uid of ['alice','bob'])canonical.run(`users/${uid}`,'users','users',uid,uid,JSON.stringify({uid}),1,1);
   const put=(id,data,where)=>{
     const path=`${root}/${id}`,json=JSON.stringify(data);
@@ -50,8 +51,8 @@ for(const root of ['posts','reels']) test(`${root} keyset seeks preserve both ti
     const spec={limit,...(cursor?{startAfter:cursor}:{})};
     assert.deepEqual(await query(spec,false),await query(spec,true),JSON.stringify({root,spec}));
   }
-  assert.ok((await query({limit:100},false)).includes('wrongParent'),'only a canonical row in the requested parent shadows a legacy copy');
-  assert.ok(shadowPlans.length>0,'legacy-only windows check canonical shadow paths');
+  assert.ok(!(await query({limit:100},false)).includes('wrongParent'),'wrong-parent canonical rows never revive a mirror');
+  assert.equal(shadowPlans.length,0,'canonical-only windows never probe mirrors');
   for(const plan of shadowPlans) assert.match(plan.join('\n'),/SEARCH .*sqlite_autoindex_friendbook_cf_firestore_documents_1 \(path=\?\)/);
   assert.ok(plans.length>0,'cursor queries use indexed candidates');
   for(const plan of plans){

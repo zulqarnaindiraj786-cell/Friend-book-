@@ -1,3 +1,4 @@
+import { canonicalSeed } from './fixtures/canonical.js';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {DatabaseSync} from 'node:sqlite';
@@ -14,7 +15,7 @@ test('unscoped comment author index removal preserves pages, counts and blocked-
   const insert=sql.prepare('INSERT INTO friendbook_cf_comments VALUES (?,?,?,?,?,?)');
   for(let i=0;i<120;i++)insert.run('posts/p1',`c${String(i).padStart(3,'0')}`,i%5===0?'blocked':i%2?'alice':'bob','comment',i>0&&i%7===0?'c001':null,1000+i);
   sql.prepare('INSERT INTO friendbook_cf_comment_details(resource,id,removed) VALUES(?,?,1)').run('posts/p1','c002');
-  const old=sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)');
+  const old=canonicalSeed(sql);
   for(const [id,author,time] of [['legacy','bob',1040],['legacyblocked','blocked',1042],['c003','bob',1030]])old.run(`comments/${id}`,'comments',id,author,JSON.stringify({postId:'p1',authorId:author,content:'legacy',createdAt:time}),1);
   sql.prepare("INSERT INTO friendbook_cf_comment_pins VALUES('posts/p1','c001')").run();
   let plans=[];

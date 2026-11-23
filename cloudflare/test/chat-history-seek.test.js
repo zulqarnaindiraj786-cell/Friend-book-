@@ -1,3 +1,4 @@
+import { canonicalSeed } from './fixtures/canonical.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
@@ -8,7 +9,7 @@ const migration=n=>readFileSync(new URL(`../migrations/${n}`,import.meta.url),'u
 test('older chat history seeks retain numeric and timestamp ranks, ties, and fallback',async()=>{
   const sql=new DatabaseSync(':memory:');
   for(const n of ['0003_additive_interactions.sql','0011_additive_app_documents.sql','0014_additive_firestore_documents.sql','0019_legacy_query_indexes.sql','0024_legacy_chat_prefix_index.sql','0028_chat_history_page_index.sql'])sql.exec(migration(n));
-  const f=sql.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)');
+  const f=sql.prepare('INSERT OR REPLACE INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)');
   for(const uid of ['alice','bob'])f.run(`users/${uid}`,'users','users',uid,uid,JSON.stringify({uid}),1,1);
   f.run('chats/room','chats','chats','room','alice',JSON.stringify({participants:['alice','bob']}),1,1);
   for(let i=0;i<160;i++){
@@ -39,7 +40,7 @@ test('older chat history seeks retain numeric and timestamp ranks, ties, and fal
   sql.exec('DROP INDEX idx_cf_firestore_chat_created_page');
   const oldSchema={limit:10,startAfter:cursors[1]};assert.deepEqual(await query(oldSchema),await query(oldSchema,true));
   sql.exec(migration('0028_chat_history_page_index.sql'));
-  const l=sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)');
+  const l=canonicalSeed(sql);
   l.run('messages/room_old','messages','room_old','alice',JSON.stringify({senderId:'alice',chatId:'room',createdAt:3}),1);
   let before=plans.length;assert.deepEqual(await query(oldSchema),await query(oldSchema,true));assert.equal(plans.length,before,'legacy bridge must use the compatibility merge');
   sql.exec("DELETE FROM friendbook_cf_documents WHERE path='messages/room_old'");

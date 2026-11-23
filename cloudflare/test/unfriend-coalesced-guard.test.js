@@ -1,3 +1,4 @@
+import { canonicalSeed } from './fixtures/canonical.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
@@ -8,14 +9,15 @@ const migration=n=>readFileSync(new URL(`../migrations/${n}`,import.meta.url),'u
 function fixture({count=1,legacyOnly=false,indexed=true}={}) {
   const sql=new DatabaseSync(':memory:');
   for(const n of ['0003_additive_interactions.sql','0011_additive_app_documents.sql','0014_additive_firestore_documents.sql','0018_social_guards.sql','0019_trusted_friendships.sql','0027_friend_participant_indexes.sql','0084_friend_guard_exceptions.sql'])sql.exec(migration(n));
-  const c=sql.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES(?,?,?,?,?,?,?,?)');
-  const l=sql.prepare('INSERT INTO friendbook_cf_documents VALUES(?,?,?,?,?,?)');
+  const c=sql.prepare('INSERT OR REPLACE INTO friendbook_cf_firestore_documents VALUES(?,?,?,?,?,?,?,?)');
+  const l=canonicalSeed(sql);
   const put=(path,doc)=>{const [coll,id]=path.split('/');c.run(path,coll,coll,id,'',JSON.stringify(doc),1,1);};
   const old=(path,doc)=>{const [coll,id]=path.split('/');l.run(path,coll,id,'',JSON.stringify(doc),1);};
   for(const uid of ['alice','bob'])put(`users/${uid}`,{uid,friendsCount:count});
   for(let i=0;i<count;i++) {
     const path=`friends/f${i}`,doc={participants:['alice','bob']};
     if(!legacyOnly)put(path,doc);old(path,doc);
+    sql.prepare('INSERT INTO friendbook_cf_documents VALUES(?,?,?,?,?,?)').run(path,'friends',`f${i}`,'',JSON.stringify(doc),1);
   }
   sql.prepare('INSERT INTO friendbook_cf_trusted_friendships VALUES(?,?,?)').run('alice','bob','friends/f0');
   let beforeBatch=null,guardInserts=0;
