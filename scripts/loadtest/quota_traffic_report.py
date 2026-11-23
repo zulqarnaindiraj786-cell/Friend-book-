@@ -64,7 +64,10 @@ def safe_shape(sql):
            if re.search(r"\b(?:parent_path|collection|collection_id)\s*=\s*'"+r+"'",q)]
     features=[label for token,label in [('friendbook_cf_social_guards','transaction_guard'),
         ('friendbook_cf_chat_participants','chat_membership'),('friendbook_cf_comment','comment'),
-        ('idx_cf_friend_participant_0','indexed_friend_guard'),('where path','path_lookup')]
+        ('idx_cf_friend_participant_0','indexed_friend_guard'),('where path','path_lookup'),('as preview_json','engagement_preview'),
+        ('as total_comments','engagement_comment_total'),('as types_json','reaction_totals'),
+        ('idx_cf_canonical_comment_page_','historical_comment_page'),
+        ('count(*) as n from friendbook_cf_firestore_documents','historical_comment_count')]
         if token in q]
     tables=[label for table,label in (
         ('friendbook_cf_firestore_documents','canonical_documents'),
@@ -83,7 +86,7 @@ def summarize_shapes(groups,metric):
     for row in groups:
         key=category(row['dimensions']['query'])
         buckets[key]=buckets.get(key,0)+row['sum'][metric]
-    top=sorted(groups,key=lambda r:r['sum'][metric],reverse=True)[:3]
+    top=sorted(groups,key=lambda r:r['sum'][metric],reverse=True)[:10]
     return {'observed_top_shape_subtotals':buckets,'shape_count':len(groups),
             'may_be_truncated':len(groups)>=60,
             'largest_shapes':[{'category':category(r['dimensions']['query']),**safe_shape(r['dimensions']['query']),

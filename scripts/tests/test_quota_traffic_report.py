@@ -63,3 +63,17 @@ class TrafficReport(unittest.TestCase):
         self.assertTrue(p.summarize_shapes([row]*60,'rowsRead')['may_be_truncated'])
         self.assertFalse(p.summarize_shapes([row],'rowsRead')['may_be_truncated'])
         with self.assertRaises(ValueError): p.summarize_shapes([],'invalid')
+
+    def test_hot_comment_shapes_have_private_data_free_labels(self):
+        shape=p.safe_shape("SELECT 1 AS types_json, 2 AS total_comments, 3 AS preview_json WHERE path='private'")
+        self.assertIn('engagement_preview',shape['features'])
+        self.assertIn('engagement_comment_total',shape['features'])
+        self.assertIn('reaction_totals',shape['features'])
+        self.assertNotIn('private',json.dumps(shape))
+
+    def test_ten_shapes_available_for_followup_without_sql_output(self):
+        rows=[{'sum':{'rowsRead':i,'rowsWritten':0},'count':1,
+               'dimensions':{'query':'SELECT secret FROM private_table'}} for i in range(15)]
+        result=p.summarize_shapes(rows,'rowsRead')
+        self.assertEqual(len(result['largest_shapes']),10)
+        self.assertNotIn('private_table',json.dumps(result))
