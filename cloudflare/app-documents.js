@@ -172,10 +172,13 @@ export async function appDocuments(request, env, identity) {
           WHERE parent_path=?1 ORDER BY updated_at DESC LIMIT ?2`).bind(collection,limit).all();
       let documents = [];
       const requestRoomReads = new Map();
+      const canonicalContentReads = new Map();
       for (const row of rows?.results || []) {
         const docPath = `${collection}/${row.doc_id}`;
         const canonicalSnapshot = row.canonical===1 && row.path===docPath && validSegment(row.doc_id);
         const currentChat = collection==='chats' && canonicalSnapshot;
+        if(canonicalSnapshot && ['posts','reels','stories'].includes(collection))
+          canonicalContentReads.set(docPath,toFirestoreFields(row.document_json));
         // The list query already loaded this exact canonical root. Avoid an
         // additional lookup per row; content ACLs below still run unchanged.
         const current = canonicalSnapshot || joinedRoot ? row : await canonicalRoot(env.DB, docPath, row);
@@ -187,7 +190,7 @@ export async function appDocuments(request, env, identity) {
       }
       if (['posts','reels','stories','lives'].includes(collection)) {
         const userReads = requestAccountReads(identity);
-        const allowed = await Promise.all(documents.map(doc => contentReadAllowed(env.DB,uid,`${collection}/${doc.id}`,userReads)));
+        const allowed = await Promise.all(documents.map(doc => contentReadAllowed(env.DB,uid,`${collection}/${doc.id}`,userReads,false,canonicalContentReads.get(`${collection}/${doc.id}`))));
         documents = documents.filter((_doc, index) => allowed[index]);
       }
       return json({ collection, documents });
@@ -269,7 +272,7 @@ export async function appDocuments(request, env, identity) {
       const existingRow = await env.DB.prepare(
         'SELECT owner_uid, document_json FROM friendbook_cf_firestore_documents WHERE path = ?'
       ).bind(docPath).first();
-      const currentRow = await canonicalRoot(env.DB, docPath, existingRow);
+      const currentRow = existingRow;
       const existingPlain = currentRow ? (toPlainDocument(currentRow.document_json, docId) || {}) : {};
       const merged = { ...existingPlain, ...incoming, id: docId };
       if (!notificationWriteAllowed(docPath, uid, currentRow ? existingPlain : null, merged) || !profileWriteAllowed(docPath, uid, currentRow ? existingPlain : null, merged) || !(await chatWriteAllowed(env.DB, docPath, uid, currentRow ? existingPlain : null, merged)) || !contentWriteAllowed(docPath, uid, currentRow ? existingPlain : null, merged)) return json({ error: 'Forbidden' }, 403);

@@ -187,7 +187,7 @@ test('canonical list rows do not incur duplicate canonical-root reads and still 
   assert.equal(result.documents.length,10);
   assert.ok(result.documents.every(doc=>doc.privacy==='Public'));
   assert.equal(duplicateReads,0);
-  assert.equal(postAclReads,20,'each post still gets the original authoritative ACL check');
+  assert.equal(postAclReads,0,'each post ACL uses its fresh canonical list snapshot, not a repeated root SELECT');
   sql.prepare("UPDATE friendbook_cf_firestore_documents SET document_json=json_set(document_json,'$.blocked',json(?)) WHERE path='users/author'").run(JSON.stringify(['viewer']));
   assert.deepEqual((await (await appDocuments(request(),{DB:counted},{uid:'viewer'})).json()).documents,[]);
 });

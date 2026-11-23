@@ -29,22 +29,28 @@ for(const root of ['posts','reels']) test(`${root} keyset seeks preserve both ti
   legacy.run(`${root}/wrongParent`,root,'wrongParent','alice',JSON.stringify({authorId:'alice',privacy:'Public',createdAt:{__type:'timestamp',millis:8}}),1);
   // Exceptional timestamps still merge through the compatibility exception path.
   put('odd',{authorId:'alice',privacy:'Public',createdAt:{__type:'timestamp',millis:2.5}},'canonical');
-  const plans=[],shadowPlans=[];
+  const plans=[],shadowPlans=[];let contentRootLookups=0;
   const db={prepare(q){const stmt=sql.prepare(q);return{bind(...args){return{
     all:async()=>{
       if(q.includes('quota_feed_rank'))plans.push(sql.prepare('EXPLAIN QUERY PLAN '+q).all(...args).map(x=>x.detail));
       if(q.startsWith('SELECT path,parent_path FROM friendbook_cf_firestore_documents WHERE path IN'))shadowPlans.push(sql.prepare('EXPLAIN QUERY PLAN '+q).all(...args).map(x=>x.detail));
       return{results:stmt.all(...args)};
     },
-    first:async()=>stmt.get(...args)||null,
+    first:async()=>{
+      if(q.includes('friendbook_cf_firestore_documents') && /WHERE path\s*=/.test(q) && typeof args[0]==='string' && args[0].startsWith(root+'/'))contentRootLookups++;
+      return stmt.get(...args)||null;
+    },
   };}};}};
   const app=createWorker(async t=>t),env={DB:db,FIREBASE_PROJECT_ID:'test'};
   const query=async(spec,reference)=>{
     const body={parent:root,orderBy:[{field:'createdAt',direction:'DESCENDING'}],...spec};
     // Force the existing generic evaluator, while retaining all fixture docs.
     if(reference)body.filters=[{field:'privacy',op:'!=',value:'Never'}];
+    contentRootLookups=0;
     const res=await app.fetch(new Request('https://local.invalid/v1/firestore/query',{method:'POST',headers:{authorization:'Bearer bob','content-type':'application/json'},body:JSON.stringify(body)}),env);
-    assert.equal(res.status,200,await res.clone().text());return (await res.json()).documents.map(x=>x.id);
+    assert.equal(res.status,200,await res.clone().text());
+    assert.equal(contentRootLookups,0,'canonical feed must authorize its loaded roots without N+1 SELECTs');
+    return (await res.json()).documents.map(x=>x.id);
   };
   const cursors=[undefined,[{__type:'timestamp',millis:99},'z'],[{__type:'timestamp',millis:4},'p159'],[{__type:'timestamp',millis:0},'p100'],[{__type:'timestamp',millis:-15},'p080'],[99,'z'],[4,'p070'],[0,'p060'],[-15,'p003']];
   for(const cursor of cursors)for(const limit of [1,3,12,100]){
@@ -60,6 +66,13 @@ for(const root of ['posts','reels']) test(`${root} keyset seeks preserve both ti
     assert.match(text,new RegExp(`idx_cf_(?:legacy_)?${root}_feed_page`));
     assert.match(text,/<expr>=\?/,'rank must constrain the expression index');
     assert.match(text,/<expr><\?/,'cursor time must seek in the expression index');
+  }
+  // A second request must observe changed author restrictions; the snapshot
+  // reuse is request-local content only, never a cached author ACL.
+  for(const restriction of [{blocked:['bob']},{banned:true},{deactivated:true}]) {
+    canonical.run('users/alice','users','users','alice','alice',JSON.stringify({uid:'alice',...restriction}),1,2);
+    assert.deepEqual(await query({limit:12},false),[]);
+    assert.deepEqual(await query({limit:12},true),[]);
   }
   sql.close();
 });

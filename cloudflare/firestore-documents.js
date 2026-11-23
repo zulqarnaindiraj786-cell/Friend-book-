@@ -288,6 +288,16 @@ export function appDocumentToFirestoreRow(row) {
 
 // Internal source marker; not serialized in any document response.
 const canonicalRootSnapshot=Symbol('canonicalRootSnapshot');
+const canonicalContentSnapshot=Symbol('canonicalContentSnapshot');
+// Only call with rows directly selected from canonical storage, before projection.
+function canonicalContentDocument(row) {
+  const doc=rowToDocument(row);
+  const parts=doc && splitPath(doc.path);
+  if(doc && parts?.length===2 && ['posts','reels','stories'].includes(parts[0])
+      && doc.parent===parts[0] && doc.path===`${doc.parent}/${doc.id}`)
+    doc[canonicalContentSnapshot]=toFirestoreFields(row.document_json);
+  return doc;
+}
 async function readRootStorageRow(db,path) {
   // One indexed canonical lookup; a mirror-only row is not a document.
   return db.prepare(`SELECT path, parent_path, collection_id, doc_id, owner_uid, document_json, create_time, update_time
@@ -1233,7 +1243,7 @@ async function visibleDocuments(db,uid,parent,docs,requestUserReads = new Map(),
       const i=next++; if (i>=docs.length) return;
       const doc=docs[i];
       allowed[i]=(nestedChat || (parent==='chats' && doc[canonicalRootSnapshot]!==undefined
-        ? storedChatMember(doc[canonicalRootSnapshot],uid) : await chatReadAllowed(db,doc.path,uid,doc.data,requestRoomReads))) && await contentReadAllowed(db,uid,doc.path,requestUserReads,includeArchivedOwner);
+        ? storedChatMember(doc[canonicalRootSnapshot],uid) : await chatReadAllowed(db,doc.path,uid,doc.data,requestRoomReads))) && await contentReadAllowed(db,uid,doc.path,requestUserReads,includeArchivedOwner,doc[canonicalContentSnapshot]);
     }
   }));
   return docs.filter((_,i)=>allowed[i]);
@@ -1509,7 +1519,7 @@ async function boundedFeedPage(db,uid,spec,requestUserReads) {
   }
   const odd=unusual.results||[];
   if (odd.length>128 || odd.some(row=>row.path!==`${root}/${row.doc_id}`)) return null;
-  const exceptions=applyQuery(odd.map(rowToDocument).filter(Boolean),{...spec,limit:null});
+  const exceptions=applyQuery(odd.map(canonicalContentDocument).filter(Boolean),{...spec,limit:null});
   const rank=`CASE WHEN json_type(a.document_json,'$.createdAt') IN ('integer','real') THEN 2 ELSE 4 END`;
   const time=`CASE WHEN json_type(a.document_json,'$.createdAt') IN ('integer','real') THEN json_extract(a.document_json,'$.createdAt') ELSE json_extract(a.document_json,'$.createdAt.millis') END`;
   const visible=[];
@@ -1571,7 +1581,7 @@ async function boundedFeedPage(db,uid,spec,requestUserReads) {
     }
     const [canonical]=batches;
 
-    const docs=sortDocuments((canonical.results||[]).map(rowToDocument).filter(Boolean),spec.orderBy).slice(0,chunk);
+    const docs=sortDocuments((canonical.results||[]).map(canonicalContentDocument).filter(Boolean),spec.orderBy).slice(0,chunk);
     const last=docs.at(-1), value=last?.data.createdAt;
     const nextCursor=last?[typeof value==='number'?2:4,typeof value==='number'?value:value.millis,last.id]:null;
     const split=docs.length<chunk ? exceptions.length : exceptions.findIndex(doc=>
@@ -3426,7 +3436,7 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0, ct
     let docs;
     const ownFollowFilters=Array.isArray(body?.filters) ? body.filters.filter(f=>ownFollowFilter(parent,uid,f)) : [];
     try {
-      const source=rows.map(rowToDocument).filter(doc => doc && canReadNotification(doc.path, uid, doc.data) && (parent !== 'friend_requests' || canReadFriendRequest(uid,doc.data)) && (parent !== 'payments' || canReadPayment(env,uid,doc.data)) && (parent !== 'subscriptions' || canReadSubscription(env,uid,doc.data)) && ownFollowFilters.every(f=>matchesFilter(doc.data,f,doc.id)));
+      const source=rows.map(row=>['posts','reels','stories'].includes(parent)?canonicalContentDocument(row):rowToDocument(row)).filter(doc => doc && canReadNotification(doc.path, uid, doc.data) && (parent !== 'friend_requests' || canReadFriendRequest(uid,doc.data)) && (parent !== 'payments' || canReadPayment(env,uid,doc.data)) && (parent !== 'subscriptions' || canReadSubscription(env,uid,doc.data)) && ownFollowFilters.every(f=>matchesFilter(doc.data,f,doc.id)));
       docs = (await Promise.all(prefilterRaw(source,parent,body?.filters).map(async doc => {
         const view = parent === 'groups' ? groupReadView(uid,doc.data,await trustedGroupOwner(db,doc.path)) : parent === 'friends' ? friendshipReadView(uid,doc.data) : profileReadView(doc.path, uid, doc.data, isPaymentAdmin(env,uid), moderator);
         return view === null ? null : { ...doc, data: view };
@@ -3493,7 +3503,7 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0, ct
     let docs;
     const ownFollowFilters=Array.isArray(filters) ? filters.filter(f=>ownFollowFilter(parent,uid,f)) : [];
     try {
-      const source=rows.map(rowToDocument).filter(doc => doc && canReadNotification(doc.path, uid, doc.data) && (parent !== 'friend_requests' || canReadFriendRequest(uid,doc.data)) && (parent !== 'payments' || canReadPayment(env,uid,doc.data)) && (parent !== 'subscriptions' || canReadSubscription(env,uid,doc.data)) && ownFollowFilters.every(f=>matchesFilter(doc.data,f,doc.id)));
+      const source=rows.map(row=>['posts','reels','stories'].includes(parent)?canonicalContentDocument(row):rowToDocument(row)).filter(doc => doc && canReadNotification(doc.path, uid, doc.data) && (parent !== 'friend_requests' || canReadFriendRequest(uid,doc.data)) && (parent !== 'payments' || canReadPayment(env,uid,doc.data)) && (parent !== 'subscriptions' || canReadSubscription(env,uid,doc.data)) && ownFollowFilters.every(f=>matchesFilter(doc.data,f,doc.id)));
       docs = (await Promise.all(prefilterRaw(source,parent,filters).map(async doc => {
         const view = parent === 'groups' ? groupReadView(uid,doc.data,await trustedGroupOwner(db,doc.path)) : parent === 'friends' ? friendshipReadView(uid,doc.data) : profileReadView(doc.path, uid, doc.data, isPaymentAdmin(env,uid));
         return view === null ? null : { ...doc, data: view };
