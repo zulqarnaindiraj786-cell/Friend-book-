@@ -435,15 +435,8 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
                 boolean has = s.toString().trim().length() > 0;
                 send.setVisibility(has ? View.VISIBLE : View.GONE);
                 quick.setVisibility(has ? View.GONE : View.VISIBLE);
-                long now = System.currentTimeMillis();
-                if (has && (!typingSent || now - lastTypingPush > 2000)) {
-                    Presence.setTyping(chatId, true);
-                    typingSent = true;
-                    lastTypingPush = now;
-                } else if (!has && typingSent) {
-                    Presence.setTyping(chatId, false);
-                    typingSent = false;
-                }
+                // QUOTA: typing indicators are gone for good. Every keystroke used to cost a D1
+                // write plus a re-read of the chat document; a single message cost dozens of them.
             }
             @Override public void afterTextChanged(Editable s) { }
         });
@@ -559,10 +552,7 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
                 peerLastSeen = lastSeen;
                 refreshPresenceText();
             });
-            typingH = Presence.watchTyping(chatId, Fb.uid(), t -> {
-                typingOn = t;
-                refreshPresenceText();
-            });
+            // No typing listener: typing state no longer exists, so there is nothing to poll for.
         }
 
         // Parse only changed documents, not 200 message bodies on every receipt/typing update.
@@ -718,7 +708,6 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         if (roomReg != null) roomReg.remove();
         if (presence != null) presence.close();
         if (typingH != null) typingH.close();
-        if (typingSent) Presence.setTyping(chatId, false);
         MessagesAdapter.stopVoice();
         if (recording) { stopRecording(false); }
     }
@@ -804,8 +793,6 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         Map<String, Object> unread = new HashMap<>();
         unread.put(peerId, FieldValue.increment(1));
         unread.put(me, 0);
-        Map<String, Object> typingOff = new HashMap<>();
-        typingOff.put(me, false);
         Map<String, String> names = new HashMap<>();
         names.put(me, Fb.myName());
         if (peerName != null && !peerName.isEmpty()) names.put(peerId, peerName);
@@ -819,7 +806,6 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
                 "lastMessage", lastMsg == null ? "" : lastMsg,
                 "lastMessageTime", FieldValue.serverTimestamp(),
                 "lastMessageTimeMs", System.currentTimeMillis(),
-                "typing", typingOff,
                 "unreadCount", unread);
     }
 

@@ -76,7 +76,7 @@ public class MainActivity extends Activity {
     private final Fragment[] tabFragments = new Fragment[5];
     private TextView homeBadge, msgBadge, notifBadge, friendsBadge, reelsBadge;
     private int active = -1;
-    private ListenerRegistration notifReg, chatReg, reqReg, referralReg;
+    private ListenerRegistration referralReg;
 
     private final java.util.Set<String> currentPendingReqIds = new java.util.HashSet<>();
     private final java.util.Set<String> currentUnreadChatIds = new java.util.HashSet<>();
@@ -554,16 +554,40 @@ public class MainActivity extends Activity {
                 com.friendbook.social.core.Admin.autoGrantByReferrals(this,(int)Math.min(Integer.MAX_VALUE,total)));
     }
 
+    /** Last badge values rendered, so a push can bump them with ZERO extra reads. */
+    private static int liveMsgUnread = 0;
+    private static int liveNotifUnread = 0;
+
+    /**
+     * Called from the FCM service when a push arrives while the app is open: the pill goes up
+     * locally instead of re-reading the notification/chat tables. No listener, no polling.
+     */
+    public static void onPushArrived(String type) {
+        MainActivity inst = activeInstance;
+        if (inst == null) return;
+        final boolean message = "message".equals(type);
+        inst.runOnUiThread(() -> {
+            if (message) {
+                liveMsgUnread++;
+                Ui.setBadge(inst.msgBadge, liveMsgUnread);
+            } else {
+                liveNotifUnread++;
+                Ui.setBadge(inst.notifBadge, liveNotifUnread);
+            }
+        });
+    }
+
     private void startBadgeListeners() {
         String me = Fb.uid();
         if (me == null) return;
-        if (notifReg != null) notifReg.remove();
-        notifReg = Fb.db().collection("notifications")
+        // QUOTA: badges are one-shot reads at launch (bounded windows). A live listener re-read all
+        // 30/60/30 rows on every single message or notification — hundreds of reads per day for a
+        // number that is only ever a pill. Pushes bump the pill locally instead (onPushArrived).
+        Fb.db().collection("notifications")
                 .whereEqualTo("toUserId", me).whereEqualTo("isRead", false)
-                // Bounded badge window: the pill never shows more than 99+, so reading every
-                // unread notification forever is pure waste. Push updates keep it current.
                 .limit(30)
-                .addSnapshotListener((snap, err) -> {
+                .get()
+                .addOnSuccessListener((snap) -> {
                     if (snap == null || !java.util.Objects.equals(me,Fb.uid())) return;
                     synchronized (currentUnreadNotifIds) {
                         currentUnreadNotifIds.clear();
@@ -594,16 +618,15 @@ public class MainActivity extends Activity {
                             }
                         }
                     }
+                    liveNotifUnread = unseen;
                     Ui.setBadge(notifBadge, unseen);
                 });
 
-        if (chatReg != null) chatReg.remove();
-        chatReg = Fb.db().collection("chats")
+        Fb.db().collection("chats")
                 .whereArrayContains("participants", me)
-                // Bounded room window: an account with 400 rooms must not re-read 400 rows every
-                // time one message lands. Recent rooms carry the unread that the badge shows.
-                .limit(60)
-                .addSnapshotListener((snap, err) -> {
+                .limit(20)
+                .get()
+                .addOnSuccessListener((snap) -> {
                     if (snap == null || !java.util.Objects.equals(me,Fb.uid())) return;
                     int total = 0;
                     long chatClearedAt = Prefs.chatBadgeClearedAt(this, me);
@@ -636,13 +659,15 @@ public class MainActivity extends Activity {
                             }
                         }
                     }
+                    liveMsgUnread = total;
                     Ui.setBadge(msgBadge, total);
                 });
 
-        if (reqReg != null) reqReg.remove();
-        reqReg = Fb.db().collection("friend_requests")
+        Fb.db().collection("friend_requests")
                 .whereEqualTo("toUid", me).whereEqualTo("status", "pending")
-                .addSnapshotListener((snap, err) -> {
+                .limit(20)
+                .get()
+                .addOnSuccessListener((snap) -> {
                     synchronized (currentPendingReqIds) {
                         currentPendingReqIds.clear();
                         if (snap != null) {
@@ -803,9 +828,6 @@ public class MainActivity extends Activity {
         if (activeInstance == this) activeInstance = null;
         super.onDestroy();
         if (referralReg != null) referralReg.remove();
-        if (notifReg != null) notifReg.remove();
-        if (chatReg != null) chatReg.remove();
-        if (reqReg != null) reqReg.remove();
         App.instance.setShakeListener(null);
     }
 }

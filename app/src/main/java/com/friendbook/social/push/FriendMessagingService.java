@@ -15,6 +15,9 @@ public class FriendMessagingService extends FirebaseMessagingService {
         String actor=com.friendbook.social.core.Fb.uid();
         if (actor != null && actor.equals(data.get("toUserId")) && "message".equals(data.get("type")))
             com.friendbook.social.d1.documents.D1DocumentStore.getInstance().refreshChatFromPush(data.get("chatId"));
+        // Badge cost = zero reads: the pill is bumped locally from the push itself.
+        if (actor != null && actor.equals(data.get("toUserId")))
+            com.friendbook.social.main.MainActivity.onPushArrived(data.get("type"));
         PushManager.show(this, data);
     }
 }

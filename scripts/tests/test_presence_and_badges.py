@@ -54,11 +54,12 @@ class PresenceBadgeTest(unittest.TestCase):
         self.assertNotIn('online && r.unread == 0',source)
         self.assertIn('h.dot.setVisibility(online ? View.VISIBLE : View.GONE)',source)
         self.assertIn('h.lastActive.setVisibility(!online && seen > 0',source)
-        # STEP 7: the chat list reads presence once per open / pull-to-refresh. No watcher handle
-        # exists to close any more, and nothing polls in the background.
-        self.assertIn('Presence.peek(uid,', source)
-        self.assertNotIn('Presence.watch(uid', source)
-        self.assertIn('presenceAsked.clear()', method(source,'protected void onStop()'))
+        # STEP 7 + QUOTA: the chat list derives presence from the user documents it already reads.
+        # No watcher handle, no per-row extra read, and nothing polls in the background.
+        self.assertIn('Presence.isUserOnlineDoc(ud)', source)
+        self.assertNotIn('Presence.watch(', source)
+        self.assertNotIn('Presence.peek(', source)
+        self.assertIn('onlineUsers.clear(); lastSeenUsers.clear();', method(source,'protected void onStop()'))
     def test_chat_profile_use_the_shared_presence_policy(self):
         # STEP 7: both screens use the shared one-shot presence read (no 30s polling watcher).
         for file in ['chat/ChatActivity.java','profile/ProfileActivity.java']:

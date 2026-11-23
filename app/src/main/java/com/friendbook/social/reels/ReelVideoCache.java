@@ -346,34 +346,15 @@ public final class ReelVideoCache {
      * Silently warms the top Reels in the background shortly after app startup so the very first
      * tap on the Reels tab starts playing in ~15ms with zero cold-network wait!
      */
+    /**
+     * QUOTA: nothing is downloaded at launch any more. The old version queried the top 3 Reels and
+     * pulled several video files on every cold start, even for a user who never opened Reels —
+     * pure bandwidth and read waste. Startup now only trims the cache; bytes are fetched when the
+     * user actually opens a Reel.
+     */
     public static void warmStartupReels(final Context c) {
         if (c == null || Prefs.dataSaver(c) || !STARTUP_WARMED.compareAndSet(false, true)) return;
-        final Context appCtx = c.getApplicationContext();
-        try {
-            int warmed = 0;
-            for (Models.Post p : FastCache.getFeed()) {
-                if (p != null && "video".equals(p.mediaType) && p.mediaUrl != null && !p.mediaUrl.isEmpty()) {
-                    prefetchSingle(appCtx, p.mediaUrl);
-                    if (++warmed >= 2) break;
-                }
-            }
-            Fb.db().collection("reels")
-                    .orderBy("createdAt", Query.Direction.DESCENDING)
-                    .limit(3)
-                    .get()
-                    .addOnSuccessListener(snap -> {
-                        if (snap == null) return;
-                        List<Models.Reel> top = new ArrayList<>();
-                        for (DocumentSnapshot d : snap.getDocuments()) {
-                            if (Boolean.TRUE.equals(d.getBoolean("safetyFlagged"))) continue;
-                            Models.Reel r = Models.Reel.fromDoc(d);
-                            if (r.videoUrl != null && !r.videoUrl.isEmpty()) top.add(r);
-                        }
-                        if (!top.isEmpty()) {
-                            prefetchWindow(appCtx, top, 0);
-                        }
-                    });
-        } catch (Throwable ignored) { }
+        trimCacheIfNeeded(cacheDir(c.getApplicationContext()));
     }
 
     private static synchronized void trimCacheIfNeeded(File dir) {

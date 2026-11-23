@@ -57,24 +57,28 @@ public class ConversationsActivity extends Activity {
     private String query = "";
     private final Map<String, Models.User> userCache = new HashMap<>();
     private boolean watchingPresence;
+    /** The "Active now" strip is cached for 10 minutes; it is a strip, not a live feed. */
+    private static final long ACTIVE_NOW_TTL_MS = 10 * 60 * 1000L;
     private androidx.swiperefreshlayout.widget.SwipeRefreshLayout swipe;
-    private final Set<String> presenceAsked = new HashSet<>();
     private final Map<String, Boolean> onlineUsers = new HashMap<>();
     private final Map<String, Long> lastSeenUsers = new HashMap<>();
     private final Set<ConvAdapter.VH> boundHolders = new HashSet<>();
 
     /**
-     * STEP 7: presence on the chat list is a one-shot read. Each user is resolved once per list
-     * refresh (open or pull-to-refresh) — no 30s polling watcher, nothing running in the background.
+     * QUOTA: presence on the chat list costs ZERO extra reads. The "Active now" strip already
+     * fetched those user documents, so the green dot and "last active" line are derived from the
+     * document we are holding — no second read per row, no Cloudflare fetch, no polling watcher.
      */
     private void ensurePresence(String uid) {
-        if (!watchingPresence || uid == null || uid.isEmpty() || Ui.TEAM_USER_ID.equals(uid) || uid.equals(Fb.uid()) || !presenceAsked.add(uid)) return;
-        Presence.peek(uid, (online, lastSeen) -> {
-            if (!watchingPresence) return;
-            onlineUsers.put(uid, online); lastSeenUsers.put(uid, lastSeen);
-            renderActiveNow();
-            for (ConvAdapter.VH holder : boundHolders) if (uid.equals(holder.boundUid)) renderRowPresence(holder, online, lastSeen);
-        });
+        if (!watchingPresence || uid == null || uid.isEmpty() || Ui.TEAM_USER_ID.equals(uid) || uid.equals(Fb.uid())) return;
+        Boolean online = onlineUsers.get(uid);
+        if (online == null) return;
+        renderRowPresenceFor(uid, online, lastSeenUsers.getOrDefault(uid, 0L));
+    }
+
+    private void renderRowPresenceFor(String uid, boolean online, long lastSeen) {
+        renderActiveNow();
+        for (ConvAdapter.VH holder : boundHolders) if (uid.equals(holder.boundUid)) renderRowPresence(holder, online, lastSeen);
     }
     private void renderRowPresence(ConvAdapter.VH h, boolean online, long seen) {
         h.dot.setVisibility(online ? View.VISIBLE : View.GONE);
@@ -210,7 +214,6 @@ public class ConversationsActivity extends Activity {
         swipe = new androidx.swiperefreshlayout.widget.SwipeRefreshLayout(this);
         swipe.setOnRefreshListener(() -> {
             inboxGeneration++; inboxLoading = false; inboxCursor = null; inboxMore = true;
-            presenceAsked.clear();
             loadInboxPage(true);
         });
         swipe.addView(rv);
@@ -266,10 +269,12 @@ public class ConversationsActivity extends Activity {
         adapter.notifyDataSetChanged();
         // Dismiss only the outer icon badge; preserve every conversation's unread state.
         com.friendbook.social.main.MainActivity.clearMessagesBadgeNow();
-        // STEP 7: the "Active now" strip is read once here (open / pull-to-refresh). No live
-        // listener on users, so the chat list never refreshes itself while the user reads it.
-        presenceAsked.clear();
-        Fb.db().collection("users").limit(45).get().addOnSuccessListener(usnap -> {
+        // STEP 7 + QUOTA: the "Active now" strip is read at most once per 10 minutes (bounded 45
+        // rows) and reused from the on-device cache in between. No live listener on users.
+        long activeAt = getSharedPreferences("fb_prefs", MODE_PRIVATE).getLong("activeNowAt:" + me, 0L);
+        boolean activeFresh = System.currentTimeMillis() - activeAt < ACTIVE_NOW_TTL_MS
+                && !userCache.isEmpty();
+        if (!activeFresh) Fb.db().collection("users").limit(45).get().addOnSuccessListener(usnap -> {
             if (isFinishing() || usnap == null || !java.util.Objects.equals(me,Fb.uid())) return;
             for (DocumentSnapshot ud : usnap) {
                 Models.User u = Models.User.fromDoc(ud);
@@ -278,8 +283,11 @@ public class ConversationsActivity extends Activity {
                 if (Fb.me != null && Fb.me.blocked != null && Fb.me.blocked.contains(u.uid)) continue;
                 com.friendbook.social.core.FastCache.putUser(u);
                 userCache.put(u.uid, u);
-                ensurePresence(u.uid);
+                onlineUsers.put(u.uid, Presence.isUserOnlineDoc(ud));
+                lastSeenUsers.put(u.uid, Presence.extractLastSeenMs(ud));
             }
+            getSharedPreferences("fb_prefs", MODE_PRIVATE).edit()
+                    .putLong("activeNowAt:" + me, System.currentTimeMillis()).apply();
             renderActiveNow();
             applyFilter();
         });
@@ -430,7 +438,7 @@ public class ConversationsActivity extends Activity {
         inboxGeneration++; inboxLoading=false;
         if (reg != null) reg.remove();
         watchingPresence = false;
-        presenceAsked.clear(); onlineUsers.clear(); lastSeenUsers.clear();
+        onlineUsers.clear(); lastSeenUsers.clear();
         for (ConvAdapter.VH h : boundHolders) { h.dot.setVisibility(View.GONE); h.lastActive.setVisibility(View.GONE); }
         boundHolders.clear();
         renderActiveNow();

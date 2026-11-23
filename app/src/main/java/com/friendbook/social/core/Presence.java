@@ -39,7 +39,10 @@ public class Presence {
     /** Callback for presence updates: (online, lastSeenMs). */
     public interface PresenceCallback { void onPresence(boolean online, long lastSeen); }
 
-    public static final long HEARTBEAT_INTERVAL_MS = 30_000L; // 30 seconds
+    // QUOTA: one presence write every 30s was 120 writes/hour per open app. A heartbeat every
+    // 4 minutes keeps the user "Active now" (freshness window is 5 minutes, PresencePolicy) while
+    // cutting presence writes by 8x.
+    public static final long HEARTBEAT_INTERVAL_MS = 240_000L; // 4 minutes
     public static final long ONLINE_TTL_MS = PresencePolicy.ONLINE_TTL_MS; // 5 minutes (300s)
     private static final Handler H = new Handler(Looper.getMainLooper());
     private static final PresenceWritePolicy FIRESTORE_WRITES = new PresenceWritePolicy();

@@ -59,18 +59,53 @@ class NoBackgroundRefresh(unittest.TestCase):
     def test_presence_is_one_shot_on_every_list_screen(self):
         presence = (JAVA / 'core/Presence.java').read_text()
         self.assertIn('public static void peek(', presence)
-        for file in ['chat/ConversationsActivity.java', 'chat/ChatActivity.java',
-                     'profile/ProfileActivity.java']:
+        # Chat list: no extra read at all, the user documents it already fetched carry presence.
+        chat_list = (JAVA / 'chat/ConversationsActivity.java').read_text()
+        self.assertIn('Presence.isUserOnlineDoc(ud)', chat_list)
+        self.assertNotIn('Presence.watch(', chat_list)
+        self.assertNotIn('Presence.peek(', chat_list)
+        # Chat header + profile: a single one-shot read on open.
+        for file in ['chat/ChatActivity.java', 'profile/ProfileActivity.java']:
             source = (JAVA / file).read_text()
             self.assertIn('Presence.peek(', source, file)
             self.assertNotIn('Presence.watch(', source, file)
 
-    def test_badge_windows_are_bounded(self):
+    def test_typing_writes_are_gone_and_heartbeat_is_throttled(self):
+        chat = (JAVA / 'chat/ChatActivity.java').read_text()
+        self.assertNotIn('Presence.setTyping(', chat)
+        self.assertNotIn('watchTyping(', chat)
+        presence = (JAVA / 'core/Presence.java').read_text()
+        self.assertIn('HEARTBEAT_INTERVAL_MS = 240_000L', presence)
+        self.assertLess(240_000, 300_000)  # must stay inside PresencePolicy.ONLINE_TTL_MS
+
+    def test_nothing_is_downloaded_at_launch(self):
+        cache = (JAVA / 'reels/ReelVideoCache.java').read_text()
+        startup = cache.split('public static void warmStartupReels', 1)[1].split('private static synchronized', 1)[0]
+        self.assertNotIn('collection("reels")', startup)
+        self.assertNotIn('prefetchSingle(', startup)
+        self.assertNotIn('prefetchWindow(', startup)
+
+    def test_badge_windows_are_bounded_and_one_shot(self):
         source = (JAVA / 'main/MainActivity.java').read_text()
+        badges = source.split('private void startBadgeListeners()', 1)[1].split('private void ', 1)[0]
+        self.assertIn('.limit(30)', badges)   # unread notifications
+        self.assertIn('.limit(20)', badges)   # chat room window / pending requests
+        self.assertIn('.limit(16)', badges)   # reels
+        self.assertEqual(0, badges.count('addSnapshotListener'), 'badges must not listen')
+        # Pushes bump the pill locally instead of re-reading the tables.
+        self.assertIn('onPushArrived', source)
+        self.assertIn('MainActivity.onPushArrived(', (JAVA / 'push/FriendMessagingService.java').read_text())
         readme = (ROOT / 'scripts/loadtest/five_user_budget.py').read_text()
-        self.assertIn('.limit(30)', source)   # unread notifications badge
-        self.assertIn('.limit(60)', source)   # chat badge room window
         self.assertIn('APP_OPEN_READS', readme)
+
+    def test_main_activity_holds_no_query_listener_at_all(self):
+        self.assertEqual(0, (JAVA / 'main/MainActivity.java').read_text().count('addSnapshotListener'))
+
+    def test_feed_does_not_reload_on_like_or_comment(self):
+        home = (JAVA / 'main/HomeFragment.java').read_text()
+        watch = home.split('private void watchLatestPosts()', 1)[1].split('private void startPostsQuery', 1)[0]
+        self.assertIn("key.append(doc.getId())", watch)
+        self.assertNotIn('doc.getData()', watch)
 
 
 if __name__ == '__main__':

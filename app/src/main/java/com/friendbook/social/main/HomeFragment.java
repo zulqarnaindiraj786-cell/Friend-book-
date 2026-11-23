@@ -58,6 +58,8 @@ import java.util.Set;
 public class HomeFragment extends Fragment implements FeedAdapter.Host {
 
     private static final int PAGE = 7;
+    /** Friend graph is cached on device for 15 minutes: friends change rarely, reads are expensive. */
+    private static final long FRIEND_GRAPH_TTL_MS = 15 * 60 * 1000L;
     private static final long NOTE_TTL_MS = 24L * 3600_000L;
 
     private FeedAdapter adapter;
@@ -65,7 +67,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
     private SwipeRefreshLayout swipe;
     private TextView freshPill;
     private LinearLayout notesRow;
-    private ListenerRegistration postsReg, storiesReg, friendsReg, livesReg;
+    private ListenerRegistration postsReg, storiesReg;
     private DocumentSnapshot lastDoc;
     private boolean moreAvailable = true;
     private boolean loadingPosts, loadedPosts, pendingFeedRefresh;
@@ -511,17 +513,18 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         feedGeneration++; loadingPosts=false; storyGeneration++; loadingStories=false;
         if (postsReg != null) { postsReg.remove(); postsReg=null; }
         if (storiesReg != null) storiesReg.remove();
-        if (friendsReg != null) friendsReg.remove();
-        if (livesReg != null) livesReg.remove();
         com.friendbook.social.core.AdsConfig.setChangeListener(null);
     }
 
     // ---------- 🔴 active lives strip ----------
     private void startLivesListener() {
-        livesReg = Fb.db().collection("lives")
+        // QUOTA: live rooms refresh on Home open, not on every host heartbeat (that live listener
+        // re-read all 25 rows every few seconds while anything was live).
+        Fb.db().collection("lives")
                 .whereEqualTo("status", "live")
                 .limit(25)
-                .addSnapshotListener((snap, err) -> {
+                .get()
+                .addOnSuccessListener((snap) -> {
                     List<Map<String, Object>> lives = new ArrayList<>();
                     long now = System.currentTimeMillis();
                     if (snap != null) {
@@ -548,8 +551,29 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         String me = Fb.uid();
         if (me == null) return;
         if(!java.util.Objects.equals(friendGraphActor,me)){friendIds.clear();friendIds.add(me);friendGraphActor=me;}
-        friendsReg = Fb.db().collection("friends").whereArrayContains("participants", me)
-                .addSnapshotListener((snap, err) -> {
+        // QUOTA: the friend graph is read at most once every 15 minutes per account (bounded to 300
+        // rows), then reused from the on-device cache. The old code re-read every friendship on
+        // every change; friends change rarely, so that was pure waste on every Home open.
+        android.content.SharedPreferences sp = getActivity() == null ? null
+                : getActivity().getSharedPreferences("fb_prefs", android.content.Context.MODE_PRIVATE);
+        long cachedAt = sp == null ? 0L : sp.getLong("friendGraphAt:" + me, 0L);
+        java.util.Set<String> cachedIds = sp == null ? null : sp.getStringSet("friendGraph:" + me, null);
+        boolean freshCache = sp != null && cachedIds != null && !cachedIds.isEmpty()
+                && System.currentTimeMillis() - cachedAt < FRIEND_GRAPH_TTL_MS;
+        if (freshCache) {
+            friendIds.clear();
+            friendIds.add(me);
+            friendIds.addAll(cachedIds);
+            loadPymk();
+            renderLoadedStories();
+            if (loadedPosts && loadedPostIds.size() <= PAGE && !lastPostDocs.isEmpty())
+                consumePostsSnapshot(lastPostDocs, true, false);
+            return;
+        }
+        Fb.db().collection("friends").whereArrayContains("participants", me)
+                .limit(300)
+                .get()
+                .addOnSuccessListener((snap) -> {
                     if(snap==null || !java.util.Objects.equals(me,Fb.uid()) || !isAdded())return;
                     friendIds.clear();
                     friendIds.add(me);
@@ -558,6 +582,12 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
                             List<String> parts = Models.ChatRoom.fromDoc(d).participants;
                             for (String p : parts) if (!p.equals(me)) friendIds.add(p);
                         }
+                    }
+                    if (sp != null) {
+                        java.util.Set<String> save = new java.util.HashSet<>(friendIds);
+                        save.remove(me);
+                        sp.edit().putStringSet("friendGraph:" + me, save)
+                                .putLong("friendGraphAt:" + me, System.currentTimeMillis()).apply();
                     }
                     loadPymk();renderLoadedStories();
                     // The first feed page may arrive before the friendship graph.
@@ -677,8 +707,11 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         postsReg=Fb.db().collection("posts").orderBy("createdAt",Query.Direction.DESCENDING).limit(PAGE)
                 .addSnapshotListener((snapshot,error)->{
                     if(snapshot==null || snapshot.getMetadata().isFromCache() || !isAdded() || !java.util.Objects.equals(actor,Fb.uid()))return;
+                    // QUOTA: only the SET of post ids matters here. The old key included the whole
+                    // document body, so every like, comment or view counter tick on a visible post
+                    // restarted the entire feed listener (7-row re-read) while the user was reading.
                     StringBuilder key=new StringBuilder();
-                    for(DocumentSnapshot doc:snapshot)key.append(doc.getId()).append(':').append(String.valueOf(doc.getData())).append('\n');
+                    for(DocumentSnapshot doc:snapshot)key.append(doc.getId()).append('\n');
                     String current=key.toString();
                     if(previous[0]==null){previous[0]=current;return;}
                     if(previous[0].equals(current))return;
