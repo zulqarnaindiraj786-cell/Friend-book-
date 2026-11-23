@@ -14,10 +14,11 @@ public class OnDemandQueryCacheTest {
     static class FakeQuery extends Query {
         boolean fresh=true, missing=false;
         int networkReads;
+        long checkedMaxAge;
         final QuerySnapshot cached=new QuerySnapshot(Collections.emptyList(),null,new SnapshotMetadata(true,false));
         final QuerySnapshot server=new QuerySnapshot(Collections.emptyList(),null,new SnapshotMetadata(false,false));
         FakeQuery(){super(null,"lives");}
-        @Override public boolean hasFreshLocalPage(long age){return fresh;}
+        @Override public boolean hasFreshLocalPage(long age){checkedMaxAge=age;return fresh && age>0;}
         @Override public Task<QuerySnapshot> get(Source source){
             if(source==Source.CACHE) return missing?Tasks.forException(new Exception("evicted")):Tasks.forResult(cached);
             networkReads++;return Tasks.forResult(server);
@@ -41,4 +42,20 @@ public class OnDemandQueryCacheTest {
         q.getCachedOrFetch(false).getResult();
         assertEquals(1,q.networkReads);
     }
+    @Test public void shortSearchWindowIsRespectedAndRepeatedResultsNeedNoNetwork() {
+        FakeQuery q=new FakeQuery();
+        for(int edit=0;edit<100;edit++) assertSame(q.cached,q.getCachedOrFetch(false,300000L).getResult());
+        assertEquals(300000L,q.checkedMaxAge);
+        assertEquals(0,q.networkReads);
+        q.fresh=false;
+        assertSame(q.server,q.getCachedOrFetch(false,300000L).getResult());
+        assertEquals(1,q.networkReads);
+    }
+    @Test public void zeroReuseWindowAndExplicitSearchRefreshFetch() {
+        FakeQuery q=new FakeQuery();
+        assertSame(q.server,q.getCachedOrFetch(false,0L).getResult());
+        assertSame(q.server,q.getCachedOrFetch(true,300000L).getResult());
+        assertEquals(2,q.networkReads);
+    }
+
 }

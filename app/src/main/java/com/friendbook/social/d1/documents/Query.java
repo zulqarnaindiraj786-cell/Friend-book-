@@ -255,7 +255,12 @@ public class Query {
      * Cache keys are account-scoped. Pull-to-refresh must pass force=true.
      */
     public Task<QuerySnapshot> getCachedOrFetch(boolean force) {
-        if (force || !hasFreshLocalPage(Long.MAX_VALUE)) return get(Source.SERVER);
+        return getCachedOrFetch(force,Long.MAX_VALUE);
+    }
+
+    /** Search results can use a short reuse window instead of indefinite list reuse. */
+    public Task<QuerySnapshot> getCachedOrFetch(boolean force,long maxAgeMs) {
+        if (force || !hasFreshLocalPage(maxAgeMs)) return get(Source.SERVER);
         return get(Source.CACHE).continueWithTask(Runnable::run, task ->
                 task.isSuccessful() ? com.google.android.gms.tasks.Tasks.forResult(task.getResult())
                         : get(Source.SERVER));
