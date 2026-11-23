@@ -167,17 +167,21 @@ export async function appDocuments(request, env, identity) {
         SELECT path,doc_id,document_json,update_time AS updated_at,1 AS canonical FROM friendbook_cf_firestore_documents
           WHERE collection_id='chats' AND parent_path='chats'
         ORDER BY updated_at DESC LIMIT ?`).bind(limit).all() : await env.DB.prepare(`
-        SELECT doc_id,document_json,update_time AS updated_at FROM friendbook_cf_firestore_documents
+        SELECT path,doc_id,document_json,update_time AS updated_at,1 AS canonical FROM friendbook_cf_firestore_documents
           WHERE parent_path=?1 ORDER BY updated_at DESC LIMIT ?2`).bind(collection,limit).all();
       let documents = [];
+      const requestRoomReads = new Map();
       for (const row of rows?.results || []) {
         const docPath = `${collection}/${row.doc_id}`;
-        const currentChat = collection==='chats' && row.canonical===1 && row.path===docPath && validSegment(row.doc_id);
-        const current = currentChat || joinedRoot ? row : await canonicalRoot(env.DB, docPath, row);
+        const canonicalSnapshot = row.canonical===1 && row.path===docPath && validSegment(row.doc_id);
+        const currentChat = collection==='chats' && canonicalSnapshot;
+        // The list query already loaded this exact canonical root. Avoid an
+        // additional lookup per row; content ACLs below still run unchanged.
+        const current = canonicalSnapshot || joinedRoot ? row : await canonicalRoot(env.DB, docPath, row);
         const doc = toPlainDocument(current.document_json, row.doc_id);
         if (doc && (collection !== 'payments' || canReadPayment(env,uid,doc)) && (collection !== 'friend_requests' || canReadFriendRequest(uid,doc)) && canReadNotification(`${collection}/${row.doc_id}`, uid, doc)) {
           const view = collection === 'groups' ? groupReadView(uid,doc,await trustedGroupOwner(env.DB,`${collection}/${row.doc_id}`)) : collection === 'friends' ? friendshipReadView(uid,doc) : profileReadView(`${collection}/${row.doc_id}`, uid, doc, isPaymentAdmin(env,uid));
-          if (view !== null && (currentChat ? storedChatMember(current.document_json,uid) : await chatReadAllowed(env.DB,docPath,uid,doc))) documents.push(view);
+          if (view !== null && (currentChat ? storedChatMember(current.document_json,uid) : await chatReadAllowed(env.DB,docPath,uid,doc,requestRoomReads))) documents.push(view);
         }
       }
       if (['posts','reels','stories','lives'].includes(collection)) {
@@ -238,7 +242,10 @@ export async function appDocuments(request, env, identity) {
     if (['users','posts','reels','events','pages','lives'].includes(collection)) {
       // Older clients use /v1/docs. Share the guarded canonical mutation with
       // newer clients so concurrent edits and relationship changes are not lost.
-      const data={...incoming,updatedAt:now};
+      // The guarded canonical route owns update_time. Injecting a new JSON
+      // updatedAt here turned identical legacy-client saves into real writes,
+      // defeating its existing no-op/mirror-repair checks.
+      const data={...incoming};
       delete data.id;
       const {firestoreDocuments}=await import('./firestore-documents.js');
       const forwarded=new Request(`${url.origin}/v1/firestore/document?path=${encodeURIComponent(docPath)}`,{

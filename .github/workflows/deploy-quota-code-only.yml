@@ -1,4 +1,4 @@
-# Code-only rollout: request-local feed ACL dependency coalescing; no D1 schema changes.
+# Code-only rollout: redundant legacy API reads and timestamp-only writes; no D1 schema changes.
 name: Deploy quota fixes without database migrations
 on:
   push:
