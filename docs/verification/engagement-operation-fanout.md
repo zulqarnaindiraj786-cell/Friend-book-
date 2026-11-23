@@ -25,4 +25,4 @@ The new outer pending-operation registry shares identical GET/no-body operations
 | Posts lists | Exact whole-query flights; initial pager sharing; short search-head reuse | Device behavior and production usage |
 | Users lists | Exact whole-query flights; initial pager sharing; short repeated-prefix reuse | Device behavior and production usage |
 
-Outstanding source investigation includes raw delta-head refresh operations, which still have a separate merge path, and whether other list surfaces need existing bundled responses. This record does not assert all redundant calls are gone. No APK/AAB, rollout, migration or merge was performed. <=100,000 reads/<=5,000 writes per representative day remains unverified.
+The raw delta-head refresh bypass was subsequently fixed and verified at 14127f9; see `delta-head-operation-fanout.md`. Whether other list surfaces need existing bundled responses still needs investigation. This record does not assert all redundant calls are gone. No APK/AAB, rollout, migration or merge was performed. <=100,000 reads/<=5,000 writes per representative day remains unverified.
