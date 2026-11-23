@@ -37,6 +37,7 @@ See `home-on-demand-budget.json` and run `python3 -m scripts.loadtest.five_user_
 ## Verification
 - Worker: `npm test`: 234/234 passed.
 - Python: `python3 -m unittest discover -s scripts/tests`: 321 passed.
-- Android: GitHub Actions `Android unit tests` compiles debug Java and executes JVM tests;
-  latest commit run must be checked before marking complete. New behavioral tests cover empty
-  cache, forced refresh, invalidation and eviction. No device-level scrolling/visual test claimed.
+- Android debug Java compilation + JVM tests: **PASS**, commit `8591263`,
+  https://github.com/zulqarnaindiraj786-cell/Friend-book-/actions/runs/45108319908
+  New behavioral tests cover empty cache, forced refresh, invalidation and eviction.
+  No device-level scrolling/visual test claimed.
