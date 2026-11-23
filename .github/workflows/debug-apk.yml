@@ -2,7 +2,7 @@ name: Build FriendBook D1 Debug APK
 
 on:
   push:
-    branches: ['arena/f6bf61bd-friend-book']
+    branches: ['arena/f6bf61bd-friend-book', 'arena/b52bc74d-friend-book']
     paths:
       - 'app/**'
       - 'gradle.properties'
