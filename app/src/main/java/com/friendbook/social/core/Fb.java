@@ -187,12 +187,20 @@ public class Fb {
      * 2. Local Firestore Disk Cache (`Source.CACHE`) → <2ms offline/2G return!
      * 3. Server fallback only on cold miss (and stores into RAM + Disk cache).
      */
+    private static final ProfileReadFlights<java.util.List<String>,Models.User> USER_READS = new ProfileReadFlights<>();
+
     public static Task<Models.User> getUser(String uid) {
         if (uid == null || uid.isEmpty()) return Tasks.forResult(null);
         Models.User ram = FastCache.getUser(uid);
         if (ram != null) return Tasks.forResult(ram);
-
         final String actor=Fb.uid();
+        // Share the complete async disk->network lookup, not only the HTTP
+        // interval. Independent caller callbacks may otherwise enqueue another
+        // network read after the first response has already left transport.
+        return USER_READS.read(java.util.Arrays.asList(actor,uid),()->readUserCacheFirst(uid,actor));
+    }
+
+    private static Task<Models.User> readUserCacheFirst(String uid,String actor) {
         TaskCompletionSource<Models.User> tcs = new TaskCompletionSource<>();
         db().collection("users").document(uid).get(Source.CACHE)
                 .addOnSuccessListener(d -> {
