@@ -1,3 +1,4 @@
+import { writeAttribution } from './write-attribution.js';
 import { canReadPayment, isPaymentAdmin } from './payment-access.js';
 import { canReadFriendRequest, friendshipReadView, groupReadView, trustedGroupOwner } from './social-access.js';
 import { supportedDocumentPath, supportedCollectionPath, contentReadAllowed, contentWriteAllowed } from './document-policy.js';
@@ -278,7 +279,7 @@ export async function appDocuments(request, env, identity) {
       const serialized = JSON.stringify(merged);
       if (serialized.length > 95_000) return json({ error: 'Document too large' }, 413);
       const appWrite = env.DB.prepare(
-        `INSERT INTO friendbook_cf_documents(path, collection, doc_id, owner_uid, document_json, updated_at)
+        `INSERT INTO friendbook_cf_documents AS ${writeAttribution('legacy',docPath)}(path, collection, doc_id, owner_uid, document_json, updated_at)
          VALUES (?, ?, ?, ?, ?, ?)
          ON CONFLICT(path) DO UPDATE SET
            owner_uid = excluded.owner_uid,
@@ -288,7 +289,7 @@ export async function appDocuments(request, env, identity) {
       const firestoreDoc = { ...merged };
       delete firestoreDoc.id;
       const firestoreWrite = env.DB.prepare(
-        `INSERT INTO friendbook_cf_firestore_documents(path, parent_path, collection_id, doc_id, owner_uid, document_json, create_time, update_time)
+        `INSERT INTO friendbook_cf_firestore_documents AS ${writeAttribution('legacy',docPath)}(path, parent_path, collection_id, doc_id, owner_uid, document_json, create_time, update_time)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(path) DO UPDATE SET owner_uid=excluded.owner_uid, document_json=excluded.document_json, update_time=excluded.update_time`
       ).bind(docPath, collection, collection, docId, ownerUid, JSON.stringify(firestoreDoc),

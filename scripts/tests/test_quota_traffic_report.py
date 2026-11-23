@@ -105,3 +105,11 @@ class TrafficReport(unittest.TestCase):
         self.assertTrue(all(len(line)<4000 for line in lines))
         self.assertNotIn('SECRET',''.join(lines))
         self.assertNotIn('largest_shapes',lines[0])
+
+    def test_allowlisted_writer_family_survives_without_user_or_arbitrary_alias_data(self):
+        shape=p.safe_shape("INSERT INTO friendbook_cf_documents AS quota_writer_document_users(path) VALUES ('SECRET')")
+        self.assertEqual(shape['writer_families'],['document:users'])
+        self.assertNotIn('SECRET',str(shape))
+        unknown=p.safe_shape('INSERT INTO friendbook_cf_documents AS quota_writer_PRIVATE_users(path) VALUES (?)')
+        self.assertNotIn('writer_families',unknown)
+        self.assertNotIn('PRIVATE',str(unknown))

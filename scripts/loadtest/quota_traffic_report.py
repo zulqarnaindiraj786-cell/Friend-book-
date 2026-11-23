@@ -83,7 +83,16 @@ def safe_shape(sql):
         ('friendbook_cf_fcm_device_claims_v2','fcm_claims'),
         ('friendbook_cf_comments','comments'),
         ('friendbook_cf_reactions','reactions')) if re.search(r'\b'+table+r'\b',q)]
-    return {'operation':op.group(1).upper() if op else 'OTHER','tables':tables,'roots':roots,'features':features}
+    # Recognize only aliases emitted from the Worker's fixed vocabulary.
+    # Never echo an arbitrary SQL identifier or assume it identifies a device.
+    callers=[]
+    for writer in ('document','chat_root','chat_message','broadcast','legacy','batch','other'):
+        for root in ('users','posts','reels','stories','chats','messages','groups','pages','notifications','lives','other'):
+            if re.search(r'\bas quota_writer_'+writer+'_'+root+r'\b',q):
+                callers.append(writer+':'+root)
+    result={'operation':op.group(1).upper() if op else 'OTHER','tables':tables,'roots':roots,'features':features}
+    if callers: result['writer_families']=callers
+    return result
 
 
 def summarize_shapes(groups,metric):

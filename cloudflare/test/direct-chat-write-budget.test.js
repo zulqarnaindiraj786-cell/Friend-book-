@@ -34,6 +34,7 @@ test('existing direct room commits canonical and mirror without temporary guard 
   const f=fixture();try {
     const r=await f.patch();assert.equal(r.status,200,await r.text());
     assert.equal(f.batches.length,1);assert.equal(f.batches[0].length,2);
+    assert.ok(f.batches[0].every(q=>q.includes('AS quota_writer_chat_root_chats')));
     assert.ok(f.batches[0].every(q=>!q.includes('friendbook_cf_social_guards')));
     for(const table of ['friendbook_cf_firestore_documents','friendbook_cf_documents'])
       assert.equal(JSON.parse(f.sql.prepare(`SELECT document_json FROM ${table}`).get().document_json).lastMessage,'new');

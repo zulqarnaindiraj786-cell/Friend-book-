@@ -1,3 +1,4 @@
+import { writeAttribution } from './write-attribution.js';
 import { accountStatus } from './account-access.js';
 import { pushCommittedChat } from './fcm-push.js';
 import { profileAudience } from './profile-audience.js';
@@ -862,11 +863,11 @@ async function writeRow(db, path, doc, now, existing, guarded = false, inlineGua
   // A changed snapshot makes path NULL and aborts the whole mirror transaction.
   // Legacy/missing documents retain the original absence/conversion guards.
   const writes = [inline ? db.prepare(
-    `INSERT INTO friendbook_cf_firestore_documents(path, parent_path, collection_id, doc_id, owner_uid, document_json, create_time, update_time)
+    `INSERT INTO friendbook_cf_firestore_documents AS ${writeAttribution('document',path)}(path, parent_path, collection_id, doc_id, owner_uid, document_json, create_time, update_time)
      VALUES (CASE WHEN (SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?1)=?2 THEN ?1 ELSE NULL END,?3,?4,?5,?6,?7,?8,?9)
      ON CONFLICT(path) DO UPDATE SET owner_uid = excluded.owner_uid, document_json = excluded.document_json, update_time = excluded.update_time`
   ).bind(path,existing.document_json,parent,coll,id,owner,serialized,createTime,now) : db.prepare(
-    `INSERT INTO friendbook_cf_firestore_documents(path, parent_path, collection_id, doc_id, owner_uid, document_json, create_time, update_time)
+    `INSERT INTO friendbook_cf_firestore_documents AS ${writeAttribution('document',path)}(path, parent_path, collection_id, doc_id, owner_uid, document_json, create_time, update_time)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(path) DO UPDATE SET owner_uid = excluded.owner_uid, document_json = excluded.document_json, update_time = excluded.update_time`
   ).bind(path, parent, coll, id, owner, serialized, createTime, now)];
@@ -877,7 +878,7 @@ async function writeRow(db, path, doc, now, existing, guarded = false, inlineGua
     const appDoc = JSON.stringify({ ...doc, id });
     const appOwner = owner || (coll === 'users' ? id : '');
     writes.push(db.prepare(
-      `INSERT INTO friendbook_cf_documents(path, collection, doc_id, owner_uid, document_json, updated_at)
+      `INSERT INTO friendbook_cf_documents AS ${writeAttribution('document',path)}(path, collection, doc_id, owner_uid, document_json, updated_at)
        VALUES (?, ?, ?, ?, ?, ?)
        ON CONFLICT(path) DO UPDATE SET owner_uid=excluded.owner_uid, document_json=excluded.document_json, updated_at=excluded.updated_at`
     ).bind(path, coll, id, appOwner, appDoc, now));
@@ -2267,10 +2268,10 @@ function broadcastPayload(env, data) {
 }
 function broadcastWrites(db,path,data,owner,row,now) {
   const parent=parentPath(path), collection=collectionIdOf(path), id=docIdOf(path);
-  const writes=[db.prepare(`INSERT INTO friendbook_cf_firestore_documents(path,parent_path,collection_id,doc_id,owner_uid,document_json,create_time,update_time)
+  const writes=[db.prepare(`INSERT INTO friendbook_cf_firestore_documents AS ${writeAttribution('broadcast',path)}(path,parent_path,collection_id,doc_id,owner_uid,document_json,create_time,update_time)
     VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET owner_uid=excluded.owner_uid,document_json=excluded.document_json,update_time=excluded.update_time`)
     .bind(path,parent,collection,id,owner,JSON.stringify(data),row?.create_time||now,now)];
-  if (isRootDocument(path)) writes.push(db.prepare(`INSERT INTO friendbook_cf_documents(path,collection,doc_id,owner_uid,document_json,updated_at)
+  if (isRootDocument(path)) writes.push(db.prepare(`INSERT INTO friendbook_cf_documents AS ${writeAttribution('broadcast',path)}(path,collection,doc_id,owner_uid,document_json,updated_at)
     VALUES (?,?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET owner_uid=excluded.owner_uid,document_json=excluded.document_json,updated_at=excluded.updated_at`)
     .bind(path,collection,id,owner,JSON.stringify({...data,id}),now));
   return writes;
@@ -2523,7 +2524,7 @@ async function writeChatMessage(db,path,doc,now,existing,auth,uid,deleted=false)
     if (serialized.length>1_800_000) return json({error:'Document too large'},413);
     // The INSERT itself checks room membership's snapshot and both possible
     // message stores. No guard rows are needed for a single new nested message.
-    const inserted=await db.prepare(`INSERT INTO friendbook_cf_firestore_documents
+    const inserted=await db.prepare(`INSERT INTO friendbook_cf_firestore_documents AS ${writeAttribution('chat_message',path)}
       (path,parent_path,collection_id,doc_id,owner_uid,document_json,create_time,update_time)
       SELECT ?1,?2,?3,?4,?5,?6,?7,?7
       WHERE EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents WHERE path=?8 AND document_json=?9)
@@ -2559,8 +2560,8 @@ async function writeChatMessage(db,path,doc,now,existing,auth,uid,deleted=false)
   } else {
     const serialized=JSON.stringify(doc), owner=ownerOf(doc,existing?.owner_uid||uid), created=existing?.create_time||now;
     if (serialized.length>1_800_000) return json({error:'Document too large'},413);
-    statements.push(db.prepare(`INSERT INTO friendbook_cf_firestore_documents(path,parent_path,collection_id,doc_id,owner_uid,document_json,create_time,update_time) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET owner_uid=excluded.owner_uid,document_json=excluded.document_json,update_time=excluded.update_time`).bind(path,parent,coll,id,owner,serialized,created,now));
-    if (isRootDocument(path)) statements.push(db.prepare(`INSERT INTO friendbook_cf_documents(path,collection,doc_id,owner_uid,document_json,updated_at) VALUES (?,?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET owner_uid=excluded.owner_uid,document_json=excluded.document_json,updated_at=excluded.updated_at`).bind(path,coll,id,owner,JSON.stringify({...doc,id}),now));
+    statements.push(db.prepare(`INSERT INTO friendbook_cf_firestore_documents AS ${writeAttribution('chat_message',path)}(path,parent_path,collection_id,doc_id,owner_uid,document_json,create_time,update_time) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET owner_uid=excluded.owner_uid,document_json=excluded.document_json,update_time=excluded.update_time`).bind(path,parent,coll,id,owner,serialized,created,now));
+    if (isRootDocument(path)) statements.push(db.prepare(`INSERT INTO friendbook_cf_documents AS ${writeAttribution('chat_message',path)}(path,collection,doc_id,owner_uid,document_json,updated_at) VALUES (?,?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET owner_uid=excluded.owner_uid,document_json=excluded.document_json,updated_at=excluded.updated_at`).bind(path,coll,id,owner,JSON.stringify({...doc,id}),now));
   }
   statements.push(db.prepare('DELETE FROM friendbook_cf_social_guards').bind());
   await db.batch(statements);
@@ -2632,16 +2633,16 @@ async function writeChatRoot(db,path,doc,now,row,uid,{canonicalOnly=false}={}) {
   const id=docIdOf(path), data=JSON.stringify(doc);
   if (data.length>1_800_000) return json({error:'Document too large'},413);
   const owner=ownerOf(doc,row?.owner_uid||uid), createTime=row?.create_time||now;
-  const canonical=inline ? db.prepare(`INSERT INTO friendbook_cf_firestore_documents
+  const canonical=inline ? db.prepare(`INSERT INTO friendbook_cf_firestore_documents AS ${writeAttribution('chat_root',path)}
     (path,parent_path,collection_id,doc_id,owner_uid,document_json,create_time,update_time)
     VALUES (CASE WHEN (SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?1)=?2
       AND (SELECT update_time FROM friendbook_cf_firestore_documents WHERE path=?1)=?3
       THEN ?1 ELSE NULL END,'chats','chats',?4,?5,?6,?7,?8)
     ON CONFLICT(path) DO UPDATE SET owner_uid=excluded.owner_uid,document_json=excluded.document_json,update_time=excluded.update_time`)
     .bind(path,row.document_json,row.update_time,id,owner,data,createTime,now)
-    : db.prepare(`INSERT INTO friendbook_cf_firestore_documents(path,parent_path,collection_id,doc_id,owner_uid,document_json,create_time,update_time) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET owner_uid=excluded.owner_uid,document_json=excluded.document_json,update_time=excluded.update_time`).bind(path,'chats','chats',id,owner,data,createTime,now);
+    : db.prepare(`INSERT INTO friendbook_cf_firestore_documents AS ${writeAttribution('chat_root',path)}(path,parent_path,collection_id,doc_id,owner_uid,document_json,create_time,update_time) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET owner_uid=excluded.owner_uid,document_json=excluded.document_json,update_time=excluded.update_time`).bind(path,'chats','chats',id,owner,data,createTime,now);
   await db.batch([...guards,...ledger.guards,...ledger.writes,canonical,
-    ...(canonicalOnly ? [] : [db.prepare(`INSERT INTO friendbook_cf_documents(path,collection,doc_id,owner_uid,document_json,updated_at) VALUES (?,?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET owner_uid=excluded.owner_uid,document_json=excluded.document_json,updated_at=excluded.updated_at`).bind(path,'chats',id,owner,JSON.stringify({...doc,id}),now)]),
+    ...(canonicalOnly ? [] : [db.prepare(`INSERT INTO friendbook_cf_documents AS ${writeAttribution('chat_root',path)}(path,collection,doc_id,owner_uid,document_json,updated_at) VALUES (?,?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET owner_uid=excluded.owner_uid,document_json=excluded.document_json,updated_at=excluded.updated_at`).bind(path,'chats',id,owner,JSON.stringify({...doc,id}),now)]),
     ...(!inline || ledger.guards.length ? [db.prepare('DELETE FROM friendbook_cf_social_guards').bind()] : [])]);
   return json({exists:true,id,path,parent:'chats',collection:'chats',data:doc,createTime,updateTime:now});
 }
@@ -3641,7 +3642,7 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0, ct
         // The first write checks both authorized snapshots inside the same D1
         // transaction. A missing/changed message or room forces a constraint
         // failure and rolls back the whole batch, including the unread reset.
-        statements.push(db.prepare(`INSERT INTO friendbook_cf_firestore_documents
+        statements.push(db.prepare(`INSERT INTO friendbook_cf_firestore_documents AS quota_writer_batch_chats
           (path,parent_path,collection_id,doc_id,owner_uid,document_json,create_time,update_time)
           VALUES (CASE WHEN EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents WHERE path=?1 AND document_json=?2)
             AND EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents WHERE path=?3 AND document_json=?4)
@@ -3659,7 +3660,7 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0, ct
         // stores. A failed check violates path's NOT NULL constraint, rolling
         // back the whole D1 batch including the room update. No guard row is
         // inserted or deleted, and a retry redoes reads, transforms and ACLs.
-        statements.push(db.prepare(`INSERT INTO friendbook_cf_firestore_documents
+        statements.push(db.prepare(`INSERT INTO friendbook_cf_firestore_documents AS quota_writer_batch_chats
           (path,parent_path,collection_id,doc_id,owner_uid,document_json,create_time,update_time)
           VALUES (CASE WHEN EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents WHERE path=?1 AND document_json=?2)
             AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents WHERE path=?3) THEN ?3 ELSE NULL END,?4,?5,?6,?7,?8,?9,?9)`)
@@ -3667,7 +3668,7 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0, ct
         const roomOwner=ownerOf(roomEntry.doc,roomEntry.existingRow.owner_uid||uid);
         statements.push(db.prepare(`UPDATE friendbook_cf_firestore_documents SET owner_uid=?,document_json=?,update_time=? WHERE path=?`)
           .bind(roomOwner,roomJson,now,roomPath));
-        if (!canonicalOnlyRoom(roomPath,roomEntry)) statements.push(db.prepare(`INSERT INTO friendbook_cf_documents(path,collection,doc_id,owner_uid,document_json,updated_at)
+        if (!canonicalOnlyRoom(roomPath,roomEntry)) statements.push(db.prepare(`INSERT INTO friendbook_cf_documents AS quota_writer_batch_chats(path,collection,doc_id,owner_uid,document_json,updated_at)
           VALUES (?,?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET owner_uid=excluded.owner_uid,document_json=excluded.document_json,updated_at=excluded.updated_at`)
           .bind(roomPath,'chats',docIdOf(roomPath),roomOwner,JSON.stringify({...roomEntry.doc,id:docIdOf(roomPath)}),now));
       } else {
@@ -3711,7 +3712,7 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0, ct
             const serialized = JSON.stringify(entry.doc);
             if (serialized.length > 1_800_000) return json({ error: 'Document too large' }, 413);
             statements.push(db.prepare(
-              `INSERT INTO friendbook_cf_firestore_documents(path, parent_path, collection_id, doc_id, owner_uid, document_json, create_time, update_time)
+              `INSERT INTO friendbook_cf_firestore_documents AS ${writeAttribution('batch',p)}(path, parent_path, collection_id, doc_id, owner_uid, document_json, create_time, update_time)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(path) DO UPDATE SET owner_uid = excluded.owner_uid, document_json = excluded.document_json, update_time = excluded.update_time`
             ).bind(p, parent, coll, id, owner, serialized, createTime, now));
@@ -3719,7 +3720,7 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0, ct
               const appDoc = JSON.stringify({ ...entry.doc, id });
               const appOwner = owner || (coll === 'users' ? id : '');
               statements.push(db.prepare(
-                `INSERT INTO friendbook_cf_documents(path, collection, doc_id, owner_uid, document_json, updated_at)
+                `INSERT INTO friendbook_cf_documents AS ${writeAttribution('batch',p)}(path, collection, doc_id, owner_uid, document_json, updated_at)
                  VALUES (?, ?, ?, ?, ?, ?)
                  ON CONFLICT(path) DO UPDATE SET owner_uid=excluded.owner_uid, document_json=excluded.document_json, updated_at=excluded.updated_at`
               ).bind(p, coll, id, appOwner, appDoc, now));

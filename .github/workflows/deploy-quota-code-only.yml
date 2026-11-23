@@ -1,4 +1,4 @@
-# Code-only rollout: bounded inbox documents and atomic direct-room guard-write removal.
+# Code-only rollout: preserve tested fixes; add fixed-vocabulary write-family SQL aliases.
 name: Deploy quota fixes without database migrations
 on:
   push:
