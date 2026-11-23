@@ -1,4 +1,4 @@
-# Code-only rollout: reuse call-signaling request profiles; keep media renewal authorization fresh.
+# Code-only rollout: avoid inserting absent-reaction NULL tombstones; preserve legacy history transitions.
 name: Deploy quota fixes without database migrations
 on:
   push:

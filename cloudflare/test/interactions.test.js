@@ -670,3 +670,44 @@ test('multi-type reaction summaries retain viewer, ordering and compact acknowle
   const removed=await (await call(f.env,'reactions','PUT',{type:null},{query:'?response=reaction'})).json();
   assert.deepEqual(removed.types,expected.filter(x=>x.type!=='like').map(x=>({...x,mine:0})));
 });
+
+test('clearing an absent post or comment reaction is a zero-change acknowledged operation',async t=>{
+ const f=fixture();t.after(f.close);
+ assert.equal((await call(f.env,'comments','POST',{id:'clear-test',text:'keep'})).status,200);
+ const changes=()=>f.sql.prepare('SELECT total_changes() n').get().n;
+ const clearPost=()=>call(f.env,'reactions','PUT',{type:null},{query:'?response=reaction'});
+ const clearComment=()=>call(f.env,'comments','PUT',{id:'clear-test',op:'react',type:null});
+ for(let i=0;i<2;i++) {
+   const before=changes();
+   const post=await clearPost();assert.equal(post.status,200);assert.deepEqual((await post.json()).types,[]);
+   const comment=await clearComment();assert.equal(comment.status,200);
+   const saved=(await comment.json()).comment;assert.equal(saved.likes,0);assert.deepEqual(saved.reactions,{});
+   assert.equal(changes(),before,'no tombstone inserted for a reaction that never existed');
+ }
+ assert.equal(f.sql.prepare('SELECT COUNT(*) n FROM friendbook_cf_reactions').get().n,0);
+ assert.equal(f.sql.prepare('SELECT COUNT(*) n FROM friendbook_cf_comment_reactions').get().n,0);
+ for(const type of ['like','love',null,'wow',null]) {
+   const post=await call(f.env,'reactions','PUT',{type},{query:'?response=reaction'});
+   assert.equal(post.status,200);assert.deepEqual((await post.json()).types,type?[{type,count:1,mine:1}]:[]);
+   const comment=await call(f.env,'comments','PUT',{id:'clear-test',op:'react',type});
+   assert.equal(comment.status,200);const saved=(await comment.json()).comment;
+   assert.equal(saved.likes,type?1:0);assert.deepEqual(saved.reactions,type?{user1:type}:{});
+ }
+ const before=changes();await clearPost();await clearComment();assert.equal(changes(),before,'existing null tombstones also remain no-ops');
+ assert.equal((await call(f.env,'reactions','PUT',{type:null},{authorize:async()=>false})).status,403);
+ assert.equal((await call(f.env,'comments','PUT',{id:'missing',op:'react',type:null})).status,404);
+});
+
+test('clearing historical unknown reactions preserves the explicit timestamp transition',async t=>{
+ const f=fixture();t.after(f.close);
+ f.sql.prepare('INSERT INTO friendbook_cf_reactions VALUES (?,?,?,?)').run('posts/p1','user1','like',0);
+ f.sql.prepare('INSERT INTO friendbook_cf_reaction_history VALUES (?,?,?)').run('posts/p1','user1',0);
+ const response=await call(f.env,'reactions','PUT',{type:null},{query:'?response=reaction'});
+ assert.equal(response.status,200);assert.deepEqual((await response.json()).types,[]);
+ assert.equal(f.sql.prepare('SELECT timestamp_known FROM friendbook_cf_reaction_history').get().timestamp_known,1);
+ const saved=f.sql.prepare('SELECT type,updated_at FROM friendbook_cf_reactions').get();
+ assert.equal(saved.type,null);assert.ok(saved.updated_at>0);
+ const before=f.sql.prepare('SELECT total_changes() n').get().n;
+ assert.equal((await call(f.env,'reactions','PUT',{type:null},{query:'?response=reaction'})).status,200);
+ assert.equal(f.sql.prepare('SELECT total_changes() n').get().n,before);
+});

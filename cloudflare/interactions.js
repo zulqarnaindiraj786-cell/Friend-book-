@@ -157,7 +157,10 @@ export async function interactions(request, env, identity, match, authorize = au
         // with the reaction when the user performs a fresh action.
         const writes = [
           db.prepare(`INSERT INTO friendbook_cf_reactions(resource,uid,type,updated_at)
-            VALUES (?,?,?,?) ON CONFLICT(resource,uid) DO UPDATE SET type=excluded.type,updated_at=excluded.updated_at
+            SELECT ?1,?2,?3,?4 WHERE ?3 IS NOT NULL
+              OR EXISTS (SELECT 1 FROM friendbook_cf_reactions WHERE resource=?1 AND uid=?2)
+              OR EXISTS (SELECT 1 FROM friendbook_cf_reaction_history WHERE resource=?1 AND uid=?2 AND timestamp_known=0)
+            ON CONFLICT(resource,uid) DO UPDATE SET type=excluded.type,updated_at=excluded.updated_at
             WHERE friendbook_cf_reactions.type IS NOT excluded.type OR EXISTS (
               SELECT 1 FROM friendbook_cf_reaction_history h WHERE h.resource=excluded.resource AND h.uid=excluded.uid AND h.timestamp_known=0
             )`)
