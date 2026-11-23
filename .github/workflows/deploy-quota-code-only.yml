@@ -1,3 +1,4 @@
+# Code-only rollout: unread notification exception scoping; no D1 schema changes.
 name: Deploy quota fixes without database migrations
 on:
   push:

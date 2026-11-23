@@ -1510,7 +1510,7 @@ async function boundedNotificationPage(db,uid,spec) {
       return db.prepare(`SELECT 1 AS hit FROM ${table} a WHERE ${where} LIMIT 1`).bind(...args).first();
     }
   };
-  const canonicalBad=await probe('friendbook_cf_firestore_documents','idx_cf_notif_exceptions',`parent_path='notifications'${byRecipient}
+  const canonicalBad=await probe('friendbook_cf_firestore_documents','idx_cf_notif_exceptions',`parent_path='notifications'${byRecipient}${unreadOnly}
       AND (doc_id GLOB '*[^ -~]*' OR path<>'notifications/'||doc_id OR ${standard})`,recipientArgs);
   if (canonicalBad) return null;
   const rank=`CASE WHEN json_type(a.document_json,'$.createdAt') IN ('integer','real') THEN 2 ELSE 4 END`;
