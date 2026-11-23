@@ -205,3 +205,10 @@ class TrafficReport(unittest.TestCase):
             if query in coverage:
                 self.assertEqual(p.category(query+' AND PRIVATE_DIFFERENCE=1'),'application_or_unattributed')
         self.assertEqual(p.category('SELECT COUNT(*) FROM friendbook_cf_firestore_documents'),'application_or_unattributed')
+
+
+    def test_structural_scan_labels_never_echo_arbitrary_aliases_or_literals(self):
+        shape=p.safe_shape("SELECT COUNT(*) AS canonical_count, SUM(x) AS PRIVATE_ALIAS FROM friendbook_cf_documents LEFT JOIN friendbook_cf_firestore_documents ON 1=1 WHERE x='PRIVATE_VALUE' GROUP BY x LIMIT 1")
+        self.assertEqual(shape['recognized_aliases'],['canonical_count'])
+        self.assertTrue({'count_aggregate','sum_aggregate','grouped','left_join','row_limit'} <= set(shape['features']))
+        self.assertNotIn('PRIVATE',str(shape))

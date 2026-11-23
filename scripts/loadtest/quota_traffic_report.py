@@ -149,7 +149,11 @@ def safe_shape(sql):
         ('idx_cf_canonical_comment_page_','historical_comment_page'),
         ('count(*) as n from friendbook_cf_firestore_documents','historical_comment_count'),
         ('on conflict','upsert'),('do nothing','conflict_do_nothing'),
-        ('values (case when','snapshot_guarded_insert')]
+        ('values (case when','snapshot_guarded_insert'),
+        ('count(','count_aggregate'),('sum(','sum_aggregate'),('group by','grouped'),
+        ('left join','left_join'),('not exists','anti_join'),(' union ','compound_select'),
+        ('limit ','row_limit'),('json_each(','json_array_iteration'),
+        ('json_extract(','json_field_predicate')]
         if token in q]
     tables=[label for table,label in (
         ('friendbook_cf_firestore_documents','canonical_documents'),
@@ -168,6 +172,11 @@ def safe_shape(sql):
                 callers.append(writer+':'+root)
     result={'operation':op.group(1).upper() if op else 'OTHER','tables':tables,'roots':roots,'features':features}
     if callers: result['writer_families']=callers
+    # Fixed diagnostic labels only, never arbitrary aliases or SQL text.
+    aliases=[name for name in ('canonical','legacy','current','mirror','sampled','legacy_only',
+                              'canonical_rows','legacy_rows','canonical_count','legacy_count','remaining','total','n')
+             if re.search(r'\bas '+name+r'\b',q)]
+    if aliases:result['recognized_aliases']=aliases
     return result
 
 
