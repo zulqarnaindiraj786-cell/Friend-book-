@@ -942,7 +942,10 @@ public class ReelsFragment extends Fragment {
                 if(holder.getBindingAdapterPosition()==pos) { selected=holder; continue; }
                 if(holder instanceof VH) ((VH)holder).pause();
             }
-            if(selected instanceof VH) ((VH)selected).play();
+            if(selected instanceof VH) {
+                ((VH)selected).refreshEngagement();
+                ((VH)selected).play();
+            }
         }
 
         @Override public int getItemCount() { return data.size(); }
@@ -961,7 +964,10 @@ public class ReelsFragment extends Fragment {
 
         @Override public void onViewAttachedToWindow(@NonNull RecyclerView.ViewHolder h){
             super.onViewAttachedToWindow(h);
-            if(h instanceof VH && visible.getAsBoolean() && h.getBindingAdapterPosition()==playingPos)((VH)h).play();
+            if(h instanceof VH && visible.getAsBoolean() && h.getBindingAdapterPosition()==playingPos){
+                ((VH)h).refreshEngagement();
+                ((VH)h).play();
+            }
         }
         @Override public void onViewDetachedFromWindow(@NonNull RecyclerView.ViewHolder h){
             if(h instanceof VH)((VH)h).pause();super.onViewDetachedFromWindow(h);
@@ -2114,6 +2120,10 @@ public class ReelsFragment extends Fragment {
             // Only explicit bind/resume/authoritative metadata refresh requests
             // engagement. Async completion only paints cache; it cannot refetch.
             private void refreshEngagement() {
+                // ViewPager attaches/prebinds neighboring holders. They are not
+                // user-visible reads; selected play/attach will refresh later.
+                if (!visible.getAsBoolean() || getBindingAdapterPosition() != playingPos
+                        || playingPos < 0) return;
                 if (reel == null || reel.id == null || reel.id.startsWith("local_uploading_")) return;
                 if (!com.friendbook.social.core.D1Client.enabled(reel.isFromPost?"posts":"reels")) return;
                 final Models.Reel current = reel;

@@ -32,3 +32,17 @@ class ReelRenderNoFetch(unittest.TestCase):
         request=source.split('public static void reel(',1)[1].split('public static void apply',1)[0]
         self.assertIn('hydrateReel(reel)',request)
         self.assertIn('fetch(',request)
+
+
+    def test_only_visible_selected_reel_can_request_engagement(self):
+        source=(JAVA/'reels/ReelsFragment.java').read_text()
+        refresh=source.split('private void refreshEngagement() {',1)[1].split('private void renderCounts()',1)[0]
+        self.assertIn('!visible.getAsBoolean()',refresh)
+        self.assertIn('getBindingAdapterPosition() != playingPos',refresh)
+        self.assertIn('playingPos < 0',refresh)
+        self.assertLess(refresh.index('playingPos < 0'),refresh.index('D1Reactions.reel('))
+        play=source.split('void playOnly(ViewPager2 pager, int pos) {',1)[1].split('@NonNull',1)[0]
+        self.assertIn('((VH)selected).refreshEngagement();',play)
+        attach=source.split('void onViewAttachedToWindow(',1)[1].split('void onViewDetachedFromWindow(',1)[0]
+        self.assertIn('h.getBindingAdapterPosition()==playingPos',attach)
+        self.assertIn('((VH)h).refreshEngagement();',attach)
