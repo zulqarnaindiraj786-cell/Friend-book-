@@ -811,9 +811,14 @@ async function unchangedRootState(db,path,row,doc) {
     .bind(path,row.document_json,row.update_time,row.owner_uid??null,JSON.stringify({...doc,id}),appOwner).first()
     .then(result=>({current:result?.current===1,mirror:result?.mirror===1 && row.owner_uid===owner}));
 }
+function literalValue(value) {
+  if(value===null || ['boolean','number','string'].includes(typeof value))return true;
+  if(!value || typeof value!=='object' || isFieldValue(value))return false;
+  return Object.values(value).every(literalValue);
+}
 function literalFields(fields) {
   return !!fields && typeof fields==='object' && !Array.isArray(fields) && Object.keys(fields).length>0
-    && Object.values(fields).every(value=>value===null || ['boolean','number','string'].includes(typeof value));
+    && Object.values(fields).every(literalValue);
 }
 
 function unchangedNotificationRead(path,row,fields) {
@@ -2621,9 +2626,17 @@ async function groupChatLedgerChanges(db,path,before,after) {
   return {guards:[guard],writes};
 }
 
-async function writeChatRoot(db,path,doc,now,row,uid,{canonicalOnly=false}={}) {
+async function writeChatRoot(db,path,doc,now,row,uid,{canonicalOnly=false,literalNoop=false}={}) {
   if (typeof db.batch!=='function') return json({error:'Atomic storage unavailable'},503);
   const before=row?decodeValue(JSON.parse(row.document_json)):null;
+  if(literalNoop && row?.[canonicalRootSnapshot] && before?.isGroup!==true
+    && doc.isGroup!==true && JSON.stringify(doc)===row.document_json
+    && ownerOf(doc,row.owner_uid||uid)===row.owner_uid) {
+    const state=await unchangedRootState(db,path,row,doc);
+    if(!state.current)throw new Error('Room changed');
+    if(state.mirror)return json(rowToDocument(row));
+    // Missing/stale mirrors still repair through the atomic write below.
+  }
   // Existing canonical direct rooms have no group authority ledger. Enforce
   // their authorized snapshot in the canonical upsert itself, so its mirror
   // remains atomic without inserting/deleting a temporary guard row.
@@ -3065,7 +3078,9 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0, ct
         }
       }
       if (chatAuth.roomPath) return await writeChatMessage(db,docPath,next,now,existing,chatAuth,uid);
-      if (splitPath(docPath).length===2 && splitPath(docPath)[0]==='chats') return await writeChatRoot(db,docPath,next,now,existing,uid);
+      if (splitPath(docPath).length===2 && splitPath(docPath)[0]==='chats') return await writeChatRoot(db,docPath,next,now,existing,uid,{
+        literalNoop:body.merge===true && body.mergeFields==null && literalFields(body.data),
+      });
       const row = await writeRow(db, docPath, next, now, existing, ['stories','events','pages','lives'].includes(splitPath(docPath)[0]));
       return json(rowToDocument(row));
     } catch (e) {
@@ -3147,7 +3162,7 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0, ct
           if (!updated) return json({error:'Update unavailable'},503);
           return json(rowToDocument({...existing,document_json:serialized,update_time:now}));
         }
-        return await writeChatRoot(db,docPath,next,now,existing,uid,{canonicalOnly});
+        return await writeChatRoot(db,docPath,next,now,existing,uid,{canonicalOnly,literalNoop:literalFields(fields)});
       }
       // Active hosts send this exact telemetry patch every eight seconds.
       // Changed telemetry still persists immediately. A quiet renewal can skip

@@ -199,7 +199,7 @@ test('identical legacy profile PUTs do not generate timestamp-only dual writes',
   const oldNow=Date.now;let clock=1800000000000;Date.now=()=>clock++;
   t.after(()=>{Date.now=oldNow;});
   const save=()=>appDocuments(new Request('https://local.invalid/v1/docs/users/viewer',{
-    method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify({displayName:'Viewer',photoUrl:''})
+    method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify({displayName:'Viewer',photoUrl:'',preferences:{theme:'dark',muted:[],refreshCount:0}})
   }),{DB:db},{uid:'viewer'});
   const first=await save();assert.equal(first.status,200,await first.clone().text());
   const stored=sql.prepare("SELECT document_json,update_time FROM friendbook_cf_firestore_documents WHERE path='users/viewer'").get();
@@ -207,6 +207,13 @@ test('identical legacy profile PUTs do not generate timestamp-only dual writes',
   for(let i=0;i<5;i++){const response=await save();assert.equal(response.status,200,await response.clone().text());}
   assert.equal(sql.prepare('SELECT total_changes() n').get().n,before,'no base, mirror, guard or projection writes for identical saves');
   assert.deepEqual(sql.prepare("SELECT document_json,update_time FROM friendbook_cf_firestore_documents WHERE path='users/viewer'").get(),stored);
+  const {firestoreDocuments}=await import('../firestore-documents.js');
+  const transform=await firestoreDocuments(new Request('https://local.invalid/v1/firestore/document?path=users/viewer',{
+    method:'PATCH',headers:{'content-type':'application/json'},
+    body:JSON.stringify({fields:{'preferences.refreshCount':{__fieldValue:'increment',value:0}}})
+  }),{DB:db},{uid:'viewer'});
+  assert.equal(transform.status,200,await transform.clone().text());
+  assert.ok(sql.prepare('SELECT total_changes() n').get().n>before,'a nested transform remains a genuine guarded write');
   sql.prepare("DELETE FROM friendbook_cf_documents WHERE path='users/viewer'").run();
   assert.equal((await save()).status,200);
   assert.ok(sql.prepare("SELECT 1 FROM friendbook_cf_documents WHERE path='users/viewer'").get(),'an identical save still repairs a missing mirror');

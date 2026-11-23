@@ -13,9 +13,9 @@ function fixture() {
     .run('chats/direct','chats','chats','direct','alice',JSON.stringify(data),1,1);
   sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)')
     .run('chats/direct','chats','direct','alice',JSON.stringify({...data,id:'direct'}),1);
-  const batches=[];let beforeBatch=null;
+  const batches=[];let beforeBatch=null,beforeState=null;
   const db={prepare(q){const stmt=sql.prepare(q);return {bind(...a){return {q,
-    async all(){return {results:stmt.all(...a)};},async first(){return stmt.get(...a)||null;},async run(){return stmt.run(...a);},
+    async all(){return {results:stmt.all(...a)};},async first(){if(q.includes('AS current') && beforeState){const run=beforeState;beforeState=null;run();}return stmt.get(...a)||null;},async run(){return stmt.run(...a);},
   };}};},async batch(statements){
     if(beforeBatch){const run=beforeBatch;beforeBatch=null;run();}
     batches.push(statements.map(s=>s.q));sql.exec('BEGIN');
@@ -23,11 +23,11 @@ function fixture() {
     catch(e){sql.exec('ROLLBACK');throw e;}
   }};
   const app=createWorker(async t=>t),env={DB:db,FIREBASE_PROJECT_ID:'friendbook-test'};
-  const patch=(uid='alice')=>app.fetch(new Request('https://example.test/v1/firestore/document?path=chats/direct',{
-    method:'PATCH',headers:{authorization:`Bearer ${uid}`,'content-type':'application/json'},
-    body:JSON.stringify({fields:{lastMessage:'new'}}),
+  const send=(body,method='PATCH',uid='alice')=>app.fetch(new Request('https://example.test/v1/firestore/document?path=chats/direct',{
+    method,headers:{authorization:`Bearer ${uid}`,'content-type':'application/json'},body:JSON.stringify(body),
   }),env);
-  return {sql,batches,patch,before(fn){beforeBatch=fn;}};
+  const patch=(uid='alice')=>send({fields:{lastMessage:'new'}},'PATCH',uid);
+  return {sql,batches,patch,send,before(fn){beforeBatch=fn;},beforeState(fn){beforeState=fn;}};
 }
 
 test('existing direct room commits canonical and mirror without temporary guard writes',async()=>{
@@ -63,5 +63,36 @@ test('failed direct-room mirror rolls back canonical update',async()=>{
     f.sql.exec("CREATE TRIGGER reject_mirror BEFORE UPDATE ON friendbook_cf_documents BEGIN SELECT RAISE(ABORT,'mirror unavailable'); END");
     assert.equal((await f.patch()).status,503);
     assert.deepEqual(f.sql.prepare('SELECT * FROM friendbook_cf_firestore_documents').get(),before);
+  } finally {f.sql.close();}
+});
+
+
+test('literal direct-room retries write zero rows while missing mirrors repair and transforms persist',async()=>{
+  const f=fixture();try {
+    assert.equal((await f.patch()).status,200);
+    const before=f.sql.prepare('SELECT total_changes() AS n').get().n;
+    const saved=f.sql.prepare('SELECT * FROM friendbook_cf_firestore_documents').get();
+    for(let i=0;i<5;i++)assert.equal((await f.patch()).status,200);
+    assert.equal((await f.send({merge:true,data:{participants:['alice','bob'],unreadCount:{bob:0}}},'PUT')).status,200);
+    assert.equal(f.sql.prepare('SELECT total_changes() AS n').get().n,before);
+    assert.deepEqual(f.sql.prepare('SELECT * FROM friendbook_cf_firestore_documents').get(),saved);
+    f.sql.exec('DELETE FROM friendbook_cf_documents');
+    assert.equal((await f.patch()).status,200);
+    assert.equal(JSON.parse(f.sql.prepare('SELECT document_json FROM friendbook_cf_documents').get().document_json).lastMessage,'new');
+    const batches=f.batches.length;
+    assert.equal((await f.send({fields:{'unreadCount.bob':{__fieldValue:'increment',value:0}}})).status,200);
+    assert.equal(f.batches.length,batches+1); // transforms are never reclassified as literal retries
+    assert.equal((await f.patch('eve')).status,403);
+  } finally {f.sql.close();}
+});
+
+test('identical direct-room save rejects a changed authorization snapshot',async()=>{
+  const f=fixture();try {
+    assert.equal((await f.patch()).status,200);
+    const mirror=f.sql.prepare('SELECT * FROM friendbook_cf_documents').get();
+    f.beforeState(()=>f.sql.prepare('UPDATE friendbook_cf_firestore_documents SET document_json=?')
+      .run(JSON.stringify({participants:['bob','eve'],lastMessage:'new',unreadCount:{bob:0}})));
+    assert.equal((await f.patch()).status,503);
+    assert.deepEqual(f.sql.prepare('SELECT * FROM friendbook_cf_documents').get(),mirror);
   } finally {f.sql.close();}
 });

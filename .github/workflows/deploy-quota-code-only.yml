@@ -1,4 +1,4 @@
-# Code-only rollout: preserve tested fixes; add fixed-vocabulary write-family SQL aliases.
+# Code-only rollout: skip authorized identical direct-room/nested literal saves; preserve transforms and mirror repair.
 name: Deploy quota fixes without database migrations
 on:
   push:
