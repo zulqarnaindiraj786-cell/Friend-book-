@@ -64,7 +64,10 @@ public final class CursorPager {
             // Rendering cached rows may close/replace this pager or change the
             // account. Do not start a stale network request after that callback.
             if(!active() || request!=requestGeneration)return;
-            (full ? head.get(Source.SERVER) : head.refreshCachedHead(cached)).addOnSuccessListener(page -> {
+            // Initial cache-first loads still require a network response on a
+            // miss, but may share that exact in-flight operation. Only an
+            // explicit refresh (zero max age) forces an independent read.
+            (full ? head.get(maxAgeMs>0 ? Source.DEFAULT : Source.SERVER) : head.refreshCachedHead(cached)).addOnSuccessListener(page -> {
                 if(!active() || request!=requestGeneration)return;
                 loading=false;
                 acceptObservedFirstPage(page);

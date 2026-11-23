@@ -20,7 +20,7 @@ class SearchReadBudget(unittest.TestCase):
         pager = (JAVA / 'core/CursorPager.java').read_text()
         self.assertIn('startLocal(Math.max(0L,maxAgeMs),true)', pager)
         self.assertIn('cached!=null && maxAgeMs>0 && head.hasFreshLocalPage(maxAgeMs)', pager)
-        self.assertIn('head.get(Source.SERVER)', pager)
+        self.assertIn('head.get(maxAgeMs>0 ? Source.DEFAULT : Source.SERVER)', pager)
         self.assertIn('request!=requestGeneration', pager)
         policy = (JAVA / 'core/SearchReadPolicy.java').read_text()
         self.assertIn('350L', policy)
