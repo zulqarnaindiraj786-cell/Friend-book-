@@ -139,12 +139,12 @@ jobs:
           if health!={'ok':True,'role':'observe_only','d1_bound':False}: raise RuntimeError('Monitor health mismatch '+json.dumps({k:health.get(k) for k in ('ok','role','d1_bound')}))
           stage='private report access check'
           try:
-              urllib.request.urlopen(base+'/report',timeout=30)
+              urllib.request.urlopen(urllib.request.Request(base+'/report',headers={'User-Agent':'FriendBookQuotaMonitorVerification/1.0'}),timeout=30)
               raise RuntimeError('Report unexpectedly public')
           except urllib.error.HTTPError as error:
-              if error.code!=401: raise RuntimeError('Unexpected unauthenticated report status')
+              if error.code!=401: raise RuntimeError('Unexpected unauthenticated report status '+str(error.code))
           stage='authenticated analytics report'
-          req=urllib.request.Request(base+'/report',headers={'Authorization':'Bearer '+report_token})
+          req=urllib.request.Request(base+'/report',headers={'Authorization':'Bearer '+report_token,'User-Agent':'FriendBookQuotaMonitorVerification/1.0'})
           with urllib.request.urlopen(req,timeout=45) as response: report=json.load(response)
           if report.get('role')!='observe_only' or report.get('automatic_fix_actions')!=[] or report.get('future_quota_guarantee') is not False:
               raise RuntimeError('Unsafe monitor report contract')
