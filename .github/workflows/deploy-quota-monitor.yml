@@ -51,7 +51,29 @@ jobs:
           MONITOR_ANALYTICS_TOKEN: ${{ secrets.CLOUDFLARE_ANALYTICS_READ_TOKEN || secrets.CLOUDFLARE_API_TOKEN }}
         run: |
           python3 - <<'PY'
-          import json,os,re,secrets,subprocess,urllib.request,urllib.error
+          import json,os,re,secrets,subprocess,sys,urllib.request,urllib.error
+          stage='name preflight'
+          report_token=''
+          def safe(text):
+              for secret in (os.environ.get('CLOUDFLARE_API_TOKEN',''),os.environ.get('MONITOR_ANALYTICS_TOKEN',''),report_token):
+                  if secret: text=text.replace(secret,'[REDACTED]')
+              return re.sub(r'\x1b\[[0-9;]*m','',text)
+          def failure(kind,error,tb):
+              detail='HTTP '+str(error.code) if isinstance(error,urllib.error.HTTPError) else kind.__name__
+              if isinstance(error,urllib.error.HTTPError):
+                  try:
+                      body=json.load(error)
+                      detail+=' '+json.dumps(body.get('errors',body.get('error','unavailable')))
+                  except Exception: pass
+              print('::error::Isolated monitor '+stage+' failed: '+safe(detail).replace('\n',' ')[:2000],flush=True)
+          sys.excepthook=failure
+          def cli(arguments,stdin=None):
+              result=subprocess.run(command+arguments,input=stdin,text=True,capture_output=True)
+              if result.returncode:
+                  detail=safe(result.stdout+'\n'+result.stderr)[-3000:].replace('\n',' %0A')
+                  print('::error::Monitor CLI '+stage+' '+detail,flush=True)
+                  raise SystemExit(result.returncode)
+              print('::notice::Monitor '+stage+' completed',flush=True)
           account=os.environ['CLOUDFLARE_ACCOUNT_ID']
           api='https://api.cloudflare.com/client/v4/accounts/'+account
           headers={'Authorization':'Bearer '+os.environ['CLOUDFLARE_API_TOKEN']}
@@ -64,24 +86,30 @@ jobs:
           except urllib.error.HTTPError as error:
               if error.code!=404: raise SystemExit('Worker name preflight unavailable; not deploying')
           command=['npx','--yes','wrangler@4.157.0']
-          subprocess.run(command+['deploy','--config','wrangler.quota-monitor.toml'],check=True)
+          stage='script upload'
+          cli(['deploy','--config','wrangler.quota-monitor.toml'])
           report_token=secrets.token_urlsafe(48)
           print('::add-mask::'+report_token,flush=True)
           # Secret values go only to stdin and encrypted Worker bindings, not logs/files.
           secret_body=json.dumps({'CF_ANALYTICS_TOKEN':os.environ['MONITOR_ANALYTICS_TOKEN'],'REPORT_TOKEN':report_token})
-          subprocess.run(command+['secret','bulk','--config','wrangler.quota-monitor.toml'],input=secret_body,text=True,check=True)
+          stage='encrypted secret setup'
+          cli(['secret','bulk','--config','wrangler.quota-monitor.toml'],secret_body)
+          stage='subdomain lookup'
           req=urllib.request.Request(api+'/workers/subdomain',headers=headers)
           with urllib.request.urlopen(req,timeout=30) as response: payload=json.load(response)
           subdomain=payload.get('result',{}).get('subdomain','')
           if not payload.get('success') or not re.fullmatch('[a-zA-Z0-9-]+',subdomain): raise SystemExit('Worker subdomain unavailable')
           base='https://friendbook-quota-monitor.'+subdomain+'.workers.dev'
+          stage='public health smoke check'
           with urllib.request.urlopen(base+'/health',timeout=30) as response: health=json.load(response)
           if health!={'ok':True,'role':'observe_only','d1_bound':False}: raise SystemExit('Monitor health mismatch')
+          stage='private report access check'
           try:
               urllib.request.urlopen(base+'/report',timeout=30)
               raise SystemExit('Report unexpectedly public')
           except urllib.error.HTTPError as error:
               if error.code!=401: raise SystemExit('Unexpected unauthenticated report status')
+          stage='authenticated analytics report'
           req=urllib.request.Request(base+'/report',headers={'Authorization':'Bearer '+report_token})
           with urllib.request.urlopen(req,timeout=45) as response: report=json.load(response)
           if report.get('role')!='observe_only' or report.get('automatic_fix_actions')!=[] or report.get('future_quota_guarantee') is not False:
