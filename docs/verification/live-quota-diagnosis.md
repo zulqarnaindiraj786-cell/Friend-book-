@@ -253,3 +253,24 @@ privacy checks. Prior Worker compile run 45116966062 remains the unchanged busin
 code's compile evidence. PR #36 remains OPEN/unmerged; no APK rebuild or production
 mutation this turn. There is no always-running monitor or auto-remediation process:
 the reusable report is invoked explicitly, so don't claim background monitoring.
+
+## Strict guarantee/proof request: acceptance explicitly fails
+
+Added `verify_quota_target.py`, six regression tests, and
+`quota-target-proof.yml`. Report: `docs/verification/quota-target-proof.md`.
+Workflow 45119704081 on source3ab635d completed with **failure at the actual daily
+acceptance step, exit2**; this is an observed budget failure, not broken tests.
+Worker235/Python358, offline10/30/100-user replays and dry-run compile all passed
+in preceding CI steps. Proof JSON artifacts uploaded successfully despite the
+budget failure. No continue-on-error or masked exit status.
+
+GraphQL-only account analytics queried at returned timestamp
+2026-11-23T05:45:34.691857Z: Nov21=3,269,075 reads/111,664 writes;
+Nov22=2,260,402/105,706; partial Nov23=470,482/6,383. Historical days precede
+latest fixes; current day straddles them. Fix rollout completion timestamp
+05:19:12Z verified from Actions45116959466 job metadata. No fully post-fix UTC
+day is available. No guarantee/savings percentage inferred. Daily target100k/5k
+is an acceptance target, not a verified provider subscription limit.
+
+Production verdict remains FAIL and future_quota_guarantee=false. No production
+SQL, mutations, application traffic, deployments or schedule changes this turn.
