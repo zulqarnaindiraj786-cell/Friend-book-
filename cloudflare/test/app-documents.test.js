@@ -231,3 +231,34 @@ test('identical legacy profile PUTs do not generate timestamp-only dual writes',
   assert.equal(denied.status,403,'same-value payload never bypasses authorization');
   assert.equal(sql.prepare('SELECT total_changes() n').get().n,beforeDenied);
 });
+
+test('legacy content GET uses one canonical root read and keeps fresh author restrictions',async t=>{
+  const {appDocuments}=await import('../app-documents.js');
+  const {sql,db}=createSqliteD1();t.after(()=>sql.close());
+  const put=sql.prepare('INSERT OR REPLACE INTO friendbook_cf_firestore_documents VALUES(?,?,?,?,?,?,?,?)');
+  const seed=(parent,id,data)=>put.run(`${parent}/${id}`,parent,parent,id,id,JSON.stringify(data),1,1);
+  seed('users','viewer',{uid:'viewer'});seed('users','author',{uid:'author'});
+  let rootReads=0;
+  const counted={prepare(q){const prepared=db.prepare(q);return{bind(...args){
+    if(q.includes('friendbook_cf_firestore_documents') && /WHERE path\s*=/.test(q) && /^(posts|reels|stories)\/p$/.test(String(args[0])))rootReads++;
+    return prepared.bind(...args);
+  }};}};
+  for(const root of ['posts','reels','stories']){
+    const read=async(actor,expected)=>{
+      rootReads=0;
+      const response=await appDocuments(new Request(`https://local.invalid/v1/docs/${root}/p`),{DB:counted},{uid:actor});
+      assert.equal(response.status,expected,await response.clone().text());
+      assert.equal(rootReads,1,'legacy GET must not re-read its canonical root for ACL');
+      return response;
+    };
+    seed('users','author',{uid:'author'});
+    seed(root,'p',{authorId:'author',privacy:'Public',content:'visible'});
+    assert.equal((await (await read('viewer',200)).json()).document.content,'visible');
+    seed(root,'p',{authorId:'author',privacy:'Only me'});
+    await read('viewer',403);await read('author',200);
+    seed(root,'p',{authorId:'author',privacy:'Public'});
+    for(const restriction of [{blocked:['viewer']},{banned:true},{deactivated:true}]){
+      seed('users','author',{uid:'author',...restriction});await read('viewer',403);
+    }
+  }
+});

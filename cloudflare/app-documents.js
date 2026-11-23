@@ -219,7 +219,11 @@ export async function appDocuments(request, env, identity) {
       const current = await readPreferredDocumentJson(env.DB,docPath);
       if (!current) return json({ error: 'Not found' }, 404);
       const document = toPlainDocument(current.document_json, docId);
-      if (!(await contentReadAllowed(env.DB, uid, docPath,requestAccountReads(identity)))) return json({error:'Forbidden'},403);
+      // This route also reads canonical storage directly. Authorize the exact
+      // raw content snapshot returned, never a client body or projected view.
+      const canonicalFields=['posts','reels','stories'].includes(collection)
+        ? toFirestoreFields(current.document_json) : undefined;
+      if (!(await contentReadAllowed(env.DB, uid, docPath,requestAccountReads(identity),false,canonicalFields))) return json({error:'Forbidden'},403);
       if (collection === 'payments' && !canReadPayment(env,uid,document)) return json({error:'Forbidden'},403);
       if (collection === 'friend_requests' && !canReadFriendRequest(uid,document)) return json({error:'Forbidden'},403);
       if (!canReadNotification(docPath, uid, document)) return json({ error: 'Forbidden' }, 403);
