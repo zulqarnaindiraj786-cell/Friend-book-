@@ -263,3 +263,11 @@ class TrafficReport(unittest.TestCase):
         grammar=p.redacted_inventory_structure('SELECT * FROM "friendbook_cf_presence" ORDER BY "rowid" LIMIT 250 OFFSET 500')
         self.assertEqual(grammar,'select * from friendbook_cf_presence order by rowid limit ? offset ?')
         self.assertNotIn('SECRET',p.redacted_inventory_structure('SELECT * FROM "SECRET" ORDER BY "SECRET" LIMIT 250'))
+
+
+    def test_retired_backup_attribution_requires_exact_historical_template(self):
+        query='SELECT * FROM friendbook_cf_presence_sessions ORDER BY rowid LIMIT ? OFFSET ?'
+        self.assertEqual(p.category(query),'exact_historical_retired_backup_template')
+        for altered in (query.replace('SELECT *','SELECT uid'),query.replace('LIMIT ?', 'LIMIT 250'),
+                        query.replace('presence_sessions','private_table')):
+            self.assertNotEqual(p.category(altered),'exact_historical_retired_backup_template')

@@ -121,6 +121,12 @@ def maintenance_shapes():
             if isinstance(node,ast.Assign) and isinstance(node.value,ast.Constant) and isinstance(node.value.value,str):
                 if any(isinstance(target,ast.Name) and target.id in names for target in node.targets):
                     known[normalize_shape(node.value.value)]=label
+    # Historical e305b41 backup/checksum template, replaced by rowid seeks in
+    # 7f76bb4. Attribution only: these strings are never submitted to D1.
+    for table in ('friendbook_cf_presence','friendbook_cf_presence_sessions',
+                  'friendbook_cf_presence_sessions_fullcopy','friendbook_cf_presence_sessions_copy',
+                  'friendbook_cf_typing','friendbook_cf_typing_sessions','friendbook_cf_typing_sessions_fullcopy'):
+        known[normalize_shape(f'SELECT * FROM {table} ORDER BY rowid LIMIT ? OFFSET ?')]='exact_historical_retired_backup_template'
     return known
 
 
