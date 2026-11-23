@@ -45,6 +45,9 @@ import java.util.Map;
  * Wellbeing, Audience & Visibility (Privacy), Your Activity/Archive/Trash, and Legal.
  */
 public class SettingsActivity extends Activity {
+    private com.friendbook.social.d1.documents.ListenerRegistration summaryCountReg;
+    private boolean summaryLoading;
+
 
     private static class SearchEntry {
         View view;
@@ -1031,9 +1034,12 @@ public class SettingsActivity extends Activity {
 
     private void accessInfoDialog() {
         String me = Fb.uid();
-        if (me == null) return;
+        if (me == null || summaryLoading) return;
+        summaryLoading=true;
         Ui.toast(this, "Loading your account summary…");
-        com.friendbook.social.core.CountReads.once(Fb.db().collection("posts").whereEqualTo("authorId",me),totalPosts->{
+        if(summaryCountReg!=null)summaryCountReg.remove();
+        summaryCountReg=com.friendbook.social.core.CountReads.once(Fb.db().collection("posts").whereEqualTo("authorId",me),totalPosts->{
+                    summaryLoading=false;
                     if(isFinishing() || isDestroyed())return;
                     Models.User u = Fb.me;
                     Ui.info(this, "📋 Your friendbook information",
@@ -1047,7 +1053,16 @@ public class SettingsActivity extends Activity {
                                     + "• Verification tick: " + (u != null ? Admin.tickLabel(u.tickLevel) : "none") + "\n"
                                     + "• Stars balance: " + (u != null ? u.stars : 0) + " ⭐\n"
                                     + "• Saved reels/highlights: " + (u != null ? u.highlightStoryIds.size() : 0));
+                },error -> {
+                    summaryLoading=false;
+                    if(!isFinishing() && !isDestroyed()) Ui.toast(this,"Couldn't load account summary. Tap to retry.");
                 });
+    }
+
+    @Override protected void onStop() {
+        if(summaryCountReg!=null){summaryCountReg.remove();summaryCountReg=null;}
+        summaryLoading=false;
+        super.onStop();
     }
 
     private void storageDialog() {
