@@ -179,9 +179,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         if(!cachedStories.isEmpty())adapter.setStories(cachedStories);
 
         swipe.addView(rv);
-        swipe.setOnRefreshListener(() -> {
-            refreshWithFriendbookAlgorithm(true);
-        });
+        swipe.setOnRefreshListener(this::refreshFromUserGesture);
 
         android.widget.FrameLayout feedWrap = new android.widget.FrameLayout(a);
         feedWrap.addView(swipe, new android.widget.FrameLayout.LayoutParams(-1, -1));
@@ -193,7 +191,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         freshPill.setVisibility(View.GONE);
         freshPill.setOnClickListener(v -> {
             freshPill.setVisibility(View.GONE);
-            refreshWithFriendbookAlgorithm(true);
+            refreshFromUserGesture();
         });
         android.widget.FrameLayout.LayoutParams pp = new android.widget.FrameLayout.LayoutParams(
                 -2, -2, Gravity.TOP | Gravity.CENTER_HORIZONTAL);
@@ -210,6 +208,15 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
      * and requests fresh live AdMob creatives in both in-feed Sponsored slots & bottom banner!
      */
     public void refreshWithFriendbookAlgorithm(boolean scrollTop) {
+        refreshWithFriendbookAlgorithm(scrollTop, false);
+    }
+
+    /** A gesture (pull, fresh pill, tapping Home) may re-read suggestions once. */
+    private void refreshFromUserGesture() {
+        refreshWithFriendbookAlgorithm(true, true);
+    }
+
+    private void refreshWithFriendbookAlgorithm(boolean scrollTop, boolean explicitUserRefresh) {
         android.app.Activity a = getActivity();
         if (a == null) return;
         if (freshPill != null) freshPill.setVisibility(View.GONE);
@@ -219,6 +226,8 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         if (adapter != null) adapter.refreshSponsoredAds();
         // An explicit pull/Home refresh supersedes an in-flight older page via feedGeneration.
         loadingPosts=false;startPostsQuery(true);
+        // A user-initiated refresh is the only path allowed to re-read suggestions.
+        if (explicitUserRefresh) loadNotesUsers(true);
         // Refresh posts without invalidating unrelated sections or their reuse windows.
         if (adapter != null) adapter.advanceFeaturedReelRotation();
         startVisibleHomeContent();
@@ -256,8 +265,8 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
             LinearLayoutManager lm = (LinearLayoutManager) rv.getLayoutManager();
             int pos = lm != null ? lm.findFirstVisibleItemPosition() : 0;
             if (pos <= 1) {
-                // Tapping Home while already at top triggers a fresh algorithm refresh!
-                refreshWithFriendbookAlgorithm(true);
+                // Tapping Home while already at top is an explicit refresh gesture.
+                refreshFromUserGesture();
             } else {
                 rv.scrollToPosition(0);
             }
@@ -437,25 +446,123 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
 
     private String notesActor;
     private long notesReadAt = -120_000L;
+    private boolean notesLoaded;
+    private boolean notesInFlight;
 
-    private void loadNotesUsers() {
+    /** Tab returns repaint suggestions from cache; only an explicit refresh reads again. */
+    private void loadNotesUsers() { loadNotesUsers(false); }
+
+    private static final String PYMK_PREFS = "fb_pymk_cache";
+
+    /** The suggestion card only needs these fields, so the cache stores exactly them. */
+    private static org.json.JSONArray pymkJson(java.util.List<Models.User> rows) {
+        org.json.JSONArray arr = new org.json.JSONArray();
+        for (Models.User u : rows) {
+            if (u == null || u.uid == null) continue;
+            arr.put(new org.json.JSONObject()
+                    .put("uid", u.uid)
+                    .put("name", u.displayName == null ? "" : u.displayName)
+                    .put("photo", u.photoUrl == null ? "" : u.photoUrl)
+                    .put("note", u.statusNote == null ? "" : u.statusNote)
+                    .put("noteAt", u.statusNoteAt)
+                    .put("tick", u.tickLevel == null ? "none" : u.tickLevel));
+        }
+        return arr;
+    }
+
+    private static java.util.List<Models.User> pymkFromJson(org.json.JSONArray arr) {
+        java.util.List<Models.User> users = new ArrayList<>();
+        if (arr == null) return users;
+        for (int i = 0; i < arr.length(); i++) {
+            org.json.JSONObject o = arr.optJSONObject(i);
+            if (o == null) continue;
+            Models.User u = new Models.User();
+            u.uid = o.optString("uid", "");
+            if (u.uid.isEmpty()) continue;
+            u.displayName = o.optString("name", "");
+            u.photoUrl = o.optString("photo", "");
+            u.statusNote = o.optString("note", "");
+            u.statusNoteAt = o.optLong("noteAt", 0L);
+            u.tickLevel = o.optString("tick", "none");
+            users.add(u);
+        }
+        return users;
+    }
+
+    /** Paint suggestions from disk so a cold start needs no read. */
+    private void restorePymkFromCache(String actor) {
+        noteUsers.clear();
+        pymkCandidates.clear();
+        android.content.Context ctx = getContext();
+        if (ctx == null || actor == null) return;
+        android.content.SharedPreferences prefs = ctx.getSharedPreferences(PYMK_PREFS, 0);
+        long now = System.currentTimeMillis();
+        java.util.List<Models.User> suggestions;
+        java.util.List<Models.User> notes;
+        try {
+            suggestions = pymkFromJson(new org.json.JSONArray(prefs.getString("ids_" + actor, "[]")));
+            notes = pymkFromJson(new org.json.JSONArray(prefs.getString("notes_" + actor, "[]")));
+        } catch (Exception broken) { return; }
+        for (Models.User u : suggestions) {
+            if (pymkCandidates.size() >= 10) break;
+            FastCache.putUser(u);
+            pymkCandidates.add(u);
+        }
+        for (Models.User u : notes) {
+            if (u.statusNote != null && !u.statusNote.isEmpty() && (now - u.statusNoteAt) < NOTE_TTL_MS) {
+                FastCache.putUser(u);
+                noteUsers.add(u);
+            }
+        }
+        renderNotesRow();
+        renderPymk();
+    }
+
+    private void persistPymk(String actor) {
+        android.content.Context ctx = getContext();
+        if (ctx == null || actor == null) return;
+        ctx.getSharedPreferences(PYMK_PREFS, 0).edit()
+                .putString("ids_" + actor, pymkJson(pymkCandidates).toString())
+                .putString("notes_" + actor, pymkJson(noteUsers).toString())
+                .putLong("at_" + actor, System.currentTimeMillis())
+                .apply();
+    }
+
+    private boolean pymkCacheFresh(String actor) {
+        android.content.Context ctx = getContext();
+        if (ctx == null || actor == null) return false;
+        long fetchedAt = ctx.getSharedPreferences(PYMK_PREFS, 0).getLong("at_" + actor, 0L);
+        long now = System.currentTimeMillis();
+        return fetchedAt > 0L && now >= fetchedAt && now - fetchedAt < com.friendbook.social.core.OnDemandLoads.PYMK_CACHE_MS;
+    }
+
+    private void loadNotesUsers(boolean forced) {
         String actor = Fb.uid();
         if (actor == null) return;
         if (!actor.equals(notesActor)) {
             notesActor = actor;
             notesReadAt = -120_000L;
-            noteUsers.clear();
-            pymkCandidates.clear();
-            renderNotesRow();
-            renderPymk();
+            notesLoaded = false;
+            restorePymkFromCache(actor);
+        }
+        // A tab switch or a cold start inside the cache window paints stored
+        // suggestions and returns without a network read.
+        if (!forced && pymkCacheFresh(actor)) {
+            if (!notesLoaded) { notesLoaded = true; restorePymkFromCache(actor); }
+            return;
         }
         long attempt = android.os.SystemClock.elapsedRealtime();
-        if (attempt - notesReadAt < 120_000L) return;
+        if (!com.friendbook.social.core.OnDemandLoads.pymkShouldFetch(
+                actor, notesActor, notesReadAt, attempt, forced, notesLoaded)) return;
+        if (notesInFlight) return;
+        notesInFlight = true;
         notesReadAt = attempt;
         // Notes need up to 30 users; reuse the first ten for Home suggestions.
         Fb.db().collection("users").limit(30).get().addOnSuccessListener(snap -> {
+            notesInFlight = false;
             if (!isAdded() || !actor.equals(Fb.uid()) || notesReadAt != attempt) return;
             if (snap == null || (snap.getMetadata().isFromCache() && snap.isEmpty())) return;
+            notesLoaded = true;
             noteUsers.clear();
             pymkCandidates.clear();
             long now = System.currentTimeMillis();
@@ -470,9 +577,10 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
                     }
                 }
             }
+            persistPymk(actor);
             renderNotesRow();
             renderPymk();
-        });
+        }).addOnFailureListener(e -> notesInFlight = false);
     }
 
     /** friendbook 525 feed sort & filter strip: Top / Most Recent / Favorites / Photos / Videos / Marketplace / Text. */
@@ -624,6 +732,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         if (me == null) return;
         if(!java.util.Objects.equals(friendGraphActor,me)){friendIds.clear();friendIds.add(me);friendGraphActor=me;}
         friendsReg = Fb.db().collection("friends").whereArrayContains("participants", me)
+                .limit(com.friendbook.social.core.OnDemandLoads.FRIEND_GRAPH_LIMIT)
                 .addSnapshotListener((snap, err) -> {
                     if(snap==null || !java.util.Objects.equals(me,Fb.uid()) || !isAdded())return;
                     friendIds.clear();

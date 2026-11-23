@@ -213,7 +213,10 @@ public class MainActivity extends Activity {
             Fb.ensureMeFresh();
 
             startBadgeListeners();
-            watchReferralsForFreeTick();
+            // Referral totals are not needed to paint the first screen; run them
+            // after the visible work instead of inside the cold-start burst.
+            new android.os.Handler(android.os.Looper.getMainLooper())
+                    .postDelayed(MainActivity.this::watchReferralsForFreeTick, 4_000L);
             AdsConfig.startWatching();
             com.friendbook.social.core.CloudAppConfig.refresh(getApplicationContext());
             return false;
@@ -579,8 +582,12 @@ public class MainActivity extends Activity {
                 });
 
         if (chatReg != null) chatReg.remove();
+        // The badge only needs the rooms that can still be unread; an unbounded
+        // read of every room on every message was the biggest cold-start cost.
         chatReg = Fb.db().collection("chats")
                 .whereArrayContains("participants", me)
+                .orderBy("inboxActivityAt", com.friendbook.social.d1.documents.Query.Direction.DESCENDING)
+                .limit(com.friendbook.social.core.OnDemandLoads.CHAT_BADGE_LIMIT)
                 .addSnapshotListener((snap, err) -> {
                     if (snap == null || !java.util.Objects.equals(me,Fb.uid())) return;
                     int total = 0;
