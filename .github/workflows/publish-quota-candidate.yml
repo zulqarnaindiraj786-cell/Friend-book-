@@ -55,4 +55,8 @@ jobs:
           gh release create "$TAG" friendbook-2.10.34.apk friendbook-2.10.34.aab SHA256SUMS.txt \
             --target "$BUILD_SHA" --prerelease --latest=false \
             --title 'FriendBook 2.10.34 (176) — signed quota-fix candidate' \
-            --notes 'Existing signed APK and AAB from successful build 45166501055, source 7f76bb466918194c24efb8d25a949b9463ed5c55. Includes concurrent engagement GET coalescing. Original build verified signatures and Android core tests. Promoted without rebuilding; SHA256SUMS attached. PR #36 remains unmerged. Not a full-day quota/capacity pass, not uploaded to Google Play, not installed automatically. Backend preview optimization was deployed separately in run 45169771972. Production Latest release unchanged.'
+            --notes 'Existing signed APK and AAB from successful build 45166501055, source 7f76bb466918194c24efb8d25a949b9463ed5c55. Includes concurrent engagement GET coalescing. Original build verified signatures and Android core tests. Promoted without rebuilding; SHA256SUMS attached. PR #36 remains unmerged. Not a full-day quota/capacity pass, not uploaded to Google Play, not installed automatically. Backend preview optimization was deployed separately in run 45169771972. Production Latest release unchanged.' > /tmp/candidate-publish.log 2>&1 || {
+              head -12 /tmp/candidate-publish.log | while IFS= read -r line; do echo "::error::${line:0:500}"; done
+              exit 1
+            }
+          cat /tmp/candidate-publish.log
