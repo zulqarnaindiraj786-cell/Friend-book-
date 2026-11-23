@@ -1,4 +1,4 @@
-# Code-only rollout: skip authorized identical direct-room/nested literal saves; preserve transforms and mirror repair.
+# Code-only rollout: adaptive bounded shared activity seek; reviewed index installed separately.
 name: Deploy quota fixes without database migrations
 on:
   push:

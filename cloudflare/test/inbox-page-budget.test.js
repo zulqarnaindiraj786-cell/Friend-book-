@@ -103,7 +103,7 @@ test('shared activity index seeks a bounded head with parity and no per-member w
     for(const read of f.reads.filter(r=>r.q.includes('idx_cf_chat_activity_seek'))) {
       const details=f.sql.prepare('EXPLAIN QUERY PLAN '+read.q).all(...read.args).map(r=>r.detail);
       assert.ok(!details.some(p=>p.includes('TEMP B-TREE')));
-      if(read.q.includes('inbox_activity <='))assert.ok(details.some(p=>p.includes('SEARCH f USING INDEX idx_cf_chat_activity_seek')));
+      if(read.args.length>2)assert.ok(details.some(p=>p.includes('SEARCH f USING INDEX idx_cf_chat_activity_seek')));
     }
     const before=f.sql.prepare('SELECT total_changes() n').get().n;
     f.sql.exec("UPDATE friendbook_cf_firestore_documents SET document_json=json_set(document_json,'$.lastMessageTime.millis',9999) WHERE path='chats/room0000'");
@@ -148,5 +148,16 @@ test('shared seek warms only from actual membership-query metadata, without an e
     assert.ok(!f.reads.some(r=>r.q.includes('idx_cf_chat_activity_seek')));
     f.reads.length=0;assert.deepEqual(await f.query({}),first);
     assert.equal(f.reads.length,1);assert.ok(f.reads[0].q.includes('idx_cf_chat_activity_seek'));
+  } finally {f.sql.close();}
+});
+
+
+test('unsafe JSON integers preserve JS-rounded activity ties and cursors through compatibility ordering',async()=>{
+  const f=fixture(true);try {
+    f.add('z',{participants:['alice','bob'],lastMessageTime:9007199254740992});
+    f.add('a',{participants:['alice','bob'],lastMessageTime:1});
+    f.sql.exec("UPDATE friendbook_cf_firestore_documents SET document_json='{\"participants\":[\"alice\",\"bob\"],\"lastMessageTime\":9007199254740993}' WHERE path='chats/a'");
+    f.expensive();assert.deepEqual((await f.query({})).map(d=>d.id),['z','a']);
+    assert.deepEqual(await f.query({startAfter:[9007199254740992,'z']}),await f.query({startAfter:[9007199254740992,'z']},true));
   } finally {f.sql.close();}
 });

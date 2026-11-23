@@ -87,6 +87,7 @@ def main():
         if type(candidates) is not int or not 0<=candidates<=64:raise ValueError('Bounded read probe returned unexpected count')
         report['bounded_read_probe']={'candidates':candidates,**{k:bounded['meta'][k] for k in ('rows_read','rows_written')}}
         if bounded['meta']['rows_written']!=0:raise ValueError('Read-only probe unexpectedly wrote rows')
+        if bounded['meta']['rows_read']>256:raise ValueError('Shared read probe exceeded reviewed bounded cost')
         report.update({'plan':details,'index_installed':True,'database_file_size':size})
     finally:
         report['operation_cost']={k:sum(row[k] for row in costs) for k in ('rows_read','rows_written')}

@@ -321,9 +321,9 @@ function inboxActivity(data) {
 }
 
 
-// Bound document materialization, not just the final HTTP response. No derived
-// per-member activity table or message-write fanout is introduced. SQLite still
-// sorts matching membership candidates: this is NOT a bounded-scan claim.
+// Choose a bounded shared-index head only after measured sort cost justifies
+// it; otherwise retain membership-first paging. No per-member activity table
+// or message-write fanout is introduced. The compatibility plan still sorts.
 async function boundedInboxPage(db,uid,spec,requestUserReads) {
   if(spec?.parent!=='chats' || !Number.isInteger(spec.limit) || spec.limit<1 || spec.limit>100
     || spec.limitToLast || spec.orderBy?.length!==1 || spec.orderBy[0]?.field!=='inboxActivityAt'
@@ -332,7 +332,7 @@ async function boundedInboxPage(db,uid,spec,requestUserReads) {
   for(const key of ['startAfter','startAt','endBefore','endAt']) {
     const c=spec[key];
     if(c!==undefined && (!Array.isArray(c) || c.length>2
-      || (c.length && (typeof c[0]!=='number' || !Number.isFinite(c[0])))
+      || (c.length && (typeof c[0]!=='number' || !Number.isFinite(c[0]) || Math.abs(c[0])>Number.MAX_SAFE_INTEGER))
       || (c.length===2 && (typeof c[1]!=='string' || /[^\x20-\x7e]/.test(c[1])))))return null;
   }
   const desc=spec.orderBy[0].direction==='DESCENDING', direction=desc?'DESC':'ASC';
@@ -351,16 +351,16 @@ async function boundedInboxPage(db,uid,spec,requestUserReads) {
   const seekSize=inboxSeekSize(db,uid,spec.limit);
   if(seekSize) {
     try {
-      const head=await db.prepare(`SELECT f.*, ${inboxSqlActivity} AS inbox_activity,
+      const head=await db.prepare(`SELECT f.*, CAST((${inboxSqlActivity}) AS REAL) AS inbox_activity,
         EXISTS(SELECT 1 FROM friendbook_cf_chat_participants m WHERE m.participant_uid=?
           AND m.chat_path=f.path AND m.source=1) AS inbox_member
         FROM friendbook_cf_firestore_documents f INDEXED BY idx_cf_chat_activity_seek
         WHERE f.path='chats/'||f.doc_id
-          ${predicates.map(p=>' AND '+p).join('')}
-        ORDER BY inbox_activity ${direction},doc_id ${direction} LIMIT ?`)
+          ${predicates.map(p=>' AND '+p.replaceAll('inbox_activity',`(${inboxSqlActivity})`)).join('')}
+        ORDER BY (${inboxSqlActivity}) ${direction},doc_id ${direction} LIMIT ?`)
         .bind(uid,...bindings.slice(1),seekSize).all();
       const rows=head.results||[];
-      if(rows.every(row=>/^[\x20-\x7e]+$/.test(row.doc_id) && row.path===`chats/${row.doc_id}` && isDocumentPath(row.path))) {
+      if(rows.every(row=>Math.abs(row.inbox_activity)<=Number.MAX_SAFE_INTEGER && /^[\x20-\x7e]+$/.test(row.doc_id) && row.path===`chats/${row.doc_id}` && isDocumentPath(row.path))) {
         const memberRows=rows.filter(row=>row.inbox_member===1);
         const docs=memberRows.map(row=>rowToDocument({...row,[canonicalRootSnapshot]:true}));
         if(docs.every((doc,i)=>inboxActivity(doc.data)===memberRows[i].inbox_activity)) {
@@ -386,7 +386,7 @@ async function boundedInboxPage(db,uid,spec,requestUserReads) {
     let result;
     try {
       result=await db.prepare(`WITH quota_inbox_candidates AS (
-        SELECT f.*, ${inboxSqlActivity} AS inbox_activity
+        SELECT f.*, CAST((${inboxSqlActivity}) AS REAL) AS inbox_activity
         FROM friendbook_cf_chat_participants m INDEXED BY idx_cf_chat_participant_source
         JOIN friendbook_cf_firestore_documents f ON f.path=m.chat_path
         WHERE m.participant_uid=? AND m.source=1)
@@ -402,7 +402,7 @@ async function boundedInboxPage(db,uid,spec,requestUserReads) {
     // SQLite UTF-8 and JS UTF-16 can disagree amongst non-ASCII ID ties.
     // ASCII candidates cannot be displaced by those ties; otherwise preserve
     // the full compatibility evaluator rather than silently skipping a room.
-    if(rows.some(row=>/[^\x20-\x7e]/.test(row.doc_id) || row.parent_path!=='chats'
+    if(rows.some(row=>Math.abs(row.inbox_activity)>Number.MAX_SAFE_INTEGER || /[^\x20-\x7e]/.test(row.doc_id) || row.parent_path!=='chats'
       || row.path!==`chats/${row.doc_id}` || !isDocumentPath(row.path)))return null;
     const docs=rows.map(row=>rowToDocument({...row,[canonicalRootSnapshot]:true}));
     if(docs.some((doc,i)=>inboxActivity(doc.data)!==rows[i].inbox_activity))return null;
