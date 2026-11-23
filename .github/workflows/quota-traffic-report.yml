@@ -1,4 +1,4 @@
-# Post-rollout report: account-wide active shapes after call and reaction fixes.
+# Fresh owner-requested loop diagnosis: execution frequency versus billed rows per query shape.
 name: Analytics-only quota traffic report
 on:
   push:
