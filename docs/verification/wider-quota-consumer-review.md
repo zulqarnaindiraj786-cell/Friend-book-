@@ -33,3 +33,13 @@ The root coverage script's broad canonical count was already scoped in source to
 ## Outcome and boundaries
 
 This continuation widened investigation, but did not establish a new unnecessary application loop or ship an app fix. Unknown consumers remain unknown. No production Worker deployment, schema migration, index removal, data deletion, APK/AAB, merge, acceptance-threshold change or backend proof-date reset occurred. No claim of 100% completion or automatic future monitoring is made. See `dominant-write-promotion-attribution.md` for exact-match versus structural-family limits and the failed repository-wide workflow-disable permission attempt.
+
+## Rank 3 traced to exact historical backup SQL
+
+Follow-up analytics https://github.com/zulqarnaindiraj786-cell/Friend-book-/actions/runs/45196783791 **SUCCESS**, window ending **2026-11-23T14:40:52Z**, exact-template attribution confirms **147,250 reads / 69 executions / 17,250 returned rows** match:
+
+`SELECT * FROM friendbook_cf_presence_sessions ORDER BY rowid LIMIT ? OFFSET ?`
+
+This exact template is present in both `checksum_pages` and `write_backup` in `scripts/loadtest/backup_retired_tables.py` at historical commit `e305b41`. The classifier generates only the seven reviewed retired-table templates, requires exact normalized SQL including bind identities, and executes none of them. This proves a historical backup-template match, not a particular actor/run or active app presence polling. Current source replaced OFFSET with rowid seeks in **7f76bb4**; source tests already cover no OFFSET, sparse/negative rowids, checksum equivalence and cursor validation. An additional 5,000-row real SQLite regression now compares the entire historical/current row sets and requires current VM work below half of historical OFFSET work. VM steps are not D1 billed reads; this is prevention evidence, not newly realized production savings.
+
+Privacy diagnostics recognize only reviewed SQL tokens/table names, redact arbitrary identifiers and all values, and preserve only allowlisted quoted identifiers. This continuation made no production app changes or table scans. Rank 3 is no longer unidentified. The 151,719-read inventory's exact caller and other residual costs remain unresolved; no 100% acceptance claim.

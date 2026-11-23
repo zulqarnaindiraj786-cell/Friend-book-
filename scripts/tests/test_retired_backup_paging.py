@@ -49,3 +49,29 @@ class RetiredBackupPagingTest(unittest.TestCase):
                 {'__friendbook_backup_rowid': 1, 'uid': 'b'}], {})):
             with self.assertRaises(ValueError):
                 list(backup.backup_pages(backup.TABLES[0]))
+
+    def test_seek_vm_budget_beats_historical_offset_without_losing_rows(self):
+        with sqlite3.connect(':memory:') as db:
+            db.row_factory = sqlite3.Row
+            table = backup.TABLES[0]
+            db.execute(f'CREATE TABLE {table}(uid TEXT, payload TEXT)')
+            db.executemany(f'INSERT INTO {table} VALUES (?,?)',
+                           ((str(i), 'payload') for i in range(5000)))
+            steps = [0]
+            def tick():
+                steps[0] += 1
+                return 0
+            db.set_progress_handler(tick, 1)
+            historical = []
+            for offset in range(0, 5001, backup.PAGE):
+                historical.extend(dict(row) for row in db.execute(
+                    f'SELECT * FROM {table} ORDER BY rowid LIMIT ? OFFSET ?', (backup.PAGE, offset)))
+            offset_work = steps[0]
+            steps[0] = 0
+            def remote(sql, args):
+                return [dict(row) for row in db.execute(sql, args)], {}
+            with patch.object(backup, 'remote_query', side_effect=remote):
+                current = [row for page in backup.backup_pages(table) for row in page]
+            self.assertEqual(current, historical)
+            # Local SQLite VM work, NOT D1 billed-row savings or production proof.
+            self.assertLess(steps[0], offset_work // 2)
