@@ -53,6 +53,7 @@ class TrafficReport(unittest.TestCase):
         self.assertEqual(report['observed_top_shape_subtotals'],{'application_or_unattributed':12})
         self.assertNotIn('PRIVATE_USER_123',json.dumps(report))
         self.assertNotIn('document_json',json.dumps(report))
+        self.assertEqual(report['largest_shapes'][0]['tables'],['canonical_documents'])
         self.assertEqual(p.parse_groups(payload([row])),[{'sum':row['sum'],'count':3}])
 
     def test_top_n_coverage_not_assumed_complete(self):

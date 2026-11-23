@@ -65,7 +65,15 @@ def safe_shape(sql):
         ('friendbook_cf_chat_participants','chat_membership'),('friendbook_cf_comment','comment'),
         ('idx_cf_friend_participant_0','indexed_friend_guard'),('where path','path_lookup')]
         if token in q]
-    return {'operation':op.group(1).upper() if op else 'OTHER','roots':roots,'features':features}
+    tables=[label for table,label in (
+        ('friendbook_cf_firestore_documents','canonical_documents'),
+        ('friendbook_cf_documents','legacy_mirror'),
+        ('friendbook_cf_social_guards','transaction_guards'),
+        ('friendbook_cf_fcm_devices','fcm_devices'),
+        ('friendbook_cf_fcm_device_claims_v2','fcm_claims'),
+        ('friendbook_cf_comments','comments'),
+        ('friendbook_cf_reactions','reactions')) if re.search(r'\b'+table+r'\b',q)]
+    return {'operation':op.group(1).upper() if op else 'OTHER','tables':tables,'roots':roots,'features':features}
 
 
 def summarize_shapes(groups,metric):

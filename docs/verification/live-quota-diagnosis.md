@@ -208,3 +208,48 @@ Inline window-analytics Python syntax check PASS; seven account-analytics
 validation tests PASS; actual remote GraphQL calls PASS. No Android/Worker
 business logic changed in this follow-up. Prior Worker compile/tests remain the
 application-code evidence. No new measured end-to-end quota guarantee.
+
+## Autonomous follow-up without requiring user technical input
+
+User explicitly asked us to investigate independently rather than require a
+screenshot or technical details. Added `quota_traffic_report.py` and the opt-in
+`quota-traffic-report.yml` workflow. It calls **only Cloudflare GraphQL**, never
+D1 SQL, application endpoints, profiling subprocesses, migrations or deployment.
+No recurring schedule was created and no Worker cron was modified.
+
+Run https://github.com/zulqarnaindiraj786-cell/Friend-book-/actions/runs/45118338726
+on source `7cf411641565fd2d423f9028318afbf81935cede` **PASS**. Sanitized JSON is
+available as the `sanitized-quota-traffic-report` Actions artifact (7-day retention).
+The report emits only fixed-vocabulary query categories, operation/root labels,
+aggregates and timestamps—no raw SQL, bindings, IDs or document values. A subsequent
+local-only refinement adds fixed-vocabulary table labels; it does not run another
+remote report automatically.
+
+Provider-returned query-adaptive data ending **2026-11-23T05:31:47Z**:
+
+| Window | Reads | Writes | Executions | Caveat |
+|---|---:|---:|---:|---|
+| Latest 5m | unavailable | unavailable | unavailable | no observations returned; NOT zero usage |
+| Latest 15m | 2,520 | 58 | 990 | 22 returned shapes, not a device trace |
+| Latest 60m | 142,828 | 2,452 | 6,826 | includes older activity and diagnostic work |
+
+The 15m window begins 05:16:47 UTC. Its observed top-shape read subtotal was 2,520
+under `application_or_unattributed`; schema inspection contributed zero reads.
+Largest shapes were comment-related SELECTs: 1,534/128 executions and 344/86;
+path lookups 290/290. The largest write shape was 30 writes/10 executions.
+No matched-session baseline, device identity/version, or full-day savings claim
+is established. Do not extrapolate these windows into a guaranteed daily cap.
+
+The 60m top-60 read shapes include 29,931 known diagnostic-preflight reads,
+6,651 known diagnostic-probe reads, and 1,209 schema-inspection reads. The shape
+list hit the 60-group limit and may be incomplete. Its category subtotals must
+NOT be subtracted from separate account billing or treated as complete app totals.
+Read-sorted and write-sorted shape samples are independent, not added together.
+
+All **352 Python tests and 235 Worker tests PASS** locally after the follow-up,
+including fail-closed handling of missing/invalid analytics, diagnostic exclusion
+without hiding actual friendship transaction writes, top-N truncation labels and
+privacy checks. Prior Worker compile run 45116966062 remains the unchanged business
+code's compile evidence. PR #36 remains OPEN/unmerged; no APK rebuild or production
+mutation this turn. There is no always-running monitor or auto-remediation process:
+the reusable report is invoked explicitly, so don't claim background monitoring.
