@@ -2,14 +2,17 @@
 name: Legacy coverage proof
 on:
   workflow_dispatch:
-  push:
-    branches: ['arena/7c7ddb7b-friend-book']
-    paths: ['.github/workflows/coverage-proof.yml']
+    inputs:
+      confirm_production_scan:
+        description: 'Explicitly authorize production D1 diagnostic/migration cost; not routine app work'
+        type: boolean
+        default: false
+        required: true
 permissions:
   contents: read
 jobs:
   coverage:
-    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[coverage-proof]')
+    if: github.event_name == 'workflow_dispatch' && inputs.confirm_production_scan == true
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:

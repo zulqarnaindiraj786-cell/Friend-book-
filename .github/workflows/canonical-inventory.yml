@@ -1,14 +1,18 @@
 # Read-only, bounded aggregate diagnostics; no document identities in logs.
 name: Canonical coverage inventory
 on:
-  push:
-    branches: [arena/7c7ddb7b-friend-book]
-    paths: [.github/workflows/canonical-inventory.yml, scripts/loadtest/canonical_inventory.py, scripts/tests/test_canonical_inventory.py]
+  workflow_dispatch:
+    inputs:
+      confirm_production_scan:
+        description: 'Explicitly authorize production D1 diagnostic/migration cost; not routine app work'
+        type: boolean
+        default: false
+        required: true
 permissions:
   contents: read
 jobs:
   inventory:
-    if: contains(github.event.head_commit.message, '[canonical-inventory]')
+    if: github.event_name == 'workflow_dispatch' && inputs.confirm_production_scan == true
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
