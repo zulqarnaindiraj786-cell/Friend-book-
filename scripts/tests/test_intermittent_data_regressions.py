@@ -16,7 +16,7 @@ class IntermittentDataTests(unittest.TestCase):
   first=home.split('private void startPostsQuery',1)[1].split('private void consumePostsSnapshot',1)[0]
   self.assertIn('loadingPosts=false;pageError=true;updatePagingUi();releaseHomeSecondary();',first)
   self.assertIn('if(!offline && !snapshot.isEmpty()) lastDoc=',first)
-  self.assertIn('if(snapshot.getMetadata().isFromCache()){\n                pageError=true;updatePagingUi();return;',home)
+  self.assertIn('feedQuery.startAfter(lastDoc).limit(PAGE).getCachedOrFetch(false)',home)
   self.assertNotIn('feedGeneration++',first)
   self.assertNotIn('Ui.toast',first)
   self.assertIn('feedGeneration++;loadingPosts=false;pageError=true;updatePagingUi();',home)

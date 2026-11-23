@@ -154,7 +154,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
                         && ((LinearLayoutManager)view.getLayoutManager()).findFirstVisibleItemPosition()==0)
                     startVisibleHomeContent();
                 LinearLayoutManager manager=(LinearLayoutManager)view.getLayoutManager();
-                // Start one five-post page only after the user scrolls the last
+                // Start one ten-post page only after the user scrolls the last
                 // post into view. The last adapter row is the paging footer.
                 if(dy>0 && isResumed() && !isHidden() && view.getScrollState()!=RecyclerView.SCROLL_STATE_IDLE
                         && !pageError && manager!=null && adapter.getItemCount()>2
@@ -299,7 +299,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
     }
 
     private void refreshPostsIfNeeded() {
-        // A warm tab return must not replace loaded older pages with the first five.
+        // A warm tab return must not replace loaded older pages with the first ten.
         if (loadedPosts && java.util.Objects.equals(feedAccount,Fb.uid()) && rv!=null
                 && rv.getLayoutManager() instanceof LinearLayoutManager) {
             LinearLayoutManager layout=(LinearLayoutManager)rv.getLayoutManager();
@@ -571,7 +571,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         if (notesInFlight) return;
         notesInFlight = true;
         notesReadAt = attempt;
-        // Notes need up to 30 users; reuse the first ten for Home suggestions.
+        // Fetch only the visible suggestion-card window, and reuse it for Notes.
         Fb.db().collection("users").limit(3).getCachedOrFetch(forced).addOnSuccessListener(snap -> {
             notesInFlight = false;
             if (!isAdded() || !actor.equals(Fb.uid()) || notesReadAt != attempt) return;
@@ -781,6 +781,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
             restorePymkFromCache(me);
             renderPymk();
             renderLoadedStories();
+            if (loadedPosts && !lastPostDocs.isEmpty()) consumePostsSnapshot(lastPostDocs,false);
             return;
         }
         Fb.db().collection("friends").whereArrayContains("participants", me)
@@ -1191,13 +1192,10 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
             feedGeneration++;loadingPosts=false;pageError=true;updatePagingUi();
         },20000L);
         final long requestedAt=android.os.SystemClock.elapsedRealtime();
-        feedQuery.startAfter(lastDoc).limit(PAGE).get().addOnSuccessListener(snapshot -> {
+        feedQuery.startAfter(lastDoc).limit(PAGE).getCachedOrFetch(false).addOnSuccessListener(snapshot -> {
             if(generation!=feedGeneration || !java.util.Objects.equals(actor,Fb.uid()) || !isAdded()) return;
             loadingPosts=false;
-            // Partial cache results cannot prove we reached the end or move the server cursor.
-            if(snapshot.getMetadata().isFromCache()){
-                pageError=true;updatePagingUi();return;
-            }
+            // getCachedOrFetch returns a complete exact-query page, not a partial document cache.
             moreAvailable=snapshot.size()==PAGE;
             if(!snapshot.isEmpty()) lastDoc=snapshot.getDocuments().get(snapshot.size()-1);
             List<Models.Post> page=new ArrayList<>();

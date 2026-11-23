@@ -2109,7 +2109,9 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             // 2. Tall Vertical Rounded Story Cards Rail SECOND (108dp × 190dp + "Find friends" card)
             RecyclerView rail = new RecyclerView(c);
             rail.setBackgroundColor(Ui.card(c));
-            rail.setLayoutManager(new LinearLayoutManager(c, RecyclerView.HORIZONTAL, false));
+            LinearLayoutManager storyLayout=new LinearLayoutManager(c, RecyclerView.HORIZONTAL, false);
+            storyLayout.setItemPrefetchEnabled(false);
+            rail.setLayoutManager(storyLayout);
             Ui.pad(rail, 8, 8, 8, 8);
             storiesAdapter = new StoriesAdapter();
             rail.setAdapter(storiesAdapter);
