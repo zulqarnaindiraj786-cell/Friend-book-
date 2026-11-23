@@ -3477,7 +3477,6 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
     }
 
     @Override
-    @Override
     protected void onStop() {
         // Leaving the screen is the last event that must reach the room document.
         publishHostHeartbeat();
