@@ -1,4 +1,4 @@
-# Code-only rollout: redundant legacy API reads and timestamp-only writes; no D1 schema changes.
+# Code-only rollout: redundant list reads and profile-only no-op writes; preserve content timestamps.
 name: Deploy quota fixes without database migrations
 on:
   push:
