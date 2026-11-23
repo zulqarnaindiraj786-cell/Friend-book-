@@ -113,3 +113,10 @@ class TrafficReport(unittest.TestCase):
         unknown=p.safe_shape('INSERT INTO friendbook_cf_documents AS quota_writer_PRIVATE_users(path) VALUES (?)')
         self.assertNotIn('writer_families',unknown)
         self.assertNotIn('PRIVATE',str(unknown))
+
+    def test_inbox_sort_is_distinct_from_generic_membership_lookup(self):
+        q="WITH quota_inbox_candidates AS (SELECT f.* FROM friendbook_cf_chat_participants m JOIN friendbook_cf_firestore_documents f ON f.path=m.chat_path WHERE m.participant_uid='SECRET') SELECT * FROM quota_inbox_candidates ORDER BY inbox_activity DESC LIMIT 10"
+        shape=p.safe_shape(q)
+        self.assertIn('chat_membership',shape['features'])
+        self.assertIn('inbox_activity_sort',shape['features'])
+        self.assertNotIn('SECRET',str(shape))
