@@ -1,0 +1,47 @@
+name: Scope chat timestamp index safely
+on:
+  push:
+    branches: [arena/b52bc74d-friend-book]
+    paths:
+      - '.github/workflows/scope-chat-timestamp-index.yml'
+      - 'cloudflare/migrations/0090_scope_chat_timestamp_index.sql'
+      - 'scripts/admin/scope_chat_timestamp_index.py'
+      - 'scripts/tests/test_chat_timestamp_index.py'
+      - 'cloudflare/test/chat-timestamp-index-quota.test.js'
+permissions:
+  contents: read
+concurrency:
+  group: friendbook-cloudflare-production
+  cancel-in-progress: false
+jobs:
+  scope-index:
+    if: contains(github.event.head_commit.message, '[scope-chat-index]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - name: Validate all app and migration regressions before any production change
+        run: |
+          npm test
+          python3 -m unittest discover -s scripts/tests
+          python3 cloudflare/test/schema_test.py
+          python3 cloudflare/test/migration_test.py
+          python3 cloudflare/test/index_plan_test.py
+          QUOTA_EXPERIMENT_FRIEND_INDEXES=1 node scripts/loadtest/d1_quota_replay.mjs 30 > /tmp/chat-index-replay.json
+      - name: Compile app without deploying
+        env:
+          WRANGLER_SEND_METRICS: 'false'
+        run: npx --yes wrangler@4.157.0 deploy --dry-run --outdir /tmp/app-compile
+      - name: Require conservative account headroom for index build
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: python3 scripts/loadtest/d1_account_usage_analytics.py --preflight-budget
+      - name: Build exact replacement first, validate plans, then retire global index
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: python3 scripts/admin/scope_chat_timestamp_index.py --apply-reviewed-replacement

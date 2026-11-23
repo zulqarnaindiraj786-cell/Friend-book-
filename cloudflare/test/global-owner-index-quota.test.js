@@ -8,7 +8,7 @@ const removal='0089_remove_redundant_global_owner_index.sql';
 test('global owner index removal preserves path authorization and scoped live throttles',()=>{
   const db=new DatabaseSync(':memory:');
   try {
-    for(const name of readdirSync(dir).filter(n=>n.endsWith('.sql')&&n!==removal).sort()) db.exec(readFileSync(new URL(name,dir),'utf8'));
+    for(const name of readdirSync(dir).filter(n=>n.endsWith('.sql')&&n<removal).sort()) db.exec(readFileSync(new URL(name,dir),'utf8'));
     const insert=db.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)');
     for(let i=0;i<300;i++) insert.run(`lives/${i%3}/chat/m${i}`,`lives/${i%3}/chat`,'chat',`m${i}`,i%2?'alice':'bob',JSON.stringify({type:i%2?'chat':'gift'}),i,i);
     const queries=[

@@ -14,7 +14,7 @@ class OwnerIndexRetirement(unittest.TestCase):
         with sqlite3.connect(':memory:', cached_statements=0) as db:
             db.row_factory=sqlite3.Row
             for path in sorted((ROOT/'cloudflare/migrations').glob('*.sql')):
-                if not path.name.startswith('0089_'): db.executescript(path.read_text())
+                if path.name<'0089_': db.executescript(path.read_text())
             def indexes():
                 return [dict(r) for r in db.execute("SELECT name,sql FROM sqlite_schema WHERE type='index'")]
             self.assertTrue(m.validate_indexes(indexes()))
