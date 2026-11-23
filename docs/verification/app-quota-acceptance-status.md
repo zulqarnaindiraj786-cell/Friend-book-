@@ -41,3 +41,24 @@ Reproduced an absent-reaction clear creating a new NULL tombstone for both posts
 A real local SQLite regression covers initial and repeated absent clears, like/love/unlike/wow/unlike, post and comment acknowledgements, unauthorized access, nonexistent comments, and existing-NULL no-ops. A separate test checks an unknown historical reaction still transitions its timestamp on explicit clear and becomes a no-op on retry. **Zero SQLite changes is not proof of zero D1 reads or billed writes**: the primary-key existence checks still have read cost and no isolated production billing probe was run for this change. No frequency or daily savings estimate is asserted.
 
 Deployment https://github.com/zulqarnaindiraj786-cell/Friend-book-/actions/runs/45187476253 **SUCCESS**, completed **2026-11-23T13:48:30Z**. **278 Worker / 385 Python tests PASS**, schema/migration/index-plan tests and 30-user network-disabled replay PASS; exact production compile, resource/cron preservation and health/auth smoke checks PASS. Latest conservative proof boundary is now **2026-11-23T13:48:30Z** (superseding the call-only boundary above); first possible complete post-fix UTC day remains Nov 24. Strict daily FAIL has not been relabeled. PR remains unmerged, Android unchanged.
+
+
+## Push/background continuation
+
+FCM device registration already guards unchanged user/token upserts; no new change was needed there. Auditing the broadcast drain exposed a separate reliability defect: a synchronous/async D1 expiry DELETE or lease UPDATE failure escaped a worker loop, retiring that slot and rejecting Promise.all before other recipients necessarily completed. The scheduled wrapper masks the rejection but cannot restore the lost slot or guarantee outstanding work finishes.
+
+Source **f4cfb96** isolates each row's lease/expiry/discard failure, keeps draining the existing bounded due page, and waits for all workers. No new reads, scans, timer, retry policy, claim store, fanout, concurrency or lease changes were introduced. A failed row is not deleted as a workaround; existing leases/backoff and expiry remain authoritative. This is a delivery-reliability correction, not a claimed D1 quota saving: more healthy queued recipients can now finish in that run.
+
+Real-schema fault injection uses 12 due recipients and poisoned UPDATE/DELETE triggers. Before the fix, 2 of 3 cases failed (claim and expired cleanup); after the fix all 3 pass, alongside scheduled failure isolation. Tests verify the 11 healthy recipients finish before resolution, only the poisoned job remains, and that job is recoverable/expirable after removing the fault. Existing send/delete failure handling remains intact.
+
+Deployment https://github.com/zulqarnaindiraj786-cell/Friend-book-/actions/runs/45188052011 **SUCCESS**, completed **2026-11-23T13:51:50Z**. **281 Worker / 385 Python tests PASS**, schema/migration/index-plan checks, 30-user network-disabled replay, exact production compile, bindings/resources/cron preservation and health/auth checks PASS. No migration, Android change or merge.
+
+Analytics-only report https://github.com/zulqarnaindiraj786-cell/Friend-book-/actions/runs/45188051866 **SUCCESS**; windows ended **2026-11-23T13:51:23Z**:
+
+| Window | Primary D1 reads | Primary D1 writes | Executions |
+|---|---:|---:|---:|
+| 5 minutes | 3 | 0 | 5 |
+| 15 minutes | 8 | 0 | 11 |
+| 60 minutes | 7,622 | 194 | 2,636 |
+
+All three account-wide database splits observed only the primary database, were not truncated, and observed other-database subtotals were 0/0. These are quiet/delayed windows, not representative activity or completed-day acceptance; the hour spans versions and engineering work, and the report ends before this final rollout completed. The existing strict daily FAIL is unchanged. Latest conservative proof boundary is **2026-11-23T13:51:50Z**, superseding earlier boundaries above. Nothing here certifies that every application behavior or unknown device consumer is defect-free.
