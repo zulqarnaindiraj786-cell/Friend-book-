@@ -1109,13 +1109,14 @@ async function visibleDocuments(db,uid,parent,docs,requestUserReads = new Map(),
   // Query/count authorize the live room before accessing its chat collection.
   if (parts?.length===3 && parts[0]==='lives' && parts[2]==='chat') return docs;
   const allowed=new Array(docs.length).fill(false);
+  const requestRoomReads=new Map();
   let next=0;
   await Promise.all(Array.from({length:Math.min(8,docs.length)},async()=>{
     for (;;) {
       const i=next++; if (i>=docs.length) return;
       const doc=docs[i];
       allowed[i]=(nestedChat || (parent==='chats' && doc[canonicalRootSnapshot]!==undefined
-        ? storedChatMember(doc[canonicalRootSnapshot],uid) : await chatReadAllowed(db,doc.path,uid,doc.data))) && await contentReadAllowed(db,uid,doc.path,requestUserReads,includeArchivedOwner);
+        ? storedChatMember(doc[canonicalRootSnapshot],uid) : await chatReadAllowed(db,doc.path,uid,doc.data,requestRoomReads))) && await contentReadAllowed(db,uid,doc.path,requestUserReads,includeArchivedOwner);
     }
   }));
   return docs.filter((_,i)=>allowed[i]);

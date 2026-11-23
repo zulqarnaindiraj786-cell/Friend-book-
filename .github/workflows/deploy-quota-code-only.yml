@@ -1,4 +1,4 @@
-# Code-only rollout: unread notification exception scoping; no D1 schema changes.
+# Code-only rollout: request-local chat authorization coalescing; no D1 schema changes.
 name: Deploy quota fixes without database migrations
 on:
   push:
