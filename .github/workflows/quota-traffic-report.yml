@@ -1,4 +1,4 @@
-# Post-rollout report: adaptive shared activity seek versus membership sort.
+# Post-rollout report: account-wide active shapes after call and reaction fixes.
 name: Analytics-only quota traffic report
 on:
   push:
