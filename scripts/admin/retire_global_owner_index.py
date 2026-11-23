@@ -71,11 +71,12 @@ def main():
     for stage in ('before','after'):
         plans=[]
         for sql,params in PROBES:
-            rows,meta=query('EXPLAIN QUERY PLAN '+sql,params)
+            rows,meta=query('EXPLAIN QUERY PLAN '+sql+' /* owner-index-'+stage+' */',params)
             if meta.get('rows_written')!=0: raise ValueError('EXPLAIN must not mutate data')
             plans.append([r['detail'] for r in rows])
         validate_plans(plans)
-        opcodes,meta=query('EXPLAIN '+INSERT)
+        # Distinct texts avoid stale EXPLAIN caches across the schema change.
+        opcodes,meta=query('EXPLAIN '+INSERT+' /* owner-index-'+stage+' */')
         if meta.get('rows_written')!=0: raise ValueError('EXPLAIN must not mutate data')
         summary.append({'stage':stage,'plans':plans,'index_insert_opcodes':sum(r['opcode']=='IdxInsert' for r in opcodes)})
         if stage=='before':

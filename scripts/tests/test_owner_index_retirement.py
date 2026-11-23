@@ -11,7 +11,7 @@ spec.loader.exec_module(m)
 
 class OwnerIndexRetirement(unittest.TestCase):
     def test_exact_schema_and_production_probe_plans_before_after(self):
-        with sqlite3.connect(':memory:') as db:
+        with sqlite3.connect(':memory:', cached_statements=0) as db:
             db.row_factory=sqlite3.Row
             for path in sorted((ROOT/'cloudflare/migrations').glob('*.sql')):
                 if not path.name.startswith('0089_'): db.executescript(path.read_text())
