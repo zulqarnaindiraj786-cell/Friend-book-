@@ -24,3 +24,7 @@ No new indexes, per-member activity fanout, database migrations or Android chang
 ## Scope still not certified
 
 The membership-first inbox sort still reads matching candidates. Eliminating that scan with a per-member ordered activity index would add message-time index/row writes; that tradeoff has not been demonstrated to satisfy the user's 5k daily write target. No speculative activity-index migration has been applied. Old mirror aggregates cannot be retrospectively mapped to a caller, and quiet analytics cannot certify the daily target.
+
+## Production rollout
+
+Source f3c4109 deployed successfully in https://github.com/zulqarnaindiraj786-cell/Friend-book-/actions/runs/45179710512, completed 2026-11-23T13:01:26Z. CI regression suite, exact production dry-run compilation, code-only deployment, resource/cron preservation and health/auth smoke checks all succeeded. No migration, merge or Android rebuild. Daily acceptance boundary updated to this completion time; no actual daily savings or full quota acceptance is claimed from local no-op tests.
