@@ -20,6 +20,8 @@ public class SplashActivity extends Activity {
     @Override
     protected void onCreate(Bundle b) {
         super.onCreate(b);
+        if (BuildConfig.DEBUG && getIntent().getBooleanExtra("quota_trace", false))
+            com.friendbook.social.core.CloudflareRequestTrace.startAppEntryWindow();
         FastCache.init(this);
         route();
     }
