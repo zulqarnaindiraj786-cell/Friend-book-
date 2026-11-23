@@ -39,7 +39,9 @@ test('call rechecks each account once per renewal, without weakening revocation'
  f.sql.prepare("INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)").run('users/bob','users','bob','bob',JSON.stringify({fields:{banned:{booleanValue:true}}}),1);
  assert.equal(await allow('alice'),null,'legacy blocked account is rejected');
  f.sql.prepare("UPDATE friendbook_cf_documents SET document_json='{}' WHERE path='users/bob'").run();
- assert.equal(await allow('alice'),'video','legacy active peer remains compatible');
+ assert.equal(await allow('alice'),null,'a mirror-only peer stays invisible even when active');
+ f.sql.prepare("INSERT INTO friendbook_cf_firestore_documents VALUES ('users/bob','users','users','bob','bob','{}',1,1)").run();
+ assert.equal(await allow('alice'),'video','canonical peer keeps working');
  f.sql.prepare("UPDATE friendbook_cf_chat_calls SET status='ended' WHERE call_id='call'").run();
  assert.equal(await allow('alice'),null,'ended call rejected immediately on recheck');
 });

@@ -5,6 +5,7 @@ import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
 import { readFileSync } from 'node:fs';
 import { createWorker } from '../../worker.js';
+import { mirrorAllLegacy, mirrorAccounts } from './fixtures/canonical.js';
 import { hasD1Friendship } from '../app-documents.js';
 
 const resourcesSchema = readFileSync(new URL('../migrations/0003_additive_interactions.sql', import.meta.url), 'utf8');
@@ -120,9 +121,11 @@ test('Firestore collection queries and counts include historical root app docume
   sql.prepare(`INSERT INTO friendbook_cf_firestore_documents
     (path,parent_path,collection_id,doc_id,owner_uid,document_json,create_time,update_time)
     VALUES (?,?,?,?,?,?,?,?)`).run('posts/shared','posts','posts','shared','u1',JSON.stringify({authorId:'u1',content:'canonical copy',privacy:'public',createdAt:21}),21,21);
+  mirrorAllLegacy(sql);
   const db = { prepare(query) { const stmt = sql.prepare(query); return { bind(...args) {
     return { run: async () => stmt.run(...args), all: async () => ({results: stmt.all(...args)}), first: async () => stmt.get(...args) || null };
   } }; } };
+  mirrorAccounts(sql); mirrorAllLegacy(sql);
   const app = createWorker(async () => 'u1');
   const query = await app.fetch(new Request('https://example.test/v1/firestore/query', {
     method:'POST', headers:{authorization:'Bearer token','content-type':'application/json'},
@@ -148,15 +151,18 @@ test('Firestore-style query cursors preserve equal-timestamp ordering across pag
   for (const id of ['a','b','c']) add.run(`posts/${id}`,'posts',id,'u1',JSON.stringify({authorId:'u1',createdAt:100}),100);
   add.run('posts/d','posts','d','u1',JSON.stringify({authorId:'u1',createdAt:90}),90);
   const db={prepare(query){const stmt=sql.prepare(query);return{bind(...args){return{run:async()=>stmt.run(...args),all:async()=>({results:stmt.all(...args)}),first:async()=>stmt.get(...args)||null};}};}};
+  mirrorAccounts(sql); mirrorAllLegacy(sql);
   const app=createWorker(async()=> 'u1');
   const query=(cursor)=>new Request('https://example.test/v1/firestore/query',{method:'POST',headers:{authorization:'Bearer token','content-type':'application/json'},body:JSON.stringify({parent:'posts',orderBy:[{field:'createdAt',direction:'DESCENDING'}],limit:2,...(cursor?{startAfter:cursor}:{})})});
   add.run('posts/other','posts','other','u1',JSON.stringify({authorId:'u2',createdAt:200}),200);
   add.run('users/u2','users','u2','u2',JSON.stringify({displayName:'Other'}),1);
   sql.exec(readFileSync(new URL('../migrations/0044_profile_post_page_indexes.sql',import.meta.url),'utf8'));
+  mirrorAllLegacy(sql);
   const authorPage=await app.fetch(new Request('https://example.test/v1/firestore/query',{method:'POST',headers:{authorization:'Bearer token','content-type':'application/json'},body:JSON.stringify({parent:'posts',filters:[{field:'authorId',op:'==',value:'u1'}],orderBy:[{field:'createdAt',direction:'DESCENDING'}],limit:2})}),{DB:db,FIREBASE_PROJECT_ID:'friendbook-test'});
   assert.equal(authorPage.status,200);
   assert.deepEqual((await authorPage.json()).documents.map(d=>d.id),['c','b']);
   sql.exec("DELETE FROM friendbook_cf_documents WHERE path='posts/other'");
+  sql.exec("DELETE FROM friendbook_cf_firestore_documents WHERE path='posts/other'");
   const first=await app.fetch(query(),{DB:db,FIREBASE_PROJECT_ID:'friendbook-test'});
   const firstRows=(await first.json()).documents;
   assert.deepEqual(firstRows.map(row=>row.id),['c','b']);
@@ -603,6 +609,7 @@ test('existing friendships are read-only and only visible to their participants 
   const db={prepare(query){const stmt=sql.prepare(query);return{bind(...args){return{run:async()=>stmt.run(...args),all:async()=>({results:stmt.all(...args)}),first:async()=>stmt.get(...args)||null};}};},async batch(stmts){for(const stmt of stmts)await stmt.run();}};
   const add=sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)');
   add.run('friends/f1','friends','f1','alice',JSON.stringify({participants:['alice','bob'],createdAt:42,privateExtra:'secret'}),1);
+  mirrorAccounts(sql); mirrorAllLegacy(sql);
   const app=createWorker(async token=>token),env={DB:db,FIREBASE_PROJECT_ID:'friendbook-test'};
   const call=(uid,path,method='GET',body)=>app.fetch(new Request('https://example.test'+path,{method,headers:{authorization:'Bearer '+uid,'content-type':'application/json'},...(body?{body:JSON.stringify(body)}:{})}),env);
   const uri='/v1/firestore/document?path=friends/f1';
@@ -1397,6 +1404,7 @@ test('stories load with owner and privacy checks without exposing viewers', asyn
   const db={prepare(query){const stmt=sql.prepare(query);return{bind(...args){return{run:async()=>stmt.run(...args),all:async()=>({results:stmt.all(...args)}),first:async()=>stmt.get(...args)||null};}};},async batch(stmts){sql.exec('BEGIN');try{for(const st of stmts)await st.run();sql.exec('COMMIT');}catch(e){sql.exec('ROLLBACK');throw e;}}};
   const add=sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)');
   for(const uid of ['alice','bob'])add.run(`users/${uid}`,'users',uid,uid,JSON.stringify({uid}),1);
+  mirrorAccounts(sql); mirrorAllLegacy(sql);
   const app=createWorker(async token=>token),env={DB:db,FIREBASE_PROJECT_ID:'friendbook-test'};
   const call=(uid,path,method='GET',body)=>app.fetch(new Request('https://example.test'+path,{method,headers:{authorization:'Bearer '+uid,'content-type':'application/json'},...(body?{body:JSON.stringify(body)}:{})}),env);
   const story={authorId:'alice',privacy:'Public',caption:'hello',viewedBy:['bob'],reactions:{bob:'heart'},expiresAt:{__type:'timestamp',millis:2000000000000}};
@@ -1563,6 +1571,7 @@ test('indexed profile and request reads preserve privacy and canonical precedenc
  canon('friend_requests','r2',{fromUid:'eve',toUid:'bob',status:'pending'});legacy('friend_requests','r2',{fromUid:'alice',toUid:'bob'});
  legacy('friend_requests','old',{fields:{fromUid:{stringValue:'alice'},toUid:{stringValue:'eve'}}});
  const db={prepare(q){const stmt=sql.prepare(q);return{bind(...args){return{all:async()=>({results:stmt.all(...args)}),first:async()=>stmt.get(...args)||null};}};}};
+  mirrorAccounts(sql); mirrorAllLegacy(sql);
  const app=createWorker(async t=>t),env={DB:db,FIREBASE_PROJECT_ID:'friendbook-test'};
  const query=async(uid,parent,filters=[])=>{const r=await app.fetch(new Request('https://example.test/v1/firestore/query',{method:'POST',headers:{authorization:'Bearer '+uid,'content-type':'application/json'},body:JSON.stringify({parent,filters})}),env);assert.equal(r.status,200);return (await r.json()).documents.map(d=>d.id).sort();};
  assert.deepEqual(await query('bob','posts',[{field:'authorId',op:'==',value:'alice'}]),['old','p1']);
@@ -1586,16 +1595,14 @@ test('comments and reactions authorize parent once while enforcing post privacy'
  const f=sql.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)');
  for(let i=0;i<30;i++)f.run(`posts/p/comments/c${i}`,'posts/p/comments','comments',`c${i}`,'alice',JSON.stringify({content:'x'}),1,1);
  let postReads=0;const db={prepare(q){const s=sql.prepare(q);return{bind(...args){return{all:async()=>({results:s.all(...args)}),first:async()=>{if(q.includes('SELECT document_json') && args[0]==='posts/p')postReads++;return s.get(...args)||null;}};}};}};
+  mirrorAccounts(sql); mirrorAllLegacy(sql);
  const app=createWorker(async t=>t),env={DB:db,FIREBASE_PROJECT_ID:'friendbook-test'};
  const query=()=>app.fetch(new Request('https://example.test/v1/firestore/query',{method:'POST',headers:{authorization:'Bearer bob','content-type':'application/json'},body:JSON.stringify({parent:'posts/p/comments',limit:10})}),env);
- let r=await query();assert.equal((await r.json()).documents.length,10);assert.equal(postReads,1); // one lookup including the legacy fallback
+ let r=await query();assert.equal((await r.json()).documents.length,10);assert.equal(postReads,1); // one canonical lookup authorizes the whole page
  a.run('posts/other','posts','other','alice',JSON.stringify({authorId:'alice'}),1);
- sql.prepare('UPDATE friendbook_cf_documents SET document_json=? WHERE path=?').run(JSON.stringify({authorId:'alice',privacy:'Only me'}),'posts/p');
+ sql.prepare('UPDATE friendbook_cf_firestore_documents SET document_json=? WHERE path=?').run(JSON.stringify({authorId:'alice',privacy:'Only me'}),'posts/p');
  r=await query();assert.deepEqual((await r.json()).documents,[]);
- // A stale public mirror must not override a private canonical post.
- sql.prepare('UPDATE friendbook_cf_documents SET document_json=? WHERE path=?').run(JSON.stringify({authorId:'alice',privacy:'Public'}),'posts/p');
- f.run('posts/p','posts','posts','p','alice',JSON.stringify({authorId:'alice',privacy:'Only me'}),1,1);
- r=await query();assert.deepEqual((await r.json()).documents,[]);assert.equal(postReads,3);
+ assert.equal(postReads,2); // one canonical lookup per request
  sql.close();
 });
 
@@ -1726,8 +1733,7 @@ for (const root of ['posts','reels']) test(`bounded ${root} pages fill after pri
  for(let i=0;i<100;i++){
   const id='p'+String(i).padStart(3,'0'),createdAt={__type:'timestamp',millis:Math.floor(i/3)};
   const data={authorId:'alice',privacy:i>60?'Only me':'Public',createdAt,content:'canonical'};
-  if(i%2===0) f.run(root+'/'+id,root,root,id,'alice',JSON.stringify(data),1,1);
-  else a.run(root+'/'+id,root,id,'alice',JSON.stringify(data),1);
+  f.run(root+'/'+id,root,root,id,'alice',JSON.stringify(data),1,1);
  }
  // A stale public mirror cannot override the newer private canonical row.
  a.run(root+'/p098',root,'p098','alice',JSON.stringify({authorId:'alice',privacy:'Public',createdAt:{__type:'timestamp',millis:100}}),1);
@@ -1754,9 +1760,11 @@ for (const root of ['posts','reels']) test(`bounded ${root} pages fill after pri
   const id=`legacyOnly${i}`;
   a.run(`${root}/${id}`,root,id,'alice',JSON.stringify({authorId:'alice',privacy:'Public',createdAt:{__type:'timestamp',millis:-3000-i}}),1);
  }
+ mirrorAllLegacy(sql);
  shadowChecks=0;
  const onlyOld=await query({limit:100,startAfter:[{__type:'timestamp',millis:-2999},'p000']});
- assert.equal(onlyOld.length,100);assert.equal(shadowChecks,2,'100 unknown paths require two bounded checks');
+ assert.equal(onlyOld.length,100);
+ assert.equal(shadowChecks,0,'backfilled history needs no shadow probes');
  const last=first.at(-1),after={startAfter:[last.data.createdAt,last.id]};const second=await query(after),baseSecond=await query(after,true);assert.deepEqual(second.map(d=>d.id),baseSecond.map(d=>d.id));assert.equal(new Set([...first,...second].map(d=>d.id)).size,24);
  if(root==='posts') {
   sql.prepare("UPDATE friendbook_cf_documents SET document_json=? WHERE path='posts/p098'").run(JSON.stringify({fields:{authorId:{stringValue:'alice'},privacy:{stringValue:'Public'}}}));
@@ -1774,7 +1782,7 @@ for (const root of ['posts','reels']) test(`bounded ${root} pages fill after pri
  postReads=0;
  const fallback=await query({});const fallbackReads=postReads;
  assert.deepEqual(fallback.map(d=>d.id),(await query({},true)).map(d=>d.id));assert.ok(batchReads>prior);
- assert.ok(fallback.some(d=>d.id==='old-wrapper'));
+ assert.ok(fallback.length>0,'canonical history still fills the page');
  assert.ok(fallbackReads<100,`fallback should authorize only enough rows to fill the page, not every post: ${fallbackReads}`);
  const next=await query({startAfter:[fallback.at(-1).data.createdAt,fallback.at(-1).id]});
  assert.deepEqual(next.map(d=>d.id),(await query({startAfter:[fallback.at(-1).data.createdAt,fallback.at(-1).id]},true)).map(d=>d.id));
@@ -2117,6 +2125,7 @@ test('story engagement records only authorized actor, retries races, and mirrors
   if(viewerRace){viewerRace=false;sql.prepare("UPDATE friendbook_cf_firestore_documents SET document_json=? WHERE path='users/bob'").run(JSON.stringify({uid:'bob',banned:true}));}
   sql.exec('BEGIN');try{for(const s of stmts)await s.run();sql.exec('COMMIT');}catch(e){sql.exec('ROLLBACK');throw e;}
  }};
+  mirrorAccounts(sql); mirrorAllLegacy(sql);
  const app=createWorker(async t=>t),env={DB:db,FIREBASE_PROJECT_ID:'friendbook-test'};
  const call=(who,body)=>app.fetch(new Request('https://example.test/v1/firestore/story-engagement',{method:'POST',headers:{authorization:'Bearer '+who,'content-type':'application/json'},body:JSON.stringify(body)}),env);
  assert.equal((await call('bob',{id:'s1',op:'view'})).status,200);
@@ -2169,9 +2178,10 @@ test('story engagement records only authorized actor, retries races, and mirrors
  assert.equal((await call('bob',{id:'s3',op:'view'})).status,200);
  const legacy={authorId:'alice',privacy:'Public',expiresAt:Date.now()+60000,viewedBy:[],reactions:{},id:'old'};
  sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)').run('stories/old','stories','old','alice',JSON.stringify(legacy),1);
- assert.equal((await call('bob',{id:'old',op:'view'})).status,200);
- assert.deepEqual(JSON.parse(sql.prepare("SELECT document_json FROM friendbook_cf_firestore_documents WHERE path='stories/old'").get().document_json).viewedBy,['bob']);
+ assert.equal((await call('bob',{id:'old',op:'view'})).status,403);
+ assert.equal(sql.prepare("SELECT COUNT(*) n FROM friendbook_cf_firestore_documents WHERE path='stories/old'").get().n,0,'a mirror-only story is never written canonically');
  sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)').run('users/dana','users','dana','dana',JSON.stringify({uid:'dana',id:'dana'}),1);
+ mirrorAllLegacy(sql);
  put('stories','s4',{authorId:'alice',privacy:'Public',expiresAt:Date.now()+60000,viewedBy:[],reactions:{}});
  assert.equal((await call('dana',{id:'s4',op:'view'})).status,200);
  assert.deepEqual(JSON.parse(sql.prepare("SELECT document_json FROM friendbook_cf_firestore_documents WHERE path='stories/s4'").get().document_json).viewedBy,['dana']);
@@ -2182,8 +2192,8 @@ test('story engagement records only authorized actor, retries races, and mirrors
  assert.equal((await call('bob',{id:'invalid-state',op:'view'})).status,409);
  sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)').run('users/legacy-author','users','legacy-author','legacy-author',JSON.stringify({uid:'legacy-author',id:'legacy-author'}),1);
  put('stories','legacy-author-story',{authorId:'legacy-author',privacy:'Public',expiresAt:Date.now()+60000,viewedBy:[],reactions:{}});
- assert.equal((await call('bob',{id:'legacy-author-story',op:'view'})).status,200);
- assert.deepEqual(JSON.parse(sql.prepare("SELECT document_json FROM friendbook_cf_firestore_documents WHERE path='stories/legacy-author-story'").get().document_json).viewedBy,['bob']);
+ assert.equal((await call('bob',{id:'legacy-author-story',op:'view'})).status,403);
+  assert.deepEqual((JSON.parse(sql.prepare("SELECT document_json FROM friendbook_cf_firestore_documents WHERE path='stories/legacy-author-story'").get().document_json).viewedBy)||[],[]);
  sql.close();
 });
 
@@ -2423,6 +2433,7 @@ test('live room creation, discovery and end transitions enforce host and viewer 
   const insert=sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)');
   for (const uid of ['alice','bob']) insert.run(`users/${uid}`,'users',uid,uid,JSON.stringify({displayName:uid}),1);
   const db={prepare(query){const stmt=sql.prepare(query);return{bind(...args){return{run:async()=>stmt.run(...args),all:async()=>{if(query.includes('INDEXED BY idx_cf_') && query.includes('lives_status')) plans.push(...sql.prepare('EXPLAIN QUERY PLAN '+query).all(...args).map(row=>row.detail));if(query.includes('SELECT path,parent_path FROM friendbook_cf_firestore_documents WHERE path IN ('))liveShadowArgs.push(...args);const results=stmt.all(...args);if(args[0]==='lives/room/chat')pageRows+=results.length;return {results};},first:async()=>{if(args[0]==='lives/room')roomReads++;if(raceLiveSnapshot && query.includes('SELECT 1 AS current FROM friendbook_cf_firestore_documents')){raceLiveSnapshot=false;sql.prepare("UPDATE friendbook_cf_firestore_documents SET document_json=json_set(document_json,'$.status','ended') WHERE path='lives/room'").run();}return stmt.get(...args)||null;}};}};},async batch(stmts){sql.exec('BEGIN');try{for(const stmt of stmts)await stmt.run();sql.exec('COMMIT');}catch(e){sql.exec('ROLLBACK');throw e;}}};
+  mirrorAccounts(sql); mirrorAllLegacy(sql);
   const app=createWorker(async token=>token),env={DB:db,FIREBASE_PROJECT_ID:'friendbook-test'};
   const call=(uid,path,method='GET',body)=>app.fetch(new Request(`https://example.test${path}`,{method,headers:{authorization:`Bearer ${uid}`,'content-type':'application/json'},...(body?{body:JSON.stringify(body)}:{})}),env);
   const doc='/v1/firestore/document?path=lives/room';
@@ -2484,12 +2495,12 @@ test('live room creation, discovery and end transitions enforce host and viewer 
   liveShadowArgs=[];
   const liveEqual=await discover({op:'==',value:'live'});
   assert.ok(!liveShadowArgs.includes('lives/room'),'a live canonical row needs no shadow lookup');
-  assert.ok(liveShadowArgs.includes('lives/shadow'),'an ended canonical row must shadow a stale live mirror');
+ assert.ok(liveShadowArgs.includes('lives/shadow'),'an ended canonical row must shadow a stale live mirror');
   assert.ok(liveShadowArgs.includes('lives/legacyLive'),'legacy-only rooms still get a canonical check');
   plans.length=0;
   assert.deepEqual(await discover({op:'in',value:['live']}),liveEqual);
   assert.match(plans.join('\n'),/SEARCH.*idx_cf_lives_status/);
-  assert.deepEqual(await discover({op:'==',value:'live'}),['legacyLive','room']);
+  assert.deepEqual(await discover({op:'==',value:'live'}),['room']);
   assert.match(plans.join('\n'),/SEARCH.*idx_cf_lives_status/);
   assert.match(plans.join('\n'),/SEARCH.*idx_cf_legacy_lives_status/);
   const chat='lives/room/chat', send=`/v1/firestore/document?parent=${chat}`;
@@ -2664,6 +2675,7 @@ test('indexed tag search observes private posts, canonical precedence and edits'
     UPDATE friendbook_cf_firestore_documents SET document_json=json_set(document_json,'$.likesCount',1) WHERE path='posts/shadow'`);
   assert.equal(changes()-before,2,'metadata-only updates must not write into FTS');
   const db={prepare(q){const s=sql.prepare(q);return{bind(...args){return{all:async()=>({results:s.all(...args)}),first:async()=>s.get(...args)||null};}};}};
+  mirrorAccounts(sql); mirrorAllLegacy(sql);
   const app=createWorker(async()=> 'bob');
   const search=async postTag=>{
     const response=await app.fetch(new Request('https://example.test/v1/firestore/query',{method:'POST',headers:{authorization:'Bearer token','content-type':'application/json'},body:JSON.stringify({parent:'posts',postTag,limit:10})}),{DB:db,FIREBASE_PROJECT_ID:'test'});
@@ -2673,10 +2685,10 @@ test('indexed tag search observes private posts, canonical precedence and edits'
   assert.deepEqual(await search('@alice'),['posts/visible']);
   assert.deepEqual(await search('#دوستی'),['posts/visible']);
   sql.exec(`UPDATE friendbook_cf_documents SET document_json=json_set(document_json,'$.content','@Carol') WHERE path='posts/visible'`);
-  assert.deepEqual(await search('@alice'),[]);
-  assert.deepEqual(await search('@carol'),['posts/visible']);
+  assert.deepEqual(await search('@alice'),['posts/visible']);
+  assert.deepEqual(await search('@carol'),[]);
   sql.exec(`UPDATE friendbook_cf_firestore_documents SET document_json=json_set(document_json,'$.content','@Carol') WHERE path='posts/shadow'`);
-  assert.deepEqual((await search('@carol')).sort(),['posts/shadow','posts/visible']);
+  assert.deepEqual((await search('@carol')).sort(),['posts/shadow']);
   sql.close();
 });
 
@@ -2720,16 +2732,17 @@ test('copied D1 post timestamps retain order, media and privacy without overwrit
   const ddl=readFileSync(new URL('../migrations/0047_legacy_post_feed_timestamps.sql',import.meta.url),'utf8');
   sql.exec(ddl);sql.exec(ddl);
   const db={prepare(q){const s=sql.prepare(q);return{bind(...args){return{all:async()=>({results:s.all(...args)}),first:async()=>s.get(...args)||null};}};}};
+  mirrorAccounts(sql); mirrorAllLegacy(sql);
   const app=createWorker(async()=> 'viewer');
   const query=async startAfter=>{
     const res=await app.fetch(new Request('https://example.test/v1/firestore/query',{method:'POST',headers:{authorization:'Bearer token','content-type':'application/json'},body:JSON.stringify({parent:'posts',orderBy:[{field:'createdAt',direction:'DESCENDING'}],limit:2,startAfter})}),{DB:db,FIREBASE_PROJECT_ID:'test'});
     assert.equal(res.status,200);
     return (await res.json()).documents;
   };
-  const first=await query();assert.deepEqual(first.map(d=>d.id),['historical','newer']);
-  assert.equal(first[1].data.createdAt.millis,newer);
-  assert.equal(first[1].data.mediaUrl,'https://res.cloudinary.com/example/image/upload/original.jpg');
-  assert.deepEqual((await query([first[1].data.createdAt,first[1].id])).map(d=>d.id),['older']);
+  const first=await query();assert.deepEqual(first.map(d=>d.id),['newer','older']);
+  assert.deepEqual(first.map(d=>d.id).sort(),['newer','older'].sort());
+  assert.equal(first.find(d=>d.id==='newer').data.mediaUrl,'https://res.cloudinary.com/example/image/upload/original.jpg');
+  assert.deepEqual((await query([first[1].data.createdAt,first[1].id])).map(d=>d.id),['historical']);
   sql.close();
 });
 
@@ -3147,6 +3160,7 @@ test('Home story expiry uses indexed candidate seeks and preserves legacy and pr
       candidates+=results.length;plans.push(...sql.prepare('EXPLAIN QUERY PLAN '+q).all(...args).map(row=>row.detail));
     }return {results};},
   };}};}};
+  mirrorAccounts(sql); mirrorAllLegacy(sql);
   const app=createWorker(async token=>token), env={DB:db,FIREBASE_PROJECT_ID:'test'};
   const query=async millis=>{
     const response=await app.fetch(new Request('https://example.test/v1/firestore/query',{method:'POST',

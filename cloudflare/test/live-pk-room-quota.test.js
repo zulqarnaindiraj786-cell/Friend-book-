@@ -14,7 +14,7 @@ test('PK room poll shares authorization lookups only within each request',async 
  put('lives/b',{hostId:'bob',status:'live',privacy:'public'});
  sql.prepare("INSERT INTO friendbook_cf_live_pk(id,room_a,room_b,host_a,host_b,status,duration_sec,created_at,expires_at) VALUES (?,?,?,?,?,?,?,?,?)").run('battle','a','b','alice','bob','active',180,1,Date.now()+60000);
  const reads=[];
- const db={prepare(q){const stmt=sql.prepare(q);return{bind(...args){return{first:async()=>{if(q.includes('UNION ALL SELECT document_json'))reads.push(args[0]);return stmt.get(...args)||null;},all:async()=>({results:stmt.all(...args)}),run:async()=>stmt.run(...args)};}};}};
+ const db={prepare(q){const stmt=sql.prepare(q);return{bind(...args){return{first:async()=>{if(q.includes('SELECT document_json FROM friendbook_cf_firestore_documents WHERE path = ?1'))reads.push(args[0]);return stmt.get(...args)||null;},all:async()=>({results:stmt.all(...args)}),run:async()=>stmt.run(...args)};}};}};
  const app=createWorker(async t=>t),env={DB:db,FIREBASE_PROJECT_ID:'test'};
  const check=async()=>{reads.length=0;const response=await app.fetch(new Request('https://example.test/v1/live/pk',{method:'POST',headers:{authorization:'Bearer viewer','content-type':'application/json'},body:JSON.stringify({action:'room',room:'a'})}),env);assert.equal(response.status,200);return response.json();};
  assert.equal((await check()).id,'battle');

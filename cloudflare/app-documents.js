@@ -107,10 +107,7 @@ export function requestAccountReads(identity) {
 export function readPreferredDocumentJson(db, path) {
   // Use one indexed lookup statement even for historical records. The legacy
   // branch is eligible only when the canonical row does not exist.
-  return db.prepare(`SELECT document_json FROM friendbook_cf_firestore_documents WHERE path = ?1
-    UNION ALL SELECT document_json FROM friendbook_cf_documents WHERE path = ?1
-      AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents WHERE path = ?1)
-    LIMIT 1`).bind(path).first();
+  return db.prepare('SELECT document_json FROM friendbook_cf_firestore_documents WHERE path = ?1 LIMIT 1').bind(path).first();
 }
 
 export async function readD1DocumentFields(db, path) {
@@ -170,17 +167,9 @@ export async function appDocuments(request, env, identity) {
       const rows = collection==='chats' ? await env.DB.prepare(`
         SELECT path,doc_id,document_json,update_time AS updated_at,1 AS canonical FROM friendbook_cf_firestore_documents
           WHERE collection_id='chats' AND parent_path='chats'
-        UNION ALL SELECT a.path,a.doc_id,a.document_json,a.updated_at,0 AS canonical FROM friendbook_cf_documents a
-          WHERE a.collection='chats' AND NOT EXISTS (
-            SELECT 1 FROM friendbook_cf_firestore_documents f WHERE f.path=a.path AND f.parent_path='chats'
-          ) ORDER BY updated_at DESC LIMIT ?`).bind(limit).all() : joinedRoot ? await env.DB.prepare(`
-        SELECT a.doc_id,COALESCE(f.document_json,a.document_json) AS document_json,a.updated_at
-        FROM (SELECT doc_id,document_json,updated_at FROM friendbook_cf_documents
-          WHERE collection=?1 ORDER BY updated_at DESC LIMIT ?2) a
-        LEFT JOIN friendbook_cf_firestore_documents f ON f.path=?1 || '/' || a.doc_id
-        ORDER BY a.updated_at DESC`).bind(collection,limit).all() : await env.DB.prepare(
-        'SELECT doc_id, document_json, updated_at FROM friendbook_cf_documents WHERE collection = ? ORDER BY updated_at DESC LIMIT ?'
-      ).bind(collection, limit).all();
+        ORDER BY updated_at DESC LIMIT ?`).bind(limit).all() : await env.DB.prepare(`
+        SELECT doc_id,document_json,update_time AS updated_at FROM friendbook_cf_firestore_documents
+          WHERE parent_path=?1 ORDER BY updated_at DESC LIMIT ?2`).bind(collection,limit).all();
       let documents = [];
       for (const row of rows?.results || []) {
         const docPath = `${collection}/${row.doc_id}`;
@@ -270,7 +259,7 @@ export async function appDocuments(request, env, identity) {
     }
     try {
       const existingRow = await env.DB.prepare(
-        'SELECT owner_uid, document_json FROM friendbook_cf_documents WHERE path = ?'
+        'SELECT owner_uid, document_json FROM friendbook_cf_firestore_documents WHERE path = ?'
       ).bind(docPath).first();
       const currentRow = await canonicalRoot(env.DB, docPath, existingRow);
       const existingPlain = currentRow ? (toPlainDocument(currentRow.document_json, docId) || {}) : {};

@@ -4,6 +4,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { readFileSync } from 'node:fs';
 import { createWorker } from '../../worker.js';
 import { authorizePost } from '../firebase-post-access.js';
+import { mirrorAllLegacy } from './fixtures/canonical.js';
 
 const MIGRATION_0001 = readFileSync(new URL('../migrations/0001_additive_profiles.sql', import.meta.url), 'utf8');
 const MIGRATION_0002 = readFileSync(new URL('../migrations/0002_additive_copy_staging.sql', import.meta.url), 'utf8');
@@ -44,7 +45,7 @@ function createSqliteD1() {
 }
 
 test('/v1/docs preserves historical staging records and stores new Cloudflare documents with D1-first ACL', async () => {
-  const { db } = createSqliteD1();
+  const { sql, db } = createSqliteD1();
   await db
     .prepare(
       `INSERT INTO friendbook_cf_documents (path, collection, doc_id, owner_uid, document_json, updated_at)
@@ -76,6 +77,7 @@ test('/v1/docs preserves historical staging records and stores new Cloudflare do
     } })).run();
   }
 
+  mirrorAllLegacy(sql);
   const w = createWorker(async () => 'uid_new');
   const env = { DB: db, FIREBASE_PROJECT_ID: 'friendbook-test' };
 

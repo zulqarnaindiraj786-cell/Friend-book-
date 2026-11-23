@@ -4,6 +4,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { generateKeyPairSync } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { fcmGateway } from '../fcm-push.js';
+import { mirrorLegacy } from './fixtures/canonical.js';
 
 test('FCM delivery uses durable atomic claims across retries and allows retry after provider errors', async () => {
   const sql=new DatabaseSync(':memory:');
@@ -12,6 +13,7 @@ test('FCM delivery uses durable atomic claims across retries and allows retry af
   const add=sql.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)');
   add.run('users/alice','users','users','alice','alice',JSON.stringify({displayName:'Alice'}),1,1);
   sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)').run('users/bob','users','bob','bob',JSON.stringify({fields:{displayName:{stringValue:'Bob'}}}),1);
+  mirrorLegacy(sql,'users/bob');
   add.run('notifications/n1','notifications','notifications','n1','alice',JSON.stringify({fromUserId:'alice',toUserId:'bob',type:'friend_request',text:'request',createdAt:{__type:'timestamp',millis:Date.now()}}),1,1);
   sql.prepare('INSERT INTO friendbook_cf_fcm_devices VALUES (?,?,?,?)').run('dev1','bob','x'.repeat(30),1);
   const key=generateKeyPairSync('rsa',{modulusLength:2048}).privateKey.export({type:'pkcs8',format:'pem'});
