@@ -23,6 +23,7 @@ import java.util.concurrent.TimeUnit;
  */
 public class D1DocumentStore {
     private static final D1DocumentStore INSTANCE = new D1DocumentStore();
+    final DocumentReadFlights<DocumentSnapshot> documentReadFlights = new DocumentReadFlights<>();
     // Keep network work bounded: a cached pool can create one thread per slow request on flaky
     // mobile networks, which starves the UI and battery. Each listener has an
     // in-flight guard so slow polls cannot pile up every five seconds.
@@ -389,6 +390,7 @@ public class D1DocumentStore {
     void invalidateDoc(String path) {
         if (path != null) {
             String actor=authenticatedUid();
+            documentReadFlights.invalidate(actor,path);
             docCache.remove(scopedCacheKey(actor,path));
             docFetchedAt.remove(scopedCacheKey(actor,path));
             if(path.equals("users/"+actor))docCachedAt.remove(actor);

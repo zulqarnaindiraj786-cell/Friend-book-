@@ -70,14 +70,18 @@ public class DocumentReference {
                     D1DocumentStoreException.Code.UNAVAILABLE, "No cached document"));
         }
         final String actor = D1DocumentStore.authenticatedUid();
-        return firestore.runAsync(() -> {
+        // Share only overlapping DEFAULT reads of the same account/path. No TTL,
+        // no completed results, and explicit SERVER reads always start new work.
+        return firestore.documentReadFlights.read(actor, path, source == Source.DEFAULT, () -> firestore.runAsync(() -> {
+            if (!actor.equals(D1DocumentStore.authenticatedUid()))
+                throw new D1DocumentStoreException(D1DocumentStoreException.Code.CANCELLED, "Account changed before document read");
             JSONObject res = D1DocumentTransport.getDocument(path);
             DocumentSnapshot snap = parseSnapshot(res);
             if (!actor.equals(D1DocumentStore.authenticatedUid()))
                 throw new D1DocumentStoreException(D1DocumentStoreException.Code.CANCELLED, "Account changed during document read");
             firestore.cacheDoc(path, snap, actor);
             return snap;
-        });
+        }));
     }
 
     DocumentSnapshot parseSnapshot(JSONObject res) {
