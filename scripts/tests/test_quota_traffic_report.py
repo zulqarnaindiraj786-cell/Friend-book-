@@ -125,3 +125,22 @@ class TrafficReport(unittest.TestCase):
         shape=p.safe_shape("SELECT * FROM friendbook_cf_firestore_documents f INDEXED BY idx_cf_chat_activity_seek WHERE f.path='SECRET'")
         self.assertIn('inbox_shared_activity_seek',shape['features'])
         self.assertNotIn('SECRET',str(shape))
+
+    def test_database_split_has_no_primary_database_filter_and_validates_totals(self):
+        query=p.database_query_text('start','end')
+        self.assertIn('dimensions { databaseId }',query)
+        self.assertNotIn('databaseId:',query)
+        row={'dimensions':{'databaseId':p.DATABASE},'sum':{'rowsRead':9,'rowsWritten':2},'count':3}
+        payload={'data':{'viewer':{'accounts':[{'d1QueriesAdaptiveGroups':[row]}]}}}
+        result=p.parse_databases(payload)
+        self.assertTrue(result['databases'][0]['primary_application'])
+        self.assertEqual(result['databases'][0]['rowsRead'],9)
+        row['sum']['rowsWritten']=True
+        with self.assertRaises(ValueError):p.parse_databases(payload)
+        row['sum']['rowsWritten']=2;row['dimensions']['databaseId']='PRIVATE SQL'
+        with self.assertRaises(ValueError):p.parse_databases(payload)
+
+    def test_empty_database_split_is_not_zero_usage(self):
+        result=p.parse_databases({'data':{'viewer':{'accounts':[{'d1QueriesAdaptiveGroups':[]}]}}})
+        self.assertEqual(result['status'],'no_observations_available')
+        with self.assertRaises(ValueError):p.parse_databases({'errors':[{'message':'no access'}]})

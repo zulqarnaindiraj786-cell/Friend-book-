@@ -28,6 +28,36 @@ def query_text(start,end,metric=None):
     } } }'''%(ACCOUNT,1 if metric is None else 60,ordering,DATABASE,start,end,dimensions)
 
 
+def database_query_text(start,end):
+    return '''{ viewer { accounts(filter:{accountTag:"%s"}) {
+      d1QueriesAdaptiveGroups(limit:100, orderBy:[sum_rowsRead_DESC],
+        filter:{datetime_geq:"%s",datetime_leq:"%s"}) {
+        dimensions { databaseId } sum { rowsRead rowsWritten } count
+      }
+    } } }'''%(ACCOUNT,start,end)
+
+
+def parse_databases(payload):
+    if payload.get('errors'): raise ValueError('Database analytics rejected')
+    accounts=payload['data']['viewer']['accounts']
+    if len(accounts)!=1: raise ValueError('Database analytics account unavailable')
+    groups=accounts[0]['d1QueriesAdaptiveGroups']
+    if not isinstance(groups,list) or len(groups)>100: raise ValueError('Invalid database groups')
+    results=[]
+    for row in groups:
+        database=row.get('dimensions',{}).get('databaseId')
+        if not isinstance(database,str) or not re.fullmatch(r'[a-fA-F0-9]{8}(?:-[a-fA-F0-9]{4}){3}-[a-fA-F0-9]{12}',database):
+            raise ValueError('Invalid database identifier')
+        values=row.get('sum',{})
+        if any(type(values.get(k)) is not int or values[k]<0 for k in ('rowsRead','rowsWritten')) or type(row.get('count')) is not int or row['count']<0:
+            raise ValueError('Invalid database totals')
+        results.append({'database_id':database.lower(),'primary_application':database.lower()==DATABASE,
+                        'rowsRead':values['rowsRead'],'rowsWritten':values['rowsWritten'],'executions':row['count']})
+    if len({r['database_id'] for r in results})!=len(results):raise ValueError('Duplicate database group')
+    return {'status':'observations_available' if groups else 'no_observations_available',
+            'may_be_truncated':len(groups)==100,'databases':results}
+
+
 def parse_groups(payload,shapes=False):
     if payload.get('errors'): raise ValueError('Analytics rejected')
     accounts=payload['data']['viewer']['accounts']
@@ -114,9 +144,14 @@ def notice_lines(window):
     # GitHub truncates long annotation messages. Keep the summary and each
     # already-sanitized shape separate so write attribution is not cut off.
     header={**window}
+    breakdown=header.pop('account_database_breakdown',None)
     for metric in ('rowsRead','rowsWritten'):
         header[metric]={k:v for k,v in window[metric].items() if k!='largest_shapes'}
     lines=['Sanitized quota traffic window '+json.dumps(header,sort_keys=True)]
+    if breakdown is not None:
+        lines.append('Sanitized database breakdown status '+json.dumps({'minutes':window['minutes'],**{k:v for k,v in breakdown.items() if k!='databases'}},sort_keys=True))
+        for database in breakdown['databases']:
+            lines.append('Sanitized database traffic '+json.dumps({'minutes':window['minutes'],'start':window['start'],'end':window['end'],**database},sort_keys=True))
     for metric in ('rowsRead','rowsWritten'):
         for rank,shape in enumerate(window[metric]['largest_shapes'],1):
             lines.append('Sanitized quota shape '+json.dumps({
@@ -130,11 +165,11 @@ def main():
     parser.add_argument('--output',type=Path)
     args=parser.parse_args()
     token=os.environ['CLOUDFLARE_API_TOKEN']
-    def fetch(query,shapes=False):
+    def fetch(query,shapes=False,databases=False):
         req=urllib.request.Request('https://api.cloudflare.com/client/v4/graphql',data=json.dumps({'query':query}).encode(),
             headers={'Authorization':'Bearer '+token,'Content-Type':'application/json'})
         with urllib.request.urlopen(req,timeout=30) as response: payload=json.load(response)
-        return parse_groups(payload,shapes)
+        return parse_databases(payload) if databases else parse_groups(payload,shapes)
     now=dt.datetime.now(dt.timezone.utc).replace(microsecond=0)
     fmt=lambda t:t.strftime('%Y-%m-%dT%H:%M:%SZ')
     report={'queried_at':fmt(now),'source':'Cloudflare delayed/adaptive query analytics',
@@ -147,6 +182,11 @@ def main():
                 'status':'observations_available' if totals else 'no_observations_available'}
         for metric in ('rowsRead','rowsWritten'):
             window[metric]=summarize_shapes(fetch(query_text(start,end,metric),True),metric)
+        try:
+            window['account_database_breakdown']=fetch(database_query_text(start,end),databases=True)
+        except (OSError,ValueError,KeyError,TypeError):
+            window['account_database_breakdown']={'status':'analytics_unavailable_not_zero','databases':[],'may_be_truncated':None}
+            print('::warning::Account database split unavailable; do not interpret missing databases as zero usage.')
         report['windows'].append(window)
         for line in notice_lines(window): print('::notice::'+line)
     if args.output:

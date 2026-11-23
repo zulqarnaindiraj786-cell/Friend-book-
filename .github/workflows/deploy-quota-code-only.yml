@@ -1,4 +1,4 @@
-# Code-only rollout: preserve adaptive bounded seek and avoid materializing unrelated chat JSON.
+# Code-only rollout: repair portable bounded maintenance and remove invalid retired-view cleanup.
 name: Deploy quota fixes without database migrations
 on:
   push:
