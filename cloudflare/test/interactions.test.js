@@ -543,7 +543,17 @@ test('indexed historical comment pages preserve complete ordering, cursors and e
   async function compare(before,after=null) {
     force=false;normalRows=0;fullRows=0;const actual=await legacyPage(db,'posts/p1','viewer',['blocked'],before,after);
     const fast={normalRows,fullRows};force=true;const expected=await legacyPage(db,'posts/p1','viewer',['blocked'],before,after);force=false;
-    assert.deepEqual(actual,expected);return {actual,fast};
+    assert.deepEqual(actual,expected);
+    // Home renders two historical previews, not a full 21-row comment page.
+    force=false;normalRows=0;
+    const preview=await legacyPage(db,'posts/p1','viewer',['blocked'],before,after,2);
+    assert.deepEqual(preview,expected.slice(0,2));
+    assert.ok(normalRows<=fast.normalRows);
+    force=true;
+    assert.deepEqual(await legacyPage(db,'posts/p1','viewer',['blocked'],before,after,2),expected.slice(0,2));
+    force=false;
+    await assert.rejects(legacyPage(db,'posts/p1','viewer',[],before,after,22),/Invalid comment page size/);
+    return {actual,fast};
   }
   for(const [before,after] of [[[Number.MAX_SAFE_INTEGER,''],null],[[1600,'n0900'],null],[[1600,'n0900'],[1600,'n0900']],[[1600,'tie035'],null],[[1600,'tie035'],[1600,'tie035']]]) {
     const result=await compare(before,after);

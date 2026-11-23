@@ -75,7 +75,7 @@ export async function engagementSummary(db, resource, uid, owner, blocked = [], 
   };
   const legacySummary = async () => {
     const count = preloaded ? preloaded.count : await legacyCommentCount(db,resource,blocked);
-    return {count,preview:count ? await legacyPage(db,resource,uid,blocked,[Number.MAX_SAFE_INTEGER,'']) : []};
+    return {count,preview:count ? await legacyPage(db,resource,uid,blocked,[Number.MAX_SAFE_INTEGER,''],null,2) : []};
   };
   const [combined,legacy] = await Promise.all([preloaded ? preloaded.canonical : canonicalSummary(),legacySummary()]);
   const typesList = JSON.parse(combined?.types_json || '[]');

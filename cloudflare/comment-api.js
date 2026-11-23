@@ -148,7 +148,7 @@ const legacySafeTime=`CASE WHEN json_type(a.document_json,'$.fields') IS NOT 'ob
   AND json_extract(a.document_json,'$.createdAt') BETWEEN 1 AND 9007199254740991
   AND a.doc_id<>'' AND a.doc_id NOT GLOB '*[^a-zA-Z0-9_-]*' AND a.path='comments/'||a.doc_id
   THEN CAST(json_extract(a.document_json,'$.createdAt') AS INTEGER) ELSE -1 END`;
-async function boundedLegacyPage(db,resource,uid,blocked,before,after) {
+async function boundedLegacyPage(db,resource,uid,blocked,before,after,pageSize) {
   const cursor=after||before;
   if(typeof db.batch!=='function' || !Array.isArray(cursor) || cursor.length!==2 || !Number.isSafeInteger(cursor[0]) || cursor[0]<0
       || typeof cursor[1]!=='string' || (cursor[1]!=='' && !validId(cursor[1])))return null;
@@ -165,7 +165,7 @@ async function boundedLegacyPage(db,resource,uid,blocked,before,after) {
       return [
         db.prepare(`${select} ${common} AND ${range}
           AND ((${legacySafeTime})${op}?4 OR ((${legacySafeTime})=?4 AND a.doc_id${op}?5))
-          ORDER BY (${legacySafeTime}) ${direction},a.doc_id ${direction} LIMIT 21`)
+          ORDER BY (${legacySafeTime}) ${direction},a.doc_id ${direction} LIMIT ${pageSize}`)
           .bind(value,JSON.stringify(blocked||[]),resource,...cursor),
         db.prepare(`${select} ${common} AND (${legacySafeTime})=-1 LIMIT 65`)
           .bind(value,JSON.stringify(blocked||[]),resource),
@@ -192,7 +192,7 @@ async function boundedLegacyPage(db,resource,uid,blocked,before,after) {
         : time<cursor[0] || (time===cursor[0] && comment.id<cursor[1]))best.push(comment);
     }
     best.sort((a,b)=>(forward?-1:1)*((b.createdAt||0)-(a.createdAt||0) || (a.id<b.id?1:a.id>b.id?-1:0)));
-    return best.slice(0,21);
+    return best.slice(0,pageSize);
   } catch(error) {
     if(/no such index: idx_cf_canonical_comment_page_(?:post|post_legacy|resource)/.test(String(error)))return null;
     throw error;
@@ -201,8 +201,9 @@ async function boundedLegacyPage(db,resource,uid,blocked,before,after) {
 
 // Historical updated_at is not the comment creation time. Page through all
 // matching legacy rows when index exceptions cannot be bounded safely.
-export async function legacyPage(db,resource,uid,blocked,before,after=null) {
-  const indexed=await boundedLegacyPage(db,resource,uid,blocked,before,after);
+export async function legacyPage(db,resource,uid,blocked,before,after=null,pageSize=21) {
+  if (!Number.isInteger(pageSize) || pageSize<1 || pageSize>21) throw Error('Invalid comment page size');
+  const indexed=await boundedLegacyPage(db,resource,uid,blocked,before,after,pageSize);
   if(indexed!==null)return indexed;
   let storageCursor=null, best=[];
   for(let batch=0;batch<100;batch++) {
@@ -215,7 +216,7 @@ export async function legacyPage(db,resource,uid,blocked,before,after=null) {
       if(comment && (after ? time>after[0] || (time===after[0] && comment.id>after[1]) : time<before[0] || (time===before[0] && comment.id<before[1])))best.push(comment);
     }
     best.sort((a,b)=>(after?-1:1)*((b.createdAt||0)-(a.createdAt||0) || (a.id<b.id?1:a.id>b.id?-1:0)));
-    if(best.length>21)best=best.slice(0,21);
+    if(best.length>pageSize)best=best.slice(0,pageSize);
     if(rows.length<500)return best;
     storageCursor=rows.at(-1);
   }
