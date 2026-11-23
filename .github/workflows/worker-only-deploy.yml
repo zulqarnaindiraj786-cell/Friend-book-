@@ -92,6 +92,7 @@ jobs:
           grep -E '^(binding|dataset|id|database_id|bucket_name|name|main) ' wrangler.toml || true
       - name: Upload the Worker (no wrangler d1 commands at all)
         run: |
+          set +e
           set -uo pipefail
           npm run deploy -- --var D1_INTERACTIONS_ENABLED:true --var VIDEO_R2_ENABLED:true --var VIDEO_R2_RETENTION_VERIFIED:true 2>&1 | tee deploy.log
           status=${PIPESTATUS[0]}
