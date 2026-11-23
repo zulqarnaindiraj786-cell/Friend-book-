@@ -1,0 +1,58 @@
+name: Validate current signed Play candidate
+on:
+  push:
+    branches: [arena/b52bc74d-friend-book]
+    paths: ['.github/workflows/quota-play-readiness.yml']
+permissions:
+  contents: read
+  actions: read
+jobs:
+  validate:
+    if: contains(github.event.head_commit.message, '[play-readiness]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: actions/download-artifact@v4
+        with:
+          name: FriendBook-playstore-aab
+          run-id: 45166501055
+          github-token: ${{ github.token }}
+          path: candidate
+      - name: Validate exact signed candidate, not a rebuilt substitute
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t bundles < <(find candidate -type f -name '*.aab')
+          test "${#bundles[@]}" -eq 1
+          bundle="${bundles[0]}"
+          jarsigner -verify "$bundle" | tee signature.txt
+          grep -q 'jar verified' signature.txt
+          curl -fsSL --retry 3 https://github.com/google/bundletool/releases/download/1.18.1/bundletool-all-1.18.1.jar -o /tmp/bundletool.jar
+          java -jar /tmp/bundletool.jar validate --bundle="$bundle"
+          java -jar /tmp/bundletool.jar dump manifest --bundle="$bundle" --module=base > candidate/manifest.xml
+          sha256sum "$bundle" | tee candidate/SHA256SUMS
+          python3 - <<'PY'
+          import xml.etree.ElementTree as ET
+          root=ET.parse('candidate/manifest.xml').getroot()
+          ns='{http://schemas.android.com/apk/res/android}'
+          assert root.get('package')=='com.friendbook.social'
+          assert root.get(ns+'versionCode')=='176'
+          assert root.get(ns+'versionName')=='2.10.34'
+          sdk=root.find('uses-sdk')
+          assert int(sdk.get(ns+'targetSdkVersion'))>=35
+          for name in ('android.hardware.screen.portrait','android.hardware.wifi'):
+              flags=[e.get(ns+'required') for e in root.findall('uses-feature') if e.get(ns+'name')==name]
+              assert flags==['false'], (name,flags)
+          print('Exact signed candidate package/version/target SDK/optional hardware gates passed.')
+          PY
+          echo 'Validated candidate only: no Play upload, approval, quota acceptance or privacy-policy approval implied.' >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: validated-play-candidate-176
+          path: candidate/
+          retention-days: 14
