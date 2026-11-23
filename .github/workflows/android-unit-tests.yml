@@ -8,8 +8,7 @@ on:
       - '.github/workflows/android-unit-tests.yml'
       - 'app/src/test/**'
       - 'app/src/main/java/com/friendbook/social/d1/**'
-      - 'app/src/main/java/com/friendbook/social/core/**'
-      - 'app/src/main/java/com/friendbook/social/main/**'
+      - 'app/src/main/java/**'
       - 'app/build.gradle'
 concurrency:
   group: friendbook-android-unit-tests
