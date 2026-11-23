@@ -198,3 +198,41 @@ Proof:
 Mention-search activity is not separately modelled in the previous 11,535 / 1,495 daily scenario;
 no invented daily saving is subtracted. Cache hits avoid repeat query delivery, not proof of actual
 D1 scanned-row usage. No whole-app zero-waste/99% claim. PR #36 unmerged; no APK/AAB produced.
+
+## Invite Friends card + search-cache eviction audit — 2026-11-19
+Implementation: `712a167`.
+
+### Requested card
+- Added a rounded Invite Friends card below Log out in Menu, with friendbook copy and a blue
+  Share on WhatsApp button, using theme-aware colors and local UI resources. Card and button
+  launch the same explicit share action; merely displaying the card does not launch anything.
+- Shared text uses the existing official Play Store constant:
+  `https://play.google.com/store/apps/details?id=com.friendbook.social`.
+  Confirmed the same URL in historical commit `b1696f7`, core/AdsConfig.java, and current code.
+  No APK download URL, Blogger link, link-shortening request, tracking write or referral lookup added.
+- Prefer WhatsApp; support WhatsApp Business; when neither can handle sharing, use the standard
+  Android share sheet. If no sharing activity exists, show a message instead of crashing.
+- Rendering/clicking the invite card adds zero FriendBook DB reads/writes. WhatsApp itself can of
+  course use its own network to send the message. No live Play listing availability check claimed.
+
+### Additional quota issue
+- High-churn users-prefix queries shared the same 32-entry persistent page LRU as Home and
+  notification pages, so searching many names could evict useful feed snapshots and cause a
+  later cache miss. Prefix-search pages now have a separate bounded persistent bucket.
+- Ordinary user lists, feed pages and chat pages retain their existing buckets. Query payloads,
+  filtering, account-scoped cache keys and limits are unchanged; no extra provider request added.
+- Collection invalidation stays shared across the collection's buckets, so a user-document
+  update marks search pages stale too. The RAM cache is still bounded/shared; RAM eviction can
+  read the retained disk snapshot rather than requiring a server fetch.
+
+Proof:
+- Worker tests: **234/234 passed**.
+- Python suite: **339 passed**.
+- Android debug Java compilation + JVM tests: **PASS**, commit `712a167`:
+  https://github.com/zulqarnaindiraj786-cell/Friend-book-/actions/runs/45112154484
+- Robolectric tests exercise actual card construction/button click, WhatsApp and Business intents,
+  chooser behavior without WhatsApp and the exact Play Store link. Cache policy tests verify
+  separate search/feed/inbox buckets; regression guards check shared invalidation/local-only share.
+  No device screenshot/pixel-match or installed-WhatsApp end-to-end test claimed.
+- Previous daily budget remains a scenario; no guessed savings from avoided eviction subtracted.
+- PR #36 remains unmerged; no APK/AAB produced.
