@@ -13,6 +13,7 @@ def main():
     subprocess.run(['python3', 'scripts/loadtest/d1_account_usage_analytics.py', '--preflight-budget'], cwd=ROOT, check=True)
     subprocess.run(['python3', 'scripts/loadtest/friend_guard_index_preflight.py', '--require-index-build-safe'], cwd=ROOT, check=True)
     probes=json.loads(subprocess.check_output(['node','scripts/loadtest/friend_guard_queries.mjs'],cwd=ROOT,text=True))
+    summaries=[]
     for probe in probes:
         if not probe['sql'].startswith('SELECT ') or ';' in probe['sql']:
             raise ValueError('Only single aggregate SELECT allowed')
@@ -28,9 +29,10 @@ def main():
                 raise ValueError('Read-only profiling invariant violated')
             if explain:
                 details=[r['detail'] for r in result['results']]
-                print('::notice::Guard plan '+probe['name']+' '+json.dumps(details))
+                print('Guard plan '+probe['name']+' '+json.dumps(details))
             else:
-                print('::notice::Guard probe '+json.dumps({'name':probe['name'],'aggregate':result['results'],'rows_read':result['meta']['rows_read'],'rows_written':result['meta']['rows_written']},sort_keys=True))
+                summaries.append({'name':probe['name'],'aggregate':result['results'],'rows_read':result['meta']['rows_read'],'rows_written':result['meta']['rows_written']})
+    print('::notice::Guard probe summary '+json.dumps(summaries,sort_keys=True))
 
 if __name__=='__main__':
     main()
