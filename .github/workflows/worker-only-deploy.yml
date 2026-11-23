@@ -96,6 +96,9 @@ jobs:
           npm run deploy -- --var D1_INTERACTIONS_ENABLED:true --var VIDEO_R2_ENABLED:true --var VIDEO_R2_RETENTION_VERIFIED:true 2>&1 | tee deploy.log
           status=${PIPESTATUS[0]}
           echo "::notice::wrangler deploy exit: $status"
+          if [ "$status" != "0" ]; then
+            grep -viE "^$" deploy.log | tail -30 | while IFS= read -r line; do echo "::error::${line:0:500}"; done
+          fi
           exit $status
       - name: Verify schedules are gone, presence routes are 404, and no cron runs
         run: |
