@@ -5,13 +5,17 @@ import { trustedGroupOwner } from './social-access.js';
 // worker.js; no source-data request is made to Firestore from this module.
 export async function authorizePost({ uid, db }, collection, id, _unused, context, requestUserReads, includeArchivedOwner = false) {
   if (!db || typeof uid !== 'string' || !uid) return false;
-  // Coalesce repeated user-profile checks only within this one query request.
-  // Never share authorization state across requests or Worker isolates.
+  // Coalesce shared ACL dependencies only within this one query request.
+  // Pending promises must be shared too: a feed authorizes rows concurrently.
+  // Post rows themselves remain independently fetched and authorized.
+  const requestRead = async (key, read) => {
+    if (!requestUserReads) return read();
+    if (!requestUserReads.has(key)) requestUserReads.set(key, read());
+    return requestUserReads.get(key);
+  };
   const fields = async path => {
-    if (requestUserReads && path.startsWith('users/')) {
-      if (!requestUserReads.has(path)) requestUserReads.set(path, readD1DocumentFields(db, path));
-      return await requestUserReads.get(path) || {};
-    }
+    if (path.startsWith('users/') || path.startsWith('groups/'))
+      return await requestRead(path, () => readD1DocumentFields(db, path)) || {};
     return await readD1DocumentFields(db, path) || {};
   };
   const string = (f, key) => typeof f[key]?.stringValue === 'string' ? f[key].stringValue : '';
@@ -36,7 +40,7 @@ export async function authorizePost({ uid, db }, collection, id, _unused, contex
   const groupId = string(post, 'groupId');
   if (groupId) {
     const groupPath = `groups/${groupId}`;
-    const [group, trustedOwner] = await Promise.all([fields(groupPath), trustedGroupOwner(db, groupPath)]);
+    const [group, trustedOwner] = await Promise.all([fields(groupPath), requestRead(`trustedGroupOwner:${groupPath}`, () => trustedGroupOwner(db, groupPath))]);
     if (!Object.keys(group).length || list(group, 'bannedMemberIds').includes(uid)) return false;
     if (!trustedOwner || string(group, 'adminId') !== trustedOwner) return false;
     const member = list(group, 'members').includes(uid);
@@ -54,5 +58,5 @@ export async function authorizePost({ uid, db }, collection, id, _unused, contex
   const privacy = (string(post, 'privacy') || 'Public').toLowerCase();
   if (privacy === 'public') return true;
   if (privacy !== 'friends') return false;
-  return await hasD1Friendship(db, uid, owner) === true;
+  return await requestRead(`trustedFriendship:${JSON.stringify([uid,owner].sort())}`, () => hasD1Friendship(db, uid, owner)) === true;
 }
