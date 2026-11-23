@@ -62,7 +62,7 @@ def category(sql):
 
 def safe_shape(sql):
     # Fixed vocabulary only; never emit SQL, bindings, IDs or document values.
-    q=sql.lower()
+    q=re.sub(r'\s+',' ',sql).strip().lower()
     op=re.match(r'\s*(select|with|insert|update|delete|create|drop|alter|explain)\b',q)
     roots=[r for r in ('users','posts','comments','friends','friend_requests','chats','notifications','reels','lives')
            if re.search(r"\b(?:parent_path|collection|collection_id)\s*=\s*'"+r+"'",q)]
@@ -101,6 +101,21 @@ def summarize_shapes(groups,metric):
                               for r in top]}
 
 
+def notice_lines(window):
+    # GitHub truncates long annotation messages. Keep the summary and each
+    # already-sanitized shape separate so write attribution is not cut off.
+    header={**window}
+    for metric in ('rowsRead','rowsWritten'):
+        header[metric]={k:v for k,v in window[metric].items() if k!='largest_shapes'}
+    lines=['Sanitized quota traffic window '+json.dumps(header,sort_keys=True)]
+    for metric in ('rowsRead','rowsWritten'):
+        for rank,shape in enumerate(window[metric]['largest_shapes'],1):
+            lines.append('Sanitized quota shape '+json.dumps({
+                'minutes':window['minutes'],'start':window['start'],'end':window['end'],
+                'ranked_by':metric,'rank':rank,**shape},sort_keys=True))
+    return lines
+
+
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output',type=Path)
@@ -124,7 +139,7 @@ def main():
         for metric in ('rowsRead','rowsWritten'):
             window[metric]=summarize_shapes(fetch(query_text(start,end,metric),True),metric)
         report['windows'].append(window)
-        print('::notice::Sanitized quota traffic window '+json.dumps(window,sort_keys=True))
+        for line in notice_lines(window): print('::notice::'+line)
     if args.output:
         args.output.parent.mkdir(parents=True,exist_ok=True)
         args.output.write_text(json.dumps(report,indent=2,sort_keys=True)+'\n')

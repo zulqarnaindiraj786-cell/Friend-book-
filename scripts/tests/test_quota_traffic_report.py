@@ -88,3 +88,20 @@ class TrafficReport(unittest.TestCase):
         for bad in (True,-1,'92'):
             row['sum']['rowsReturned']=bad
             with self.assertRaises(ValueError):p.parse_groups(payload([row]),True)
+
+    def test_multiline_upserts_are_not_mislabeled_as_plain_inserts(self):
+        shape=p.safe_shape('INSERT INTO friendbook_cf_documents VALUES (?,?) ON\n   CONFLICT(path) DO UPDATE SET document_json=?')
+        self.assertIn('upsert',shape['features'])
+        self.assertEqual(shape['tables'],['legacy_mirror'])
+
+    def test_each_shape_gets_a_bounded_notice_instead_of_truncated_mega_annotation(self):
+        row={'sum':{'rowsRead':1,'rowsWritten':0,'rowsReturned':1},'count':1,
+             'dimensions':{'query':"SELECT document_json FROM friendbook_cf_documents WHERE path='SECRET'"}}
+        window={'minutes':5,'start':'start','end':'end','all_query_totals':None,
+                'rowsRead':p.summarize_shapes([row]*10,'rowsRead'),
+                'rowsWritten':p.summarize_shapes([row]*10,'rowsWritten')}
+        lines=p.notice_lines(window)
+        self.assertEqual(len(lines),21)
+        self.assertTrue(all(len(line)<4000 for line in lines))
+        self.assertNotIn('SECRET',''.join(lines))
+        self.assertNotIn('largest_shapes',lines[0])
