@@ -23,3 +23,16 @@ class QueryReadFlightsWiring(unittest.TestCase):
         for start, end in [('void invalidateDoc(String path)', 'ListenerRegistration registerDocListener'),
                            ('void notifyCollectionListeners(String parentPath)', 'private void pollActiveListeners')]:
             self.assertIn('queryReadFlights.invalidateAll()', store.split(start, 1)[1].split(end, 1)[0])
+
+    def test_delta_heads_share_whole_merge_only_for_exact_cached_input(self):
+        source = (BASE / 'Query.java').read_text()
+        delta = source.split('public Task<QuerySnapshot> refreshCachedHead', 1)[1].split('public ListenerRegistration', 1)[0]
+        self.assertIn('return get(Source.DEFAULT)', delta)
+        self.assertNotIn('Source.SERVER', delta)
+        self.assertIn('cachedRows=cachedHeadRows(cached)', delta)
+        self.assertIn('queryReadFlights.read(actor,deltaFlightKey(key,delta,cachedRows),true,()->firestore.runAsync', delta)
+        self.assertLess(delta.index('queryReadFlights.read'), delta.index('D1DocumentTransport.query'))
+        self.assertIn('if (!actor.equals(D1DocumentStore.authenticatedUid()))', delta)
+        key = source.split('static String deltaFlightKey', 1)[1].split('/** Refresh', 1)[0]
+        for component in ['put("delta-head")', 'put(headKey)', 'put(delta.toQueryBody())', 'put(cachedRows)']:
+            self.assertIn(component, key)

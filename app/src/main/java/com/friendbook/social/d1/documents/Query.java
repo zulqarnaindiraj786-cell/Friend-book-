@@ -307,13 +307,41 @@ public class Query {
         return firestore.isQueryCacheFresh(D1DocumentStore.queryCacheKey(this,D1DocumentStore.authenticatedUid()),parentPath,maxAgeMs);
     }
 
+    /** Encode the exact merge input; partial/different cached heads must never share results. */
+    JSONArray cachedHeadRows(QuerySnapshot cached) throws org.json.JSONException {
+        JSONArray result=new JSONArray();
+        for(DocumentSnapshot doc:cached.getDocuments()) {
+            JSONObject row=new JSONObject();
+            java.util.Map<String,Object> data=new java.util.HashMap<>(doc.getData());
+            if(feedEngagement){
+                Object summary=data.remove("__feedEngagement");
+                if(summary instanceof String)try{row.put("engagement",new JSONObject((String)summary));}catch(org.json.JSONException ignored){}
+            }
+            row.put("path",doc.getPath()).put("id",doc.getId()).put("data",D1DocumentJson.encodeMap(data));
+            if(doc.getCreateTime()!=null)row.put("createTime",doc.getCreateTime().toDate().getTime());
+            if(doc.getUpdateTime()!=null)row.put("updateTime",doc.getUpdateTime().toDate().getTime());
+            result.put(row);
+        }
+        return result;
+    }
+
+    static String deltaFlightKey(String headKey,Query delta,JSONArray cachedRows) {
+        return new JSONArray().put("delta-head").put(headKey).put(delta.toQueryBody()).put(cachedRows).toString();
+    }
+
     /** Refresh a descending head without skipping a burst larger than one page. */
     public Task<QuerySnapshot> refreshCachedHead(QuerySnapshot cached) {
-        if (cached == null || cached.isEmpty() || limitValue == null || limitValue <= 0) return get(Source.SERVER);
+        // This is an ordinary lifecycle load, not an explicit forced refresh.
+        if (cached == null || cached.isEmpty() || limitValue == null || limitValue <= 0) return get(Source.DEFAULT);
         final String actor = D1DocumentStore.authenticatedUid();
         final Query delta = endBefore(cached.getDocuments().get(0)).limitToLast(limitValue);
         final String key = D1DocumentStore.queryCacheKey(this, actor);
-        return firestore.runAsync(() -> {
+        final JSONArray cachedRows;
+        try { cachedRows=cachedHeadRows(cached); }
+        catch(Exception error) { return com.google.android.gms.tasks.Tasks.forException(error); }
+        // Include the complete cached merge input, not just the first cursor.
+        // Mutations/pushes detach this registry along with ordinary queries.
+        return firestore.queryReadFlights.read(actor,deltaFlightKey(key,delta,cachedRows),true,()->firestore.runAsync(() -> {
             JSONArray updated = D1DocumentTransport.query(delta.toQueryBody());
             if (!actor.equals(D1DocumentStore.authenticatedUid()))
                 throw new D1DocumentStoreException(D1DocumentStoreException.Code.CANCELLED, "Account changed during delta read");
@@ -322,24 +350,15 @@ public class Query {
                 JSONObject row=updated.getJSONObject(i);
                 rows.put(row.getString("id"),row);
             }
-            for(DocumentSnapshot doc:cached.getDocuments()) {
+            for(int i=0;i<cachedRows.length();i++) {
                 if(rows.size()>=limitValue)break;
-                if(rows.containsKey(doc.getId()))continue;
-                JSONObject row=new JSONObject();
-                java.util.Map<String,Object> data=new java.util.HashMap<>(doc.getData());
-                if(feedEngagement){
-                    Object summary=data.remove("__feedEngagement");
-                    if(summary instanceof String)try{row.put("engagement",new JSONObject((String)summary));}catch(org.json.JSONException ignored){}
-                }
-                row.put("path",doc.getPath()).put("id",doc.getId()).put("data",D1DocumentJson.encodeMap(data));
-                if(doc.getCreateTime()!=null)row.put("createTime",doc.getCreateTime().toDate().getTime());
-                if(doc.getUpdateTime()!=null)row.put("updateTime",doc.getUpdateTime().toDate().getTime());
-                rows.put(doc.getId(),row);
+                JSONObject row=cachedRows.getJSONObject(i);
+                if(!rows.containsKey(row.getString("id")))rows.put(row.getString("id"),row);
             }
             JSONArray merged=new JSONArray(rows.values());
             firestore.cacheQuery(key,merged.toString());
             return parseQuerySnapshot(merged);
-        });
+        }));
     }
 
     public ListenerRegistration addSnapshotListener(EventListener<QuerySnapshot> listener) {
