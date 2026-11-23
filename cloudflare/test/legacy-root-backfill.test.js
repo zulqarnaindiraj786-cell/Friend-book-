@@ -86,3 +86,38 @@ test('unsafe shapes and stale metadata never get promoted', () => {
   assert.match(statement.sql, /NOT EXISTS/);
   assert.throws(() => rowStatement({}), /unsafe plan length/);
 });
+
+test('complete zero-work inventory exits after one query without page, reinventory or writes', async t => {
+  const {db,legacy,query}=fixture(t);
+  legacy('posts','p1',{authorId:'alice',createdAt:1,id:'p1'});
+  await promoteCollection(query,'posts');
+  const before=db.prepare('SELECT total_changes() AS n').get().n;
+  for (const write of [false,true]) {
+    const calls=[];
+    const result=await promoteCollection(async(sql,args)=>{
+      calls.push(sql);return query(sql,args);
+    },'posts',{write});
+    assert.equal(calls.length,1);
+    assert.match(calls[0],/COUNT\(\*\) AS sampled/);
+    assert.deepEqual(result,{collection:'posts',before:0,inserted:0,after:0,scanned:0,
+      skipped:{},facades:0,representations:0,reads:0,truncated:false});
+  }
+  assert.equal(db.prepare('SELECT total_changes() AS n').get().n,before);
+});
+
+test('sentinel-sized or inconsistent inventory cannot falsely report complete promotion', async()=>{
+  for (const row of [
+    {sampled:25001,legacy_only:0},{sampled:25002,legacy_only:0},
+    {sampled:-1,legacy_only:0},{sampled:1,legacy_only:-1},
+    {sampled:1,legacy_only:2},{sampled:1,legacy_only:0.5},
+  ]) {
+    let calls=0;
+    await assert.rejects(()=>promoteCollection(async()=>{calls++;return {results:[row]};},'posts'),/inventory unavailable/);
+    assert.equal(calls,1,'invalid inventory must stop before any page/write');
+  }
+});
+
+test('largest complete inventory remains accepted but cap sentinel is rejected', async()=>{
+  assert.equal(await legacyOnly(async()=>({results:[{sampled:25000,legacy_only:0}]}),'posts'),0);
+  assert.equal(await legacyOnly(async()=>({results:[{sampled:0,legacy_only:0}]}),'posts'),0);
+});
