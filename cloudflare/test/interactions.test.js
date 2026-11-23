@@ -788,3 +788,35 @@ test('zero-visible engagement skips removed/blocked preview history without chan
   const compatible=await engagementSummary(db,'posts/p1','viewer','owner',[]);
   assert.deepEqual(compatible,visible);
 });
+
+test('zero visible totals skip blocked-author subtraction history while positive totals stay exact',async t=>{
+  const f=fixture();t.after(f.close);
+  f.sql.exec(`WITH RECURSIVE seq(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM seq WHERE i<3000)
+    INSERT INTO friendbook_cf_comments(resource,id,uid,text,created_at)
+    SELECT 'posts/p1','removed'||i,'blocked','text',i FROM seq;
+    INSERT INTO friendbook_cf_comment_details(resource,id,removed)
+    SELECT resource,id,1 FROM friendbook_cf_comments WHERE resource='posts/p1';`);
+  let visits=0,forceOld=false;
+  f.sql.function('quota_blocked_count_probe',_id=>{visits++;return 1;});
+  const db={prepare(query){
+    if(query.includes('AS preview_json')){
+      query=query.replace('WHERE COALESCE(d.removed,0)=0)',
+        'WHERE quota_blocked_count_probe(c.id) AND COALESCE(d.removed,0)=0)');
+      if(forceOld)query=query.replace('CASE WHEN visible_total=0 THEN 0','CASE WHEN 0 THEN 0');
+    }
+    return f.env.DB.prepare(query);
+  }};
+  forceOld=true;
+  const prior=await engagementSummary(db,'posts/p1','viewer','owner',['blocked','blocked']);
+  assert.ok(visits>=3000,`counterfactual must visit removed blocked history, got ${visits}`);
+  forceOld=false;visits=0;
+  const optimized=await engagementSummary(db,'posts/p1','viewer','owner',['blocked','blocked']);
+  assert.deepEqual(optimized,prior);assert.equal(visits,0);
+  f.sql.exec(`INSERT INTO friendbook_cf_comments(resource,id,uid,text,created_at) VALUES
+    ('posts/p1','visible','author','public comment',4000),
+    ('posts/p1','hidden','blocked','blocked comment',4001);`);
+  visits=0;
+  const positive=await engagementSummary(db,'posts/p1','viewer','owner',['blocked','blocked']);
+  assert.equal(positive.comments,1);assert.equal(positive.preview[0].id,'visible');
+  assert.ok(visits>0,'positive totals must still subtract blocked comments');
+});

@@ -47,8 +47,13 @@ function engagementStatement(db, resource, uid, blocked, useTotals = true) {
         ON c.resource=?2 AND c.uid=blocked.value
       LEFT JOIN friendbook_cf_comment_details d ON d.resource=c.resource AND d.id=c.id
       WHERE COALESCE(d.removed,0)=0)`;
-  const count = useTotals ? `COALESCE((SELECT total FROM friendbook_cf_visible_comment_totals WHERE resource=?2),0)
-        ${blocked.length ? `- ${blockedCount}` : ''}` : `(SELECT COUNT(*) FROM friendbook_cf_comments c
+  const storedTotal = `COALESCE((SELECT total FROM friendbook_cf_visible_comment_totals WHERE resource=?2),0)`;
+  // A known zero visible total cannot contain a visible blocked comment.
+  // Skip scanning removed history for every blocked author in that case.
+  // LIMIT prevents flattening/re-evaluating the totals lookup.
+  const count = useTotals ? (blocked.length ? `(SELECT CASE WHEN visible_total=0 THEN 0
+        ELSE visible_total - ${blockedCount} END FROM (SELECT ${storedTotal} AS visible_total LIMIT 1))`
+        : storedTotal) : `(SELECT COUNT(*) FROM friendbook_cf_comments c
       LEFT JOIN friendbook_cf_comment_details d ON d.resource=c.resource AND d.id=c.id
       WHERE c.resource=?2 AND COALESCE(d.removed,0)=0
         AND c.uid NOT IN (SELECT value FROM json_each(?3)))`;
