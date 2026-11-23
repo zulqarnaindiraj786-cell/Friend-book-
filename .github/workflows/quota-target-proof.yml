@@ -1,4 +1,4 @@
-# Recheck daily verdict after 2.10.34 build; no production SQL or deployment.
+# Owner-requested strict daily verification after final adaptive inbox rollout; analytics only.
 name: Strict quota target verification (not a guarantee)
 on:
   push:
