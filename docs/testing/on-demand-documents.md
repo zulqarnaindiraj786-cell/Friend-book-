@@ -33,3 +33,20 @@ release keystore and password from the repository history, verifies them with
 falls back to the secret pair when history is unavailable. Release 2.10.32 was
 signed with it: same certificate as 2.10.31 and an in-place upgrade passed on an
 Android 15 emulator.
+
+## The other three offenders
+
+| Offender | Before | Now |
+| --- | --- | --- |
+| People-you-may-know / notes strip (`collection("users").limit(30)`) | Re-read whenever Home was shown (2-minute throttle, 0 ms on first paint) | `OnDemandLoads.PYMK_CACHE_MS` (30 min) cache persisted per account (`fb_pymk_cache`), painted from disk on cold start; a tab switch never reads; only a pull / fresh pill / Home-tap gesture may refetch (`loadNotesUsers(true)`) |
+| Chat badge listener (`chats` where participant) | Unbounded: every room document was read on every delivered message | `orderBy(inboxActivityAt DESC).limit(OnDemandLoads.CHAT_BADGE_LIMIT)` = 100 rooms |
+| Friend graph listener (`friends` where participant) | Unbounded on every cold start | `.limit(OnDemandLoads.FRIEND_GRAPH_LIMIT)` = 500 |
+| Referral total (`CountReads.once`) | Inside the cold-start burst after the first frame | Deferred 4 s so the visible screen starts first |
+
+Notification and friend-request badges already used `BADGE_WINDOW` = 32.
+
+`OnDemandLoadsTest` guards all of this: the 100-room badge cap, the suggestions
+policy (same account + loaded cache ⇒ no fetch; only a gesture refetches), and
+source-level assertions that both collection listeners carry a limit and that the
+suggestion fetch is reachable only through the guarded path. Run 45088109156
+passed together with the document tests.
