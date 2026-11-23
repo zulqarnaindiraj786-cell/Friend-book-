@@ -24,8 +24,9 @@ Repeat open: **0 extra Home/badge query documents**, plus 1 conservative auth al
 Two explicit refreshes/day are separately charged (158 documents). Cache eviction, writes or push
 invalidations can cause extra cache misses, so 136 is not a universal daily cap.
 
-Five-user revised scenario: **11,000 document reads / 1,495 row-write operations per day**.
-If all 20 app opens miss cache: **28,020 estimated reads/day** under the script's other assumptions.
+Latest five-user scenario: **11,535 document reads / 1,495 row-write operations per day**.
+See the inbox follow-up below for the additional explicitly charged actions.
+If all 20 app opens miss cache: **28,555 estimated reads/day** under the script's other assumptions.
 
 Correction to the previous report: `limit(450)` was inside the explicit **Mark all read** action,
 NOT the normal notification-open path. The old 2,250 notification-open reads/user/day number was
@@ -98,3 +99,39 @@ No invented numeric saving is subtracted from the earlier **11,000 / 1,495** sce
 not separately model the removed Menu registration/churn or media GETs. That remains a scenario,
 not proof of whole-app D1 usage or zero quota waste. Chat/call/account-security listeners and
 legitimate explicit operations are intentionally retained. No APK/AAB produced; PR #36 unmerged.
+
+
+## Inbox repeat-read and invalidation follow-up — 2026-11-19
+Implementation: `f00bd80`.
+
+- Ordinary chat-list opens and older pages reuse complete account/query/cursor caches, including
+  empty results. Cache misses still fetch. The ten displayed rooms and one lookahead are retained.
+- Explicit pull and visible-inbox message pushes bypass cache; pushes remain debounced, never polled.
+- Cached first page restores its cursor; older pages can come from cache. Timestamp/revision checks
+  and InboxMessageHandoff still protect the latest visible preview and unread state.
+- Pending push is scheduled after cached completion too, preventing a push arriving during cache
+  hydration from being stranded. Cached snapshots do not trigger incoming-call ringing; fresh
+  call signaling paths and message receipt logic are unchanged.
+- Found a correctness prerequisite: persistent query invalidation previously covered only groups
+  and friends. Now all changed collections are marked stale in their correct account-scoped cache
+  namespace, including the separate chat namespace. This writes local preferences only; it does
+  not download a hidden list. A later open can fetch when the cache is stale.
+
+Budget correction: current inbox code has no separate users-strip query. A cold page returns at
+most **11 documents** (ten visible + one lookahead), not the previous 10+20 assumption. To avoid
+claiming unmeasured savings, the updated model charges all ten inbox opens as cache misses,
+plus 20 visible-push refreshes, two pulls, and five older pages: **407 documents/user/day**.
+These added explicit actions raise the overall estimate from 11,000 to **11,535 reads/day** for
+five users, despite removal of redundant reads. Writes remain **1,495/day**. A valid cache-hit
+inbox open costs zero inbox-query documents; writes/push invalidation, eviction and user refreshes
+can require a fetch. Neither total is measured D1 rows_read or a guaranteed production cap.
+
+Proof:
+- Worker tests: **234/234 passed**.
+- Python checks: **331 passed**.
+- Android debug Java compilation + JVM tests: **PASS**, commit `f00bd80`:
+  https://github.com/zulqarnaindiraj786-cell/Friend-book-/actions/runs/45110057902
+- New JVM policy tests verify chat/message cache namespace selection, invalidation, cache miss,
+  timestamp rollback and expiry. Regression guards cover inbox push/pull, cursor restore, handoff,
+  cached call-state safety and pending-push scheduling. No device-level test claimed.
+- Merge remains on hold. No APK/AAB produced.
