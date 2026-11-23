@@ -226,6 +226,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         if (a == null) return;
         if (freshPill != null) freshPill.setVisibility(View.GONE);
         forceReRank = true;
+        if (explicitUserRefresh && adapter!=null) adapter.resetAuthorLookupAttempts();
         FeedAlgorithm.nextRefreshGeneration(a);
         applyFilterOnCachedFeed();
         if (adapter != null) adapter.refreshSponsoredAds();

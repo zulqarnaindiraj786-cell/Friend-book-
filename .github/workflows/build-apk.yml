@@ -101,6 +101,7 @@ jobs:
       - name: Build Signed Release APK + Signed Google Play Store AAB (Production Only)
         id: rel
         env:
+          JAVA_TOOL_OPTIONS: '-Drobolectric.dependency.repo.url=https://repo.maven.apache.org/maven2'
           FB_KEYSTORE_B64: ${{ secrets.FB_KEYSTORE_B64 }}
           FRIENDBOOK_RELEASE_STORE_PASSWORD: ${{ secrets.FB_KEYSTORE_PASSWORD || secrets.FRIENDBOOK_RELEASE_STORE_PASSWORD }}
           FRIENDBOOK_RELEASE_KEY_ALIAS: ${{ secrets.FB_KEY_ALIAS || secrets.FRIENDBOOK_RELEASE_KEY_ALIAS }}
@@ -208,7 +209,7 @@ jobs:
         if: github.ref != 'refs/heads/main'
         run: |
           echo '## Migration candidate only' >> "$GITHUB_STEP_SUMMARY"
-          echo 'No GitHub production release is published from this branch. D1/presence remain OFF. Build and loopback tests do not certify 3k full-app capacity or complete backend migration.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Branch APK/AAB are test candidates, not a production capacity pass. No merge or Google Play publishing occurs. Build tests do not certify full-app capacity.' >> "$GITHUB_STEP_SUMMARY"
 
       - name: Package Signed Release APK, Play Store AAB (API 36 + R8 Mapping)
         run: |
@@ -227,7 +228,7 @@ jobs:
         with:
           name: FriendBook-playstore-aab
           path: friendbook-playstore.aab
-          retention-days: 1
+          retention-days: 7
 
       - name: Upload Signed Release APK
         uses: actions/upload-artifact@v4
@@ -235,7 +236,7 @@ jobs:
         with:
           name: FriendBook-release-apk
           path: friendbook.apk
-          retention-days: 1
+          retention-days: 7
 
       - name: Upload R8 Deobfuscation Mapping
         uses: actions/upload-artifact@v4
@@ -243,7 +244,23 @@ jobs:
         with:
           name: FriendBook-release-mapping
           path: friendbook-mapping.txt
-          retention-days: 1
+          retention-days: 7
+
+      - name: Publish owner-requested signed test candidate (not Latest)
+        if: github.ref == 'refs/heads/arena/b52bc74d-friend-book' && contains(github.event.head_commit.message, '[signed-candidate]')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG="friendbook-2.10.33-signed-${GITHUB_SHA:0:8}"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" friendbook.apk friendbook-playstore.aab friendbook-mapping.txt --clobber
+          else
+            gh release create "$TAG" friendbook.apk friendbook-playstore.aab friendbook-mapping.txt \
+              --target "$GITHUB_SHA" --prerelease --latest=false \
+              --title 'friendbook 2.10.33 — Signed test APK + AAB' \
+              --notes 'Owner-requested signed test candidate from PR #36, versionCode 175. Includes on-demand quota fixes and Invite Friends. Not merged, not a production capacity pass, not published to Google Play. The production Latest release is unchanged.'
+          fi
 
       # Publish the owner-requested release APK + Play Store AAB so in-app updates serve the new Cloudflare APK.
       - name: Publish Signed Release APK + Play Store AAB to GitHub Releases

@@ -73,6 +73,8 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     // Fetch a missing author at most once per adapter/account; recycled rows must not
     // launch a network request on every bind.
     private final Set<String> requestedAuthors = new HashSet<>();
+    /** Explicit user retry only: a missing/offline author must not cause a bind/request loop. */
+    public void resetAuthorLookupAttempts() { requestedAuthors.clear(); }
     private List<StoriesAdapter.Group> storyGroups = new ArrayList<>();
     public boolean showHeader = true;
     public boolean showFooter = true;
@@ -966,9 +968,8 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         if (!pagePost && author == null && (p.authorName == null || p.authorName.isEmpty())
                 && p.authorId != null && !p.authorId.isEmpty()
                 && requestedAuthors.add(String.valueOf(actor) + ":" + p.authorId)) {
-            final String requestKey=String.valueOf(actor) + ":" + p.authorId;
             Fb.getUserFresh(p.authorId).addOnSuccessListener(loaded -> {
-                if (loaded == null) { requestedAuthors.remove(requestKey); return; }
+                if (loaded == null) return;
                 if (java.util.Objects.equals(actor, Fb.uid()) && !activity.isFinishing()) notifyDataSetChanged();
             });
         }
