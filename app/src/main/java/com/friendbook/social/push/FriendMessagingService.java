@@ -4,6 +4,7 @@ import com.google.firebase.messaging.FirebaseMessagingService;
 import com.google.firebase.messaging.RemoteMessage;
 
 public class FriendMessagingService extends FirebaseMessagingService {
+    private static final PushRefreshBurstGate REFRESH_BURSTS = new PushRefreshBurstGate();
     @Override public void onNewToken(String token) { PushManager.save(this, token); }
     @Override public void onMessageReceived(RemoteMessage message) {
         PushTrace.stage("fcm_received", "event=" + PushTrace.id(message.getData().get("eventId"))
@@ -16,7 +17,12 @@ public class FriendMessagingService extends FirebaseMessagingService {
         // This does not block on network or use push text as a stored message.
         String actor=com.friendbook.social.core.Fb.uid();
         boolean currentActor=actor!=null && actor.equals(data.get("toUserId"));
-        if (currentActor && com.friendbook.social.App.isForeground() && "message".equals(data.get("type"))) {
+        // Keep display independent. Only duplicate foreground invalidations
+        // share this short transport-ID window; calls always remain immediate.
+        boolean refreshAllowed=currentActor && com.friendbook.social.App.isForeground()
+                && ("incoming_call".equals(data.get("type"))
+                    || REFRESH_BURSTS.allow(actor,message.getMessageId(),android.os.SystemClock.elapsedRealtime()));
+        if (refreshAllowed && "message".equals(data.get("type"))) {
             com.friendbook.social.d1.documents.D1DocumentStore.getInstance().refreshChatFromPush(data.get("chatId"));
         // Badge cost = zero reads: the pill is bumped locally from the push itself.
         if (actor != null && actor.equals(data.get("toUserId")))
@@ -24,7 +30,7 @@ public class FriendMessagingService extends FirebaseMessagingService {
             com.friendbook.social.chat.ConversationsActivity.refreshVisibleInboxFromPush(actor);
         }
         PushManager.show(this, data);
-        if (com.friendbook.social.App.isForeground() && currentActor && actor.equals(com.friendbook.social.core.Fb.uid())) {
+        if (refreshAllowed && actor.equals(com.friendbook.social.core.Fb.uid())) {
             com.friendbook.social.d1.documents.D1DocumentStore store = com.friendbook.social.d1.documents.D1DocumentStore.getInstance();
             String type = data.get("type");
             if ("incoming_call".equals(type)) {
