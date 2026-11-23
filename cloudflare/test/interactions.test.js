@@ -746,3 +746,45 @@ test('ten-comment historical pages bound each route to eleven rows without losin
  assert.deepEqual(delta.comments.map(c=>c.id),Array.from({length:10},(_,i)=>`small_${String(51+i).padStart(3,'0')}`));
  assert.ok(delta.next);assert.ok(observed.every(n=>n<=11));
 });
+
+test('zero-visible engagement skips removed/blocked preview history without changing summary', async t=>{
+  const f=fixture();t.after(f.close);
+  f.sql.exec(`WITH RECURSIVE seq(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM seq WHERE i<3000)
+    INSERT INTO friendbook_cf_comments(resource,id,uid,text,created_at)
+    SELECT 'posts/p1','c'||i,'hidden','text',i FROM seq;
+    INSERT INTO friendbook_cf_comment_details(resource,id,removed)
+    SELECT resource,id,1 FROM friendbook_cf_comments WHERE resource='posts/p1';`);
+  let visits=0,forcePreview=false;
+  f.sql.function('quota_preview_probe',_id=>{visits++;return 1;});
+  const db={prepare(query){
+    if(query.includes('AS preview_json')) {
+      query=query.replace('WHERE c.resource = ?2 AND COALESCE(d.removed, 0) = 0',
+        'WHERE c.resource = ?2 AND quota_preview_probe(c.id) AND COALESCE(d.removed, 0) = 0');
+      // Counterfactual: same statement/counts, but force the former unconditional
+      // preview traversal. This measures local row visits, not D1 billing.
+      if(forcePreview)query=query.replace('CASE WHEN engagement_count.total_comments > 0 THEN','CASE WHEN 1 THEN');
+    }
+    return f.env.DB.prepare(query);
+  }};
+  const check=async blocked=>{
+    forcePreview=true;visits=0;
+    const unconditional=await engagementSummary(db,'posts/p1','viewer','owner',blocked);
+    assert.ok(visits>=3000,`counterfactual must traverse history, got ${visits}`);
+    forcePreview=false;visits=0;
+    const optimized=await engagementSummary(db,'posts/p1','viewer','owner',blocked);
+    assert.deepEqual(optimized,unconditional);
+    assert.equal(visits,0,'known empty preview must not visit comment history');
+    assert.equal(optimized.comments,0);assert.deepEqual(optimized.preview,[]);
+  };
+  await check([]);
+  f.sql.exec('UPDATE friendbook_cf_comment_details SET removed=0');
+  await check(['hidden']);
+  // A visible comment must still appear; the optimization cannot disable reads.
+  const visible=await engagementSummary(db,'posts/p1','viewer','owner',[]);
+  assert.equal(visible.comments,3000);assert.equal(visible.preview.length,2);
+  // Old schemas still use the exact compatible count rather than treating a
+  // missing totals table as proof of zero comments.
+  f.sql.exec('DROP TABLE friendbook_cf_visible_comment_totals');
+  const compatible=await engagementSummary(db,'posts/p1','viewer','owner',[]);
+  assert.deepEqual(compatible,visible);
+});

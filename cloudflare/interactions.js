@@ -36,6 +36,9 @@ const reactionTypesSql = `COALESCE((SELECT json_group_array(json_object('type', 
       FROM (SELECT type, total FROM friendbook_cf_reaction_totals WHERE resource = ?2 AND total > 0 ORDER BY type) s), '[]')`;
 
 // Shared by explicit post details and the bounded Home response; no writes here.
+// Evaluate the visible count once in a non-flattened one-row subquery. If no
+// visible canonical comments exist, do not scan their removed/blocked history
+// merely to discover an empty two-comment preview. Legacy previews stay separate.
 function engagementStatement(db, resource, uid, blocked, useTotals = true) {
   // Seek each blocked author instead of scanning the resource's entire comment
   // history to subtract a usually tiny subset. DISTINCT prevents double counts.
@@ -51,8 +54,8 @@ function engagementStatement(db, resource, uid, blocked, useTotals = true) {
         AND c.uid NOT IN (SELECT value FROM json_each(?3)))`;
   return db.prepare(`SELECT
     ${reactionTypesSql} AS types_json,
-    ${count} AS total_comments,
-    COALESCE((SELECT json_group_array(json_object(
+    engagement_count.total_comments AS total_comments,
+    CASE WHEN engagement_count.total_comments > 0 THEN COALESCE((SELECT json_group_array(json_object(
       'id', p.id, 'resource', p.resource, 'uid', p.uid, 'text', p.text, 'parent_id', p.parent_id,
       'created_at', p.created_at, 'historical_unattributed', p.historical_unattributed,
       'created_at_known', p.created_at_known, 'media_url', p.media_url, 'mentions', p.mentions,
@@ -60,7 +63,8 @@ function engagementStatement(db, resource, uid, blocked, useTotals = true) {
       'likes', p.likes, 'mine', p.mine
     )) FROM (${commentSelect.replace('r.uid=?', 'r.uid=?1')} WHERE c.resource = ?2 AND COALESCE(d.removed, 0) = 0
       AND c.uid NOT IN (SELECT value FROM json_each(?3))
-      ORDER BY c.created_at DESC, c.id DESC LIMIT 2) p), '[]') AS preview_json`)
+      ORDER BY c.created_at DESC, c.id DESC LIMIT 2) p), '[]') ELSE '[]' END AS preview_json
+    FROM (SELECT ${count} AS total_comments LIMIT 1) engagement_count`)
     .bind(uid, resource, JSON.stringify(blocked || []));
 }
 
