@@ -242,10 +242,11 @@ export async function appDocuments(request, env, identity) {
     if (['users','posts','reels','events','pages','lives'].includes(collection)) {
       // Older clients use /v1/docs. Share the guarded canonical mutation with
       // newer clients so concurrent edits and relationship changes are not lost.
-      // The guarded canonical route owns update_time. Injecting a new JSON
-      // updatedAt here turned identical legacy-client saves into real writes,
-      // defeating its existing no-op/mirror-repair checks.
-      const data={...incoming};
+      // Profile revisions use canonical update_time. Injecting a new JSON
+      // updatedAt here turned identical profile saves into real writes,
+      // defeating existing no-op/mirror-repair checks. Retain historical
+      // timestamp behavior for content/event/page clients.
+      const data=collection==='users' ? {...incoming} : {...incoming,updatedAt:now};
       delete data.id;
       const {firestoreDocuments}=await import('./firestore-documents.js');
       const forwarded=new Request(`${url.origin}/v1/firestore/document?path=${encodeURIComponent(docPath)}`,{
