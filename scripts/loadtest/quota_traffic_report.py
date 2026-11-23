@@ -45,6 +45,7 @@ def parse_groups(payload,shapes=False):
 
 def category(sql):
     q=re.sub(r'\s+',' ',sql).strip().lower()
+    if re.search(r'\b(?:into|from|table|index)\s+(?:if\s+(?:not\s+)?exists\s+)?quota_index_probe_[a-f0-9]{32}(?:_(?:old|new))?\b',q): return 'known_diagnostic_billing_probe'
     if re.match(r'^(explain\b|(?:select|with)\b.*\bsqlite_(?:schema|master)\b)',q): return 'schema_inspection'
     if re.match(r'^(create|drop|alter)\b',q): return 'schema_change'
     if q.startswith('with ') and all(k in q for k in ('canonical_sample','legacy_sample','bad_wrapped')):

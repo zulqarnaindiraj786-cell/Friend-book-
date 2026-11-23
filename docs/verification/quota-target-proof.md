@@ -1,5 +1,7 @@
 # Quota target proof — FAIL, not guaranteed solved
 
+> Historical verification snapshot from before migration 0090. See [latest timestamp-index fix and billing proof](chat-timestamp-quota-fix.md). The latest rollout boundary is now 2026-11-23T06:03:58Z; no complete post-0090 day is proven here.
+
 ## Result
 
 **Production daily target: FAIL. Code validation: PASS.**

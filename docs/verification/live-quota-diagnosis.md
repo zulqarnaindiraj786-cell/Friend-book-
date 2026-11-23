@@ -297,3 +297,29 @@ Runtime secrets encrypted; prefer dedicated analytics-read credential. Deploymen
 fallback reuses existing connected Cloudflare credential, whose scopes are NOT
 proven read-only. This limitation is explicit in operator documentation. No secret
 values exposed, persisted in Git or included in report artifacts.
+
+## Third targeted fix active: chat-only timestamp index
+
+See `docs/verification/chat-timestamp-quota-fix.md`. Rollout45121610265 and
+independent validation45121618490 both PASS, source65bfb09561764291e47584a7e5767f5648856780.
+Latest rollout completion06:03:58Z. New partial index idx_cf_chat_root_updated
+replaces the global canonical collection/update index without changing chat-list
+ordering or live throttle query plans. No user-row mutation, app Worker deploy,
+cron change, merge or APK rebuild. Reported one-time SQL total21,025reads/1,092writes.
+
+Billing probe45121843452 PASS, sourcea006464c79be8269962623718f754b61f8eb18d9:
+unique disposable table, two synthetic rows/stage, actual D1 counters nonchat
+insert3->2writes, chat3->3writes. NOT the full application schema/workload or a
+daily percentage. Cleanup verified, no app table/user data touched. Entire probe
+including schema checks/cleanup1,490reads/19writes. No repeat scan schedule.
+
+RolloutCI241Worker/360Python PASS; current full localPython363 PASS. Schema,
+migrations,index-plan,30-user offline replay and dry-run compile PASS. Initial
+local partial index lacking parent key failed plan test; corrected before rollout.
+Historical owner-index fixture is bounded to its pre-0089 schema, preserving tests.
+
+Strict daily verifier boundary updated to06:03:58Z (no new verification run here);
+historical failure proof labeled accordingly. Analytics classifier now recognizes
+quota_index_probe_<uuid> query shapes as diagnostic billing probes, not app traffic.
+Task remains unresolved against complete-day100k/5k target; no unconditional
+future guarantee or full-day savings claim. PR36 remains open/unmerged.

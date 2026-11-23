@@ -43,6 +43,8 @@ class TrafficReport(unittest.TestCase):
         self.assertEqual(p.category('EXPLAIN INSERT INTO friendbook_cf_documents VALUES (?)'),'schema_inspection')
         self.assertEqual(p.category('SELECT name FROM sqlite_schema'),'schema_inspection')
         self.assertEqual(p.category('DROP INDEX idx_example'),'schema_change')
+        self.assertEqual(p.category('INSERT INTO quota_index_probe_'+('a'*32)+' VALUES (?)'),'known_diagnostic_billing_probe')
+        self.assertEqual(p.category('DROP TABLE IF EXISTS quota_index_probe_'+('a'*32)),'known_diagnostic_billing_probe')
         self.assertEqual(p.category('INSERT INTO friendbook_cf_social_guards SELECT CASE WHEN NOT EXISTS(SELECT 1 FROM friendbook_cf_documents) THEN 1 END'),'application_or_unattributed')
         self.assertEqual(p.category('SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?'),'application_or_unattributed')
 
