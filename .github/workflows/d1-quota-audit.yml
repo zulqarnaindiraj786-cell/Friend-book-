@@ -5,7 +5,7 @@ name: Read-only D1 quota audit
 on:
   workflow_dispatch:
   push:
-    branches: [arena/7c7ddb7b-friend-book]
+    branches: [arena/b52bc74d-friend-book]
     paths: [.github/workflows/d1-quota-audit.yml]
 permissions: {}
 jobs:

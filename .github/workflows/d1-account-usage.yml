@@ -3,7 +3,7 @@
 name: Read-only account D1 usage
 on:
   push:
-    branches: [arena/7c7ddb7b-friend-book]
+    branches: [arena/b52bc74d-friend-book]
     paths:
       - '.github/workflows/d1-account-usage.yml'
       - 'scripts/loadtest/d1_account_usage_analytics.py'
