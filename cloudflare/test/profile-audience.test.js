@@ -18,7 +18,32 @@ test('profile audience deduplicates followers, verified friends and pending send
   add(legacy,'stale','ignored','pending');
   add(legacy,'old','ellen','pending');
   const db={prepare:q=>({bind:(...args)=>({first:async()=>sql.prepare(q).get(...args)})})};
-  assert.deepEqual(await profileAudience(db,'bob','chris',['alice','dana']),{profileAudienceCount:4,profileAudienceIncludesViewer:true});
+  assert.deepEqual(await profileAudience(db,'bob','chris',['alice','dana']),{profileAudienceCount:3,profileAudienceIncludesViewer:true});
   sql.exec("DELETE FROM friendbook_cf_firestore_documents WHERE path='new'");
-  assert.deepEqual(await profileAudience(db,'bob','chris',['alice','dana']),{profileAudienceCount:3,profileAudienceIncludesViewer:false});
+  assert.deepEqual(await profileAudience(db,'bob','chris',['alice','dana']),{profileAudienceCount:2,profileAudienceIncludesViewer:false});
+});
+
+test('audience works without a legacy table and seeks canonical recipient/status',async t=>{
+  const sql=new DatabaseSync(':memory:');t.after(()=>sql.close());
+  sql.exec(`CREATE TABLE friendbook_cf_trusted_friendships(uid_low,uid_high);
+    CREATE INDEX friendship_low ON friendbook_cf_trusted_friendships(uid_low,uid_high);
+    CREATE INDEX friendship_high ON friendbook_cf_trusted_friendships(uid_high,uid_low);
+    CREATE TABLE friendbook_cf_firestore_documents(path,parent_path,document_json,doc_id);
+    CREATE INDEX idx_cf_request_canonical_in_status ON friendbook_cf_firestore_documents(
+      parent_path,json_extract(document_json,'$.toUid'),json_extract(document_json,'$.status'),json_extract(document_json,'$.fromUid'),doc_id)
+      WHERE parent_path='friend_requests';
+    WITH RECURSIVE seq(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM seq WHERE i<5000)
+    INSERT INTO friendbook_cf_firestore_documents
+      SELECT 'friend_requests/'||i,'friend_requests',json_object('fromUid','sender'||i,'toUid','other'||i,'status','pending'),i FROM seq;
+    INSERT INTO friendbook_cf_firestore_documents VALUES
+      ('friend_requests/p','friend_requests','{"fromUid":"sender","toUid":"bob","status":"pending"}','p');`);
+  let statement='',args=[];
+  const db={prepare:q=>({bind:(...values)=>({first:async()=>{statement=q;args=values;return sql.prepare(q).get(...values);}})})};
+  assert.deepEqual(await profileAudience(db,'bob','sender',[]),{profileAudienceCount:1,profileAudienceIncludesViewer:true});
+  const plan=sql.prepare('EXPLAIN QUERY PLAN '+statement).all(...args).map(row=>row.detail).join('\n');
+  assert.match(plan,/SEARCH friendbook_cf_firestore_documents USING (?:COVERING )?INDEX idx_cf_request_canonical_in_status/);
+  assert.doesNotMatch(statement,/friendbook_cf_documents\b/);
+  // A canonical cancellation/deletion cannot be undone by a stale mirror.
+  sql.exec("UPDATE friendbook_cf_firestore_documents SET document_json=json_set(document_json,'$.status','accepted') WHERE doc_id='p'");
+  assert.deepEqual(await profileAudience(db,'bob','sender',[]),{profileAudienceCount:0,profileAudienceIncludesViewer:false});
 });

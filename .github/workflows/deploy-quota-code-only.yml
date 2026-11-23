@@ -1,4 +1,4 @@
-# Code-only rollout: reject unreadable non-owner audiences before ACL dependency reads.
+# Code-only rollout: remove legacy mirror reads from opt-in profile audience counts.
 name: Deploy quota fixes without database migrations
 on:
   push:
