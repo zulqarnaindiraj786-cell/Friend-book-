@@ -81,7 +81,10 @@ def parse_groups(payload,shapes=False):
 
 
 def normalize_shape(sql):
-    return re.sub(r'\s+',' ',sql).strip().rstrip(';').lower()
+    # Ignore formatting only, not punctuation, bind slots or literal values.
+    tokens=re.findall(r"'(?:''|[^'])*'|\"(?:\"\"|[^\"])*\"|`[^`]*`|\[[^\]]*\]|\?[0-9]*|[A-Za-z_][A-Za-z0-9_]*|[0-9]+(?:\.[0-9]+)?|<>|!=|<=|>=|\|\||[^\s]",sql)
+    if tokens and tokens[-1]==';':tokens.pop()
+    return ' '.join(t if t.startswith(("'",'"','`','[')) else t.lower() for t in tokens)
 
 
 @lru_cache(maxsize=1)

@@ -212,3 +212,11 @@ class TrafficReport(unittest.TestCase):
         self.assertEqual(shape['recognized_aliases'],['canonical_count'])
         self.assertTrue({'count_aggregate','sum_aggregate','grouped','left_join','row_limit'} <= set(shape['features']))
         self.assertNotIn('PRIVATE',str(shape))
+
+
+    def test_exact_template_normalization_ignores_formatting_but_preserves_values(self):
+        self.assertEqual(p.normalize_shape('SELECT count(*) AS sampled FROM t WHERE a=?1;'),
+                         p.normalize_shape('select COUNT ( * ) as sampled from t where a = ?1'))
+        self.assertNotEqual(p.normalize_shape("SELECT 'A b'"),p.normalize_shape("SELECT 'A  b'"))
+        self.assertNotEqual(p.normalize_shape("SELECT 'Case'"),p.normalize_shape("SELECT 'case'"))
+        self.assertNotEqual(p.normalize_shape('SELECT ?1'),p.normalize_shape('SELECT ?2'))
