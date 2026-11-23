@@ -42,6 +42,19 @@ jobs:
               if result.get('errors'):
                   msg=result['errors'][0].get('message','Unknown GraphQL error')
                   raise SystemExit('Analytics query rejected: '+re.sub(r'[^a-zA-Z0-9 _.:,-]','',msg)[:200])
+              if metric=='rowsRead':
+                  aggregate=q.replace('limit:60, orderBy:[sum_%s_DESC]'%metric,'limit:1').replace('dimensions { query } ','')
+                  req=urllib.request.Request('https://api.cloudflare.com/client/v4/graphql',data=json.dumps({'query':aggregate}).encode(),headers={'Authorization':'Bearer '+os.environ['CF_TOKEN'],'Content-Type':'application/json'})
+                  with urllib.request.urlopen(req,timeout=25) as r: total=json.load(r)
+                  if total.get('errors'): raise SystemExit('Window aggregate unavailable; no changes made')
+                  accounts=total['data']['viewer']['accounts']
+                  if len(accounts)!=1: raise SystemExit('Window account unavailable')
+                  groups=accounts[0]['d1QueriesAdaptiveGroups']
+                  if len(groups)>1: raise SystemExit('Unexpected window aggregation')
+                  values=groups[0] if groups else None
+                  if values is not None and (any(type(values['sum'].get(k)) is not int or values['sum'][k]<0 for k in ('rowsRead','rowsWritten')) or type(values.get('count')) is not int or values['count']<0):
+                      raise SystemExit('Invalid window totals')
+                  print('::notice::Window totals '+json.dumps({'window':label,'start':fmt(start),'end':fmt(end),'adaptive_totals':values,'caveat':'Delayed adaptive query dataset; not device attribution, account billing or guaranteed rate'},sort_keys=True))
               print('Top by '+metric)
               for account in result['data']['viewer']['accounts']:
                   printed=0
