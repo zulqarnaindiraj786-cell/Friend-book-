@@ -57,3 +57,36 @@ class RootCoverageBudget(unittest.TestCase):
             self.assertEqual(coverage.main(), 1)
         self.assertEqual(calls, [(coverage.LEGACY_SQL, ()), (coverage.CANONICAL_SQL, coverage.COLLECTIONS)])
         self.assertNotIn(coverage.HISTORICAL_CANONICAL_SQL, [q for q, _ in calls])
+
+    def test_malformed_coverage_never_becomes_success_or_leaks_response(self):
+        valid_legacy = [{'collection': 'posts', 'legacy_rows': 1, 'legacy_only': 0}]
+        valid_canonical = [{'collection': 'posts', 'canonical_rows': 1}]
+        cases = [
+            (None, valid_canonical), ([None], valid_canonical),
+            ([{'collection': 'SECRET'}], valid_canonical),
+            ([{'collection': 'posts', 'legacy_rows': True, 'legacy_only': 0}], valid_canonical),
+            ([{'collection': 'posts', 'legacy_rows': 1, 'legacy_only': -1}], valid_canonical),
+            ([{'collection': 'posts', 'legacy_rows': 1, 'legacy_only': 2}], valid_canonical),
+            (valid_legacy * 2, valid_canonical),
+            (valid_legacy, [{'collection': 'posts'}]),
+            (valid_legacy, [{'collection': 'posts', 'canonical_rows': '1'}]),
+            (valid_legacy, [{'collection': 'SECRET', 'canonical_rows': 1}]),
+            (valid_legacy, valid_canonical * 2),
+        ]
+        for legacy, canonical in cases:
+            with self.subTest(legacy=legacy, canonical=canonical):
+                output=io.StringIO()
+                with patch.object(coverage, 'remote_query', side_effect=[(legacy, {}),(canonical, {})]), contextlib.redirect_stdout(output):
+                    self.assertEqual(coverage.main(), 2)
+                self.assertNotIn('SECRET', output.getvalue())
+                self.assertNotIn('zero legacy-only', output.getvalue())
+
+    def test_empty_database_is_valid_and_custom_collection_names_stay_private(self):
+        for legacy, canonical in [([], []),
+            ([{'collection':'SECRET_CUSTOM_COLLECTION','legacy_rows':3,'legacy_only':2}], [])]:
+            output=io.StringIO()
+            with patch.object(coverage,'remote_query',side_effect=[(legacy,{}),(canonical,{})]), contextlib.redirect_stdout(output):
+                self.assertEqual(coverage.main(),0)
+            self.assertNotIn('SECRET',output.getvalue())
+            if legacy:
+                self.assertIn('"collection": "other", "legacy_only": 2',output.getvalue())
