@@ -44,6 +44,7 @@ jobs:
           gradle-version: '8.11.1'
 
       - name: Fetch and verify Robolectric Android jars before test JVM startup
+        timeout-minutes: 8
         run: |
           set -euo pipefail
           for VER in "15-robolectric-12650502-i7" "9-robolectric-4913185-2-i7"; do
@@ -51,11 +52,11 @@ jobs:
             JAR="$DIR/android-all-instrumented-$VER.jar"
             URL="https://repo.maven.apache.org/maven2/org/robolectric/android-all-instrumented/$VER/android-all-instrumented-$VER.jar"
             mkdir -p "$DIR"
-            curl -fsSL --retry 6 --retry-delay 3 --retry-all-errors "$URL.sha512" -o "$JAR.sha512.tmp"
+            curl -fsSL --connect-timeout 15 --max-time 120 --retry 3 --retry-max-time 180 --retry-delay 3 --retry-all-errors "$URL.sha512" -o "$JAR.sha512.tmp"
             HASH="$(awk '{print $1}' "$JAR.sha512.tmp")"
             [[ "$HASH" =~ ^[a-fA-F0-9]{128}$ ]]
             if [ ! -f "$JAR" ] || ! printf '%s  %s\n' "$HASH" "$JAR" | sha512sum --check --status; then
-              curl -fsSL --retry 6 --retry-delay 3 --retry-all-errors "$URL" -o "$JAR.tmp"
+              curl -fsSL --connect-timeout 15 --max-time 120 --retry 3 --retry-max-time 180 --retry-delay 3 --retry-all-errors "$URL" -o "$JAR.tmp"
               printf '%s  %s\n' "$HASH" "$JAR.tmp" | sha512sum --check --status
               mv "$JAR.tmp" "$JAR"
             fi
