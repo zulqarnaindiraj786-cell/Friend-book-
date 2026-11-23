@@ -186,8 +186,9 @@ export function createWorker(verify = verifyFirebaseToken) {
 const app = createWorker();
 // One maintenance pass every 15 minutes: stale live rooms, the admin broadcast
 // outbox and expired view-dedupe rows. No per-second or per-minute cron exists.
-const handler = Object.assign(Object.create(null), app, {
+const handler = {
+  ...app,
   scheduled: (event, env, ctx) => import('./cloudflare/scheduled.js')
     .then(module => module.scheduled(event, env, ctx)),
-});
+};
 export default handler;
