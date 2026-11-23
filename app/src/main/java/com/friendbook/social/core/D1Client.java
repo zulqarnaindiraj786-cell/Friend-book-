@@ -22,6 +22,7 @@ public final class D1Client {
     private static final ThreadPoolExecutor INTERACTIVE=new ThreadPoolExecutor(2,2,30,TimeUnit.SECONDS,new ArrayBlockingQueue<>(24));
     private static final android.os.Handler MAIN=new android.os.Handler(android.os.Looper.getMainLooper());
     private static final Map<String,List<Runnable>> OBSERVERS=new HashMap<>();
+    private static final EngagementReadCoalescer READS=new EngagementReadCoalescer();
     public static String key(String collection,String id){return collection+"/"+id;}
     public static Runnable observe(String resource,Runnable callback){
         OBSERVERS.computeIfAbsent(resource,k->new ArrayList<>()).add(callback);
@@ -49,19 +50,24 @@ public final class D1Client {
                 String token=Tasks.await(user.getIdToken(false),15,TimeUnit.SECONDS).getToken();
                 if(token==null||!Objects.equals(actor,Fb.uid()))throw new IOException("Account changed");
                 URL url=new URL(BuildConfig.CLOUDFLARE_API_URL+"/v1/engagement/"+Uri.encode(collection)+"/"+Uri.encode(id)+"/"+kind+(query==null?"":query));
-                JSONObject response;
-                try { response=D1HttpTransport.send(url,method,token,body); }
-                catch(D1HttpTransport.HttpStatusException failure) {
-                    if(failure.status!=401 || !Objects.equals(actor,Fb.uid()))throw failure;
-                    String refreshed=Tasks.await(user.getIdToken(true),15,TimeUnit.SECONDS).getToken();
-                    if(refreshed==null || !Objects.equals(actor,Fb.uid()))throw new IOException("Account changed");
-                    response=D1HttpTransport.send(url,method,refreshed,body);
-                }
-                final JSONObject data=response;
+                String response=READS.execute("GET".equals(method) && body==null,actor,url.toString(),
+                        ()->sendWithRefresh(url,method,token,body,user,actor).toString());
+                // Each consumer owns its JSON; sharing a mutable result leaks UI edits.
+                final JSONObject data=new JSONObject(response);
                 MAIN.post(()->{if(Objects.equals(actor,Fb.uid()))result.trySetResult(data);else result.trySetException(new IOException("Account changed"));});
             }catch(Exception error){MAIN.post(()->result.trySetException(new IOException("D1 unavailable. Retry; nothing was written to Firebase.",error)));}
         });}catch(RejectedExecutionException error){result.setException(new IOException("Too many pending requests. Try again."));}
         return result.getTask();
+    }
+    private static JSONObject sendWithRefresh(URL url,String method,String token,JSONObject body,FirebaseUser user,String actor)throws Exception {
+        if(!Objects.equals(actor,Fb.uid()))throw new IOException("Account changed");
+        try { return D1HttpTransport.send(url,method,token,body); }
+        catch(D1HttpTransport.HttpStatusException failure) {
+            if(failure.status!=401 || !Objects.equals(actor,Fb.uid()))throw failure;
+            String refreshed=Tasks.await(user.getIdToken(true),15,TimeUnit.SECONDS).getToken();
+            if(refreshed==null || !Objects.equals(actor,Fb.uid()))throw new IOException("Account changed");
+            return D1HttpTransport.send(url,method,refreshed,body);
+        }
     }
     public static boolean isRetryableReactionFailure(Throwable error) {
         for(Throwable cause=error;cause!=null;cause=cause.getCause()) {
