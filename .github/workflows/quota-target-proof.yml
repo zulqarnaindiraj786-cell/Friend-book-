@@ -1,3 +1,4 @@
+# Recheck daily verdict after 2.10.34 build; no production SQL or deployment.
 name: Strict quota target verification (not a guarantee)
 on:
   push:
