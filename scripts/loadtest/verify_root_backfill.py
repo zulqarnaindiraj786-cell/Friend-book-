@@ -21,14 +21,22 @@ FROM friendbook_cf_documents l
 LEFT JOIN friendbook_cf_firestore_documents f ON f.path=l.path
 GROUP BY l.collection'''
 
-CANONICAL_SQL = '''SELECT parent_path AS collection, COUNT(*) AS canonical_rows
+# Preserve the old exact template solely for historical analytics attribution;
+# it must never execute during current coverage checks.
+HISTORICAL_CANONICAL_SQL = '''SELECT parent_path AS collection, COUNT(*) AS canonical_rows
 FROM friendbook_cf_firestore_documents GROUP BY parent_path'''
+
+# Only these root counts are consumed below. Seek the existing parent index
+# instead of scanning/grouping every nested message collection in the database.
+CANONICAL_SQL = '''SELECT parent_path AS collection, COUNT(*) AS canonical_rows
+FROM friendbook_cf_firestore_documents
+WHERE parent_path IN (?,?,?,?,?,?,?,?,?,?,?,?,?) GROUP BY parent_path'''
 
 
 def main():
     try:
         legacy_rows, _ = remote_query(LEGACY_SQL, ())
-        canonical_rows, _ = remote_query(CANONICAL_SQL, ())
+        canonical_rows, _ = remote_query(CANONICAL_SQL, COLLECTIONS)
     except Exception as error:  # noqa: BLE001 - never echo provider text
         print('::error:: Coverage query failed: ' + type(error).__name__ + ' (no changes made).')
         return 2

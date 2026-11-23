@@ -105,7 +105,7 @@ def maintenance_shapes():
     # initialize remote clients). Only these reviewed SQL constants qualify.
     templates={
         'canonical_inventory.py':(('SQL',),'exact_coverage_inventory_template'),
-        'verify_root_backfill.py':(('LEGACY_SQL','CANONICAL_SQL'),'exact_coverage_inventory_template'),
+        'verify_root_backfill.py':(('LEGACY_SQL','CANONICAL_SQL','HISTORICAL_CANONICAL_SQL'),'exact_coverage_inventory_template'),
         'notification_index_preflight.py':(('SQL',),'exact_index_preflight_template'),
         'legacy_comment_preflight.py':(('SQL',),'exact_index_preflight_template'),
         'friend_guard_index_preflight.py':(('SQL',),'exact_index_preflight_template'),

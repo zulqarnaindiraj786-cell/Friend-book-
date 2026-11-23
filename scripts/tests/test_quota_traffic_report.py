@@ -198,7 +198,7 @@ class TrafficReport(unittest.TestCase):
         shapes=p.maintenance_shapes()
         coverage=[q for q,label in shapes.items() if label=='exact_coverage_inventory_template']
         preflights=[q for q,label in shapes.items() if label=='exact_index_preflight_template']
-        self.assertEqual(len(coverage),3)
+        self.assertEqual(len(coverage),4)
         self.assertEqual(len(preflights),5)
         for query in coverage+preflights:
             self.assertNotEqual(p.category(query),'application_or_unattributed')
