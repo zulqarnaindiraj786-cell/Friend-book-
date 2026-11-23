@@ -183,7 +183,7 @@ class TrafficReport(unittest.TestCase):
 
     def test_legacy_promotion_requires_exact_reviewed_sql_not_just_table_names(self):
         shapes=p.maintenance_shapes()
-        self.assertEqual(len(shapes),3)
+        self.assertGreaterEqual(len(shapes),3)
         promotion=next(q for q,label in shapes.items() if label=='known_legacy_root_promotion')
         self.assertEqual(p.category(promotion),'known_legacy_root_promotion')
         self.assertEqual(p.category(promotion.upper()+';'),'known_legacy_root_promotion')
@@ -192,3 +192,16 @@ class TrafficReport(unittest.TestCase):
         for query,label in shapes.items():
             self.assertEqual(p.category(query),label)
         self.assertNotIn('document_json',str(p.safe_shape(promotion)))
+
+
+    def test_coverage_templates_are_parsed_without_import_or_remote_calls(self):
+        shapes=p.maintenance_shapes()
+        coverage=[q for q,label in shapes.items() if label=='exact_coverage_inventory_template']
+        preflights=[q for q,label in shapes.items() if label=='exact_index_preflight_template']
+        self.assertEqual(len(coverage),3)
+        self.assertEqual(len(preflights),5)
+        for query in coverage+preflights:
+            self.assertNotEqual(p.category(query),'application_or_unattributed')
+            if query in coverage:
+                self.assertEqual(p.category(query+' AND PRIVATE_DIFFERENCE=1'),'application_or_unattributed')
+        self.assertEqual(p.category('SELECT COUNT(*) FROM friendbook_cf_firestore_documents'),'application_or_unattributed')

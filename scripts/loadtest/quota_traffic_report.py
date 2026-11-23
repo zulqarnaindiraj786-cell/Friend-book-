@@ -6,6 +6,7 @@ Top-N shape subtotals are NOT complete totals and must never be subtracted from
 account billing. Unknown/empty/error analytics are never reported as zero usage.
 """
 import argparse
+import ast
 from functools import lru_cache
 import datetime as dt
 import json
@@ -100,6 +101,23 @@ def maintenance_shapes():
         template=re.search(r'(?:export )?const '+name+r' = `([^`]+)`;',source)
         if template and '${' not in template.group(1):
             known[normalize_shape(template.group(1))]='known_legacy_root_inventory'
+    # Read constants via AST, never import maintenance modules (imports can
+    # initialize remote clients). Only these reviewed SQL constants qualify.
+    templates={
+        'canonical_inventory.py':(('SQL',),'exact_coverage_inventory_template'),
+        'verify_root_backfill.py':(('LEGACY_SQL','CANONICAL_SQL'),'exact_coverage_inventory_template'),
+        'notification_index_preflight.py':(('SQL',),'exact_index_preflight_template'),
+        'legacy_comment_preflight.py':(('SQL',),'exact_index_preflight_template'),
+        'friend_guard_index_preflight.py':(('SQL',),'exact_index_preflight_template'),
+        'follow_membership_preflight.py':(('SQL',),'exact_index_preflight_template'),
+        'follow_fast_exception_preflight.py':(('SQL',),'exact_index_preflight_template'),
+    }
+    for filename,(names,label) in templates.items():
+        tree=ast.parse((Path(__file__).resolve().parent/filename).read_text())
+        for node in tree.body:
+            if isinstance(node,ast.Assign) and isinstance(node.value,ast.Constant) and isinstance(node.value.value,str):
+                if any(isinstance(target,ast.Name) and target.id in names for target in node.targets):
+                    known[normalize_shape(node.value.value)]=label
     return known
 
 
