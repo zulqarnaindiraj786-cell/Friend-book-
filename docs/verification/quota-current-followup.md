@@ -31,3 +31,20 @@ Local validation: all 241 Worker tests and 368 Python tests pass. These are corr
 The preview optimization is source-only pending validated deployment. Existing broad production deployment workflow applies pending migrations and does not allow this branch. Do not expand that workflow or replay migrations to ship this small optimization. A separate deployment must preserve current bindings/vars, capture rollback version, and apply zero database migrations. No backend deployment was performed by this follow-up.
 
 The separate signed Android 2.10.34/176 build (45166501055) succeeded and contains engagement GET coalescing, but installation on user devices remains unknown. PR #36 remains unmerged.
+
+## Production rollout completed
+
+Source 23bb6cceee754abdeb964631fb86c2b13c0af6b8 was deployed by the dedicated code-only pipeline:
+https://github.com/zulqarnaindiraj786-cell/Friend-book-/actions/runs/45169771972
+
+All steps succeeded; CI job completed at provider-reported 2026-11-23T11:57:55Z. Use this conservative timestamp as the start of the latest deployed optimization, not the earlier index-only boundary.
+
+- 241 Worker tests / 370 Python tests, schema/migration/index-plan local tests and 30-user network-disabled replay passed.
+- Metadata preflight verified exact live resource binding names/types, D1 ID, R2 bucket, Analytics Engine dataset, Durable Object classes, reviewed public vars and */15 cron before deployment.
+- Previous deployment version metadata recorded in `quota-code-rollout-evidence` artifact for rollback.
+- Wrangler code/assets deployment succeeded with --keep-vars. No D1 migration command or table/index/data mutation was run by rollout tooling. Normal application traffic/maintenance remains active; health executes a constant SELECT 1.
+- Post-deployment binding identity comparison and public-var/cron checks passed.
+- Health returned 200 with D1 enabled and Analytics Engine bound; unauthenticated /v1/me returned 401.
+- PR #36 remains open/unmerged. No new Android release was needed for this server-only optimization.
+
+The source-only deployment warning above describes the earlier checkpoint and is superseded by this section. Full authenticated production comment behavior is covered by local tests, not by an authenticated live-user smoke test. Post-deployment billed savings and a full-day target pass are still unverified; prior strict daily FAIL remains historical evidence and must not be erased.
