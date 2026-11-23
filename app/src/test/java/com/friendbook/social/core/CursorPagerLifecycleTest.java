@@ -26,7 +26,7 @@ public class CursorPagerLifecycleTest {
                 Query query=mock(Query.class),head=mock(Query.class);
                 when(query.limit(10)).thenReturn(head);
                 QuerySnapshot cache=mock(QuerySnapshot.class);
-                DocumentSnapshot doc=mock(DocumentSnapshot.class);when(doc.getId()).thenReturn("one");
+                DocumentSnapshot doc=mock(com.friendbook.social.d1.documents.QueryDocumentSnapshot.class);when(doc.getId()).thenReturn("one");
                 when(cache.isEmpty()).thenReturn(variant==0);
                 when(cache.size()).thenReturn(variant==0?0:1);
                 when(cache.getDocuments()).thenReturn(variant==0?Collections.emptyList():Collections.singletonList(doc));
