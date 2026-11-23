@@ -9,6 +9,6 @@
 
 Python 422 passed; Worker 293 passed; 48-workload quota replay completed successfully; diff check passed. Added Robolectric coverage for initial DEFAULT versus explicit SERVER routing in posts/users and retained short-cache reuse/expiry coverage. Profile bundled-mode change has a source wiring guard, not a device-level network trace.
 
-First combined Android run 45288192016 failed **before compilation/tests** while downloading Robolectric jars (curl exit 22). The preceding 2498afb-only run was superseded/cancelled by concurrency. `gh run rerun --failed` rejected rerun; this documentation push requests a fresh normal workflow run. Neither result is a passing compile. Update this record after that run resolves.
+Combined Android compile/JVM run **45288451363 SUCCESS** at exact source **e72fccd234ca6b1674aceffbb56d47c6e2fc05a5**, including both fixes and new Robolectric tests. Earlier run 45288192016 failed before compilation/tests downloading Robolectric jars (curl exit 22); the 2498afb-only run was superseded by concurrency. A documentation-only push did not trigger the path-filtered workflow; the additional test assertion push triggered the successful combined run.
 
 No APK/AAB, deployment, migration, or merge. Standalone point-read and engagement request prevalence and representative-day <=100k reads/<=5k writes acceptance remain unverified. These fixes close identified duplicate paths, not all genuine reads or a 100% quota guarantee.
