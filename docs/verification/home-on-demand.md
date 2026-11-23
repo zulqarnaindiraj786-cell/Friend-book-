@@ -135,3 +135,35 @@ Proof:
   timestamp rollback and expiry. Regression guards cover inbox push/pull, cursor restore, handoff,
   cached call-state safety and pending-push scheduling. No device-level test claimed.
 - Merge remains on hold. No APK/AAB produced.
+
+## Failed-count retry / lifecycle audit — 2026-11-19
+Implementation commits: `d8d8d0d`, `169f127`.
+
+- **Unbounded failed count requests**: CountReads previously retried indefinitely with backoff up
+  to five minutes. It now allows three total attempts (initial + two retries after 1s and 2s),
+  and only for transient transport/server errors. Permission/auth/quota exhaustion, cancelled,
+  malformed/unsupported queries and other permanent errors do not retry. Exact server counts
+  and the existing close/account-switch guards are retained. Reopening/explicit user action can
+  initiate a new bounded operation; this is not a lifetime request limit.
+- **Account summary detached from its owner**: Settings discarded the CountReads cancellation
+  handle. It now stores/cancels it onStop, guards duplicate taps while loading, and unlocks retry
+  with an error message after terminal failure. Closing a screen suppresses queued retries and
+  late UI callbacks; an already-sent network request cannot be undone.
+- **Deferred referral count could run offscreen**: Main's unowned four-second startup callback
+  is now scheduled only while resumed, and both the pending callback and count registration
+  are cancelled onPause. Once successfully loaded, the result is not re-requested on ordinary
+  resumes of this MainActivity instance. Account changes reset that state. BlueTick's explicit
+  count path and referral auto-grant logic remain intact.
+
+Proof:
+- Worker `npm test`: **234/234 passed** (Worker code unchanged).
+- Python regression suite: **334 passed**.
+- Android debug compilation + JVM tests: **PASS**, commit `169f127`:
+  https://github.com/zulqarnaindiraj786-cell/Friend-book-/actions/runs/45110675372
+- New JVM tests cover the attempt cap, 10,000 post-cap decisions, every D1 error code,
+  transient I/O and non-retryable programming errors. Source guards verify owner cancellation,
+  account guards, summary tap deduplication and referral session reuse. Not a device/outage test.
+- No guessed daily savings applied: avoided reads depend on actual failures, lifecycle and the
+  number of rows scanned by each aggregate. The prior **11,535 / 1,495** normal-activity scenario
+  is unchanged and remains an estimate, not live quota telemetry. No whole-app zero-waste claim.
+- PR #36 remains unmerged. No APK/AAB produced.
