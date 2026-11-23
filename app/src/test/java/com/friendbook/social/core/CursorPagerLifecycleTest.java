@@ -55,4 +55,18 @@ public class CursorPagerLifecycleTest {
             verify(head,never()).get(Source.SERVER);
         }
     }
+    @Test public void openUnchangedPagerStillRefreshesNormally() {
+        try(MockedStatic<Fb> fb=mockStatic(Fb.class)) {
+            fb.when(Fb::uid).thenReturn("viewer");
+            Query query=mock(Query.class),head=mock(Query.class);
+            when(query.limit(10)).thenReturn(head);
+            when(head.get(Source.CACHE)).thenReturn(Tasks.forException(new java.io.IOException("cache miss")));
+            when(head.get(Source.SERVER)).thenReturn(Tasks.forException(new java.io.IOException("offline")));
+            CursorPager pager=new CursorPager(query,10,"still-open",(docs,more,loading,error)->{});
+            pager.startFullRefresh();Shadows.shadowOf(Looper.getMainLooper()).idle();
+            verify(head,times(1)).get(Source.SERVER);
+            pager.close();
+        }
+    }
+
 }
