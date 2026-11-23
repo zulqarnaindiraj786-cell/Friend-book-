@@ -167,3 +167,34 @@ Proof:
   number of rows scanned by each aggregate. The prior **11,535 / 1,495** normal-activity scenario
   is unchanged and remains an estimate, not live quota telemetry. No whole-app zero-waste claim.
 - PR #36 remains unmerged. No APK/AAB produced.
+
+## Mention-search repeat reads / focus audit — 2026-11-19
+Implementation: `9e090b3`; verification cleanup/config: `1423938`, `bbd22f4`.
+
+- Repeated mention prefixes used to send the same bounded name queries again after typing and
+  backspacing. Exact account-scoped query results, including empty pages, now reuse a five-minute
+  cache window. New prefixes, expired/invalidated pages or cache eviction still query normally.
+- Existing distinct case variants, ten-result per-query cap, selected UID identity, bulk mention
+  choices, reply tagging and the 250ms debounce are preserved; no lower-result fallback substituted.
+- Queued network work checks actor, attachment, window focus and input focus before dispatch.
+  Completion checks those conditions again, and selection verifies the original actor. Existing
+  detach cancellation remains. Already-dispatched requests cannot be cancelled by these guards.
+- Query cache helper now accepts an optional maximum age. Existing list callers retain their
+  previous reuse window; only mention searches opt into the five-minute window.
+
+Proof:
+- Worker tests: **234/234 passed**.
+- Python suite: **337 passed**.
+- Android compilation + JVM tests: **PASS**, commit `bbd22f4`:
+  https://github.com/zulqarnaindiraj786-cell/Friend-book-/actions/runs/45111512077
+- New behavioral JVM tests cover 100 repeated cache hits (zero fake-network calls), the supplied
+  search TTL, stale results, explicit refresh and zero-window bypass. Regression guards cover
+  focused-input dispatch, actor checks, debounce and retained case variants. Not a device benchmark.
+- Two earlier Android runs failed while Robolectric was fetching Maven artifacts (IOException /
+  MavenArtifactFetcher), not an observed app assertion. Failed-job rerun was unavailable. The test
+  workflow now passes Maven Central's canonical `repo.maven.apache.org` endpoint to its JVMs,
+  consistent with the existing release workflow. No test was skipped or downgraded to get green.
+
+Mention-search activity is not separately modelled in the previous 11,535 / 1,495 daily scenario;
+no invented daily saving is subtracted. Cache hits avoid repeat query delivery, not proof of actual
+D1 scanned-row usage. No whole-app zero-waste/99% claim. PR #36 unmerged; no APK/AAB produced.
