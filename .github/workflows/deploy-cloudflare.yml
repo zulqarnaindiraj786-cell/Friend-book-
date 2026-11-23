@@ -612,14 +612,15 @@ jobs:
           code=$(curl --silent --show-error --max-time 30 -o /tmp/friendbook-auth.json -w '%{http_code}' \
             https://rough-firefly-dd7b.zulqarnaindiraj786.workers.dev/v1/me)
           test "$code" = 401
+          # Presence routes are retired for good: they must answer 404, never 401/200.
           pcode=$(curl --silent --show-error --max-time 30 -o /tmp/friendbook-presence.json -w '%{http_code}' \
             https://rough-firefly-dd7b.zulqarnaindiraj786.workers.dev/v1/presence/me)
-          test "$pcode" = 401
+          test "$pcode" = 404
           vcode=$(curl --silent --show-error --max-time 30 -X POST -o /tmp/friendbook-video.json -w '%{http_code}' \
             https://rough-firefly-dd7b.zulqarnaindiraj786.workers.dev/v1/videos)
           test "$vcode" = 401
-          echo 'Unauthenticated profile, presence, and video requests rejected (401).'
-          echo 'Deployment passed; D1 interactions are explicitly verified ON, with Realtime Presence + R2 Video routes active.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Unauthenticated profile and video requests rejected (401); retired presence routes answer 404.'
+          echo 'Deployment passed; D1 interactions are explicitly verified ON, with retired presence routes gone and R2 Video routes active.' >> "$GITHUB_STEP_SUMMARY"
       - name: Copy Firebase Firestore to D1 with per-collection checkpoints
         if: github.event_name == 'push' && contains(github.event.head_commit.message, '[firestore-copy]')
         env:
