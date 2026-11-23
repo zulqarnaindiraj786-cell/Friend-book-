@@ -1755,7 +1755,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
             }
 
             if ("join".equals(type)) {
-                if (!uid.isEmpty() && activeViewerIds.add(uid)) {
+                if (LiveViewerEvents.apply(activeViewerIds, uid, true, isNewPacket)) {
                     totalUniqueViewers++;
                     // A real viewer change is the moment the room document needs
                     // the new list; no timer writes it later.
@@ -1763,7 +1763,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
                 }
                 visibleMessages.add(new ChatItem(id, uid, name, photo, text, "join"));
             } else if ("leave".equals(type)) {
-                if (activeViewerIds.remove(uid)) publishHostHeartbeat();
+                if (LiveViewerEvents.apply(activeViewerIds, uid, false, isNewPacket)) publishHostHeartbeat();
             } else if ("reaction".equals(type)) {
                 if (isNewPacket) {
                     if (!uid.equals(Fb.uid())) {
