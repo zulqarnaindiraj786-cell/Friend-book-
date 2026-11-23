@@ -266,7 +266,7 @@ export async function commentsAPI(request, db, identity, resource, data, context
     const [page,old,pinned,reactions]=await Promise.all([
       db.prepare(commentSelect+` WHERE c.resource=? AND COALESCE(d.removed,0)=0 AND c.uid NOT IN (SELECT value FROM json_each(?))
         AND (c.created_at,c.id) ${compare} (?,?) ORDER BY c.created_at ${direction},c.id ${direction} LIMIT ?`).bind(uid,resource,JSON.stringify(context.blocked||[]),...boundary,size+1).all(),
-      legacyPage(db,resource,uid,context.blocked||[],boundary,delta?boundary:null),pin(),
+      legacyPage(db,resource,uid,context.blocked||[],boundary,delta?boundary:null,size+1),pin(),
       url.searchParams.get('includeReactions')==='1' && context.reactionTotals ? context.reactionTotals() : null,
     ]);
     const current=page.results.map(row=>normalized(row,uid));

@@ -711,3 +711,38 @@ test('clearing historical unknown reactions preserves the explicit timestamp tra
  assert.equal((await call(f.env,'reactions','PUT',{type:null},{query:'?response=reaction'})).status,200);
  assert.equal(f.sql.prepare('SELECT total_changes() n').get().n,before);
 });
+
+test('ten-comment historical pages bound each route to eleven rows without losing cursors',async t=>{
+ const f=fixture();t.after(f.close);
+ const put=f.sql.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)');
+ for(let i=0;i<120;i++){
+   const id=`small_${String(i).padStart(3,'0')}`;
+   const route=['postId','post_id','resource'][i%3];
+   const data={authorId:'author',content:'historical',createdAt:1000+i,[route]:route==='resource'?'posts/p1':'p1'};
+   put.run(`comments/${id}`,'comments','comments',id,'author',JSON.stringify(data),1,1);
+ }
+ const observed=[],db=f.env.DB,prepare=db.prepare;
+ db.prepare=function(q){
+   const stmt=prepare.call(this,q);
+   return{...stmt,bind(...args){const bound=stmt.bind(...args),run=bound.run;
+     return{...bound,async run(){const result=await run();
+       if(q.includes('idx_cf_canonical_comment_page_') && q.includes('ORDER BY'))observed.push(result.results.length);
+       return result;
+     }};
+   }};
+ };
+ let cursor=null;const ids=[];
+ for(let pageNo=0;pageNo<12;pageNo++){
+   const query='?limit=10'+(cursor?'&before='+encodeURIComponent(cursor):'');
+   const response=await call(f.env,'comments','GET',undefined,{query});assert.equal(response.status,200);
+   const page=await response.json();assert.equal(page.comments.length,10);
+   ids.push(...page.comments.map(c=>c.id));cursor=page.next;
+ }
+ assert.equal(cursor,null);assert.equal(new Set(ids).size,120);
+ assert.deepEqual(ids,Array.from({length:120},(_,i)=>`small_${String(119-i).padStart(3,'0')}`));
+ assert.ok(observed.length>=3);assert.ok(observed.every(n=>n<=11),`historical route overfetch: ${observed.slice(0,3)}`);
+ const after=btoa(JSON.stringify([1050,'small_050']));observed.length=0;
+ const delta=await (await call(f.env,'comments','GET',undefined,{query:'?limit=10&after='+encodeURIComponent(after)})).json();
+ assert.deepEqual(delta.comments.map(c=>c.id),Array.from({length:10},(_,i)=>`small_${String(51+i).padStart(3,'0')}`));
+ assert.ok(delta.next);assert.ok(observed.every(n=>n<=11));
+});

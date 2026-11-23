@@ -1,4 +1,4 @@
-# Code-only rollout: isolate broadcast outbox row failures without changing retries, leases or cron.
+# Code-only rollout: honor requested comment page size in historical route lookahead.
 name: Deploy quota fixes without database migrations
 on:
   push:
