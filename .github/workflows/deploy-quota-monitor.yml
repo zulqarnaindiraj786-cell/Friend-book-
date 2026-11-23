@@ -1,0 +1,92 @@
+name: Deploy isolated quota reporting Worker
+on:
+  push:
+    branches: [arena/b52bc74d-friend-book]
+    paths:
+      - '.github/workflows/deploy-quota-monitor.yml'
+      - 'wrangler.quota-monitor.toml'
+      - 'cloudflare/quota-monitor.js'
+      - 'cloudflare/test/quota-monitor.test.js'
+permissions:
+  contents: read
+concurrency:
+  group: friendbook-quota-monitor-deployment
+  cancel-in-progress: false
+jobs:
+  deploy:
+    if: contains(github.event.head_commit.message, '[deploy-quota-monitor]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      WRANGLER_SEND_METRICS: 'false'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - name: Test all Worker handlers and Python regressions
+        run: |
+          npm test
+          python3 -m unittest discover -s scripts/tests
+      - name: Verify isolated configuration and compile both Workers without deploying the app
+        run: |
+          python3 - <<'PY'
+          import pathlib,tomllib
+          cfg=tomllib.loads(pathlib.Path('wrangler.quota-monitor.toml').read_text())
+          assert cfg['name']=='friendbook-quota-monitor'
+          assert cfg['main']=='cloudflare/quota-monitor.js'
+          assert cfg['triggers']['crons']==['*/15 * * * *']
+          assert set(cfg)=={'name','main','compatibility_date','workers_dev','preview_urls','triggers','observability'}
+          app=tomllib.loads(pathlib.Path('wrangler.toml').read_text())
+          assert app['name']=='rough-firefly-dd7b' and app['triggers']['crons']==['*/15 * * * *']
+          PY
+          npx --yes wrangler@4.157.0 deploy --dry-run --outdir /tmp/friendbook-app-compile
+          npx --yes wrangler@4.157.0 deploy --config wrangler.quota-monitor.toml --dry-run --outdir /tmp/quota-monitor-compile
+      - name: Deploy only isolated monitor and verify authenticated report
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: '92f3d04598822de2e49e14561218d090'
+          MONITOR_ANALYTICS_TOKEN: ${{ secrets.CLOUDFLARE_ANALYTICS_READ_TOKEN || secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          python3 - <<'PY'
+          import json,os,re,secrets,subprocess,urllib.request,urllib.error
+          account=os.environ['CLOUDFLARE_ACCOUNT_ID']
+          api='https://api.cloudflare.com/client/v4/accounts/'+account
+          headers={'Authorization':'Bearer '+os.environ['CLOUDFLARE_API_TOKEN']}
+          # Refuse to replace an unrelated Worker if the name is already in use.
+          req=urllib.request.Request(api+'/workers/scripts/friendbook-quota-monitor',headers=headers)
+          try:
+              with urllib.request.urlopen(req,timeout=30) as response: source=response.read().decode('utf-8',errors='replace')
+              if 'quota_monitor_report' not in source or 'createQuotaMonitor' not in source:
+                  raise SystemExit('Monitor name is already in use by an unrelated script; not deploying')
+          except urllib.error.HTTPError as error:
+              if error.code!=404: raise SystemExit('Worker name preflight unavailable; not deploying')
+          command=['npx','--yes','wrangler@4.157.0']
+          subprocess.run(command+['deploy','--config','wrangler.quota-monitor.toml'],check=True)
+          report_token=secrets.token_urlsafe(48)
+          print('::add-mask::'+report_token,flush=True)
+          # Secret values go only to stdin and encrypted Worker bindings, not logs/files.
+          secret_body=json.dumps({'CF_ANALYTICS_TOKEN':os.environ['MONITOR_ANALYTICS_TOKEN'],'REPORT_TOKEN':report_token})
+          subprocess.run(command+['secret','bulk','--config','wrangler.quota-monitor.toml'],input=secret_body,text=True,check=True)
+          req=urllib.request.Request(api+'/workers/subdomain',headers=headers)
+          with urllib.request.urlopen(req,timeout=30) as response: payload=json.load(response)
+          subdomain=payload.get('result',{}).get('subdomain','')
+          if not payload.get('success') or not re.fullmatch('[a-zA-Z0-9-]+',subdomain): raise SystemExit('Worker subdomain unavailable')
+          base='https://friendbook-quota-monitor.'+subdomain+'.workers.dev'
+          with urllib.request.urlopen(base+'/health',timeout=30) as response: health=json.load(response)
+          if health!={'ok':True,'role':'observe_only','d1_bound':False}: raise SystemExit('Monitor health mismatch')
+          try:
+              urllib.request.urlopen(base+'/report',timeout=30)
+              raise SystemExit('Report unexpectedly public')
+          except urllib.error.HTTPError as error:
+              if error.code!=401: raise SystemExit('Unexpected unauthenticated report status')
+          req=urllib.request.Request(base+'/report',headers={'Authorization':'Bearer '+report_token})
+          with urllib.request.urlopen(req,timeout=45) as response: report=json.load(response)
+          if report.get('role')!='observe_only' or report.get('automatic_fix_actions')!=[] or report.get('future_quota_guarantee') is not False:
+              raise SystemExit('Unsafe monitor report contract')
+          print('::notice::Isolated monitor health '+base+'/health')
+          print('::notice::Live monitor report '+json.dumps(report,sort_keys=True))
+          print('::notice::Monitor deployed with 15-minute aggregate logging. Application Worker, data and cron unchanged. It does not auto-fix or enforce quota.')
+          PY

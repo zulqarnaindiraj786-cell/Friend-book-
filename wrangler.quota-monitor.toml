@@ -1,0 +1,16 @@
+# Separate observer. Never use this config to deploy the application Worker.
+name = "friendbook-quota-monitor"
+main = "cloudflare/quota-monitor.js"
+compatibility_date = "2024-01-01"
+workers_dev = true
+preview_urls = false
+
+[triggers]
+crons = ["*/15 * * * *"]
+
+[observability]
+enabled = true
+head_sampling_rate = 1
+
+# Intentionally NO D1, R2, KV, Durable Object or application service bindings.
+# CF_ANALYTICS_TOKEN and REPORT_TOKEN are encrypted secrets, never plaintext vars.
