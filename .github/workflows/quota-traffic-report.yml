@@ -1,4 +1,4 @@
-# Owner reports installing new APK and a five-minute session; capture delayed 5/15/60m analytics.
+# Post-rollout report: bounded inbox and fixed-vocabulary write-family attribution.
 name: Analytics-only quota traffic report
 on:
   push:

@@ -19,3 +19,13 @@ Existing canonical direct-room writes now guard both document JSON and revision 
 ## Remaining evidence
 
 Deployment and post-rollout measurements must be recorded separately. Caller-level attribution of historic mirror shape totals remains unresolved; no necessary consistency write was removed based solely on SQL counts. A complete post-rollout day meeting 100k reads / 5k writes is still required. No merge or Play upload is performed.
+
+## Successful production rollout
+
+- Core changes source be05785: run 45178512078 SUCCESS, completion 2026-11-23T12:53:38Z.
+- Final source 0d5bc26 (core changes plus write-family attribution): run https://github.com/zulqarnaindiraj786-cell/Friend-book-/actions/runs/45178797587 SUCCESS, completion 2026-11-23T12:55:37Z.
+- Final validation: 259 Worker / 376 Python tests pass, production-config dry-run compilation passes, code-only deploy passes, resource/binding/cron preservation and health/auth smoke checks pass. No migrations, Android rebuild or merge.
+
+Write-family attribution uses SQL target aliases containing only allowlisted writer families and collection roots. Document/profile writes, direct-chat roots, chat-message inserts, chat batches, broadcasts and the legacy adapter are distinguishable without logging IDs, document data or bindings. Aliases introduce no extra queries or persisted telemetry. The sanitized analytics parser emits only the same fixed vocabulary. Not every historical/social helper is labeled; old windows cannot be retrospectively attributed. Provider retention/normalization of these aliases and real activity still need to be observed, so instrumentation is not itself proof of which caller generated the previous writes.
+
+The daily acceptance boundary is now 2026-11-23T12:55:37Z. Until a complete subsequent day is measured, do not claim 100k/5k acceptance or that all remaining read cost is eliminated.
