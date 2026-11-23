@@ -13,8 +13,9 @@ import static org.junit.Assert.*;
 /** Guards the three on-demand budgets: suggestions, listener caps and cold start. */
 public class OnDemandLoadsTest {
 
-    @Test public void chatBadgeListenerIsCappedAtOneHundredRooms() {
-        assertEquals(100, OnDemandLoads.CHAT_BADGE_LIMIT);
+    @Test public void chatBadgeReadIsCappedAtTwentyRooms() {
+        // QUOTA: the badge is a one-shot read for a pill that shows "99+"; 20 recent rooms is plenty.
+        assertEquals(20, OnDemandLoads.CHAT_BADGE_LIMIT);
         assertTrue(OnDemandLoads.FRIEND_GRAPH_LIMIT > 0);
         assertTrue(OnDemandLoads.FRIEND_GRAPH_LIMIT <= 500);
         assertTrue(OnDemandLoads.BADGE_WINDOW <= 32);
