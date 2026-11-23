@@ -27,6 +27,13 @@ export async function authorizePost({ uid, db }, collection, id, _unused, contex
   if (!owner) return false;
   const hidden=Boolean(post.archived?.booleanValue) || Number(post.trashedAt?.integerValue || post.trashedAt?.doubleValue || post.trashedAt?.timestampValue && Date.parse(post.trashedAt.timestampValue) || 0) > 0;
   if (hidden && !(includeArchivedOwner && collection==='posts' && owner===uid)) return false;
+  // A non-owner can never read an owner-only, unknown or malformed audience.
+  // Reject from the freshly loaded canonical post before fetching profiles,
+  // group authority and friendship dependencies which cannot grant access.
+  // Owners retain the existing audience compatibility behavior.
+  const privacy = (string(post, 'privacy') || 'Public').toLowerCase();
+  if (owner !== uid && ((post.privacy && typeof post.privacy.stringValue !== 'string')
+      || !['public','friends'].includes(privacy))) return false;
   const [me, author] = await Promise.all([
     fields(`users/${uid}`), owner===uid ? Promise.resolve(null) : fields(`users/${owner}`),
   ]);
@@ -54,8 +61,6 @@ export async function authorizePost({ uid, db }, collection, id, _unused, contex
   if (owner === uid) return true;
   if (!Object.keys(author).length || author.banned?.booleanValue || author.deactivated?.booleanValue
       || list(me, 'blocked').includes(owner) || list(author, 'blocked').includes(uid)) return false;
-  if (post.privacy && typeof post.privacy.stringValue !== 'string') return false;
-  const privacy = (string(post, 'privacy') || 'Public').toLowerCase();
   if (privacy === 'public') return true;
   if (privacy !== 'friends') return false;
   return await requestRead(`trustedFriendship:${JSON.stringify([uid,owner].sort())}`, () => hasD1Friendship(db, uid, owner)) === true;

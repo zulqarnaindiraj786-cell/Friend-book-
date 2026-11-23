@@ -54,3 +54,40 @@ test('request-local ACL storage errors never become permissions and next request
   f.setFail(false);assert.ok((await page(f,new Map())).every(Boolean));
   assert.equal(f.calls.documents.get('groups/room'),2);
 });
+
+test('denied audiences stop at the canonical post without profile/group/friendship fan-out',async()=>{
+  for (const privacy of ['Only me','Private','unknown',true,12,{},[],null]) {
+    const f=fixture();
+    for(let i=0;i<20;i++) {
+      f.docs.set('users/author'+i,{uid:'author'+i});
+      Object.assign(f.docs.get('posts/p'+i),{authorId:'author'+i,privacy});
+    }
+    assert.deepEqual(await page(f,new Map()),Array(20).fill(false));
+    assert.equal(f.calls.documents.size,20,'only the twenty independent canonical post reads');
+    assert.equal(f.calls.owner,0);assert.equal(f.calls.friendship,0);
+    for(let i=0;i<20;i++)assert.equal(f.calls.documents.get('posts/p'+i),1);
+  }
+});
+
+test('early audience rejection preserves owner compatibility and allowed audience dependencies',async()=>{
+  for(const privacy of ['Only me','unknown',true,null]) {
+    const f=fixture();
+    f.docs.get('posts/p0').privacy=privacy;
+    assert.equal(await authorizePost({uid:'author',db:f.db},'posts','p0',undefined,{},new Map()),true);
+    assert.equal(f.calls.owner,1,'owner still needs trusted group authorization');
+    f.docs.get('groups/room').bannedMemberIds=['author'];
+    assert.equal(await authorizePost({uid:'author',db:f.db},'posts','p0',undefined,{},new Map()),false);
+  }
+  for(const privacy of [undefined,'','PUBLIC','Friends']) {
+    const f=fixture();
+    if(privacy===undefined)delete f.docs.get('posts/p0').privacy;
+    else f.docs.get('posts/p0').privacy=privacy;
+    assert.equal(await authorizePost({uid:'viewer',db:f.db},'posts','p0',undefined,{},new Map()),true);
+    assert.equal(f.calls.documents.get('users/viewer'),1);
+    assert.equal(f.calls.documents.get('users/author'),1);
+    assert.equal(f.calls.owner,1);
+    assert.equal(f.calls.friendship,privacy==='Friends'?1:0);
+    f.docs.get('users/author').blocked=['viewer'];
+    assert.equal(await authorizePost({uid:'viewer',db:f.db},'posts','p0',undefined,{},new Map()),false);
+  }
+});

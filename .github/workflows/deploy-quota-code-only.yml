@@ -1,4 +1,4 @@
-# Code-only rollout: skip historical preview scans when visible comment count is zero.
+# Code-only rollout: reject unreadable non-owner audiences before ACL dependency reads.
 name: Deploy quota fixes without database migrations
 on:
   push:
