@@ -37,6 +37,8 @@ public final class CursorPager {
     public void startOnDemand() { reuseExactPages=true; startLocal(Long.MAX_VALUE,true); }
     public void refreshOnDemand() { reuseExactPages=true; startFullRefresh(); }
     public void startCachedDay() { startLocal(24*60*60*1000L,true); }
+    /** Short exact-query reuse across search terms over the same recent posts. */
+    public void startCachedFor(long maxAgeMs) { startLocal(Math.max(0L,maxAgeMs),true); }
     private void startLocal(long maxAgeMs,boolean full) {
         if(!active() || loading)return;
         loading=true;

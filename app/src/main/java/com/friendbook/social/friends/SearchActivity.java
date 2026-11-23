@@ -140,7 +140,7 @@ public class SearchActivity extends Activity implements UsersAdapter.Handler, Fe
                     }
                 }
                 pending = () -> search(q);
-                handler.postDelayed(pending, 120);
+                handler.postDelayed(pending, com.friendbook.social.core.SearchReadPolicy.DEBOUNCE_MS);
             }
             @Override public void afterTextChanged(Editable s) { }
         });
@@ -223,7 +223,8 @@ public class SearchActivity extends Activity implements UsersAdapter.Handler, Fe
             if(loading)return;
             secondSpelling.clear();for(DocumentSnapshot doc:docs)secondSpelling.put(doc.getId(),Models.User.fromDoc(doc));mergePeople.run();finishPeople.run();
         });
-        peopleA.start();if(peopleB!=null)peopleB.start();
+        peopleA.startCachedFor(com.friendbook.social.core.SearchReadPolicy.EXACT_PAGE_REUSE_MS);
+        if(peopleB!=null)peopleB.startCachedFor(com.friendbook.social.core.SearchReadPolicy.EXACT_PAGE_REUSE_MS);
         boolean tagSearch=q.matches("[#@][\\p{L}\\p{N}_]{1,80}");
         Query postQuery=Fb.db().collection("posts").orderBy("createdAt",Query.Direction.DESCENDING);
         if(tagSearch)postQuery=postQuery.matchingPostTag(q);
@@ -236,7 +237,11 @@ public class SearchActivity extends Activity implements UsersAdapter.Handler, Fe
             }
             postsAdapter.setPosts(list);postsTitle.setVisibility(list.isEmpty()?View.GONE:View.VISIBLE);
             morePosts.setText(loading?"Loading…":!error.isEmpty()?"Retry posts":more?"More post results":"All scanned");morePosts.setEnabled(!loading && more);
-        });postPages.start();
+        });
+        // Ordinary terms filter the same recent-post page locally. Reuse its
+        // exact response briefly instead of refetching twenty posts per term.
+        // Hashtag queries have distinct serialized keys and cannot mix results.
+        postPages.startCachedFor(com.friendbook.social.core.SearchReadPolicy.EXACT_PAGE_REUSE_MS);
     }
 
     // ---- UsersAdapter.Handler ----
