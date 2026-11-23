@@ -1401,7 +1401,8 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
             engine.startBroadcasting(true);
             engine.startSpeakerPlayback();
             uiHandler.post(durationTicker);
-            uiHandler.postDelayed(hostHeartbeatTask, 8000L);
+            // QUOTA: one heartbeat write per minute instead of every 8s (150s liveness window).
+            uiHandler.postDelayed(hostHeartbeatTask, 60_000L);
             postSystemChat(hostNameStr + " started a live video & voice broadcast!");
             notifyFollowersGoingLive();
         }).addOnFailureListener(e -> {

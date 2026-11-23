@@ -2,7 +2,7 @@
 import { loadChat } from './chat-access.js';
 import { readD1DocumentFields, hasD1Friendship } from './app-documents.js';
 export const PRESENCE_TTL_MS = 300_000; // 5 minutes (300 seconds)
-export const WRITE_COALESCE_MS = 30_000; // Write every 30s (matches heartbeat)
+export const WRITE_COALESCE_MS = 240_000; // QUOTA: persist presence every 4 minutes (client heartbeat cadence, 5 minute freshness window)
 export const TYPING_TTL_MS = 8_000;
 const json = (body, status = 200) => Response.json(body, {
   status, headers: { 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' },

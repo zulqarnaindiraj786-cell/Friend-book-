@@ -26,7 +26,7 @@ ACTIVITY = {
     'likes_reactions': 50,
     'posts_comments': 5,
     'settings_saves': 5,
-    'live_events': 10,
+    'live_host_minutes': 10,    # minutes a user actually broadcasts per day
     'foreground_minutes': 120,  # presence heartbeat runs only while the app is in the foreground
 }
 
@@ -62,8 +62,9 @@ WRITE_COST = {
     'receipt': 1,
     'post_or_comment': 3,       # post/comment + author counter + notification
     'settings': 1,
-    'live_heartbeat': 2,
+    'live_heartbeat': 1,        # one host heartbeat write per minute (was one every 8s)
     'presence_heartbeat': 1,    # own presence doc, throttled to one write every 4 minutes
+    'presence_session': 1,      # WebSocket presence session row, same 4 minute coalescing
     'fcm_maintenance': 1,       # 12-hourly registration refresh, 2 per day
 }
 
@@ -102,8 +103,9 @@ def per_user_writes():
         'receipts': round(a['chat_received'] * 0.5) * w['receipt'],
         'posts_comments': (a['posts_comments'] * 2) * w['post_or_comment'],
         'settings': a['settings_saves'] * w['settings'],
-        'live': a['live_events'] * w['live_heartbeat'],
+        'live': a['live_host_minutes'] * w['live_heartbeat'],
         'presence_heartbeats': round(a['foreground_minutes'] / 4) * w['presence_heartbeat'],
+        'presence_sessions': round(a['foreground_minutes'] / 4) * w['presence_session'],
         'fcm_maintenance': 2 * w['fcm_maintenance'],
     }
 
@@ -154,7 +156,7 @@ def baseline_totals():
         + round(a['chat_received'] * 0.5) * WRITE_COST['receipt']
         + (a['posts_comments'] * 2) * WRITE_COST['post_or_comment']
         + a['settings_saves'] * WRITE_COST['settings']
-        + a['live_events'] * WRITE_COST['live_heartbeat']
+        + a['live_host_minutes'] * 7 * WRITE_COST['live_heartbeat']  # old: 8s heartbeat = 7.5 writes/min
         + b['presence_writes_old']
     )
     return round(reads_per_user * USERS + CRON_RUNS * CRON_READS_PER_RUN), round(writes_per_user * USERS)
