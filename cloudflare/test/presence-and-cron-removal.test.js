@@ -29,13 +29,20 @@ test('neither the app nor the Worker runtime references removed status endpoints
   }
 });
 
-test('the Worker exports no scheduled handler and the config schedules no cron', () => {
+test('exactly one cron runs every fifteen minutes and it only does bounded maintenance', () => {
   const config = read('wrangler.toml');
-  assert.doesNotMatch(config, /^\s*\[triggers\]/m, 'no [triggers] block');
-  assert.doesNotMatch(config, /^\s*crons\s*=/m, 'no cron expressions');
-  assert.equal('scheduled' in worker, false);
-  assert.doesNotMatch(read('worker.js'), /\bscheduled\s*\(/);
-  assert.doesNotMatch(read('worker.js'), /maintenance\.js/);
+  assert.match(config, /^\s*\[triggers\]/m, 'a triggers block exists');
+  const cronLines = config.split('\n').filter(line => /^\s*crons?\s*=/.test(line));
+  assert.equal(cronLines.length, 1, 'one cron declaration');
+  assert.match(cronLines[0], /\*\/15 \* \* \* \*/, 'every fifteen minutes');
+  assert.doesNotMatch(config, /\*\/1 |\* \* \* \* \*|\*\/5 /, 'never per minute or per second');
+  assert.equal('scheduled' in worker, true, 'the Worker exports a scheduled handler');
+
+  const scheduled = read('cloudflare/scheduled.js');
+  assert.doesNotMatch(scheduled, /setInterval|setTimeout|while\s*\(/, 'no looping inside the pass');
+  assert.match(scheduled, /UPDATE friendbook_cf_firestore_documents[\s\S]*?LIMIT 20/, 'stale live rooms are bounded');
+  assert.match(scheduled, /drainBroadcastPush/, 'only the durable outbox is retried');
+  assert.match(scheduled, /DELETE FROM friendbook_cf_view_dedupe[\s\S]*?LIMIT 200/, 'dedupe cleanup is bounded');
 });
 
 test('chat, feed and presence-free requests still reach the Worker exactly as before', async () => {

@@ -184,8 +184,10 @@ export function createWorker(verify = verifyFirebaseToken) {
   };
 }
 const app = createWorker();
-// No cron triggers are configured and no scheduled handler is exported, so the
-// Worker runs only in response to requests. Notification push is delivered by
-// the write path; retiring the cron also stops the 15-minute R2 cleanup retry
-// and the official-broadcast pump (see docs/testing/cron-removal.md).
-export default app;
+// One maintenance pass every 15 minutes: stale live rooms, the admin broadcast
+// outbox and expired view-dedupe rows. No per-second or per-minute cron exists.
+const handler = Object.assign(Object.create(null), app, {
+  scheduled: (event, env, ctx) => import('./cloudflare/scheduled.js')
+    .then(module => module.scheduled(event, env, ctx)),
+});
+export default handler;

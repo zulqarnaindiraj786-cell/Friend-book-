@@ -88,4 +88,31 @@ public class ListenerPollingPolicyTest {
    else if (child.getName().endsWith(".java")) out.add(child);
   }
  }
+
+ /** Live rooms and call signaling are push/on-demand only: no interval at all. */
+ @Test public void liveAndCallSignalingNeverPoll() {
+  String[] signaling = {"lives", "lives/room1", "chats/a_b", "chats/a_b/messages"};
+  for (String path : signaling) {
+   assertEquals(path, Long.MAX_VALUE, ListenerPollingPolicy.intervalMs(path, true));
+   assertFalse(path, ListenerPollingPolicy.due(path, true, 5_000L));
+   assertFalse(path, ListenerPollingPolicy.due(path, true, 60_000L));
+  }
+ }
+
+ /** No 2.5s/6s/8s live timers may come back, and no JS interval either. */
+ @Test public void noIntervalPollingLeftInLiveCode() throws Exception {
+  String live = readSource("src/main/java/com/friendbook/social/live/LiveActivity.java");
+  assertFalse("PK room polling must be on demand", live.contains("postDelayed(pollPkRoom"));
+  assertFalse("host heartbeat must be event driven", live.contains("hostHeartbeatTask"));
+  assertTrue("a real viewer change writes the heartbeat", live.contains("publishHostHeartbeat()"));
+  String relay = readSource("src/main/java/com/friendbook/social/live/LiveRelayClient.java");
+  assertFalse("relay keepalive must not use a timer", relay.contains("postDelayed(renew"));
+  assertTrue("relay renews from traffic", relay.contains("maybeRenew"));
+ }
+
+ private static String readSource(String relative) throws Exception {
+  java.io.File file = new java.io.File(relative);
+  assertTrue("Missing source: " + relative, file.isFile());
+  return new String(java.nio.file.Files.readAllBytes(file.toPath()), java.nio.charset.StandardCharsets.UTF_8);
+ }
 }

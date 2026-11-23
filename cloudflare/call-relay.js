@@ -16,6 +16,7 @@ export class CallRelay {
     for (const socket of this.state.getWebSockets(uid)) socket.close(1000,'Replaced');
     const [client,server]=Object.values(new WebSocketPair());
     this.state.acceptWebSocket(server,[uid]);
+    try { server.send(JSON.stringify({kind:'lease',ms:12000})); } catch {}
     server.serializeAttachment({chat,call,uid,type,until:Date.now()+12000,checked:Date.now(),window:0,count:0});
     return new Response(null,{status:101,webSocket:client});
   }

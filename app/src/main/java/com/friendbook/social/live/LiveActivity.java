@@ -343,19 +343,18 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
         }
     };
 
-    private final Runnable hostHeartbeatTask = new Runnable() {
-        @Override
-        public void run() {
-            if (!isEnded && isHost && isLiveStarted && liveId != null) {
-                Map<String, Object> hb = new HashMap<>();
-                hb.put("lastHeartbeatMs", System.currentTimeMillis());
-                hb.put("viewerIds", new ArrayList<>(activeViewerIds));
-                hb.put("peakViewers", peakViewers);
-                Fb.db().collection("lives").document(liveId).update(hb);
-                uiHandler.postDelayed(this, 8000L);
-            }
-        }
-    };
+    /**
+     * One write per real event (start, viewer change, screen leave). There is no
+     * repeating heartbeat: a closed or idle app must not write on a timer.
+     */
+    private void publishHostHeartbeat() {
+        if (isEnded || !isHost || !isLiveStarted || liveId == null) return;
+        Map<String, Object> hb = new HashMap<>();
+        hb.put("lastHeartbeatMs", System.currentTimeMillis());
+        hb.put("viewerIds", new ArrayList<>(activeViewerIds));
+        hb.put("peakViewers", peakViewers);
+        Fb.db().collection("lives").document(liveId).update(hb);
+    }
 
     @Override
     protected void onCreate(@Nullable Bundle savedInstanceState) {
@@ -1408,7 +1407,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
                 engine.startBroadcasting(true);
                 engine.startSpeakerPlayback();
                 uiHandler.post(durationTicker);
-                uiHandler.postDelayed(hostHeartbeatTask, 8000L);
+                publishHostHeartbeat();
                 postSystemChat(hostNameStr + " started a live video & voice broadcast!");
                 notifyFollowersGoingLive();
             });
@@ -1758,10 +1757,13 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
             if ("join".equals(type)) {
                 if (!uid.isEmpty() && activeViewerIds.add(uid)) {
                     totalUniqueViewers++;
+                    // A real viewer change is the moment the room document needs
+                    // the new list; no timer writes it later.
+                    publishHostHeartbeat();
                 }
                 visibleMessages.add(new ChatItem(id, uid, name, photo, text, "join"));
             } else if ("leave".equals(type)) {
-                activeViewerIds.remove(uid);
+                if (activeViewerIds.remove(uid)) publishHostHeartbeat();
             } else if ("reaction".equals(type)) {
                 if (isNewPacket) {
                     if (!uid.equals(Fb.uid())) {
@@ -3024,8 +3026,8 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
                 if ("active".equals(battle.optString("status"))) applyCloudPk(battle);
                 else if (pkBattleActive) teardownPkStageUi();
             }
-            uiHandler.removeCallbacks(pollPkRoom);
-            uiHandler.postDelayed(pollPkRoom, pkBattleActive ? 2500L : 6000L);
+            // On demand only: the next PK read happens on a user action, a push
+            // invalidation or the next screen resume. No 2.5/6 second timer.
         });
     }
 
@@ -3472,6 +3474,14 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
             return;
         }
         confirmExitOrEnd();
+    }
+
+    @Override
+    @Override
+    protected void onStop() {
+        // Leaving the screen is the last event that must reach the room document.
+        publishHostHeartbeat();
+        super.onStop();
     }
 
     @Override

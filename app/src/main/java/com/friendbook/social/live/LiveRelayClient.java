@@ -30,14 +30,10 @@ public final class LiveRelayClient {
     private volatile WebSocket socket;
     private volatile boolean stopped;
     private volatile boolean ready;
-    private final Runnable renew = new Runnable() {
-        @Override public void run() {
-            WebSocket s = socket;
-            if (stopped || !ready || s == null) return;
-            if (!s.send("renew")) { fail(); return; }
-            main.postDelayed(this, 2000);
-        }
-    };
+    // The relay announces its lease once. Renewal is piggy-backed on real traffic
+    // when the lease is nearly over, so no client-side interval timer exists.
+    private volatile long leaseUntil;
+    private volatile boolean renewRequested;
 
     public LiveRelayClient(Listener listener) { this.listener = listener; }
 
@@ -69,15 +65,23 @@ public final class LiveRelayClient {
                     main.post(() -> {
                         if (stopped) { ws.cancel(); return; }
                         ready = true;
-                        main.postDelayed(renew, 2000);
                         listener.ready();
                     });
                 }
                 @Override public void onMessage(WebSocket ws, String packet) {
                     if (stopped || packet.length() > MAX_PACKET) return;
+                    maybeRenew();
                     try {
                         JSONObject json = new JSONObject(packet);
                         String kind = json.getString("kind");
+                        if (kind.equals("lease")) {
+                            long ms = json.optLong("ms", 0L);
+                            if (ms > 0 && ms <= 60_000L) {
+                                leaseUntil = android.os.SystemClock.elapsedRealtime() + ms;
+                                renewRequested = false;
+                            }
+                            return;
+                        }
                         if (kind.equals("audience")) {
                             int count = json.getInt("count");
                             if (count >= 0 && count <= 48) main.post(() -> { if (!stopped) listener.audience(count); });
@@ -100,6 +104,16 @@ public final class LiveRelayClient {
         }).addOnFailureListener(error -> fail());
     }
 
+    /** Called from real traffic only: no timer drives this. */
+    private void maybeRenew() {
+        WebSocket s = socket;
+        if (stopped || !ready || s == null || renewRequested) return;
+        long until = leaseUntil;
+        if (until == 0L || android.os.SystemClock.elapsedRealtime() < until - 5_000L) return;
+        renewRequested = true;
+        if (!s.send("renew")) fail();
+    }
+
     public void send(String kind, String data, long seq) {
         WebSocket s = socket;
         if (!ready || stopped || s == null || data == null || data.length() > MAX_PACKET - 128 || s.queueSize() > MAX_PACKET) return;
@@ -119,7 +133,6 @@ public final class LiveRelayClient {
     public void close() {
         stopped = true;
         ready = false;
-        main.removeCallbacks(renew);
         WebSocket s = socket;
         if (s != null) s.cancel();
     }

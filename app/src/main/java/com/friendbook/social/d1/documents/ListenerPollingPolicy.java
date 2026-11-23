@@ -1,18 +1,14 @@
 package com.friendbook.social.d1.documents;
 
-/** Ordinary lists are push-driven. Only active signaling can use foreground periodic reads. */
+/**
+ * Nothing polls. Live rooms, call signaling, chat lists and profiles are all
+ * push-driven (FCM invalidation) or refreshed on demand by the visible screen,
+ * so the periodic interval for every path is "never".
+ */
 final class ListenerPollingPolicy {
     private ListenerPollingPolicy() { }
-    static long intervalMs(String path, boolean foreground) {
-        if (!foreground || path == null) return Long.MAX_VALUE;
-        // Discovery is separate from an open live room's real-time signaling.
-        if (path.equals("lives")) return 10_000;
-        if (path.startsWith("lives/")) return 5_000;
-        // Direct room state is still used during active call signaling.
-        if (path.startsWith("chats/") && path.indexOf('/', 6) < 0
-                && com.friendbook.social.chat.CallActivity.isBusy()) return 5_000;
-        return Long.MAX_VALUE;
-    }
+
+    static long intervalMs(String path, boolean foreground) { return Long.MAX_VALUE; }
 
     /**
      * How long a cached snapshot may be painted without a network read.

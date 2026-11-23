@@ -45,6 +45,9 @@ export class LiveRelay {
       this.viewers.delete(entry);
     };
     socket.accept();
+    // The lease is announced once; clients renew from real traffic instead of
+    // running a client-side interval timer.
+    try { socket.send(JSON.stringify({kind:'lease',ms:LEASE_MS})); } catch {}
     if (role==='publish') this.publisher=entry;
     else if (role==='cohost') this.coHost=entry;
     else if (role==='pkguest') this.pkGuest=entry;

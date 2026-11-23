@@ -3800,7 +3800,8 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0, ct
       for (const [p,onlyReset] of byPath) if (onlyReset && /^chats\/[^/]+$/.test(p)) unreadOnlyRooms.add(p);
     }
     const messageRoomPaths=new Set(order.filter(p=>splitPath(p)?.length===4).map(p=>chatAuths.get(p)?.roomPath).filter(Boolean));
-    const previewKeys=new Set(['lastMessage','lastMessageTime','lastMessageTimeMs','unreadCount','typing','participantNames','participantPhotos']);
+    // Chat preview fields only. Typing state no longer exists in any write path.
+    const previewKeys=new Set(['lastMessage','lastMessageTime','lastMessageTimeMs','unreadCount','participantNames','participantPhotos']);
     const canonicalOnlyRoom=(p,entry)=>{
       if (!entry.existingRow?.[canonicalRootSnapshot]) return false;
       if (unreadOnlyRooms.has(p)) return true;
