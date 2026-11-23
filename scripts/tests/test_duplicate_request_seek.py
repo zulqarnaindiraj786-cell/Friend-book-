@@ -1,4 +1,5 @@
 """Exercise the unchanged production UPDATE, not a simplified SELECT."""
+import importlib.util
 import json
 from pathlib import Path
 import re
@@ -13,6 +14,22 @@ INDEX = MIGRATIONS / '0088_pending_duplicate_request_seek.sql'
 
 
 class DuplicateRequestSeek(unittest.TestCase):
+    def test_admin_preflight_fails_closed_and_probe_is_read_only(self):
+        spec = importlib.util.spec_from_file_location('pending_seek', ROOT / 'scripts/admin/apply_pending_request_seek.py')
+        admin = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(admin)
+        admin.validate_preflight({'sampled': 20000, 'invalid_json': 0})
+        for row in ({'sampled': 20001, 'invalid_json': 0}, {'sampled': -1, 'invalid_json': 0},
+                    {'sampled': 1, 'invalid_json': 1}, {'sampled': True, 'invalid_json': 0}, {}):
+            with self.assertRaises(ValueError):
+                admin.validate_preflight(row)
+        with self.database() as db:
+            self.insert(db, 'friend_requests/a', {'fromUid': 'alice', 'toUid': 'bob', 'status': 'pending'})
+            before = db.total_changes
+            self.assertEqual(db.execute(admin.probe_sql(), ('alice', 'bob', 'alice', 'bob')).fetchone(), (1,))
+            self.assertEqual(db.total_changes, before)
+        self.assertEqual(admin.cleanup_sql(), SQL)
+
     def database(self):
         db = sqlite3.connect(':memory:')
         for name in ['0011_additive_app_documents.sql', '0014_additive_firestore_documents.sql',
