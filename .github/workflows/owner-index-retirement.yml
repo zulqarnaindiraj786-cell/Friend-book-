@@ -1,0 +1,46 @@
+name: Retire reviewed redundant owner index
+on:
+  push:
+    branches: [arena/b52bc74d-friend-book]
+    paths:
+      - '.github/workflows/owner-index-retirement.yml'
+      - 'scripts/admin/retire_global_owner_index.py'
+      - 'scripts/tests/test_owner_index_retirement.py'
+      - 'cloudflare/migrations/0089_remove_redundant_global_owner_index.sql'
+permissions:
+  contents: read
+concurrency:
+  group: friendbook-cloudflare-production
+  cancel-in-progress: false
+jobs:
+  retire-index:
+    if: contains(github.event.head_commit.message, '[retire-global-owner-index]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npm test
+      - name: Local regression and quota replay (network disabled)
+        run: |
+          python3 -m unittest discover -s scripts/tests
+          python3 cloudflare/test/schema_test.py
+          python3 cloudflare/test/migration_test.py
+          python3 cloudflare/test/index_plan_test.py
+          QUOTA_EXPERIMENT_FRIEND_INDEXES=1 node scripts/loadtest/d1_quota_replay.mjs 10 > /tmp/offline-quota-replay.json
+      - name: Compile Worker without deploying
+        env:
+          WRANGLER_SEND_METRICS: 'false'
+        run: npx --yes wrangler@4.157.0 deploy --dry-run --outdir /tmp/friendbook-worker
+      - name: Require conservative account headroom
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: python3 scripts/loadtest/d1_account_usage_analytics.py --preflight-budget
+      - name: Validate scoped plans and retire only reviewed index
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: python3 scripts/admin/retire_global_owner_index.py --retire-reviewed-index

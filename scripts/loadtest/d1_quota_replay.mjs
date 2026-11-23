@@ -67,7 +67,7 @@ async function call(uid,path,method='GET',body){
   return res.json();
 }
 const changes=()=>sql.prepare('SELECT total_changes() AS n').get().n;
-const report={environment:'Local SQLite + real Worker handlers; not Cloudflare billing or capacity data',users,concurrency,workloads:{}};
+const report={environment:'Local SQLite + real Worker handlers; not Cloudflare billing or capacity data',users,concurrency,friendGuardIndexed:env.FRIEND_GUARD_INDEXED==='true',workloads:{}};
 async function measure(name,requests,run){
   const before=changes(), start=statements, startRows=returnedRows, startProbes=shadowProbes;
   await run();
@@ -310,18 +310,20 @@ await measure('duplicateFriendRequest',friendshipPairs,()=>wave(friendshipPairs,
 assert.equal(report.workloads.duplicateFriendRequest.changedRowsIncludingTriggers,0);
 sql.prepare("INSERT INTO friendbook_cf_interaction_resources(resource,state) VALUES ('posts/item39','verified') ON CONFLICT(resource) DO NOTHING").run();
 const engagement='/v1/engagement/posts/item39';
-// A busy synthetic legacy post with a small mix of exception encodings.
+// A busy canonical comment route with a small mix of exception encodings.
+// Mirror-only comments must not leak through the canonical-only read policy.
 // This exercises the real comment handler and indexed D1 batch, not billing.
 for(let i=0;i<188;i++) {
   const id=`legacy${String(i).padStart(4,'0')}`;
-  addMirror.run(`comments/${id}`,'comments',id,'user0',JSON.stringify({postId:'item39',authorId:'user0',content:id,
-    createdAt:i<180?now+i:'2020-01-01T00:00:00.000Z'}),now+i);
+  add('comments',id,'user0',{postId:'item39',authorId:'user0',content:id,
+    createdAt:i<180?now+i:'2020-01-01T00:00:00.000Z'});
 }
-await measure('legacyCommentPage',users,()=>wave(users,async i=>{
+addMirror.run('comments/mirror-only','comments','mirror-only','user0',JSON.stringify({postId:'item39',authorId:'user0',content:'must remain hidden',createdAt:now+999999}),now);
+await measure('canonicalCommentPage',users,()=>wave(users,async i=>{
   const page=await call(`user${i}`,`${engagement}/comments`);
   assert.equal(page.comments.length,20);assert.equal(page.comments[0].id,'legacy0179');
 }));
-assert.equal(report.workloads.legacyCommentPage.changedRowsIncludingTriggers,0);
+assert.equal(report.workloads.canonicalCommentPage.changedRowsIncludingTriggers,0);
 const like=i=>call(`user${i}`,`${engagement}/reactions?response=reaction`,'PUT',{type:'like'});
 const comment=i=>call(`user${i}`,`${engagement}/comments`,'POST',{id:`reply${i}`,text:'A synthetic quota replay comment'});
 const register=i=>call(`user${i}`,'/functions/v1/send-fcm-notification','POST',{action:'register',device_id:`device${i}`,token:`synthetic-not-a-provider-token-${i}`});
