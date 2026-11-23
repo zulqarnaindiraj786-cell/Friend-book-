@@ -65,3 +65,36 @@ See `home-on-demand-budget.json` and run `python3 -m scripts.loadtest.five_user_
   https://github.com/zulqarnaindiraj786-cell/Friend-book-/actions/runs/45109014981
   New behavioral tests cover empty cache, forced refresh, invalidation and eviction.
   No device-level scrolling/visual test claimed.
+
+## Additional quota audit — 2026-11-19
+Verified implementation commits: `ae3bed6`, `0a7b9bb`.
+
+1. **Unseen Reel download**: first-frame callback used to download one next `.mp4` on
+   unmetered Wi-Fi. Removed the speculative downloader and its call site entirely. Playback
+   still uses the selected Reel's lightweight startup rendition; next-holder preparation can
+   use only an already-complete local file. Existing local cache lookup, retry UI, selected
+   autoplay and quality handling retained. This saves unnecessary media GET/bandwidth, not a
+   demonstrated number of D1 rows. No claim that all selected-video streams now persist to disk.
+2. **Duplicate Menu self-profile listener**: Menu had its own `users/{uid}` registration while
+   the central account listener already delivered the same profile. Menu now observes the
+   in-process shared profile only while visible, detaching on hide/stop. Name, photo, creator
+   subtitle, account switcher data and verified tick still update without a second DB listener.
+3. **Age-triggered profile registration churn**: `ensureMeFresh()` no longer recreates a healthy
+   registration merely because 60 seconds elapsed. It still restarts for no registration,
+   changed account or a failed listener. Central account listener, foreground refresh/invalidation,
+   account creation and suspension/sign-out handling remain. Security handling runs before
+   optional UI observers.
+
+Verification for this follow-up:
+- Worker `npm test`: **234/234 passed**.
+- Python regression guards: **328 passed**.
+- Android debug Java compilation + JVM tests: **PASS**, commit `0a7b9bb`:
+  https://github.com/zulqarnaindiraj786-cell/Friend-book-/actions/runs/45109586711
+- New JVM policy tests exercise 10,000 healthy resume decisions, registration absence,
+  account switch, failure recovery and signed-out behavior. This is not a device load test.
+- `git diff --check`: clean.
+
+No invented numeric saving is subtracted from the earlier **11,000 / 1,495** scenario: it did
+not separately model the removed Menu registration/churn or media GETs. That remains a scenario,
+not proof of whole-app D1 usage or zero quota waste. Chat/call/account-security listeners and
+legitimate explicit operations are intentionally retained. No APK/AAB produced; PR #36 unmerged.
