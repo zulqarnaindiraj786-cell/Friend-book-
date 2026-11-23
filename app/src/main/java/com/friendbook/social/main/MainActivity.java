@@ -78,6 +78,10 @@ public class MainActivity extends Activity {
     private long foregroundStartedAt;
     private final com.friendbook.social.core.AppUpdates appUpdates = new com.friendbook.social.core.AppUpdates();
     private ListenerRegistration referralReg;
+    private final android.os.Handler referralHandler=new android.os.Handler(android.os.Looper.getMainLooper());
+    private final Runnable referralRefresh=this::watchReferralsForFreeTick;
+    private boolean referralCountLoaded;
+    private String referralCountActor;
 
     private final java.util.Set<String> currentPendingReqIds = new java.util.HashSet<>();
     private final java.util.Set<String> currentUnreadChatIds = new java.util.HashSet<>();
@@ -213,10 +217,6 @@ public class MainActivity extends Activity {
             Fb.ensureMeFresh();
 
             startBadgeListeners();
-            // Referral totals are not needed to paint the first screen; run them
-            // after the visible work instead of inside the cold-start burst.
-            new android.os.Handler(android.os.Looper.getMainLooper())
-                    .postDelayed(MainActivity.this::watchReferralsForFreeTick, 4_000L);
             AdsConfig.startWatching();
             com.friendbook.social.core.CloudAppConfig.refresh(getApplicationContext());
             return false;
@@ -523,10 +523,13 @@ public class MainActivity extends Activity {
 
     private void watchReferralsForFreeTick() {
         String me = Fb.uid();
-        if (me == null) return;
+        if (me == null || !permissionHostResumed || isFinishing() || referralCountLoaded) return;
         if(referralReg!=null)referralReg.remove();
-        referralReg=com.friendbook.social.core.CountReads.once(Fb.db().collection("referrals").whereEqualTo("refBy",me),total->
-                com.friendbook.social.core.Admin.autoGrantByReferrals(this,(int)Math.min(Integer.MAX_VALUE,total)));
+        referralReg=com.friendbook.social.core.CountReads.once(Fb.db().collection("referrals").whereEqualTo("refBy",me),total->{
+            if(!permissionHostResumed || !me.equals(Fb.uid()) || isFinishing())return;
+            referralCountLoaded=true;
+            com.friendbook.social.core.Admin.autoGrantByReferrals(this,(int)Math.min(Integer.MAX_VALUE,total));
+        });
     }
 
     // Badges display at most 15+; full history remains in the paginated screens.
@@ -773,6 +776,8 @@ public class MainActivity extends Activity {
     @Override
     protected void onPause() {
         permissionHostResumed = false;
+        referralHandler.removeCallbacks(referralRefresh);
+        if(referralReg!=null){referralReg.remove();referralReg=null;}
         notificationPermissionHandler.removeCallbacks(notificationPermissionPrompt);
         FeedAlgorithm.onAppBackgrounded(this);
         super.onPause();
@@ -784,6 +789,12 @@ public class MainActivity extends Activity {
         foregroundStartedAt = System.currentTimeMillis();
         if (!isFinishing()) appUpdates.onResume(this);
         permissionHostResumed = true;
+        String referralActor=Fb.uid();
+        if(!java.util.Objects.equals(referralCountActor,referralActor)) {
+            referralCountActor=referralActor;referralCountLoaded=false;
+        }
+        referralHandler.removeCallbacks(referralRefresh);
+        if(!referralCountLoaded)referralHandler.postDelayed(referralRefresh, 4_000L);
         boolean freshSession = FeedAlgorithm.onAppResumed(this);
         if (freshSession) {
             if (tabFragments[TAB_HOME] instanceof HomeFragment) {
@@ -816,6 +827,7 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        referralHandler.removeCallbacks(referralRefresh);
         appUpdates.dismiss();
         notificationPermissionHandler.removeCallbacks(notificationPermissionPrompt);
         if (activeInstance == this) activeInstance = null;
