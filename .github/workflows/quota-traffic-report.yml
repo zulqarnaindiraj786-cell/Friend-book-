@@ -1,4 +1,4 @@
-# Refresh current 5m/60m consumers; mixed 24h is context, never a post-fix certificate.
+# Rank six post-rollout hours with ten read/six write shapes; analytics only, no daily certificate.
 name: Analytics-only quota traffic report
 on:
   push:
@@ -21,7 +21,7 @@ jobs:
       - name: Read analytics only (no D1 SQL, application traffic or deployment)
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-        run: python3 scripts/loadtest/quota_traffic_report.py --window-minutes 5 60 1440 --output /tmp/quota-traffic-report.json
+        run: python3 scripts/loadtest/quota_traffic_report.py --window-minutes 360 --output /tmp/quota-traffic-report.json
       - uses: actions/upload-artifact@v4
         with:
           name: sanitized-quota-traffic-report
