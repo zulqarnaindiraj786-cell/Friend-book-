@@ -231,3 +231,18 @@ class TrafficReport(unittest.TestCase):
             self.assertNotIn(private,grammar)
         self.assertNotIn('SECRET',p.redacted_inventory_structure("SELECT 'a--SECRET', \"SECRET\", `SECRET`, [SECRET] /*SECRET*/"))
         self.assertLessEqual(len(p.redacted_inventory_structure(sql*100)),1800)
+
+
+    def test_single_historical_window_exposes_ten_read_and_six_write_shapes(self):
+        shape={'category':'application_or_unattributed','operation':'SELECT','tables':[],
+               'features':[],'rowsRead':1,'rowsWritten':0,'executions':1}
+        window={'minutes':1440,'end':'end',**{metric:{'may_be_truncated':True,'largest_shapes':[dict(shape) for _ in range(10)]}
+                for metric in ('rowsRead','rowsWritten')}}
+        lines=p.priority_shape_notices([window])
+        self.assertEqual(len(lines),8)
+        counts={'rowsRead':0,'rowsWritten':0}
+        for line in lines:
+            data=json.loads(line.removeprefix('Sanitized priority shapes '))
+            counts[data['ranked_by']]+=len(data['shapes'])
+            self.assertLess(len(line),3500)
+        self.assertEqual(counts,{'rowsRead':10,'rowsWritten':6})

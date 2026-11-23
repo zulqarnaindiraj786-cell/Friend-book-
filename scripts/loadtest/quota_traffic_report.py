@@ -255,16 +255,23 @@ def cross_window_totals(windows):
 
 
 def priority_shape_notices(windows):
-    # GitHub keeps only a small number of notices per step. Reserve six compact
-    # notices for the two costliest shapes in EVERY window before verbose detail.
-    # Only accept the sanitized summaries, never raw SQL or bindings.
+    # A single historical window gets a wider investigation: ten read shapes,
+    # six write shapes, two per notice, plus the totals notice = nine slots.
+    # Multiple recent windows retain two shapes each within CI's notice budget.
     lines=[]
     for window in windows:
         for metric in ('rowsRead','rowsWritten'):
-            lines.append('Sanitized priority shapes '+json.dumps({
-                'minutes':window['minutes'],'end':window['end'],'ranked_by':metric,
-                'may_be_truncated':window[metric]['may_be_truncated'],
-                'shapes':window[metric]['largest_shapes'][:2]},sort_keys=True))
+            depth=(10 if metric=='rowsRead' else 6) if len(windows)==1 else 2
+            selected=window[metric]['largest_shapes'][:depth]
+            for offset in range(0,len(selected),2):
+                shapes=[dict(shape) for shape in selected[offset:offset+2]]
+                for shape in shapes:
+                    if 'redacted_inventory_structure' in shape:
+                        shape['redacted_inventory_structure']=shape['redacted_inventory_structure'][:700]
+                lines.append('Sanitized priority shapes '+json.dumps({
+                    'minutes':window['minutes'],'end':window['end'],'ranked_by':metric,
+                    'rank_start':offset+1,'may_be_truncated':window[metric]['may_be_truncated'],
+                    'shapes':shapes},sort_keys=True))
     return lines
 
 
