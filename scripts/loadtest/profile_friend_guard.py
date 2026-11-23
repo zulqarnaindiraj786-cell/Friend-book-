@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Read-only aggregate guard profiling, only after bounded preflight succeeds."""
+import argparse
 import json
 import os
 from pathlib import Path
@@ -8,13 +9,23 @@ import urllib.request
 
 ROOT = Path(__file__).resolve().parents[2]
 
+def select_probes(probes, include_full_scan_baseline=False):
+    return [p for p in probes if include_full_scan_baseline or p['name']!='original-duplicate-guard']
+
+
 def main():
+    parser=argparse.ArgumentParser(description='Costly production SELECT probes; use GraphQL analytics for routine quota checks.')
+    parser.add_argument('--allow-production-scans',action='store_true',required=True,
+                        help='Explicitly permit the capped table preflight and aggregate D1 probes')
+    parser.add_argument('--include-full-scan-baseline',action='store_true',
+                        help='Also rerun the expensive original guard; omitted by default')
+    args=parser.parse_args()
     # Fail closed on excessive table size/exception count or account usage.
     subprocess.run(['python3', 'scripts/loadtest/d1_account_usage_analytics.py', '--preflight-budget'], cwd=ROOT, check=True)
     subprocess.run(['python3', 'scripts/loadtest/friend_guard_index_preflight.py', '--require-index-build-safe'], cwd=ROOT, check=True)
     probes=json.loads(subprocess.check_output(['node','scripts/loadtest/friend_guard_queries.mjs'],cwd=ROOT,text=True))
     summaries=[]
-    for probe in probes:
+    for probe in select_probes(probes,args.include_full_scan_baseline):
         if not probe['sql'].startswith('SELECT ') or ';' in probe['sql']:
             raise ValueError('Only single aggregate SELECT allowed')
         for explain in (True,False):

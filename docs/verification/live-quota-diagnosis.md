@@ -163,3 +163,48 @@ Further changes must be justified against current action mix, measured productio
 costs and a defined usage budget—not repeated expensive diagnostic table scans.
 Signed Android 2.10.33/175 is unchanged by these schema fixes; its previous signed
 build proof remains applicable. This turn did not rebuild Android or publish Play.
+
+## Post-install complaint: distinguish diagnostics from application traffic
+
+User reports installation did not visibly change usage. No device-side trace,
+installed version confirmation, or matching dashboard screenshot/time range is
+available. Do not dismiss the report as merely a cumulative-counter issue.
+
+Fresh **GraphQL-only** runs on source `f426347ad4d524f248946970e0c9663ae76fbf63`:
+- Query windows: https://github.com/zulqarnaindiraj786-cell/Friend-book-/actions/runs/45117760693 **PASS** (all six jobs).
+- Account daily: https://github.com/zulqarnaindiraj786-cell/Friend-book-/actions/runs/45117760730 **PASS**.
+- The account workflow explicitly skipped Worker/schema inspection with the
+  `[analytics-only]` marker. No D1 SQL, application request, mutation or deployment
+  was executed by these runs.
+
+Provider-returned timestamps (not an assumption about the user's local date):
+- At 2026-11-23T05:26:19 UTC, account-adaptive daily total 469,779 reads / 6,379 writes.
+- Query-adaptive 05:21:17–05:26:17 UTC: **30 reads / 0 writes / 18 executions**.
+- Query-adaptive 05:11:18–05:26:18 UTC: **38,147 reads / 58 writes / 1,011 executions**.
+- Query-adaptive latest 60m: 143,258 reads / 2,452 writes / 7,004 executions.
+
+Important attribution correction: the 15m dataset includes a 29,931-read capped
+friendship diagnostic CTE plus 5,649 reads across three original full-guard SELECT
+executions (1,883 each). Those are our administrative diagnostic shapes:
+**35,580 of 38,147 query-adaptive reads (~93%)** in that specific window, not
+ordinary app query shapes. The remaining 2,567 reads are not a device attribution
+or guaranteed app-only remainder. Account analytics can lag and differ from query
+analytics; do not subtract these values from account billing or claim all account
+growth is explained. The latest 5m window is low-activity and cannot prove the
+installed app is fixed or establish comparative savings.
+
+Prevent diagnostic overhead from recurring accidentally:
+- Friendship profiling CLI now refuses to run without `--allow-production-scans`,
+  before any subprocess/network action.
+- Its workflow requires BOTH the existing profiling marker and a separate
+  `[allow-production-scans]` marker.
+- Original full-scan baseline is additionally excluded unless separately opted
+  in at the CLI; the workflow does not enable it.
+- Ordinary quota checks should use GraphQL analytics only. Never rerun table
+  preflight merely to reassure the user or obtain a fresh daily number.
+
+All **347 Python tests PASS**, including three new opt-in regression tests.
+Inline window-analytics Python syntax check PASS; seven account-analytics
+validation tests PASS; actual remote GraphQL calls PASS. No Android/Worker
+business logic changed in this follow-up. Prior Worker compile/tests remain the
+application-code evidence. No new measured end-to-end quota guarantee.
