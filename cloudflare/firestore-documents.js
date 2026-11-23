@@ -2750,11 +2750,11 @@ async function livePk(request,db,uid,now,identity) {
       || !Number.isInteger(input.durationSec) || input.durationSec<60 || input.durationSec>600)) return json({error:'Invalid PK rooms'},400);
   if (action!=='invite' && !validRoom(action==='room'?input.room:input.id)) return json({error:'Invalid PK ID'},400);
   try {
+    const reads=requestAccountReads(identity);
     if (action==='room') {
       const row=await db.prepare(`SELECT * FROM friendbook_cf_live_pk WHERE status='active' AND expires_at>? AND (room_a=? OR room_b=?) LIMIT 1`).bind(now,input.room,input.room).first();
       // The four checks belong to one request. Share in-flight room/account
       // reads only here; the next poll rechecks fresh privacy and ban state.
-      const reads=requestAccountReads(identity);
       if (!row || !await authorizeLiveMedia(db,row.room_a,uid,'watch',reads) || !await authorizeLiveMedia(db,row.room_b,uid,'watch',reads)
           || !await authorizeLiveMedia(db,row.room_a,row.host_a,'publish',reads) || !await authorizeLiveMedia(db,row.room_b,row.host_b,row.room_a===row.room_b?'watch':'publish',reads)) return json({status:'idle'});
       // Publish/watch ACLs already loaded both current host profiles. Reuse
@@ -2769,25 +2769,26 @@ async function livePk(request,db,uid,now,identity) {
     const roomA=battle?.room_a ?? input.roomA,roomB=battle?.room_b ?? input.roomB;
     if (action==='status') {
       if (![battle.host_a,battle.host_b].includes(uid) && (battle.status!=='active' || battle.expires_at<=now
-          || !await authorizeLiveMedia(db,roomA,uid,'watch') || !await authorizeLiveMedia(db,roomB,uid,'watch'))) return json({error:'Forbidden'},403);
+          || !await authorizeLiveMedia(db,roomA,uid,'watch',reads) || !await authorizeLiveMedia(db,roomB,uid,'watch',reads))) return json({error:'Forbidden'},403);
       return json({...battle,status:['invited','active'].includes(battle.status) && battle.expires_at<=now?'ended':battle.status});
     }
     const [a,b]=await Promise.all([readRow(db,`lives/${roomA}`),readRow(db,`lives/${roomB}`)]);
     if (!a || !b) return json({error:'PK rooms unavailable'},404);
     const aa=decodeValue(JSON.parse(a.document_json)),bb=decodeValue(JSON.parse(b.document_json));
+    reads.set(`lives/${roomA}`,toFirestoreFields(a.document_json));
+    reads.set(`lives/${roomB}`,toFirestoreFields(b.document_json));
     const guest=roomA===roomB;
     const guards=[await chatDocumentGuard(db,a.path,a),...(guest?[]:[await chatDocumentGuard(db,b.path,b)])];
     const clear=db.prepare('DELETE FROM friendbook_cf_social_guards').bind();
     if (action==='invite') {
       const target=guest ? input.guestUid : bb.hostId;
       if (aa.hostId!==uid || uid===target || (guest && aa.coHostUid) || bb.pkInvitesEnabled===false
-          || !await authorizeLiveMedia(db,roomA,uid,'publish') || !await authorizeLiveMedia(db,roomB,target,guest?'watch':'publish')
-          || !await authorizeLiveMedia(db,roomB,uid,'watch') || !await authorizeLiveMedia(db,roomA,target,'watch')) return json({error:'Forbidden'},403);
+          || !await authorizeLiveMedia(db,roomA,uid,'publish',reads) || !await authorizeLiveMedia(db,roomB,target,guest?'watch':'publish',reads)
+          || !await authorizeLiveMedia(db,roomB,uid,'watch',reads) || !await authorizeLiveMedia(db,roomA,target,'watch',reads)) return json({error:'Forbidden'},403);
       const id=autoId();
       const inviteId=autoId();
-      const profile=await readRow(db,`users/${uid}`);
-      const actor=profile?decodeValue(JSON.parse(profile.document_json)):{};
-      const msg={type:'pk_invite',uid,name:String(actor.displayName||'').slice(0,200),targetUid:target,pkBattleId:id,
+      const actor=await reads.get(`users/${uid}`);
+      const msg={type:'pk_invite',uid,name:String(fromFirestoreValue(actor?.displayName)||'').slice(0,200),targetUid:target,pkBattleId:id,
         text:'sent a PK battle invitation',durationSec:input.durationSec,createdAt:now,createdAtMs:now};
       await db.batch([...guards,db.prepare(`INSERT INTO friendbook_cf_live_pk(id,room_a,room_b,host_a,host_b,status,duration_sec,created_at,expires_at)
         SELECT ?,?,?,?,?,'invited',?,?,? WHERE NOT EXISTS (
@@ -2799,9 +2800,9 @@ async function livePk(request,db,uid,now,identity) {
     }
     if (aa.hostId!==battle.host_a || (!guest && bb.hostId!==battle.host_b) || (action==='end'?![battle.host_a,battle.host_b].includes(uid):uid!==battle.host_b)) return json({error:'Forbidden'},403);
     const accepting=action==='accept';
-    if (accepting && ((guest && aa.coHostUid) || bb.pkInvitesEnabled===false || !await authorizeLiveMedia(db,roomA,battle.host_a,'publish')
-        || !await authorizeLiveMedia(db,roomB,battle.host_b,guest?'watch':'publish') || !await authorizeLiveMedia(db,roomA,battle.host_b,'watch')
-        || !await authorizeLiveMedia(db,roomB,battle.host_a,'watch'))) return json({error:'Forbidden'},403);
+    if (accepting && ((guest && aa.coHostUid) || bb.pkInvitesEnabled===false || !await authorizeLiveMedia(db,roomA,battle.host_a,'publish',reads)
+        || !await authorizeLiveMedia(db,roomB,battle.host_b,guest?'watch':'publish',reads) || !await authorizeLiveMedia(db,roomA,battle.host_b,'watch',reads)
+        || !await authorizeLiveMedia(db,roomB,battle.host_a,'watch',reads))) return json({error:'Forbidden'},403);
     const status=accepting?'active':action==='decline'?'declined':'ended';
     const expected=action==='end'?'active':'invited';
     const expires=accepting?now+battle.duration_sec*1000:now;

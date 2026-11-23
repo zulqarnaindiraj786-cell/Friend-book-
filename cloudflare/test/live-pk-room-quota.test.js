@@ -16,11 +16,16 @@ test('PK room poll shares authorization lookups only within each request',async 
  const reads=[];
  const db={prepare(q){const stmt=sql.prepare(q);return{bind(...args){return{first:async()=>{if(q.includes('FROM friendbook_cf_firestore_documents') && typeof args[0]==='string' && /^(users|lives)\//.test(args[0]))reads.push(args[0]);return stmt.get(...args)||null;},all:async()=>({results:stmt.all(...args)}),run:async()=>stmt.run(...args)};}};}};
  const app=createWorker(async t=>t),env={DB:db,FIREBASE_PROJECT_ID:'test'};
- const check=async()=>{reads.length=0;const response=await app.fetch(new Request('https://example.test/v1/live/pk',{method:'POST',headers:{authorization:'Bearer viewer','content-type':'application/json'},body:JSON.stringify({action:'room',room:'a'})}),env);assert.equal(response.status,200);return response.json();};
+ const check=async(action='room')=>{reads.length=0;const response=await app.fetch(new Request('https://example.test/v1/live/pk',{method:'POST',headers:{authorization:'Bearer viewer','content-type':'application/json'},body:JSON.stringify(action==='room'?{action,room:'a'}:{action,id:'battle'})}),env);assert.equal(response.status,200);return response.json();};
  assert.equal((await check()).id,'battle');
  assert.equal(reads.filter(v=>v==='lives/a').length,1);assert.equal(reads.filter(v=>v==='lives/b').length,1);
  assert.equal(reads.filter(v=>v==='users/alice').length,1);assert.equal(reads.filter(v=>v==='users/bob').length,1);
  assert.equal(reads.filter(v=>v==='users/viewer').length,1,'reuse same-request account gate snapshot, never a cross-request cache');
+ assert.equal((await check('status')).status,'active');
+ assert.equal(reads.filter(v=>v==='users/viewer').length,1,'status shares the current viewer snapshot too');
+ assert.equal(reads.filter(v=>v==='users/alice').length,1);
+ assert.equal(reads.filter(v=>v==='users/bob').length,1);
+
  const update=sql.prepare('UPDATE friendbook_cf_firestore_documents SET document_json=? WHERE path=?');
  update.run(JSON.stringify({displayName:'Renamed host'}),'users/alice');
  assert.equal((await check()).name_a,'Renamed host','name refreshes on the next request without duplicate host reads');
