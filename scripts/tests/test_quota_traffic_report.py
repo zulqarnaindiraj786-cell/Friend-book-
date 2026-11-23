@@ -179,3 +179,16 @@ class TrafficReport(unittest.TestCase):
             self.assertEqual(data['ranked_by'],('rowsRead','rowsWritten')[i%2])
         source=(ROOT/'scripts/loadtest/quota_traffic_report.py').read_text()
         self.assertLess(source.index("for line in priority_shape_notices(report['windows'])"),source.index("for line in notice_lines(window)"))
+
+
+    def test_legacy_promotion_requires_exact_reviewed_sql_not_just_table_names(self):
+        shapes=p.maintenance_shapes()
+        self.assertEqual(len(shapes),3)
+        promotion=next(q for q,label in shapes.items() if label=='known_legacy_root_promotion')
+        self.assertEqual(p.category(promotion),'known_legacy_root_promotion')
+        self.assertEqual(p.category(promotion.upper()+';'),'known_legacy_root_promotion')
+        self.assertEqual(p.category(promotion.replace('returning path','returning doc_id')),'application_or_unattributed')
+        self.assertEqual(p.category('INSERT INTO friendbook_cf_firestore_documents SELECT * FROM friendbook_cf_documents'),'application_or_unattributed')
+        for query,label in shapes.items():
+            self.assertEqual(p.category(query),label)
+        self.assertNotIn('document_json',str(p.safe_shape(promotion)))

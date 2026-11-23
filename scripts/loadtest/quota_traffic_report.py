@@ -6,6 +6,7 @@ Top-N shape subtotals are NOT complete totals and must never be subtracted from
 account billing. Unknown/empty/error analytics are never reported as zero usage.
 """
 import argparse
+from functools import lru_cache
 import datetime as dt
 import json
 import os
@@ -77,7 +78,34 @@ def parse_groups(payload,shapes=False):
              **({'dimensions':{'query':r['dimensions']['query']}} if shapes else {})} for r in groups]
 
 
+
+def normalize_shape(sql):
+    return re.sub(r'\s+',' ',sql).strip().rstrip(';').lower()
+
+
+@lru_cache(maxsize=1)
+def maintenance_shapes():
+    # Exact repo SQL matches only; never infer migration work from table names.
+    # If the script/template changes unexpectedly, leave the shape unattributed.
+    source=(Path(__file__).resolve().parent/'promote_legacy_roots.mjs').read_text()
+    fields=re.search(r"const FIELDS = \[(.*?)\];",source)
+    insert=re.search(r"sql: `([^`]+ON CONFLICT\(path\) DO NOTHING RETURNING path)`",source)
+    known={}
+    if fields and insert:
+        names=re.findall(r"'([a-z_]+)'",fields.group(1))
+        query=insert.group(1).replace("${FIELDS.join(',')}",','.join(names))
+        if names and '${' not in query:
+            known[normalize_shape(query)]='known_legacy_root_promotion'
+    for name in ('PAGE','INVENTORY'):
+        template=re.search(r'(?:export )?const '+name+r' = `([^`]+)`;',source)
+        if template and '${' not in template.group(1):
+            known[normalize_shape(template.group(1))]='known_legacy_root_inventory'
+    return known
+
+
 def category(sql):
+    exact=maintenance_shapes().get(normalize_shape(sql))
+    if exact:return exact
     q=re.sub(r'\s+',' ',sql).strip().lower()
     if re.search(r'\b(?:into|from|table|index)\s+(?:if\s+(?:not\s+)?exists\s+)?quota_index_probe_[a-f0-9]{32}(?:_(?:old|new))?\b',q): return 'known_diagnostic_billing_probe'
     if re.match(r'^(explain\b|(?:select|with)\b.*\bsqlite_(?:schema|master)\b)',q): return 'schema_inspection'
