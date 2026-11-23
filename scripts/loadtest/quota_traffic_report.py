@@ -195,7 +195,11 @@ def priority_shape_notices(windows):
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output',type=Path)
+    parser.add_argument('--window-minutes',type=int,nargs='+',default=[5,15,60],
+                        help='Analytics lookback windows, 1 to 1440 minutes; never executes D1 SQL')
     args=parser.parse_args()
+    if any(m<1 or m>1440 for m in args.window_minutes):
+        parser.error('window minutes must be between 1 and 1440')
     token=os.environ['CLOUDFLARE_API_TOKEN']
     def fetch(query,shapes=False,databases=False):
         req=urllib.request.Request('https://api.cloudflare.com/client/v4/graphql',data=json.dumps({'query':query}).encode(),
@@ -207,7 +211,7 @@ def main():
     report={'queried_at':fmt(now),'source':'Cloudflare delayed/adaptive query analytics',
             'warning':'Not account billing, device attribution, matched-session savings or a guaranteed quota balance. Top-shape subtotals may be incomplete.',
             'windows':[]}
-    for minutes in (5,15,60):
+    for minutes in dict.fromkeys(args.window_minutes):
         start,end=fmt(now-dt.timedelta(minutes=minutes)),fmt(now)
         totals=fetch(query_text(start,end))
         window={'minutes':minutes,'start':start,'end':end,'all_query_totals':totals[0] if totals else None,
