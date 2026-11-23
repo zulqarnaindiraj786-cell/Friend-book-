@@ -545,6 +545,9 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
         postsRv.setNestedScrollingEnabled(false);
         postsRv.setItemAnimator(null);
         postsAdapter = new FeedAdapter(this, this);
+        // Profile pages already request, seed and hydrate bundled engagement.
+        // Rebinding a cached page must not fan out one summary GET per post.
+        postsAdapter.feedEngagementInPage = true;
         postsAdapter.showHeader = false;
         postsAdapter.showFooter = true;
         postsRv.setAdapter(postsAdapter);
