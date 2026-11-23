@@ -12,6 +12,8 @@ class LiveViewerReplay(unittest.TestCase):
         self.assertIn('boolean isNewPacket = processedPacketIds.add(id);', chat)
         self.assertIn('LiveViewerEvents.apply(activeViewerIds, uid, true, isNewPacket)', chat)
         self.assertIn('LiveViewerEvents.apply(activeViewerIds, uid, false, isNewPacket)', chat)
+        self.assertEqual(chat.count('publishHostHeartbeat();'), 1)
+        self.assertIn('if (!viewersBeforeSnapshot.equals(activeViewerIds)) publishHostHeartbeat();', chat)
         self.assertNotIn('activeViewerIds.add(uid)', chat)
         self.assertNotIn('activeViewerIds.remove(uid)', chat)
         self.assertIn('visibleMessages.add(new ChatItem(id, uid, name, photo, text, "join"))', chat)

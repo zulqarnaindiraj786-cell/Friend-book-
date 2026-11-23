@@ -1728,6 +1728,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
     private final com.friendbook.social.core.RealtimeSoundGate giftSoundGate = new com.friendbook.social.core.RealtimeSoundGate(System.currentTimeMillis());
     private void onChatSnapshot(List<DocumentSnapshot> docs, boolean fromCache) {
         boolean soundEligible = giftSoundGate.begin(fromCache);
+        Set<String> viewersBeforeSnapshot = new HashSet<>(activeViewerIds);
         List<ChatItem> visibleMessages = new ArrayList<>();
         for (DocumentSnapshot d : docs) {
             Map<String, Object> m = d.getData();
@@ -1757,13 +1758,12 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
             if ("join".equals(type)) {
                 if (LiveViewerEvents.apply(activeViewerIds, uid, true, isNewPacket)) {
                     totalUniqueViewers++;
-                    // A real viewer change is the moment the room document needs
-                    // the new list; no timer writes it later.
-                    publishHostHeartbeat();
+                    // Publish the final membership once below, not one write per
+                    // packet in a replayed or batched snapshot.
                 }
                 visibleMessages.add(new ChatItem(id, uid, name, photo, text, "join"));
             } else if ("leave".equals(type)) {
-                if (LiveViewerEvents.apply(activeViewerIds, uid, false, isNewPacket)) publishHostHeartbeat();
+                LiveViewerEvents.apply(activeViewerIds, uid, false, isNewPacket);
             } else if ("reaction".equals(type)) {
                 if (isNewPacket) {
                     if (!uid.equals(Fb.uid())) {
@@ -1830,6 +1830,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
                 visibleMessages.add(new ChatItem(id, uid, name, photo, text, type));
             }
         }
+        if (!viewersBeforeSnapshot.equals(activeViewerIds)) publishHostHeartbeat();
         chatAdapter.setItems(visibleMessages);
         if (!visibleMessages.isEmpty()) {
             chatRv.scrollToPosition(visibleMessages.size() - 1);

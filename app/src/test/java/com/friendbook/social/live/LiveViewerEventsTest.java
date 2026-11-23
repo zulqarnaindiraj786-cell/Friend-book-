@@ -33,6 +33,23 @@ public class LiveViewerEventsTest {
         assertEquals(Set.of("alice", "bob"), viewers);
     }
 
+    @Test public void aSnapshotPublishesOnlyItsFinalChangedMembership() {
+        Set<String> viewers = new HashSet<>(), packets = new HashSet<>();
+        int writes = 0;
+        for (int snapshot = 0; snapshot < 1000; snapshot++) {
+            Set<String> before = new HashSet<>(viewers);
+            for (int i = 0; i < 100; i++)
+                LiveViewerEvents.apply(viewers, "viewer" + i, true, packets.add("join" + i));
+            if (!before.equals(viewers)) writes++;
+        }
+        assertEquals(1, writes);
+        assertEquals(100, viewers.size());
+        Set<String> before = new HashSet<>(viewers);
+        LiveViewerEvents.apply(viewers, "transient", true, packets.add("transient-join"));
+        LiveViewerEvents.apply(viewers, "transient", false, packets.add("transient-leave"));
+        assertEquals(before, viewers); // No intermediate membership needs persisting.
+    }
+
     @Test public void duplicateStateAndInvalidActorsNeverProduceWrites() {
         Set<String> viewers = new HashSet<>();
         assertFalse(LiveViewerEvents.apply(viewers, null, true, true));
