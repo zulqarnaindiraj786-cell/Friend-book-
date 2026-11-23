@@ -143,7 +143,7 @@ def category(sql):
 def redacted_inventory_structure(sql):
     # Diagnostic grammar from a fixed vocabulary, NOT raw SQL. Literals,
     # arbitrary identifiers, numeric values and comments never pass through.
-    vocabulary=set("select count sum coalesce case when then else end as from where and or not is null left join on indexed by limit order group having asc desc with materialized exists distinct in sampled legacy_only path collection parent_path doc_id document_json owner_uid updated_at update_time sample l f s a friendbook_cf_documents friendbook_cf_firestore_documents idx_friendbook_cf_documents_collection_updated idx_friendbook_cf_firestore_parent".split())
+    vocabulary=set("resource views friendbook_cf_view_counters event_key created_at friendbook_cf_fcm_device_claims friendbook_cf_chat_participants chat_path uid friendbook_cf_trusted_friendships uid_low uid_high friend_path select count sum coalesce case when then else end as from where and or not is null left join on indexed by limit order group having asc desc with materialized exists distinct in sampled legacy_only path collection parent_path doc_id document_json owner_uid updated_at update_time sample l f s a friendbook_cf_documents friendbook_cf_firestore_documents idx_friendbook_cf_documents_collection_updated idx_friendbook_cf_firestore_parent".split())
     pattern=r"'(?:''|[^'])*'|\"(?:\"\"|[^\"])*\"|`[^`]*`|\[[^\]]*\]|--[^\n]*|/\*[\s\S]*?\*/|\?[0-9]*|[A-Za-z_][A-Za-z0-9_]*|[0-9]+(?:\.[0-9]+)?|<>|!=|<=|>=|[^\s]"
     result=[]
     for token in re.findall(pattern,sql):
@@ -181,7 +181,11 @@ def safe_shape(sql):
         ('friendbook_cf_fcm_devices','fcm_devices'),
         ('friendbook_cf_fcm_device_claims_v2','fcm_claims'),
         ('friendbook_cf_comments','comments'),
-        ('friendbook_cf_reactions','reactions')) if re.search(r'\b'+table+r'\b',q)]
+        ('friendbook_cf_reactions','reactions'),
+        ('friendbook_cf_view_counters','view_counters'),
+        ('friendbook_cf_fcm_device_claims','legacy_fcm_claims'),
+        ('friendbook_cf_chat_participants','chat_participants'),
+        ('friendbook_cf_trusted_friendships','trusted_friendships')) if re.search(r'\b'+table+r'\b',q)]
     # Recognize only aliases emitted from the Worker's fixed vocabulary.
     # Never echo an arbitrary SQL identifier or assume it identifies a device.
     callers=[]
@@ -198,6 +202,8 @@ def safe_shape(sql):
     if aliases:result['recognized_aliases']=aliases
     if set(('sampled','legacy_only')) <= set(aliases) and set(('canonical_documents','legacy_mirror')) <= set(tables):
         result['redacted_inventory_structure']=redacted_inventory_structure(sql)
+    if result['operation']=='SELECT' and not (set(tables)&{'canonical_documents','legacy_mirror','comments','reactions'}):
+        result['redacted_unmapped_select_structure']=redacted_inventory_structure(sql)
     return result
 
 

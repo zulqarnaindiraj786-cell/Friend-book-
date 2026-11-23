@@ -246,3 +246,14 @@ class TrafficReport(unittest.TestCase):
             counts[data['ranked_by']]+=len(data['shapes'])
             self.assertLess(len(line),3500)
         self.assertEqual(counts,{'rowsRead':10,'rowsWritten':6})
+
+
+    def test_unmapped_select_structure_keeps_only_fixed_vocabulary(self):
+        result=p.safe_shape("SELECT SECRET_COLUMN FROM SECRET_TABLE WHERE uid='SECRET_UID' LIMIT 250")
+        grammar=result['redacted_unmapped_select_structure']
+        self.assertNotIn('SECRET',grammar)
+        self.assertNotIn('250',grammar)
+        self.assertIn('limit ?',grammar)
+        views=p.safe_shape('SELECT resource, views FROM friendbook_cf_view_counters ORDER BY views DESC LIMIT ?')
+        self.assertEqual(views['tables'],['view_counters'])
+        self.assertIn('views desc limit ?',views['redacted_unmapped_select_structure'])
