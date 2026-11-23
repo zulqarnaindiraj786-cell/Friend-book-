@@ -21,4 +21,13 @@ public class QueryCachePolicyTest {
         assertFalse(QueryCachePolicy.isFresh(201,0,200,Long.MAX_VALUE));
         assertFalse(QueryCachePolicy.isFresh(100,0,200,100));
     }
+    @Test public void prefixSearchesHaveASeparateEvictionBucketFromFeedAndInbox() {
+        assertEquals("d1_user_search_query_cache_v1",QueryCachePolicy.preferencesForQuery(
+                "alice|{\"parent\":\"users\",\"startAt\":[\"Ali\"],\"endAt\":[\"AliZ\"]}"));
+        assertEquals("d1_query_cache_v2",QueryCachePolicy.preferencesForQuery("alice|{\"parent\":\"posts\"}"));
+        assertEquals("d1_query_cache_v2",QueryCachePolicy.preferencesForQuery("alice|{\"parent\":\"users\"}"));
+        assertEquals("d1_chat_query_cache_v2",QueryCachePolicy.preferencesForQuery("alice|{\"parent\":\"chats\"}"));
+        assertEquals("d1_chat_query_cache_v2",QueryCachePolicy.preferencesForQuery("alice|{\"parent\":\"chats/room/messages\"}"));
+    }
+
 }

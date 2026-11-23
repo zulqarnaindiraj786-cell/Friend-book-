@@ -710,15 +710,8 @@ public class D1DocumentStore {
         }
     }
 
-    private static boolean isChatCache(String key) {
-        int split=key.indexOf('|');
-        if (split<0) return false;
-        String query=key.substring(split+1);
-        return query.contains("\"parent\":\"chats\"") || query.contains("\"parent\":\"chats/");
-    }
-
     private static android.content.SharedPreferences queryPreferences(com.friendbook.social.App app,String key) {
-        return app.getSharedPreferences(isChatCache(key) ? "d1_chat_query_cache_v2" : "d1_query_cache_v2",0);
+        return app.getSharedPreferences(QueryCachePolicy.preferencesForQuery(key),0);
     }
 
     String getCachedQuery(String key) {
@@ -738,7 +731,9 @@ public class D1DocumentStore {
         if(app==null)return false;
         long saved=queryPreferences(app,key).getLong("t_"+cacheHash(key),0L);
         long now=System.currentTimeMillis();
-        long invalidated=queryPreferences(app,key).getLong("invalidated_"+cacheHash(authenticatedUid()+"|"+parent),0L);
+        // Collection invalidation is shared across its page and search buckets.
+        long invalidated=app.getSharedPreferences(QueryCachePolicy.preferencesFor(parent),0)
+                .getLong("invalidated_"+cacheHash(authenticatedUid()+"|"+parent),0L);
         return QueryCachePolicy.isFresh(saved,invalidated,now,maxAgeMs);
     }
 

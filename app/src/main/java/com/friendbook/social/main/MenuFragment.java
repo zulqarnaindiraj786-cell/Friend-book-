@@ -347,6 +347,8 @@ public class MenuFragment extends Fragment {
                     a.finish();
                 }));
         body.addView(logout);
+        body.addView(spacer(a,20));
+        body.addView(inviteFriendsCard(a));
 
         TextView ver = Ui.tv(a, "friendbook for Android · v" + vName, 11, Ui.sub(a));
         ver.setGravity(Gravity.CENTER);
@@ -356,6 +358,29 @@ public class MenuFragment extends Fragment {
         sv.addView(body);
         root.addView(sv, new LinearLayout.LayoutParams(-1, 0, 1));
         return root;
+    }
+
+    private View inviteFriendsCard(Activity a) {
+        LinearLayout card=Ui.col(a);
+        card.setBackground(Ui.round(a,Ui.isDark(a)?0xFF202433:0xFFEEF1FF,20));
+        Ui.pad(card,20,18,20,18);
+        card.addView(Ui.tvBold(a,"Invite Friends",23,Ui.txt(a)));
+        TextView subtitle=Ui.tv(a,"Help your friends discover friendbook",14,Ui.sub(a));
+        subtitle.setPadding(0,Ui.dp(a,4),0,Ui.dp(a,18));
+        card.addView(subtitle);
+        TextView share=Ui.btn(a,"Share on WhatsApp");
+        share.setTextColor(Color.WHITE);
+        share.setBackground(Ui.round(a,0xFF4355B5,16));
+        Ui.pad(share,16,12,16,12);
+        android.graphics.drawable.Drawable icon=a.getDrawable(android.R.drawable.ic_menu_share).mutate();
+        icon.setTint(Color.WHITE);icon.setBounds(0,0,Ui.dp(a,22),Ui.dp(a,22));
+        share.setCompoundDrawables(icon,null,null,null);
+        share.setCompoundDrawablePadding(Ui.dp(a,9));
+        share.setContentDescription("Invite friends: share friendbook Play Store link on WhatsApp");
+        share.setOnClickListener(v -> com.friendbook.social.core.InviteFriends.shareOnWhatsApp(a));
+        card.setOnClickListener(v -> com.friendbook.social.core.InviteFriends.shareOnWhatsApp(a));
+        card.addView(share,new LinearLayout.LayoutParams(-2,-2));
+        return card;
     }
 
     private void addGridRow(LinearLayout body, Activity a, View left, View right) {
