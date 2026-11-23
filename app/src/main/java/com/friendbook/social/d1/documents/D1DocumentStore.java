@@ -534,11 +534,11 @@ public class D1DocumentStore {
 
     void notifyCollectionListeners(String parentPath) {
         if ("posts".equals(parentPath)) postWriteVersion.incrementAndGet();
-        if ("groups".equals(parentPath) || "friends".equals(parentPath)) {
-            com.friendbook.social.App app=com.friendbook.social.App.instance;
-            if(app!=null)app.getSharedPreferences("d1_query_cache_v2",0).edit()
-                    .putLong("invalidated_"+cacheHash(authenticatedUid()+"|"+parentPath),System.currentTimeMillis()).apply();
-        }
+        // Invalidate locally without fetching hidden lists. Every cache-first collection needs
+        // this, not just friends/groups; chat pages live in their own preferences namespace.
+        com.friendbook.social.App app=com.friendbook.social.App.instance;
+        if(app!=null)app.getSharedPreferences(QueryCachePolicy.preferencesFor(parentPath),0).edit()
+                .putLong("invalidated_"+cacheHash(authenticatedUid()+"|"+parentPath),System.currentTimeMillis()).apply();
         for (QueryListenerEntry e : queryListeners) {
             if (e.active && parentPath.equals(e.query.parentPath)) {
                 e.refreshPending.set(true);
@@ -739,7 +739,7 @@ public class D1DocumentStore {
         long saved=queryPreferences(app,key).getLong("t_"+cacheHash(key),0L);
         long now=System.currentTimeMillis();
         long invalidated=queryPreferences(app,key).getLong("invalidated_"+cacheHash(authenticatedUid()+"|"+parent),0L);
-        return saved>0 && saved>invalidated && saved<=now && now-saved<maxAgeMs;
+        return QueryCachePolicy.isFresh(saved,invalidated,now,maxAgeMs);
     }
 
     synchronized void cacheQuery(String key, String json) {

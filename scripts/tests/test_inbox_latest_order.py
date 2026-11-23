@@ -16,7 +16,8 @@ class InboxLatestOrderTest(unittest.TestCase):
 
     def test_cached_or_old_pages_cannot_replace_the_latest_row(self):
         inbox = (CHAT / 'ConversationsActivity.java').read_text()
-        self.assertIn('snap.getMetadata().isFromCache() && !allRooms.isEmpty()', inbox)
+        self.assertIn('page.getCachedOrFetch(forceRefresh)', inbox)
+        self.assertIn('if(!reset || inboxCursor==null)', inbox)
         self.assertIn('previous.room.lastMessageTime>r.room.lastMessageTime', inbox)
         self.assertIn('allRooms.set(allRooms.indexOf(previous),r)', inbox)
         self.assertIn('.orderBy("inboxActivityAt"', inbox)

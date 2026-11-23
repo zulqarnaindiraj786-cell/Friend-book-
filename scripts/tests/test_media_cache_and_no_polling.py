@@ -57,7 +57,8 @@ class NoBackgroundRefresh(unittest.TestCase):
     def test_chat_list_reads_once_and_supports_pull_to_refresh(self):
         source = (JAVA / 'chat/ConversationsActivity.java').read_text()
         self.assertIn('inboxSwipe', source)
-        self.assertIn('Source.SERVER', source)
+        self.assertIn('loadInboxPage(true,true)', source)
+        self.assertIn('page.getCachedOrFetch(forceRefresh)', source)
 
     def test_home_lists_are_one_shot(self):
         home = (JAVA / 'main/HomeFragment.java').read_text()

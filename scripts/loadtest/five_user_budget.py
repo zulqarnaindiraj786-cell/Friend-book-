@@ -23,6 +23,9 @@ ACTIVITY = {
     'notification_mark_all': 1,
     'notification_unread_to_mark': 40,
     'chat_list_opens': 10,
+    'chat_list_visible_pushes': 20,
+    'chat_list_pulls': 2,
+    'chat_list_older_pages': 5,
     'chat_thread_opens': 12,
     'chat_sent': 30,
     'chat_received': 45,         # while the thread is already open
@@ -52,7 +55,7 @@ READ_COST = {
     'notification_page': 20,
     'notification_sender_lookups': 20,  # conservative allowance: one unknown sender per row
     'notification_mark_batch': 20,
-    'chat_list_open': 10 + 20,                              # inbox limit(10) + users strip (cached 10 min)
+    'chat_list_open': 11,  # 10 displayed rooms + 1 lookahead; no separate users-strip query
     'chat_thread_open': 40 + 1 + 2,
     'chat_send': 3,
     'chat_received_while_open': 0,
@@ -102,7 +105,8 @@ def per_user_reads():
         # Mark-all reads every unread row, plus an empty-tail probe and refreshed head.
         # Smaller batches reduce peak work, NOT total rows needed to mark everything.
         'notification_mark_all': a['notification_mark_all'] * (a['notification_unread_to_mark'] + 1 + c['notification_open']),
-        'chat_list': a['chat_list_opens'] * c['chat_list_open'],
+        # Conservatively charge all opens as misses, plus explicit pulls, older pages and visible pushes.
+        'chat_list': (a['chat_list_opens'] + a['chat_list_visible_pushes'] + a['chat_list_pulls'] + a['chat_list_older_pages']) * c['chat_list_open'],
         'chat_threads': a['chat_thread_opens'] * c['chat_thread_open'],
         'chat_sends': a['chat_sent'] * c['chat_send'],
         'chat_received': a['chat_received'] * c['chat_received_while_open'],
@@ -142,7 +146,7 @@ def main():
     report = {
         'users': USERS,
         'measurement': 'document-delivery estimate, not D1 rows_read telemetry',
-        'assumptions': '20 opens: 1 cache miss, 19 cache hits; 60 friends; 2 explicit Home refreshes; cache not evicted/invalidated otherwise; notification list: 5 opens + 5 older pages charged as misses, 200 sender lookups, 1 explicit mark-all of 40 unread',
+        'assumptions': '20 opens: 1 cache miss, 19 cache hits; 60 friends; 2 explicit Home refreshes; cache not evicted/invalidated otherwise; notification list: 5 opens + 5 older pages charged as misses, 200 sender lookups, 1 explicit mark-all of 40 unread; inbox: 10 opens as misses + 20 visible push refreshes + 2 pulls + 5 older pages, 11 docs each',
         'cold_open_documents_with_60_friends': HOME_READS + BADGE_READS + 60,
         'cached_open_incremental_home_and_badge_documents': 0,
         'cached_open_auth_allowance': 1,

@@ -48,7 +48,7 @@ public class ConversationsActivity extends Activity {
     private final android.os.Handler inboxHandler=new android.os.Handler(android.os.Looper.getMainLooper());
     private boolean pushPending;
     private final Runnable pushRefresh=()->{
-        if(!this.inboxLoading && pushPending){pushPending=false;loadInboxPage(true);}
+        if(!this.inboxLoading && pushPending){pushPending=false;loadInboxPage(true,true);}
     };
 
     public static void refreshVisibleInboxFromPush(String actor) {
@@ -196,7 +196,7 @@ public class ConversationsActivity extends Activity {
         inboxMoreButton.setVisibility(View.GONE);
         inboxSwipe=new androidx.swiperefreshlayout.widget.SwipeRefreshLayout(this);
         inboxSwipe.addView(rv);
-        inboxSwipe.setOnRefreshListener(()->loadInboxPage(true));
+        inboxSwipe.setOnRefreshListener(()->loadInboxPage(true,true));
         root.addView(inboxSwipe, new LinearLayout.LayoutParams(-1, 0, 1));
         root.addView(inboxMoreButton);
         setContentView(root);
@@ -291,7 +291,9 @@ public class ConversationsActivity extends Activity {
         inboxMoreButton.setText(loadingOlderInbox?"Loading older chats…":retryOlderInbox?"Retry loading chats":"Load more chats");
     }
 
-    private void loadInboxPage(boolean reset) {
+    private void loadInboxPage(boolean reset) { loadInboxPage(reset,false); }
+
+    private void loadInboxPage(boolean reset,boolean forceRefresh) {
         if(inboxLoading || (!reset && (!inboxMore || inboxCursor==null))) {
             inboxSwipe.setRefreshing(false);
             return;
@@ -303,19 +305,16 @@ public class ConversationsActivity extends Activity {
         if(!reset && inboxCursor!=null) query=query.startAfter(inboxCursor);
         java.util.function.Consumer<com.friendbook.social.d1.documents.QuerySnapshot> apply=snap -> {
             if(generation!=inboxGeneration || !java.util.Objects.equals(me,Fb.uid()) || isFinishing()) return;
-            if(snap.getMetadata().isFromCache() && !allRooms.isEmpty()){
-                inboxLoading=false;loadingOlderInbox=false;inboxSwipe.setRefreshing(false);
-                return;
-            }
             inboxLoading=false;loadingOlderInbox=false;inboxSwipe.setRefreshing(false);
-            if(!snap.getMetadata().isFromCache() && (!reset || inboxCursor==null)){
+            if(!reset || inboxCursor==null){
                 inboxMore=snap.size()>INBOX_PAGE_SIZE;
                 if(!snap.isEmpty())inboxCursor=snap.getDocuments().get(Math.min(INBOX_PAGE_SIZE,snap.size())-1);
             }
             Set<String> hiddenChats = getSharedPreferences("fb_prefs", MODE_PRIVATE)
                     .getStringSet("hiddenChats", new HashSet<>());
             for (DocumentSnapshot d : snap.getDocuments().subList(0,Math.min(INBOX_PAGE_SIZE,snap.size()))) {
-                CallActivity.maybeHandleIncomingFromRoomDoc(ConversationsActivity.this, d);
+                if(!snap.getMetadata().isFromCache())
+                    CallActivity.maybeHandleIncomingFromRoomDoc(ConversationsActivity.this, d);
                 if (hiddenChats.contains(d.getId())) continue;
                 Room r = new Room();
                 r.room = Models.ChatRoom.fromDoc(d);
@@ -343,7 +342,7 @@ public class ConversationsActivity extends Activity {
             applyFilter();
             if(!reset)reachedInboxBottom=false;
             updateInboxFooter();
-            if(!snap.getMetadata().isFromCache())schedulePendingPush();
+            schedulePendingPush();
         };
         java.util.function.Consumer<Exception> failed=error->{
             if(generation!=inboxGeneration)return;
@@ -354,16 +353,9 @@ public class ConversationsActivity extends Activity {
             schedulePendingPush();
         };
         com.friendbook.social.d1.documents.Query page=query.limit(INBOX_PAGE_SIZE+1);
-        if(!reset)page.get(com.friendbook.social.d1.documents.Source.SERVER).addOnSuccessListener(apply::accept).addOnFailureListener(failed::accept);
-        else page.get(com.friendbook.social.d1.documents.Source.CACHE).addOnCompleteListener(cache -> {
-            if(generation!=inboxGeneration || !java.util.Objects.equals(me,Fb.uid()) || isFinishing())return;
-            com.friendbook.social.d1.documents.QuerySnapshot cached=cache.isSuccessful()?cache.getResult():null;
-            if(cached!=null && !cached.isEmpty() && allRooms.isEmpty()) {
-                apply.accept(cached);
-                inboxLoading=true;
-            }
-            page.refreshCachedHead(cached).addOnSuccessListener(apply::accept).addOnFailureListener(failed::accept);
-        });
+        // Exact account/cursor cache pages are complete, including an empty result.
+        // Pull and visible message pushes bypass the cache; normal opens/older pages reuse it.
+        page.getCachedOrFetch(forceRefresh).addOnSuccessListener(apply::accept).addOnFailureListener(failed::accept);
     }
 
     private void applyFilter() {
