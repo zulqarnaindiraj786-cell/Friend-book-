@@ -50,6 +50,7 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
     private final List<Models.User> suggestions = new ArrayList<>();
     private com.friendbook.social.core.CursorPager activePager;
     private com.friendbook.social.core.CursorPager suggestionPager;
+    private com.friendbook.social.d1.documents.ForegroundReadScope sectionReadScope;
     private androidx.swiperefreshlayout.widget.SwipeRefreshLayout swipe;
     private boolean pageMore,pageLoading,suggestionMore,suggestionLoading;
     private String pageError="",suggestionError="";
@@ -78,7 +79,11 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
     private final Runnable renderFrame=()->{renderQueued=false;render();};
     private void requestRender(){if(!renderQueued){renderQueued=true;frameHandler.postDelayed(renderFrame,16);}}
     private boolean current(int token,String actor){return token==generation && visibleActor(actor);}
-    private void closePage(boolean keepInline){generation++;if(activePager!=null){activePager.close();activePager=null;}if(!keepInline && suggestionPager!=null){inlineToken++;suggestionPager.close();suggestionPager=null;}checkingUsers.clear();loadingProfiles.clear();frameHandler.removeCallbacks(renderFrame);renderQueued=false;}
+    private com.friendbook.social.d1.documents.ForegroundReadScope sectionReadScope(){
+        if(sectionReadScope==null)sectionReadScope=new com.friendbook.social.d1.documents.ForegroundReadScope();
+        return sectionReadScope;
+    }
+    private void closePage(boolean keepInline){generation++;if(activePager!=null){activePager.close();activePager=null;}if(!keepInline && suggestionPager!=null){inlineToken++;suggestionPager.close();suggestionPager=null;}if(sectionReadScope!=null){sectionReadScope.close();sectionReadScope=null;}checkingUsers.clear();loadingProfiles.clear();frameHandler.removeCallbacks(renderFrame);renderQueued=false;}
 
 
     @Nullable
@@ -227,7 +232,7 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
         });render();
         boolean full=forceSectionRefresh;forceSectionRefresh=false;
         if(full)activePager.startFullRefresh();
-        else activePager.startCachedFor(300_000L);
+        else activePager.startCachedForForeground(300_000L);
     }
 
     private void loadInlineSuggestions(){
@@ -239,7 +244,7 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
             suggestionMore=more;suggestionLoading=loading;suggestionError=error;
             if(loading){if(!isHidden())requestRender();return;}
             consumeSuggestions(docs,me,generation);if(!isHidden())render();
-        });suggestionPager.startCachedFor(300_000L);
+        });suggestionPager.startCachedForForeground(300_000L);
     }
 
     private void consumeSuggestions(List<DocumentSnapshot> docs,String me,int token){
@@ -275,15 +280,23 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
         List<String> unchecked=new ArrayList<>(uncheckedSet);
         for(int offset=0;offset<unchecked.size();offset+=10){
             final List<String> ids=new ArrayList<>(unchecked.subList(offset,Math.min(offset+10,unchecked.size())));checkingUsers.addAll(ids);
-            frameHandler.postDelayed(()->{
-                if(current(token,me) && checkingUsers.containsAll(ids)){
-                    checkingUsers.removeAll(ids);failedCandidates.addAll(ids);requestRender();
+            final com.friendbook.social.d1.documents.ForegroundReadScope scope=sectionReadScope();
+            Runnable deadline=new Runnable(){@Override public void run(){
+                if(!current(token,me) || !checkingUsers.containsAll(ids))return;
+                if(!com.friendbook.social.App.isForeground()){
+                    scope.whenForeground().addOnSuccessListener(ignored->{
+                        if(current(token,me) && checkingUsers.containsAll(ids))frameHandler.postDelayed(this,20000L);
+                    });
+                    return;
                 }
-            },20000L);
-            com.google.android.gms.tasks.Task<java.util.Map<String,Boolean>> friends=Fb.db().friendshipFacts(ids);
-            com.google.android.gms.tasks.Task<com.friendbook.social.d1.documents.QuerySnapshot> received=Fb.db().collection("friend_requests").whereEqualTo("toUid",me).whereIn("fromUid",ids).whereEqualTo("status","pending").limit(10).get();
-            com.google.android.gms.tasks.Task<com.friendbook.social.d1.documents.QuerySnapshot> sent=Fb.db().collection("friend_requests").whereEqualTo("fromUid",me).whereIn("toUid",ids).whereEqualTo("status","pending").limit(10).get();
+                checkingUsers.removeAll(ids);failedCandidates.addAll(ids);requestRender();
+            }};
+            frameHandler.postDelayed(deadline,20000L);
+            com.google.android.gms.tasks.Task<java.util.Map<String,Boolean>> friends=Fb.db().friendshipFactsAutomatic(ids,scope);
+            com.google.android.gms.tasks.Task<com.friendbook.social.d1.documents.QuerySnapshot> received=Fb.db().collection("friend_requests").whereEqualTo("toUid",me).whereIn("fromUid",ids).whereEqualTo("status","pending").limit(10).getAutomatic(scope);
+            com.google.android.gms.tasks.Task<com.friendbook.social.d1.documents.QuerySnapshot> sent=Fb.db().collection("friend_requests").whereEqualTo("fromUid",me).whereIn("toUid",ids).whereEqualTo("status","pending").limit(10).getAutomatic(scope);
             com.google.android.gms.tasks.Tasks.whenAllSuccess(friends,received,sent).addOnSuccessListener(results->{
+                frameHandler.removeCallbacks(deadline);
                 if(!current(token,me) || !checkingUsers.containsAll(ids))return;checkingUsers.removeAll(ids);
                 @SuppressWarnings("unchecked") java.util.Map<String,Boolean> a=(java.util.Map<String,Boolean>)results.get(0);
                 com.friendbook.social.d1.documents.QuerySnapshot b=(com.friendbook.social.d1.documents.QuerySnapshot)results.get(1),c=(com.friendbook.social.d1.documents.QuerySnapshot)results.get(2);
@@ -293,7 +306,7 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
                 for(String id:ids)if(Boolean.TRUE.equals(a.get(id)))candidateFriends.add(id);
                 for(DocumentSnapshot doc:b)candidateIncoming.add(doc.getString("fromUid"));for(DocumentSnapshot doc:c)candidateOutgoing.add(doc.getString("toUid"));
                 checkedCandidates.addAll(ids);candidatesCheckedAt=android.os.SystemClock.elapsedRealtime();requestRender();
-            }).addOnFailureListener(error->{if(current(token,me) && checkingUsers.containsAll(ids)){checkingUsers.removeAll(ids);failedCandidates.addAll(ids);requestRender();}});
+            }).addOnFailureListener(error->{frameHandler.removeCallbacks(deadline);if(current(token,me) && checkingUsers.containsAll(ids)){checkingUsers.removeAll(ids);failedCandidates.addAll(ids);requestRender();}});
         }
     }
 
@@ -309,7 +322,7 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
         for(String uid:loadingProfiles)if(attemptedProfiles.add(uid))missing.add(uid);
         loadingProfiles.clear();
         for(List<String> ids:Ui.chunks(missing,10)){
-            Fb.db().collection("users").whereIn(com.friendbook.social.d1.documents.FieldPath.documentId(),ids).limit(10).get()
+            Fb.db().collection("users").whereIn(com.friendbook.social.d1.documents.FieldPath.documentId(),ids).limit(10).getAutomatic(sectionReadScope())
                     .addOnSuccessListener(snap->{
                         if(!current(token,actor))return;
                         for(DocumentSnapshot doc:snap){Models.User u=Models.User.fromDoc(doc);userCache.put(u.uid,u);com.friendbook.social.core.FastCache.putUser(u);}

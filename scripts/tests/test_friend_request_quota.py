@@ -19,7 +19,7 @@ class FriendRequestQuota(unittest.TestCase):
   self.assertNotIn('.limit(20)',s)
   self.assertNotIn('Fb.getUserFresh(',s)
   self.assertIn('Ui.chunks(missing,10)',s)
-  self.assertIn('activePager.startCachedFor(300_000L)',s)
+  self.assertIn('activePager.startCachedForForeground(300_000L)',s)
   self.assertIn('setItemPrefetchEnabled(false)',s)
  def test_request_badge_is_bounded_and_cached(self):
   s=(JAVA/'main/MainActivity.java').read_text().split('private void startBadgeListeners()',1)[1].split('Fb.db().collection("friend_requests")',1)[1]

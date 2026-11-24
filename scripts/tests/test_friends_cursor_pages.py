@@ -5,10 +5,10 @@ JAVA=Path(__file__).resolve().parents[2]/'app/src/main/java/com/friendbook/socia
 class FriendsCursorPages(unittest.TestCase):
     def test_ten_per_visible_section_and_cached_request_head(self):
         code=(JAVA/'friends/FriendsFragment.java').read_text()
-        for token in ['SEC_SENT = 3','new com.friendbook.social.core.CursorPager(query,10','NearEndPaging.attach(rv','if(hidden){ closePage(false); }','if(loading){requestRender();return;}','swipe.setOnRefreshListener(()->{forceSectionRefresh=true;startSection();})','People you may know','suggestionPager.startCachedFor(300_000L)']:
+        for token in ['SEC_SENT = 3','new com.friendbook.social.core.CursorPager(query,10','NearEndPaging.attach(rv','if(hidden){ closePage(false); }','if(loading){requestRender();return;}','swipe.setOnRefreshListener(()->{forceSectionRefresh=true;startSection();})','People you may know','suggestionPager.startCachedForForeground(300_000L)']:
             self.assertIn(token,code)
         self.assertNotIn('addSnapshotListener',code)
-        self.assertIn('activePager.startCachedFor(300_000L)',code)
+        self.assertIn('activePager.startCachedForForeground(300_000L)',code)
         self.assertNotIn('activePager.startDelta()',code)
     def test_sent_uses_manual_pages_without_profile_requests(self):
         code=(JAVA/'friends/FriendsFragment.java').read_text()
@@ -19,7 +19,7 @@ class FriendsCursorPages(unittest.TestCase):
         self.assertIn('Load more sent requests',code)
     def test_candidate_checks_bounded_guarded_and_fail_closed(self):
         code=(JAVA/'friends/FriendsFragment.java').read_text()
-        for token in ['offset+=10','Fb.db().friendshipFacts(ids)','Tasks.whenAllSuccess','a.size()!=ids.size()','b.size()==10','if(!current(token,me) || !checkingUsers.containsAll(ids))return','},20000L)','failedCandidates.addAll(ids)','FriendCandidatePages.canOfferRequest']:
+        for token in ['offset+=10','Fb.db().friendshipFactsAutomatic(ids,scope)','Tasks.whenAllSuccess','a.size()!=ids.size()','b.size()==10','if(!current(token,me) || !checkingUsers.containsAll(ids))return','frameHandler.postDelayed(deadline,20000L)','failedCandidates.addAll(ids)','FriendCandidatePages.canOfferRequest']:
             self.assertIn(token,code)
     def test_action_targets_and_account_guards(self):
         code=(JAVA/'friends/FriendsFragment.java').read_text()

@@ -91,13 +91,35 @@ public class FriendRequestDemandTest {
    pending.setResult(null);Shadows.shadowOf(Looper.getMainLooper()).idle();for(int i=0;i<100;i++)f.primary(row);verify(doc,times(1)).delete();verify(requests,never()).whereEqualTo(anyString(),any());
   }
  }
+ @Test public void candidateChecksStayScopedAndDoNotTimeoutWhileBackgrounded()throws Exception{
+  try(MockedStatic<Fb> fb=mockStatic(Fb.class);MockedStatic<com.friendbook.social.App> app=mockStatic(com.friendbook.social.App.class)){
+   fb.when(Fb::uid).thenReturn("candidate-actor");app.when(com.friendbook.social.App::isForeground).thenReturn(false);
+   FriendsFragment f=fragment("candidate-actor");Models.User u=new Models.User();u.uid="candidate";((List<Models.User>)field("suggestions").get(f)).add(u);
+   D1DocumentStore db=mock(D1DocumentStore.class);fb.when(Fb::db).thenReturn(db);
+   TaskCompletionSource<Map<String,Boolean>> facts=new TaskCompletionSource<>();when(db.friendshipFactsAutomatic(anyList(),any(ForegroundReadScope.class))).thenReturn(facts.getTask());
+   CollectionReference requests=mock(CollectionReference.class);Query received=mock(Query.class),sent=mock(Query.class);when(db.collection("friend_requests")).thenReturn(requests);
+   when(requests.whereEqualTo("toUid","candidate-actor")).thenReturn(received);when(requests.whereEqualTo("fromUid","candidate-actor")).thenReturn(sent);
+   when(received.whereIn(eq("fromUid"),anyList())).thenReturn(received);when(sent.whereIn(eq("toUid"),anyList())).thenReturn(sent);
+   when(received.whereEqualTo("status","pending")).thenReturn(received);when(sent.whereEqualTo("status","pending")).thenReturn(sent);
+   when(received.limit(10)).thenReturn(received);when(sent.limit(10)).thenReturn(sent);
+   when(received.getAutomatic(any(ForegroundReadScope.class))).thenReturn(new TaskCompletionSource<QuerySnapshot>().getTask());when(sent.getAutomatic(any(ForegroundReadScope.class))).thenReturn(new TaskCompletionSource<QuerySnapshot>().getTask());
+   java.lang.reflect.Method check=FriendsFragment.class.getDeclaredMethod("checkCandidates",String.class,int.class);check.setAccessible(true);
+   for(int i=0;i<100;i++)check.invoke(f,"candidate-actor",0);
+   ForegroundReadScope scope=(ForegroundReadScope)field("sectionReadScope").get(f);
+   verify(db,times(1)).friendshipFactsAutomatic(anyList(),eq(scope));verify(received,times(1)).getAutomatic(scope);verify(sent,times(1)).getAutomatic(scope);
+   Shadows.shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofSeconds(21));
+   assertTrue(((Set<?>)field("checkingUsers").get(f)).contains("candidate"));assertFalse(((Set<?>)field("failedCandidates").get(f)).contains("candidate"));
+   java.lang.reflect.Method close=FriendsFragment.class.getDeclaredMethod("closePage",boolean.class);close.setAccessible(true);close.invoke(f,false);
+   assertFalse(scope.whenForeground().isSuccessful());assertTrue(((Set<?>)field("checkingUsers").get(f)).isEmpty());
+  }
+ }
  @Test public void tenMissingFriendProfilesUseOneBatchWithoutForcedPerUserGets()throws Exception{
   try(MockedStatic<Fb> fb=mockStatic(Fb.class)){
    fb.when(Fb::uid).thenReturn("profiles-request-actor");FriendsFragment f=fragment("profiles-request-actor");
-   D1DocumentStore db=mock(D1DocumentStore.class);fb.when(Fb::db).thenReturn(db);CollectionReference users=mock(CollectionReference.class);Query q=mock(Query.class);when(db.collection("users")).thenReturn(users);when(users.whereIn(any(com.friendbook.social.d1.documents.FieldPath.class),anyList())).thenReturn(q);when(q.limit(10)).thenReturn(q);when(q.get()).thenReturn(new TaskCompletionSource<QuerySnapshot>().getTask());
+   D1DocumentStore db=mock(D1DocumentStore.class);fb.when(Fb::db).thenReturn(db);CollectionReference users=mock(CollectionReference.class);Query q=mock(Query.class);when(db.collection("users")).thenReturn(users);when(users.whereIn(any(com.friendbook.social.d1.documents.FieldPath.class),anyList())).thenReturn(q);when(q.limit(10)).thenReturn(q);when(q.getAutomatic(any(ForegroundReadScope.class))).thenReturn(new TaskCompletionSource<QuerySnapshot>().getTask());
    java.lang.reflect.Method ensure=FriendsFragment.class.getDeclaredMethod("ensureUser",String.class);ensure.setAccessible(true);java.lang.reflect.Method hydrate=FriendsFragment.class.getDeclaredMethod("hydrateFriendProfiles",String.class,int.class);hydrate.setAccessible(true);
    for(int demand=0;demand<100;demand++){for(int uid=0;uid<10;uid++)ensure.invoke(f,"friend-profile-"+uid);hydrate.invoke(f,"profiles-request-actor",0);}
-   verify(q,times(1)).get();verify(users).whereIn(any(com.friendbook.social.d1.documents.FieldPath.class),argThat(ids->ids.size()==10));fb.verify(()->Fb.getUserFresh(anyString()),never());
+   verify(q,times(1)).getAutomatic((ForegroundReadScope)field("sectionReadScope").get(f));verify(q,never()).get();verify(users).whereIn(any(com.friendbook.social.d1.documents.FieldPath.class),argThat(ids->ids.size()==10));fb.verify(()->Fb.getUserFresh(anyString()),never());
   }
  }
 

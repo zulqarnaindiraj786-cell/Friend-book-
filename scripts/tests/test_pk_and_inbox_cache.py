@@ -7,7 +7,7 @@ class PkAndInboxCacheTest(unittest.TestCase):
     def test_home_tab_switch_closes_inline_network_ownership(self):
         friends = (JAVA / 'friends/FriendsFragment.java').read_text()
         self.assertIn('closePage(false);', friends)
-        self.assertIn('suggestionPager.startCachedFor(300_000L)',friends)
+        self.assertIn('suggestionPager.startCachedForForeground(300_000L)',friends)
         self.assertIn('!keepInline && suggestionPager!=null', friends)
         self.assertIn('me.equals(pageActor)', friends)
         self.assertIn('.orderBy("createdAt",Query.Direction.DESCENDING)', friends)
