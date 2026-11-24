@@ -17,6 +17,11 @@ class AndroidPrWorkflow(unittest.TestCase):
             self.assertIn(token,fetch)
         self.assertIn('"$hash" "$jar.tmp" | sha512sum --check --status', fetch)
 
+    def test_unit_workflow_reuses_the_verified_mirror_fetcher(self):
+        code=(ROOT/'.github/workflows/android-unit-tests.yml').read_text()
+        self.assertIn('bash scripts/ci/fetch_robolectric_jars.sh',code)
+        self.assertIn('gradle testDebugUnitTest',code)
+
     def test_mirror_fallback_never_accepts_a_corrupt_runtime(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp)

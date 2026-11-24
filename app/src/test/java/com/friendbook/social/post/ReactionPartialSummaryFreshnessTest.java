@@ -42,6 +42,21 @@ public class ReactionPartialSummaryFreshnessTest {
    assertEquals(7,post.comments);assertEquals(1,post.likes);
   }
  }
+ @Test public void orphanedTimestampCannotMakePartialSummaryFresh()throws Exception{
+  try(MockedStatic<Fb> fb=mockStatic(Fb.class);MockedStatic<FastCache> cache=mockStatic(FastCache.class);
+      MockedStatic<D1Client> client=mockStatic(D1Client.class,call->"key".equals(call.getMethod().getName())?call.callRealMethod():RETURNS_DEFAULTS.answer(call))){
+   fb.when(Fb::uid).thenReturn("partial-evicted-actor");
+   D1Reactions.cached("posts","partial-evicted"); // initialize account scope
+   java.lang.reflect.Field field=D1Reactions.class.getDeclaredField("FETCHED_AT");field.setAccessible(true);
+   android.util.LruCache<String,Long> ages=(android.util.LruCache<String,Long>)field.get(null);
+   ages.put("posts/partial-evicted",android.os.SystemClock.elapsedRealtime());
+   D1Reactions.acceptDetailTotals("partial-evicted",types("like"),android.os.SystemClock.elapsedRealtime());
+   client.when(()->D1Client.request("posts","partial-evicted","reactions","GET",null,null)).thenReturn(Tasks.forResult(full(8,"like")));
+   Models.Post post=post("partial-evicted");D1Reactions.loadPost(RuntimeEnvironment.getApplication(),post,()->{});
+   Shadows.shadowOf(Looper.getMainLooper()).idle();assertEquals(8,post.comments);
+   client.verify(()->D1Client.request("posts","partial-evicted","reactions","GET",null,null),times(1));
+  }
+ }
  @Test public void partialDetailTotalsPreserveExistingSummaryAge()throws Exception{
   try(MockedStatic<Fb> fb=mockStatic(Fb.class);MockedStatic<FastCache> cache=mockStatic(FastCache.class);
       MockedStatic<D1Client> client=mockStatic(D1Client.class,call->"key".equals(call.getMethod().getName())?call.callRealMethod():RETURNS_DEFAULTS.answer(call))){
