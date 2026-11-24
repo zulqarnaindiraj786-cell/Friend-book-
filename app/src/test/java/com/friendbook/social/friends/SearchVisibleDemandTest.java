@@ -33,7 +33,7 @@ public class SearchVisibleDemandTest {
    Query userQuery=mock(Query.class),postQuery=mock(Query.class),userHead=mock(Query.class),postHead=mock(Query.class);
    when(db.collection("users")).thenReturn(users);when(db.collection("posts")).thenReturn(posts);
    when(users.orderBy("displayName",Query.Direction.ASCENDING)).thenReturn(userQuery);
-   when(userQuery.startAt(any())).thenReturn(userQuery);when(userQuery.endAt(any())).thenReturn(userQuery);
+   when(userQuery.startAt(anyString())).thenReturn(userQuery);when(userQuery.endAt(anyString())).thenReturn(userQuery);
    when(userQuery.limit(10)).thenReturn(userHead);when(posts.orderBy("createdAt",Query.Direction.DESCENDING)).thenReturn(postQuery);
    when(postQuery.limit(10)).thenReturn(postHead);
    QuerySnapshot cached=new QuerySnapshot(Collections.emptyList(),null,new SnapshotMetadata(true,false));
