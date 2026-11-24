@@ -39,6 +39,23 @@ public class EngagementOperationFlightsTest {
         assertSame(replacement,reads.read("resource",()->Tasks.forResult("bad")));
         next.setResult("new");assertEquals("new",replacement.getResult());
     }
+    @Test public void resourceMutationDetachesOnlyThatResourceAcrossActorsAndKinds() {
+        ProfileReadFlights<List<String>,String> reads=new ProfileReadFlights<>();
+        List<String> target=Arrays.asList("viewer","posts","post-1","reactions","","normal");
+        List<String> sameResourceOtherActor=Arrays.asList("other","posts","post-1","comments","?limit=10","interactive");
+        List<String> unrelated=Arrays.asList("viewer","posts","post-2","reactions","","normal");
+        Task<String> oldTarget=reads.read(target,()->new TaskCompletionSource<String>().getTask());
+        Task<String> oldOtherActor=reads.read(sameResourceOtherActor,()->new TaskCompletionSource<String>().getTask());
+        Task<String> oldUnrelated=reads.read(unrelated,()->new TaskCompletionSource<String>().getTask());
+        D1Client.invalidateResourceReads(reads,"posts","post-1");
+        Task<String> newTarget=reads.read(target,()->new TaskCompletionSource<String>().getTask());
+        assertNotSame(oldTarget,newTarget);
+        assertNotSame(oldOtherActor,reads.read(sameResourceOtherActor,()->new TaskCompletionSource<String>().getTask()));
+        assertSame(oldUnrelated,reads.read(unrelated,()->Tasks.forResult("must-not-start")));
+        D1Client.invalidateResourceReads(reads,"posts","post-2");
+        assertNotSame(oldUnrelated,reads.read(unrelated,()->new TaskCompletionSource<String>().getTask()));
+    }
+
     @Test public void accountResourceCursorKindAndPriorityNeverMix() {
         ProfileReadFlights<List<String>,String> reads=new ProfileReadFlights<>();
         List<String> base=Arrays.asList("actor","posts","post","reactions","","normal");

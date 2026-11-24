@@ -38,12 +38,18 @@ public final class D1Client {
                 "reactions".equals(kind) && "PUT".equals(method) ? "?response=reaction" : null,true);
     }
     private static final ProfileReadFlights<List<String>,String> READ_OPERATIONS=new ProfileReadFlights<>();
+    static void invalidateResourceReads(ProfileReadFlights<List<String>,String> reads,String collection,String id) {
+        // A mutation can affect every engagement view of this resource, including
+        // other actors/lanes, but not an unrelated post's in-flight operation.
+        if(collection==null || id==null){reads.invalidateAll();return;}
+        reads.invalidateMatching(key->key.size()<3 || (collection.equals(key.get(1)) && id.equals(key.get(2))));
+    }
     private static Task<JSONObject> request(String collection,String id,String kind,String method,JSONObject body,String query,boolean interactive){
         if(!"GET".equals(method) || body!=null){
-            // A read started before or during a write cannot satisfy a later read.
-            READ_OPERATIONS.invalidateAll();
+            // A read started before or during this resource's write cannot satisfy a later read.
+            invalidateResourceReads(READ_OPERATIONS,collection,id);
             Task<JSONObject> write=executeRequest(collection,id,kind,method,body,query,interactive);
-            write.addOnCompleteListener(Runnable::run,ignored->READ_OPERATIONS.invalidateAll());
+            write.addOnCompleteListener(Runnable::run,ignored->invalidateResourceReads(READ_OPERATIONS,collection,id));
             return write;
         }
         final String actor=Fb.uid();

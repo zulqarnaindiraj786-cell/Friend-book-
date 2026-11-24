@@ -13,6 +13,11 @@ final class ProfileReadFlights<K,V> {
     /** Detach pre-mutation operations without cancelling their current consumers. */
     synchronized void invalidateAll() { active.clear(); }
 
+    /** Unrelated operations remain shareable; matched consumers still finish normally. */
+    synchronized void invalidateMatching(java.util.function.Predicate<K> predicate) {
+        active.keySet().removeIf(predicate);
+    }
+
     synchronized Task<V> read(K key,Callable<Task<V>> start) {
         Task<V> existing=active.get(key);
         if (existing!=null) return existing;
