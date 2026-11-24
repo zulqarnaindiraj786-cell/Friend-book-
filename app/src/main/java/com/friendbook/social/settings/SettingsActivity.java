@@ -267,6 +267,9 @@ public class SettingsActivity extends Activity {
         body.addView(rowI(Icons.BOOKMARK, "📥 Save 30 posts for offline reading",
                 "Download text & tiny thumbnails now (" + com.friendbook.social.core.FastCache.cachedFeedCount() + " cached)",
                 () -> com.friendbook.social.core.FastCache.preloadFeedForOffline(this, null)));
+        body.addView(rowI(Icons.CHART, "Loop Trace · Start / Stop & Share",
+                "Record local API attempts to investigate repeat calls",
+                () -> com.friendbook.social.core.LoopTrace.show(this)));
         body.addView(rowI(Icons.CHART, "📊 Live network & speed diagnostics",
                 com.friendbook.social.core.FastCache.netLabel(this) + " · "
                         + Ui.formatBytes(Prefs.dataBytesSaved(this)) + " saved",
