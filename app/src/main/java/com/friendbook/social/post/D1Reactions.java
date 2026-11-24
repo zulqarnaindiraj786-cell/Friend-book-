@@ -22,7 +22,8 @@ public final class D1Reactions {
  private static final Map<String,PendingReaction> MUTATIONS=new HashMap<>();
  private static final Map<String,Integer> GENERATION=new HashMap<>();
  private static final Map<String,List<Runnable>> WAITERS=new HashMap<>();
- private static void scope(){if(!Objects.equals(actor,Fb.uid())){actor=Fb.uid();CACHE.evictAll();FETCHED_AT.evictAll();POSTS.evictAll();LOADING.clear();FAILED.clear();WRITING.clear();UNCONFIRMED.clear();MUTATIONS.clear();GENERATION.clear();WAITERS.clear();}}
+ private static final Map<String,Object> READ_TOKENS=new HashMap<>();
+ private static void scope(){if(!Objects.equals(actor,Fb.uid())){actor=Fb.uid();CACHE.evictAll();FETCHED_AT.evictAll();POSTS.evictAll();LOADING.clear();FAILED.clear();WRITING.clear();UNCONFIRMED.clear();MUTATIONS.clear();GENERATION.clear();WAITERS.clear();READ_TOKENS.clear();}}
  public static String mine(JSONObject summary){JSONArray a=summary.optJSONArray("types");if(a!=null)for(int i=0;i<a.length();i++){JSONObject r=a.optJSONObject(i);if(r!=null&&r.optInt("mine")>0)return r.optString("type");}return null;}
  public static int total(JSONObject summary){int n=0;JSONArray a=summary.optJSONArray("types");if(a!=null)for(int i=0;i<a.length();i++){JSONObject r=a.optJSONObject(i);if(r!=null)n+=r.optInt("count");}return n;}
  public static JSONObject cached(String collection,String id){scope();return CACHE.get(D1Client.key(collection,id));}
@@ -67,15 +68,35 @@ public final class D1Reactions {
   }if(FAILED.contains(key)||WRITING.contains(key))return;
   WAITERS.computeIfAbsent(key,k->new ArrayList<>()).add(ready);
   if(LOADING.contains(key))return;
-  String uid=actor;int generation=GENERATION.getOrDefault(key,0);LOADING.add(key);D1Client.request(collection,id,"reactions","GET",null,null).addOnSuccessListener(data->{
-   if(!Objects.equals(uid,Fb.uid()))return;LOADING.remove(key);
-   if(WRITING.contains(key)){WAITERS.remove(key);return;}
-   if(generation!=GENERATION.getOrDefault(key,0)){List<Runnable> pending=WAITERS.remove(key);if(pending!=null)for(Runnable callback:pending)fetch(context,collection,id,false,callback);return;}
-   UNCONFIRMED.remove(key);
-   remember(context,collection,id,data);List<Runnable> pending=WAITERS.remove(key);if(pending!=null)for(Runnable callback:pending)callback.run();
-  }).addOnFailureListener(e->{if(!Objects.equals(uid,Fb.uid()))return;LOADING.remove(key);WAITERS.remove(key);FAILED.add(key);
-   new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(()->{if(Objects.equals(uid,Fb.uid()))FAILED.remove(key);},10000);});
+  Object token=new Object();READ_TOKENS.put(key,token);LOADING.add(key);
+  startFetch(context,collection,id,actor,key,token,1);
  }
+ private static void readFailed(String uid,String key,Object token){
+  LOADING.remove(key);WAITERS.remove(key);FAILED.add(key);
+  MAIN.postDelayed(()->{
+   if(Objects.equals(uid,Fb.uid()) && READ_TOKENS.get(key)==token){FAILED.remove(key);READ_TOKENS.remove(key);}
+  },10000);
+ }
+ private static void startFetch(Context context,String collection,String id,String uid,String key,Object token,int attempt){
+  if(!Objects.equals(uid,Fb.uid()) || READ_TOKENS.get(key)!=token)return;
+  int generation=GENERATION.getOrDefault(key,0);
+  D1Client.request(collection,id,"reactions","GET",null,null).addOnSuccessListener(data->{
+   if(!Objects.equals(uid,Fb.uid()) || READ_TOKENS.get(key)!=token)return;
+   if(WRITING.contains(key)){LOADING.remove(key);WAITERS.remove(key);READ_TOKENS.remove(key);return;}
+   if(generation!=GENERATION.getOrDefault(key,0)){
+    // Hold the flight lock across the delay. Repeated invalidation may queue
+    // demand but cannot start a recursive response->GET chain or parallel read.
+    if(attempt>=3){readFailed(uid,key,token);return;}
+    MAIN.postDelayed(()->startFetch(context,collection,id,uid,key,token,attempt+1),2000L);
+    return;
+   }
+   LOADING.remove(key);READ_TOKENS.remove(key);UNCONFIRMED.remove(key);
+   remember(context,collection,id,data);List<Runnable> pending=WAITERS.remove(key);if(pending!=null)for(Runnable callback:pending)callback.run();
+  }).addOnFailureListener(e->{
+   if(Objects.equals(uid,Fb.uid()) && READ_TOKENS.get(key)==token)readFailed(uid,key,token);
+  });
+ }
+
  public static void seedFeed(Context context,com.friendbook.social.d1.documents.DocumentSnapshot doc,long requestedAt){
   scope();String key=D1Client.key("posts",doc.getId());Long last=FETCHED_AT.get(key);
   if(WRITING.contains(key) || UNCONFIRMED.contains(key) || ((doc.getMetadata().isFromCache() && CACHE.get(key)!=null) || (last!=null && last>=requestedAt)))return;
