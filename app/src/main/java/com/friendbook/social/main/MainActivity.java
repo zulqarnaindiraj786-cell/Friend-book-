@@ -700,28 +700,9 @@ public class MainActivity extends Activity {
                     Ui.setBadge(friendsBadge, count);
                 });
 
-        // Video / Reels badge (capped at 15+ via Ui.setBadge)
-        Fb.db().collection("reels")
-                .orderBy("createdAt", com.friendbook.social.d1.documents.Query.Direction.DESCENDING)
-                .limit(16)
-                .getCachedOrFetch(false)
-                .addOnSuccessListener(snap -> {
-                    if (Prefs.quiet(this) || active == TAB_REELS) {
-                        Ui.setBadge(reelsBadge, 0);
-                        return;
-                    }
-                    long clearedAt = Prefs.reelsBadgeClearedAt(this, me);
-                    int unseen = 0;
-                    if (snap != null) {
-                        for (com.friendbook.social.d1.documents.DocumentSnapshot d : snap) {
-                            long ts = com.friendbook.social.core.Format.ts(d.get("createdAt"));
-                            if (clearedAt <= 0L || ts <= 0L || ts > clearedAt) {
-                                unseen++;
-                            }
-                        }
-                    }
-                    Ui.setBadge(reelsBadge, unseen);
-                });
+        // Reels are loaded only when the user opens that tab. Do not prefetch
+        // unseen videos just to manufacture a badge on another screen.
+        Ui.setBadge(reelsBadge,0);
     }
 
     private final android.os.Handler notificationPermissionHandler =

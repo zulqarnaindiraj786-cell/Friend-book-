@@ -67,3 +67,7 @@ class LiveScreenDemand(unittest.TestCase):
         self.assertNotIn('.limit(25)',pk)
         prefix=code.split('private static com.friendbook.social.d1.documents.Query pkPeoplePrefix',1)[1].split('private static LinearLayout buildOpponentRow',1)[0]
         self.assertIn('.limit(10)',prefix)
+    def test_main_screen_does_not_prefetch_reels_for_an_unseen_badge(self):
+        code=(JAVA/'main/MainActivity.java').read_text().split('private void startBadgeListeners()',1)[1].split('private final android.os.Handler notificationPermissionHandler',1)[0]
+        self.assertNotIn('collection("reels")',code)
+        self.assertIn('Ui.setBadge(reelsBadge,0)',code)
