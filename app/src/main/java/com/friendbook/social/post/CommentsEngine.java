@@ -33,16 +33,20 @@ public class CommentsEngine {
         catch(org.json.JSONException e){throw new IllegalArgumentException("Invalid D1 comment",e);}
     }
     private static void d1Changed(String collection,String id,org.json.JSONObject data){
-        d1Changed(collection,id,data,null);
+        d1Changed(collection,id,data,null,null,null);
     }
     private static void d1Changed(String collection,String id,org.json.JSONObject data,String operation){
+        d1Changed(collection,id,data,operation,null,null);
+    }
+    private static void d1Changed(String collection,String id,org.json.JSONObject data,String operation,String commentId,D1Reactions.CommentBaseline before){
         for(Handle h:new ArrayList<>(D1_HANDLES))if(h.active() && collection.equals(h.collection) && id.equals(h.docId)){
             h.revision++;h.error="";if(data.has("pinned"))h.pinned=data.optString("pinned");
             if(data.has("removed")){String removed=data.optString("removed");h.pendingD1.remove(removed);h.deleted.add(removed);h.latest.remove(removed);h.older.remove(removed);}
             org.json.JSONObject row=data.optJSONObject("comment");if(row!=null){Models.Comment c=fromD1(row,h.key);h.pendingD1.remove(c.id);h.deleted.remove(c.id);if(h.older.containsKey(c.id))h.older.put(c.id,c);else h.latest.put(c.id,c);}
             h.emit();
         }
-        D1Reactions.commentChanged(collection,id,data,operation);
+        if(!"create".equals(operation) || !D1Reactions.commentCreated(collection,id,commentId,data,before))
+            D1Reactions.commentChanged(collection,id,data,operation);
         com.friendbook.social.core.D1Client.changed(com.friendbook.social.core.D1Client.key(collection,id));
     }
     private static final Set<List<String>> MUTATIONS=new HashSet<>();
@@ -383,10 +387,11 @@ public class CommentsEngine {
             for(Handle h:new ArrayList<>(D1_HANDLES))if(h.active() && collection.equals(h.collection) && docId.equals(h.docId)){
                 h.revision++;h.pendingD1.add(local.id);h.deleted.remove(local.id);h.latest.put(local.id,local);
             }
+            D1Reactions.CommentBaseline baseline=D1Reactions.commentBaseline(collection,docId);
             D1Drafts.sending(me,collection,docId,newId);
             com.friendbook.social.core.D1Client.request(collection,docId,"comments","POST",body,null).addOnSuccessListener(data->{
                 D1Drafts.settled(me,collection,docId,newId);
-                D1Drafts.ack(com.friendbook.social.App.instance,me,collection,docId,newId);if(!java.util.Objects.equals(me,Fb.uid()))return;d1Changed(collection,docId,data);if("posts".equals(collection)&&com.friendbook.social.core.Mentions.hasBulk(local.mentions))com.friendbook.social.push.FCMPush.bulkMention(docId,newId);if(cb!=null)cb.onSaved(newId);
+                D1Drafts.ack(com.friendbook.social.App.instance,me,collection,docId,newId);if(!java.util.Objects.equals(me,Fb.uid()))return;d1Changed(collection,docId,data,"create",newId,baseline);if("posts".equals(collection)&&com.friendbook.social.core.Mentions.hasBulk(local.mentions))com.friendbook.social.push.FCMPush.bulkMention(docId,newId);if(cb!=null)cb.onSaved(newId);
             }).addOnFailureListener(e->{D1Drafts.settled(me,collection,docId,newId);if(!java.util.Objects.equals(me,Fb.uid()))return;
                 d1Changed(collection,docId,com.friendbook.social.core.D1Client.object("removed",newId));if(cb!=null)cb.onComplete(false,"Comment not confirmed. Use Unsent comments to retry the same draft safely.");});
             return local;

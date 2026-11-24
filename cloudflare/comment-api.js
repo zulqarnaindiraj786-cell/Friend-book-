@@ -289,10 +289,10 @@ export async function commentsAPI(request, db, identity, resource, data, context
     const replyTo=parentRow?.uid||'';
     const existing=await read(data.id);
     if(existing){return existing.uid===uid && !existing.removed && existing.text===content.text && existing.parent_id===parent &&
-      (existing.media_url||'')===content.media && (existing.mentions||'[]')===content.mentions?reply({comment:normalized(existing,uid),owner:context.owner||'',replyTo}):reply({error:'Comment ID conflict'},409);}
+      (existing.media_url||'')===content.media && (existing.mentions||'[]')===content.mentions?reply({comment:normalized(existing,uid),owner:context.owner||'',replyTo,created:false,visibleToActor:!(context.blocked||[]).includes(uid)}):reply({error:'Comment ID conflict'},409);}
     // The insert already checks legacy ID collisions atomically. Do not run
     // the same check as a separate round trip before every new comment.
-    const [, , acknowledgement] = await db.batch([
+    const [insertResult, , acknowledgement] = await db.batch([
       db.prepare(`INSERT INTO friendbook_cf_comments(resource,id,uid,text,parent_id,created_at)
         SELECT ?,?,?,?,?,? WHERE NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents WHERE path=? AND parent_path='comments')
         AND (? IS NULL OR EXISTS (SELECT 1 FROM friendbook_cf_comments c LEFT JOIN friendbook_cf_comment_details d ON d.resource=c.resource AND d.id=c.id
@@ -306,7 +306,9 @@ export async function commentsAPI(request, db, identity, resource, data, context
     ]);
     const saved=acknowledgement.results?.[0];
     if(saved?.uid!==uid || saved.removed || saved.text!==content.text || saved.parent_id!==parent || (saved.media_url||'')!==content.media || (saved.mentions||'[]')!==content.mentions)return reply({error:'Comment ID conflict'},409);
-    return reply({comment:normalized(saved,uid),owner:context.owner||'',replyTo});
+    const changes=insertResult?.meta?.changes ?? insertResult?.changes;
+    return reply({comment:normalized(saved,uid),owner:context.owner||'',replyTo,
+      ...(changes===0 || changes===1 ? {created:changes===1,visibleToActor:!(context.blocked||[]).includes(uid)} : {})});
   }
   if(!['react','pin','remove','edit'].includes(data.op))return reply({error:'Unknown operation'},400);
   if(data.op==='react' && data.type!==null && !types.has(data.type))return reply({error:'Invalid reaction'},400);

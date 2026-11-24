@@ -820,3 +820,26 @@ test('zero visible totals skip blocked-author subtraction history while positive
   assert.equal(positive.comments,1);assert.equal(positive.preview[0].id,'visible');
   assert.ok(visits>0,'positive totals must still subtract blocked comments');
 });
+
+test('new comment ACK indicates actual insert and visibility without changing idempotent or denied behavior', async t=>{
+  const f=fixture();t.after(f.close);
+  const auth=async(_identity,_collection,_id,_unused,context)=>{context.owner='user2';context.blocked=[];return true;};
+  const payload={id:'created-once',text:'hello'};
+  const first=await call(f.env,'comments','POST',payload,{authorize:auth});assert.equal(first.status,200);
+  let data=await first.json();assert.equal(data.created,true);assert.equal(data.visibleToActor,true);assert.equal(data.comment.authorId,'user1');
+  const retry=await call(f.env,'comments','POST',payload,{authorize:auth});assert.equal(retry.status,200);
+  data=await retry.json();assert.equal(data.created,false);assert.equal(data.visibleToActor,true);
+  assert.equal((await call(f.env,'comments','POST',{...payload,text:'changed'},{authorize:auth})).status,409);
+  const blocked=async(_i,_c,_id,_u,context)=>{context.blocked=['user1'];return true;};
+  const invisible=await (await call(f.env,'comments','POST',{id:'self-blocked',text:'x'},{authorize:blocked})).json();
+  assert.equal(invisible.created,true);assert.equal(invisible.visibleToActor,false);
+  assert.equal((await call(f.env,'comments','POST',{id:'denied',text:'x'},{authorize:async()=>false})).status,403);
+  assert.equal(f.sql.prepare('SELECT COUNT(*) n FROM friendbook_cf_comments').get().n,2);
+});
+
+test('new comment ACK omits creation claim if batch result lacks change metadata',async t=>{
+  const f=fixture();t.after(f.close);const batch=f.env.DB.batch;
+  f.env.DB.batch=async statements=>{const result=await batch(statements);if(statements.length===3)result[0]={};return result;};
+  const response=await call(f.env,'comments','POST',{id:'unknown-change',text:'ok'});assert.equal(response.status,200);
+  const data=await response.json();assert.equal(data.comment.id,'unknown-change');assert.equal(Object.hasOwn(data,'created'),false);
+});

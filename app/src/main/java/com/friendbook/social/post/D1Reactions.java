@@ -29,6 +29,48 @@ public final class D1Reactions {
  public static JSONObject cached(String collection,String id){scope();return CACHE.get(D1Client.key(collection,id));}
  public static String mine(String collection,String id){JSONObject data=cached(collection,id);return data==null?null:mine(data);}
  public static void invalidate(String collection,String id){scope();String key=D1Client.key(collection,id);GENERATION.put(key,GENERATION.getOrDefault(key,0)+1);FETCHED_AT.remove(key);FAILED.remove(key);java.lang.ref.WeakReference<Models.Post> reference=POSTS.get(key);Models.Post post=reference==null?null:reference.get();if(post!=null)fetch(null,collection,id,false,()->hydrate(post));}
+ /** Snapshot only a fresh, idle summary before sending a new comment. */
+ static final class CommentBaseline {
+  final String actor,key;final JSONObject summary;final int generation;
+  CommentBaseline(String actor,String key,JSONObject summary,int generation){this.actor=actor;this.key=key;this.summary=summary;this.generation=generation;}
+ }
+ static CommentBaseline commentBaseline(String collection,String id){
+  scope();String key=D1Client.key(collection,id);JSONObject summary=CACHE.get(key);Long age=FETCHED_AT.get(key);
+  if(actor==null || summary==null || age==null || android.os.SystemClock.elapsedRealtime()-age>=REFRESH_MS
+      || LOADING.contains(key)||WRITING.contains(key)||UNCONFIRMED.contains(key))return null;
+  return new CommentBaseline(actor,key,summary,GENERATION.getOrDefault(key,0));
+ }
+ /** Apply only a provably new, visible comment to the unchanged pre-send summary. */
+ static boolean commentCreated(String collection,String id,String commentId,JSONObject ack,CommentBaseline before){
+  scope();String key=D1Client.key(collection,id);Long age=FETCHED_AT.get(key);
+  if(before==null || !Objects.equals(actor,before.actor) || !key.equals(before.key)
+      || CACHE.get(key)!=before.summary || GENERATION.getOrDefault(key,0)!=before.generation
+      || age==null || android.os.SystemClock.elapsedRealtime()-age>=REFRESH_MS
+      || LOADING.contains(key)||WRITING.contains(key)||UNCONFIRMED.contains(key)
+      || !Boolean.TRUE.equals(ack.opt("created")) || !Boolean.TRUE.equals(ack.opt("visibleToActor")))return false;
+  JSONObject row=ack.optJSONObject("comment");
+  if(row==null || !commentId.equals(row.optString("id")) || !actor.equals(row.optString("authorId")))return false;
+  Object count=before.summary.opt("comments");JSONArray preview=before.summary.optJSONArray("preview");
+  if(!(count instanceof Integer) || (Integer)count<0 || (Integer)count==Integer.MAX_VALUE
+      || preview==null || preview.length()!=Math.min(2,(Integer)count))return false;
+  try{
+   List<JSONObject> rows=new ArrayList<>();rows.add(new JSONObject(row.toString()));
+   for(int i=0;i<preview.length();i++){
+    JSONObject old=preview.optJSONObject(i);
+    if(old==null || old.optString("id").isEmpty() || commentId.equals(old.optString("id")))return false;
+    rows.add(new JSONObject(old.toString()));
+   }
+   for(JSONObject item:rows)if(!item.isNull("createdAt") && !(item.opt("createdAt") instanceof Number))return false;
+   rows.sort((a,b)->{int order=Long.compare(b.optLong("createdAt",0),a.optLong("createdAt",0));
+    return order!=0?order:b.optString("id").compareTo(a.optString("id"));});
+   JSONArray nextPreview=new JSONArray();for(int i=0;i<Math.min(2,rows.size());i++)nextPreview.put(rows.get(i));
+   JSONObject updated=new JSONObject(before.summary.toString()).put("comments",(Integer)count+1).put("preview",nextPreview);
+   GENERATION.put(key,before.generation+1);CACHE.put(key,updated); // Do not extend reaction freshness.
+   java.lang.ref.WeakReference<Models.Post> reference=POSTS.get(key);Models.Post post=reference==null?null:reference.get();
+   if(post!=null)hydrate(post);
+   return true;
+  }catch(JSONException malformed){return false;}
+ }
  /** Use the authenticated comment ACK for count-neutral edits; do not GET a full post summary. */
  static void commentChanged(String collection,String id,JSONObject acknowledgement,String operation){
   scope();
