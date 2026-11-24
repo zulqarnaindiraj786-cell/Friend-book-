@@ -28,12 +28,21 @@ public class HomeRefreshDemandTest {
    cache.verify(()->FastCache.saveFeed(isNull(),argThat(List::isEmpty)),times(1));
   }
  }
+ @Test public void automaticHomeEntryWaitsUntilResumedAndForeground()throws Exception{
+  try(MockedStatic<Fb> fb=mockStatic(Fb.class);MockedStatic<com.friendbook.social.App> app=mockStatic(com.friendbook.social.App.class)){
+   HomeFragment home=spy(new HomeFragment());doReturn(false).when(home).isResumed();
+   java.lang.reflect.Method refresh=HomeFragment.class.getDeclaredMethod("refreshPostsIfNeeded");refresh.setAccessible(true);
+   refresh.invoke(home);
+   doReturn(true).when(home).isResumed();app.when(com.friendbook.social.App::isForeground).thenReturn(false);
+   refresh.invoke(home);fb.verifyNoInteractions();
+  }
+ }
  @Test public void loadedHomeDoesNotRefreshOnRepeatedReturnWithoutInvalidation()throws Exception{
-  try(MockedStatic<Fb> fb=mockStatic(Fb.class)){
-   fb.when(Fb::uid).thenReturn("actor");
+  try(MockedStatic<Fb> fb=mockStatic(Fb.class);MockedStatic<com.friendbook.social.App> app=mockStatic(com.friendbook.social.App.class)){
+   fb.when(Fb::uid).thenReturn("actor");app.when(com.friendbook.social.App::isForeground).thenReturn(true);
    com.friendbook.social.d1.documents.D1DocumentStore db=mock(com.friendbook.social.d1.documents.D1DocumentStore.class);
    when(db.postWriteVersion()).thenReturn(7L);fb.when(Fb::db).thenReturn(db);
-   HomeFragment home=spy(new HomeFragment());doReturn(false).when(home).isHidden();
+   HomeFragment home=spy(new HomeFragment());doReturn(false).when(home).isHidden();doReturn(true).when(home).isResumed();
    java.lang.reflect.Field loaded=HomeFragment.class.getDeclaredField("loadedPosts");loaded.setAccessible(true);loaded.setBoolean(home,true);
    java.lang.reflect.Field actor=HomeFragment.class.getDeclaredField("feedAccount");actor.setAccessible(true);actor.set(home,"actor");
    java.lang.reflect.Field version=HomeFragment.class.getDeclaredField("lastFeedWriteVersion");version.setAccessible(true);version.setLong(home,7L);

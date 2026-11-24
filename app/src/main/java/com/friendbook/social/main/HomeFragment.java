@@ -355,6 +355,10 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
     }
 
     private void refreshPostsIfNeeded() {
+        // onStart and the Activity's onResume can run before the Application
+        // has marked the process foreground. The posted fragment resume below
+        // will retry once that lifecycle transition is complete.
+        if (!isResumed() || !com.friendbook.social.App.isForeground()) return;
         // Returning to Home alone is not new data. Keep an already loaded head
         // until a local/push invalidation or an explicit refresh asks for one.
         if (loadedPosts && java.util.Objects.equals(feedAccount,Fb.uid())
@@ -723,16 +727,24 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         homeStarted=true;prepareFeedAccount();
         if (adapter != null) adapter.setFeedBannersVisible(!isHidden());
         FastCache.addReactionObserver(reactionObserver);
-        refreshPostsIfNeeded();
-        if (!isHidden()) {
-            if (adapter != null) adapter.advanceFeaturedReelRotation();
-            startVisibleHomeContent();
-        }
         com.friendbook.social.core.AdsConfig.setChangeListener((id, en) -> {
             if (adapter != null) adapter.setAdsConfig(id, en);
         });
         adapter.setAdsConfig(com.friendbook.social.core.AdsConfig.nativeId(),
                 com.friendbook.social.core.AdsConfig.nativeAdsEnabled());
+    }
+
+    @Override
+    public void onResume() {
+        super.onResume();
+        // Run after the Activity's resumed callback updates App.isForeground().
+        engagementHandler.post(() -> {
+            if (!homeStarted || !isResumed() || !isAdded() || isHidden()
+                    || !com.friendbook.social.App.isForeground()) return;
+            refreshPostsIfNeeded();
+            if (adapter != null) adapter.advanceFeaturedReelRotation();
+            startVisibleHomeContent();
+        });
     }
 
     @Override
@@ -755,13 +767,15 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
     }
 
     private void startVisibleHomeContent() {
+        if (!isResumed() || !com.friendbook.social.App.isForeground()) return;
         cancelHomeSecondary();
         final String actor = Fb.uid();
         if (!com.friendbook.social.core.HomeSectionReadPolicy.shouldStart(
                 actor,headerRequestedActor,headerRequested,forceSections)) return;
         pendingHomeSecondary = () -> {
             pendingHomeSecondary = null;
-            if (!homeStarted || !isAdded() || isHidden() || !actor.equals(Fb.uid())) return;
+            if (!homeStarted || !isResumed() || !com.friendbook.social.App.isForeground()
+                    || !isAdded() || isHidden() || !actor.equals(Fb.uid())) return;
             if (!(rv.getLayoutManager() instanceof LinearLayoutManager)
                     || ((LinearLayoutManager)rv.getLayoutManager()).findFirstVisibleItemPosition()>0) return;
             headerRequested=true;headerRequestedActor=actor;

@@ -21,7 +21,8 @@ public class ProfileDemandTest {
  @Test public void ownAndVisitorRepeatedStartOnlyStartOnePostHeadAndVisitorRelationshipDemand()throws Exception{
   for(boolean own:new boolean[]{true,false}){
    String actor=own?"own-profile-actor":"visitor-profile-actor",target=own?actor:"visited-profile";
-   try(MockedStatic<Fb> fb=mockStatic(Fb.class);MockedStatic<CountReads> counts=mockStatic(CountReads.class)){
+   try(MockedStatic<Fb> fb=mockStatic(Fb.class);MockedStatic<CountReads> counts=mockStatic(CountReads.class);
+       MockedStatic<com.friendbook.social.App> app=mockStatic(com.friendbook.social.App.class)){
     fb.when(Fb::uid).thenReturn(actor);ProfileActivity a=activity(actor,target);field("profileStarted").setBoolean(a,false);
     D1DocumentStore db=mock(D1DocumentStore.class);fb.when(Fb::db).thenReturn(db);CollectionReference users=mock(CollectionReference.class),posts=mock(CollectionReference.class),friends=mock(CollectionReference.class),requests=mock(CollectionReference.class);DocumentReference profile=mock(DocumentReference.class);Query post=mock(Query.class),relationship=mock(Query.class);
     when(db.collection("users")).thenReturn(users);when(users.document(target)).thenReturn(profile);when(profile.withProfileAudience()).thenReturn(profile);when(profile.addSnapshotListener(any())).thenReturn(mock(ListenerRegistration.class));
@@ -29,6 +30,16 @@ public class ProfileDemandTest {
     when(db.collection("friends")).thenReturn(friends);when(friends.whereIn(eq("participants"),anyList())).thenReturn(relationship);
     when(db.collection("friend_requests")).thenReturn(requests);when(requests.whereEqualTo(eq("fromUid"),any())).thenReturn(relationship);when(relationship.whereEqualTo(anyString(),any())).thenReturn(relationship);when(relationship.limit(1)).thenReturn(relationship);when(relationship.getCachedOrFetch(false,300_000L)).thenReturn(new TaskCompletionSource<QuerySnapshot>().getTask());
     for(int i=0;i<100;i++)call(a,"onStart",new Class<?>[]{});
+    int generation=field("profileStartGeneration").getInt(a);
+    // Started-but-not-resumed and background states must not initiate reads.
+    app.when(com.friendbook.social.App::isForeground).thenReturn(true);
+    call(a,"startResumedProfile",new Class<?>[]{String.class,int.class},actor,generation);
+    field("profileResumed").setBoolean(a,true);
+    app.when(com.friendbook.social.App::isForeground).thenReturn(false);
+    call(a,"startResumedProfile",new Class<?>[]{String.class,int.class},actor,generation);
+    verify(db,never()).collection(anyString());
+    app.when(com.friendbook.social.App::isForeground).thenReturn(true);
+    for(int i=0;i<100;i++)call(a,"startResumedProfile",new Class<?>[]{String.class,int.class},actor,generation);
     verify(post,times(1)).get(Source.CACHE);verify(profile,times(1)).addSnapshotListener(any());verify(relationship,times(own?0:3)).getCachedOrFetch(false,300_000L);verify(db,never()).collection("subscriptions");
     call(a,"onStop",new Class<?>[]{});
    }

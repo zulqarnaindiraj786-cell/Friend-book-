@@ -891,7 +891,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
     }
 
     private int profileStartGeneration;
-    private boolean profileStarted,profilePostLoading,profilePostError;
+    private boolean profileStarted,profileResumed,profileInitialStarted,profilePostLoading,profilePostError;
     private long profileScrollIntentAt=-10_000L;
     private String profileActor;
     private boolean activeProfile(String actor,int generation){
@@ -920,8 +920,31 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
         profileActor=actor;profileStarted=true;
         FastCache.addReactionObserver(reactionObserver);
         ++profileStartGeneration;
-        // Start header and first posts independently; a slow page must not delay the header.
+        profileInitialStarted=false;
+    }
+
+    @Override protected void onResume() {
+        super.onResume();
+        profileResumed=true;
+        final String actor=profileActor;
+        final int generation=profileStartGeneration;
+        // Activity onResume runs before the Application's resumed callback.
+        // Post until that callback has marked the process foreground.
+        new android.os.Handler(android.os.Looper.getMainLooper()).post(
+                () -> startResumedProfile(actor,generation));
+    }
+
+    private void startResumedProfile(String actor,int generation) {
+        if (!profileResumed || profileInitialStarted || !activeProfile(actor,generation)
+                || !com.friendbook.social.App.isForeground()) return;
+        profileInitialStarted=true;
+        // Header and first posts remain independent; a slow page cannot delay the header.
         startProfileListeners();
+    }
+
+    @Override protected void onPause() {
+        profileResumed=false;
+        super.onPause();
     }
 
     private void startProfileListeners() {
