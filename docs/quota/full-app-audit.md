@@ -1,5 +1,7 @@
 # Whole-app quota audit — working ledger, NOT 100% completion
 
+> Follow-up source status: Group 120-post bulk listener has now been replaced with independent 10-item feed/moderation cursors and explicit pinned-post resolution; see `docs/verification/app-group-post-pagination.md`. Group invite200 and legacy reactor row hydration were addressed separately in `docs/verification/app-invites-reactor-demand.md`. Earlier findings below are retained as the historical audit baseline, not current unresolved status for those specific paths. These source patches are not yet in the owner’s installed APK; daily quota acceptance and other ledger items remain open.
+
 ## Evidence and scope
 
 Source review covers Android and the Cloudflare request/maintenance paths. Refreshed machine-readable inventory: `docs/testing/android-demand-inventory.json` (214 Java + 1 Kotlin source files). Its line counts are leads, not requests, SQL executions, billed rows, or measured load rankings. Cloudflare backend was inspected but NOT changed or deployed in this pass. Supabase unused. PR remains unmerged.
