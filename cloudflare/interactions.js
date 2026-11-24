@@ -6,6 +6,14 @@ const json = (body, status = 200) => Response.json(body, {
   status, headers: { 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' },
 });
 const types = new Set(['like', 'love', 'haha', 'wow', 'sad', 'angry']);
+async function stableEventId(prefix,fields) {
+  const encoder=new TextEncoder(),digest=new Uint8Array(await crypto.subtle.digest('SHA-256',
+    new Uint8Array(fields.flatMap(value=>{const bytes=encoder.encode(value);return [bytes.length>>>24,(bytes.length>>>16)&255,(bytes.length>>>8)&255,bytes.length&255,...bytes];}))));
+  return prefix+[...digest].map(byte=>byte.toString(16).padStart(2,'0')).join('');
+}
+const reactionNotificationId=(actor,recipient,type,resource)=>stableEventId('action_',[actor,recipient,type,resource]);
+const commentNotificationId=(actor,recipient,type,resource,commentId)=>stableEventId('comment_',
+  [actor,recipient,type==='reply'?'reply':'comment',resource,commentId]);
 function identifier(value) {
   const id = decodeURIComponent(value);
   if (!id || new TextEncoder().encode(id).length > 1500 || /[\/\x00-\x1f]/.test(id) || ['.', '..'].includes(id)) throw Error();
@@ -195,6 +203,21 @@ export async function interactions(request, env, identity, match, authorize = au
     if (kind === 'reactors') return await reactorsAPI(request,db,resource,context);
     if (kind === 'comments') {
       context.reactionTotals=async()=>JSON.parse((await db.prepare(`SELECT ${reactionTypesSql} AS types_json`).bind(identity.uid,resource).first()).types_json);
+      context.commentNotifications=async(commentId,replyTo)=>{
+        if(!data.notify)return [];
+        const recipients=[];
+        if(context.owner && context.owner!==identity.uid)recipients.push({to:context.owner,type:collection==='posts'?'comment':'reel_comment',text:`${context.name||''} commented on your ${collection==='posts'?'post':'reel'}`});
+        if(replyTo && replyTo!==identity.uid && replyTo!==context.owner)recipients.push({to:replyTo,type:collection==='posts'?'reply':'reel_comment_reply',text:`${context.name||''} replied to your comment`});
+        const createdAt=Date.now(),events=[];
+        for(const recipient of recipients){
+          const eventType=recipient.type.includes('reply')?'reply':'comment';
+          const eventId=await commentNotificationId(identity.uid,recipient.to,eventType,resource,commentId);
+          events.push({id:eventId,toUserId:recipient.to,fromUserId:identity.uid,fromUserName:context.name||'',
+            fromUserPhotoUrl:context.photo||'',type:recipient.type,...(collection==='reels'?{contentType:'reel'}:{}),
+            text:recipient.text,postId:id,isRead:false,createdAt});
+        }
+        return events;
+      };
       return await commentsAPI(request,db,identity,resource,data,context);
     }
     if (kind === 'reactions') {
@@ -219,12 +242,38 @@ export async function interactions(request, env, identity, match, authorize = au
             .bind(resource, identity.uid)
         ];
         if (new URL(request.url).searchParams.get('response') === 'reaction') {
-          // One D1 batch: the acknowledgement cannot fail in a separate comment read
-          // after committing the reaction. Older clients still receive the full summary.
-          const results = await db.batch([...writes, db.prepare(`SELECT ${reactionTypesSql} AS types_json`)
-            .bind(identity.uid, resource)]);
-          return json({ reactionOnly: true, owner: context.owner,
-            types: JSON.parse(results[2].results[0].types_json) });
+          // The optional inbox event is committed in this same D1 batch as the
+          // absolute reaction. The server derives its recipient and sender from
+          // the authorized resource/request, never from client-supplied identity.
+          const notificationId=new URL(request.url).searchParams.get('notify')==='1'
+            && context.owner && context.owner!==identity.uid
+            ? await reactionNotificationId(identity.uid,context.owner,
+                collection==='posts'?'like':'reel_like',id) : null;
+          const notificationTime=Date.now();
+          const notification=notificationId?{
+            toUserId:context.owner,fromUserId:identity.uid,fromUserName:context.name||'',
+            fromUserPhotoUrl:context.photo||'',type:collection==='posts'?'like':'reel_like',
+            ...(collection==='reels'?{contentType:'reel'}:{}),
+            text:`${context.name||''} liked your ${collection==='posts'?'post':'reel'}`,
+            postId:id,isRead:false,createdAt:notificationTime,
+          }:null;
+          const batch=[...writes,db.prepare(`SELECT ${reactionTypesSql} AS types_json`).bind(identity.uid,resource)];
+          if(notificationId){
+            const path=`notifications/${notificationId}`,serialized=JSON.stringify(notification);
+            batch.push(db.prepare(`INSERT INTO friendbook_cf_firestore_documents(path,parent_path,collection_id,doc_id,owner_uid,document_json,create_time,update_time)
+              SELECT ?, 'notifications','notifications',?,?, ?,?,? WHERE NOT EXISTS
+                (SELECT 1 FROM friendbook_cf_firestore_documents WHERE path=?)`)
+              .bind(path,notificationId,identity.uid,serialized,notificationTime,notificationTime,path));
+            batch.push(db.prepare(`INSERT OR IGNORE INTO friendbook_cf_documents(path,collection,doc_id,owner_uid,document_json,updated_at)
+              VALUES(?,'notifications',?,?,?,?)`)
+              .bind(path,notificationId,identity.uid,JSON.stringify({...notification,id:notificationId}),notificationTime));
+          }
+          const results=await db.batch(batch);
+          const created=Boolean(notificationId && (results[3]?.meta?.changes??results[3]?.changes)===1);
+          return json({reactionOnly:true,owner:context.owner,
+            types:JSON.parse(results[2].results[0].types_json),
+            ...(notificationId?{notificationId:created?notificationId:null,notificationCreated:created,
+              notification:created?{...notification,id:notificationId}:null}:{})});
         }
         await db.batch(writes);
       }

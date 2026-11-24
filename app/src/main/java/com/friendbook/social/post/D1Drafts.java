@@ -19,6 +19,7 @@ public final class D1Drafts {
   if(actor==null || !Objects.equals(actor,Fb.uid()) || RETRYING.contains(key)
       || !InteractionCooldown.acquire(actor,"comment-draft:"+key.toString()))return;
   RETRYING.add(key);
+  try{body.put("notify",true);}catch(JSONException ignored){}
   D1Client.request(collection,id,"comments","POST",body,null).addOnSuccessListener(data->{
    RETRYING.remove(key);ack(context,actor,collection,id,body.optString("id"));
    if(Objects.equals(actor,Fb.uid()) && saved!=null)saved.accept(data);

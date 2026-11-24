@@ -483,11 +483,11 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
                 new CommentsEngine.PostCallback() {
                     @Override public void onSaved(String commentId) {
                         if(!currentCommentsActor())return;
-                        if (post != null && !me.equals(post.authorId)) {
+                        if (!D1Client.enabled("posts") && post != null && !me.equals(post.authorId)) {
                             Notify.sendForComment(post.authorId, "comment",
                                     Fb.myName() + " commented on your post", "posts",postId,commentId);
                         }
-                        if (replyTarget != null && !me.equals(replyTarget.authorId)
+                        if (!D1Client.enabled("posts") && replyTarget != null && !me.equals(replyTarget.authorId)
                                 && !java.util.Objects.equals(replyTarget.authorId,post==null?null:post.authorId)) {
                             Notify.sendForComment(replyTarget.authorId, "reply",
                                     Fb.myName() + " replied to your comment", "posts",postId,commentId);

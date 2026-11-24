@@ -20,9 +20,8 @@ import java.util.Set;
 public class CommentsEngine {
     public static void showD1Drafts(android.app.Activity activity,String collection,String id){
         D1Drafts.show(activity,collection,id,data->{d1Changed(collection,id,data);
-            String me=Fb.uid(),owner=data.optString("owner"),reply=data.optString("replyTo");org.json.JSONObject row=data.optJSONObject("comment");if(me==null||row==null)return;
-            if(!owner.isEmpty()&&!owner.equals(me))com.friendbook.social.core.Notify.sendForComment(owner,"posts".equals(collection)?"comment":"reel_comment",Fb.myName()+" commented",collection,id,row.optString("id"));
-            if(!reply.isEmpty()&&!reply.equals(me))com.friendbook.social.core.Notify.sendForComment(reply,"reply",Fb.myName()+" replied to your comment",collection,id,row.optString("id"));
+            String me=Fb.uid();org.json.JSONObject row=data.optJSONObject("comment");if(me==null||row==null)return;
+            com.friendbook.social.core.Notify.pushCommittedEvents(data);
             Models.Comment comment=fromD1(row,id);if("posts".equals(collection)&&com.friendbook.social.core.Mentions.hasBulk(comment.mentions))com.friendbook.social.push.FCMPush.bulkMention(id,comment.id);
         });
     }
@@ -380,7 +379,7 @@ public class CommentsEngine {
         local.createdAt = now;
 
         if(d1(collection)){
-            org.json.JSONObject body=com.friendbook.social.core.D1Client.object("id",newId,"text",local.content,"mediaUrl",local.imageUrl,"parentId",local.parentId.isEmpty()?null:local.parentId,"mentions",new org.json.JSONArray(local.mentions));
+            org.json.JSONObject body=com.friendbook.social.core.D1Client.object("id",newId,"text",local.content,"mediaUrl",local.imageUrl,"parentId",local.parentId.isEmpty()?null:local.parentId,"mentions",new org.json.JSONArray(local.mentions),"notify",true);
             if(!D1Drafts.keep(com.friendbook.social.App.instance,me,collection,docId,body)){if(cb!=null)cb.onComplete(false,"Couldn't save draft. Nothing sent.");return null;}
             // Keep the optimistic comment in each active handle as well as the screen.
             // An in-flight page response must not erase it before the POST resolves.
@@ -391,7 +390,7 @@ public class CommentsEngine {
             D1Drafts.sending(me,collection,docId,newId);
             com.friendbook.social.core.D1Client.request(collection,docId,"comments","POST",body,null).addOnSuccessListener(data->{
                 D1Drafts.settled(me,collection,docId,newId);
-                D1Drafts.ack(com.friendbook.social.App.instance,me,collection,docId,newId);if(!java.util.Objects.equals(me,Fb.uid()))return;d1Changed(collection,docId,data,"create",newId,baseline);if("posts".equals(collection)&&com.friendbook.social.core.Mentions.hasBulk(local.mentions))com.friendbook.social.push.FCMPush.bulkMention(docId,newId);if(cb!=null)cb.onSaved(newId);
+                D1Drafts.ack(com.friendbook.social.App.instance,me,collection,docId,newId);if(!java.util.Objects.equals(me,Fb.uid()))return;com.friendbook.social.core.Notify.pushCommittedEvents(data);d1Changed(collection,docId,data,"create",newId,baseline);if("posts".equals(collection)&&com.friendbook.social.core.Mentions.hasBulk(local.mentions))com.friendbook.social.push.FCMPush.bulkMention(docId,newId);if(cb!=null)cb.onSaved(newId);
             }).addOnFailureListener(e->{D1Drafts.settled(me,collection,docId,newId);if(!java.util.Objects.equals(me,Fb.uid()))return;
                 d1Changed(collection,docId,com.friendbook.social.core.D1Client.object("removed",newId));if(cb!=null)cb.onComplete(false,"Comment not confirmed. Use Unsent comments to retry the same draft safely.");});
             return local;

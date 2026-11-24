@@ -289,10 +289,10 @@ public class ReelCommentsActivity extends Activity implements CommentsAdapter.Ho
                 new CommentsEngine.PostCallback() {
                     @Override public void onSaved(String commentId) {
                         if(!currentCommentsActor())return;
-                        if (author != null && !me.equals(author)) {
+                        if (!com.friendbook.social.core.D1Client.enabled(collection) && author != null && !me.equals(author)) {
                             Notify.sendForComment(author, "reel_comment", Fb.myName() + " commented on your reel", collection,reelId,commentId);
                         }
-                        if (replyTarget != null && !me.equals(replyTarget.authorId)
+                        if (!com.friendbook.social.core.D1Client.enabled(collection) && replyTarget != null && !me.equals(replyTarget.authorId)
                                 && !java.util.Objects.equals(replyTarget.authorId,author)) {
                             Notify.sendForComment(replyTarget.authorId, "reel_comment_reply", Fb.myName() + " replied to your comment", collection,reelId,commentId);
                         }

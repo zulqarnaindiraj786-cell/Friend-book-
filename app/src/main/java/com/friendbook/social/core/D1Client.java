@@ -34,8 +34,9 @@ public final class D1Client {
         return request(collection,id,kind,method,body,query,false);
     }
     public static Task<JSONObject> requestInteractive(String collection,String id,String kind,String method,JSONObject body){
-        return request(collection,id,kind,method,body,
-                "reactions".equals(kind) && "PUT".equals(method) ? "?response=reaction" : null,true);
+        String query="reactions".equals(kind) && "PUT".equals(method)
+                ? (body!=null && body.optBoolean("notify",false) ? "?response=reaction&notify=1" : "?response=reaction") : null;
+        return request(collection,id,kind,method,body,query,true);
     }
     private static final ProfileReadFlights<List<String>,String> READ_OPERATIONS=new ProfileReadFlights<>();
     static void invalidateResourceReads(ProfileReadFlights<List<String>,String> reads,String collection,String id) {

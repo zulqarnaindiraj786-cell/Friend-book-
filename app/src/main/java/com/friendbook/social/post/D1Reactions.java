@@ -227,7 +227,7 @@ public final class D1Reactions {
   final Context context;
   final String collection,id,key,uid;
   final ReactionWriteQueue queue=new ReactionWriteQueue();
-  JSONObject confirmed;
+  JSONObject confirmed, committedNotification;
   String initialType, owner="";
   Runnable render;
   PendingReaction(Context context,String collection,String id,String key,String uid){
@@ -290,8 +290,11 @@ public final class D1Reactions {
   }
   void sendTarget(ReactionWriteQueue.Target target,int attempt){
    final int generation=GENERATION.getOrDefault(key,0);
-   D1Client.requestInteractive(collection,id,"reactions","PUT",D1Client.object("type",target.type))
+   boolean notifyOwner=Prefs.notifLikes(context) && !owner.isEmpty() && !owner.equals(uid);
+   D1Client.requestInteractive(collection,id,"reactions","PUT",D1Client.object("type",target.type,"notify",notifyOwner))
     .addOnSuccessListener(data->{
+     if(data.optBoolean("notificationCreated") && data.optJSONObject("notification")!=null)
+      committedNotification=data.optJSONObject("notification");
      if(!current())return;
      JSONArray types=data.optJSONArray("types");
      if(types==null){recover(target,attempt);return;}
@@ -334,8 +337,10 @@ public final class D1Reactions {
    MUTATIONS.remove(key);WRITING.remove(key);
    if(confirmed!=null){publish(confirmed);D1Client.changed(key);}
    if(error!=null){FETCHED_AT.remove(key);Ui.toast(context,error);return;}
-   if(confirmed!=null && initialType==null && mine(confirmed)!=null && !owner.isEmpty() && !owner.equals(uid))
-    Notify.send(owner,"posts".equals(collection)?"like":"reel_like",Fb.myName()+" liked your "+("posts".equals(collection)?"post":"reel"),id);
+   if(committedNotification!=null){
+    String notificationId=committedNotification.optString("id","");
+    if(!notificationId.isEmpty())try{Notify.pushCommitted(notificationId,D1Client.map(committedNotification));}catch(JSONException ignored){}
+   }
   }
  }
  static void historicalNotice(Activity activity,TextView note,LinearLayout filter,LinearLayout rows,int historical,boolean identified){

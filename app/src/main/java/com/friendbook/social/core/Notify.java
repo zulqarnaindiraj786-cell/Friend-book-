@@ -112,6 +112,22 @@ public class Notify {
         }).addOnFailureListener(e -> com.friendbook.social.push.PushTrace.failure("notification_write_failed", e));
     }
 
+    /** Queue push for a notification already atomically persisted with its D1 action. */
+    public static void pushCommitted(String id,Map<String,Object> notification) {
+        if(id==null || id.isEmpty() || notification==null)return;
+        Object target=notification.get("toUserId");
+        if(target==null)return;
+        com.friendbook.social.push.FCMPush.notification(id,notification);
+    }
+    public static void pushCommittedEvents(org.json.JSONObject response) {
+        if(response==null)return;
+        org.json.JSONArray events=response.optJSONArray("notifications");if(events==null)return;
+        for(int i=0;i<events.length();i++)try{
+            org.json.JSONObject event=events.getJSONObject(i);
+            pushCommitted(event.optString("id",""),D1Client.map(event));
+        }catch(org.json.JSONException ignored){}
+    }
+
     /**
      * Sends an official "friendbook Team" message that delivers BOTH:
      * 1. A notification with the dark Crown-F emblem (`Ui.TEAM_AVATAR_TOKEN`)
