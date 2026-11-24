@@ -16,6 +16,6 @@ final class CountReadRetryPolicy {
                 default: transientError=false;
             }
         }
-        return transientError ? (1_000L << (attempts-1)) : -1L;
+        return transientError ? 2_000L : -1L;
     }
 }

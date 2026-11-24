@@ -10,7 +10,7 @@ public class CountReadRetryPolicyTest {
     }
     @Test public void outageStopsAfterThreeAttemptsInsteadOfRetryingForever() {
         Exception offline=failure(D1DocumentStoreException.Code.UNAVAILABLE);
-        assertEquals(1000L,CountReadRetryPolicy.delayAfterFailure(1,offline));
+        assertEquals(2000L,CountReadRetryPolicy.delayAfterFailure(1,offline));
         assertEquals(2000L,CountReadRetryPolicy.delayAfterFailure(2,offline));
         for(int attempts=3;attempts<10000;attempts++)
             assertEquals(-1L,CountReadRetryPolicy.delayAfterFailure(attempts,offline));
@@ -25,7 +25,7 @@ public class CountReadRetryPolicyTest {
         }
     }
     @Test public void ioFailureCanRecoverButUnknownProgrammingFailureDoesNotLoop() {
-        assertEquals(1000L,CountReadRetryPolicy.delayAfterFailure(1,new java.io.IOException()));
+        assertEquals(2000L,CountReadRetryPolicy.delayAfterFailure(1,new java.io.IOException()));
         assertEquals(-1L,CountReadRetryPolicy.delayAfterFailure(1,new IllegalStateException()));
         assertEquals(-1L,CountReadRetryPolicy.delayAfterFailure(0,new java.io.IOException()));
     }

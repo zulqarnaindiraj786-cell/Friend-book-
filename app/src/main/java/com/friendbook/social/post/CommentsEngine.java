@@ -81,6 +81,12 @@ public class CommentsEngine {
         public void publishCached() { emit(); }
 
         private int pageAttempt;
+        private int conflictAttempts;
+        private Runnable conflictRetry;
+        private void cancelConflictRetry() {
+            if(conflictRetry!=null)pageHandler.removeCallbacks(conflictRetry);
+            conflictRetry=null;
+        }
         private Runnable pageDeadline;
         private final android.os.Handler pageHandler=new android.os.Handler(android.os.Looper.getMainLooper());
         private void clearPageDeadline() {
@@ -90,7 +96,12 @@ public class CommentsEngine {
         private final Set<String> pendingD1=new HashSet<>();
         private void d1Page(boolean first){d1Page(first,false);}
         private void d1Page(boolean first,boolean background){
-            if(!active()||loading)return;loading=true;quietPage=background;if(!background){error="";emit();}
+            if(!active()||loading)return;
+            cancelConflictRetry();conflictAttempts=0;
+            d1PageAttempt(first,background);
+        }
+        private void d1PageAttempt(boolean first,boolean background){
+            if(!active()||loading)return;conflictAttempts++;loading=true;quietPage=background;if(!background){error="";emit();}
             if(!active())return;
             final int attempt=++pageAttempt;
             pageDeadline=()->{
@@ -110,7 +121,20 @@ public class CommentsEngine {
                 clearPageDeadline();loading=false;
                 org.json.JSONArray rows=data.optJSONArray("comments");if(rows==null){error="Invalid D1 response";emit();return;}
                 // A response started before a local mutation must not overwrite its result.
-                if(requestedAtRevision!=revision){if(!background || detailBundle)d1Page(first,background);return;}
+                if(requestedAtRevision!=revision){
+                    // Local ACKs must win, but immediate refetch-on-conflict can
+                    // sustain an unbounded GET chain while edits keep arriving.
+                    if(background && !detailBundle)return;
+                    if(conflictAttempts>=3){error="Comments changed while loading. Tap to retry.";emit();return;}
+                    loading=true;
+                    conflictRetry=()->{
+                        conflictRetry=null;
+                        if(!active())return;
+                        loading=false;d1PageAttempt(first,background);
+                    };
+                    pageHandler.postDelayed(conflictRetry,2_000L);
+                    return;
+                }
                 if(detailBundle && first){
                     org.json.JSONArray totals=data.optJSONArray("reactions");
                     if(totals!=null)D1Reactions.acceptDetailTotals(docId,totals,requestedAt);
@@ -182,7 +206,7 @@ public class CommentsEngine {
                 emit();
             }).addOnFailureListener(e -> { if(active()) { loading=false; error="Couldn't load older comments. Tap again to retry."; emit(); } });
         }
-        public void remove() { closed=true;clearPageDeadline();for(ListenerRegistration reg:regs) reg.remove(); regs.clear(); }
+        public void remove() { closed=true;cancelConflictRetry();clearPageDeadline();for(ListenerRegistration reg:regs) reg.remove(); regs.clear(); }
     }
 
     public static Handle watchPostDetail(String id,Models.Post bundled,Listener listener,Runnable denied) {
