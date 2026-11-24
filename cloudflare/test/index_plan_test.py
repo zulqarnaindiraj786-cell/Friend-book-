@@ -46,14 +46,14 @@ class IndexPlans(unittest.TestCase):
                 ('sqlite_autoindex_friendbook_cf_reactions_1', 'SELECT type FROM friendbook_cf_reactions WHERE resource=? AND uid=?', ('posts/p', 'u')),
                 ('idx_cf_friend_participant_0', f"SELECT path FROM {table} WHERE parent_path='friends' AND json_extract(document_json,'$.participants[0]')=?", ('u',)),
                 ('idx_cf_chat_participant_source', 'SELECT chat_path FROM friendbook_cf_chat_participants WHERE participant_uid=? AND source=1', ('u',)),
-                ('idx_cf_firestore_inbox_recipient', f"SELECT path FROM {table} WHERE parent_path='notifications' AND json_extract(document_json,'$.toUserId')=?", ('u',)),
+                ('idx_cf_notif_page', f"SELECT path FROM {table} INDEXED BY idx_cf_notif_page WHERE parent_path='notifications' AND json_extract(document_json,'$.toUserId')=?", ('u',)),
                 ('sqlite_autoindex_friendbook_cf_view_counters_1', 'SELECT views FROM friendbook_cf_view_counters WHERE resource=?', ('posts/p',)),
             ]
             for obsolete in ('idx_cf_broadcast_users', 'idx_cf_legacy_broadcast_users', 'idx_cf_posts_author',
                              'idx_cf_legacy_posts_author', 'idx_cf_reels_author', 'idx_cf_posts_feed_nonstandard',
                              'idx_cf_legacy_posts_feed_nonstandard', 'idx_cf_chat_nonstandard_order',
                              'idx_cf_chat_nonstandard_order_v2', 'idx_cf_legacy_users_display_name',
-                             'idx_cf_message_sender', 'idx_cf_comment_author', 'idx_cf_inbox_unread'):
+                             'idx_cf_message_sender', 'idx_cf_comment_author', 'idx_cf_inbox_unread', 'idx_cf_firestore_inbox_recipient'):
                 self.assertIsNone(db.execute("SELECT name FROM sqlite_master WHERE type='index' AND name=?", (obsolete,)).fetchone())
             for index, sql, args in checks:
                 with self.subTest(index=index):
