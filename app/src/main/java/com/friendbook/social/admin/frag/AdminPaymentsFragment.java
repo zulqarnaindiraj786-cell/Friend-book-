@@ -41,6 +41,14 @@ public class AdminPaymentsFragment extends Fragment {
     private LinearLayout list;
     private TextView countT;
     private ListenerRegistration reg;
+    private com.friendbook.social.core.CursorPager pages;
+    private LinearLayout cards;
+    private TextView more;
+    private String actor;
+    private boolean started;
+    private final java.util.Set<String> pending=new java.util.HashSet<>();
+    private final java.util.Map<String,String> confirmed=new java.util.HashMap<>();
+    private final java.util.List<DocumentSnapshot> loaded=new java.util.ArrayList<>();
 
     @Nullable
     @Override
@@ -55,39 +63,57 @@ public class AdminPaymentsFragment extends Fragment {
         countT = Ui.tv(a, "✓ Badge & Verification Requests", 12, Ui.sub(a));
         Ui.pad(countT, 2, 0, 2, 8);
         list.addView(countT);
+        cards=Ui.col(a);list.addView(cards);
+        LinearLayout controls=Ui.row(a);list.addView(controls);
+        TextView refresh=Ui.tvBold(a,"Refresh requests",13,Ui.BLUE);Ui.pad(refresh,8,10,8,10);
+        refresh.setOnClickListener(v->startPages());controls.addView(refresh);
+        more=Ui.tvBold(a,"Load 10 more",13,Ui.BLUE);Ui.pad(more,8,10,8,10);
+        more.setOnClickListener(v->{if(pages!=null)pages.next();});controls.addView(more);
         return sv;
     }
 
     @Override
     public void onStart() {
         super.onStart();
-        reg = Fb.db().collection("payments")
-                .orderBy("date", Query.Direction.DESCENDING).limit(100)
-                .addSnapshotListener((snap, err) -> {
-                    android.app.Activity a = getActivity();
-                    if (a == null) return;
-                    while (list.getChildCount() > 1) list.removeViewAt(1);
-                    if (err != null || snap == null) {
-                        countT.setText("Requests unavailable — please retry");
-                        return;
-                    }
-                    if (snap.isEmpty()) {
-                        countT.setText("0 requests yet");
-                        TextView empty = Ui.tv(a, "✓ Free creator badge & verification requests will appear here.",
-                                13, Ui.sub(a));
-                        Ui.pad(empty, 4, 14, 4, 0);
-                        list.addView(empty);
-                        return;
-                    }
-                    countT.setText(snap.size() + " request(s) — newest first");
-                    for (DocumentSnapshot d : snap.getDocuments()) list.addView(row(a, d));
-                });
+        android.app.Activity a=getActivity();
+        if(a==null || !Admin.isAdmin() || Fb.uid()==null)return;
+        if(actor!=null && !actor.equals(Fb.uid())){a.finish();return;}
+        actor=Fb.uid();started=true;startPages();
+    }
+
+    private void startPages() {
+        if(!started || !java.util.Objects.equals(actor,Fb.uid()) || getActivity()==null)return;
+        if(reg!=null){reg.remove();reg=null;}
+        if(pages!=null){pages.close();pages=null;}
+        loaded.clear();renderRequests();
+        Query query=Fb.db().collection("payments").orderBy("date",Query.Direction.DESCENDING);
+        pages=new com.friendbook.social.core.CursorPager(query,10,"admin-payments",(docs,hasMore,busy,error)->{
+            if(!started || !java.util.Objects.equals(actor,Fb.uid()) || getActivity()==null)return;
+            more.setText(busy?"Loading…":!error.isEmpty()?"Retry page":hasMore?"Load 10 more":"All loaded");
+            more.setEnabled(!busy && hasMore);
+            if(!busy && (error.isEmpty() || !docs.isEmpty())){loaded.clear();loaded.addAll(docs);renderRequests();}
+            if(!error.isEmpty())Ui.toast(getActivity(),error);
+        });
+        pages.startObserved();
+        reg=query.limit(10).addSnapshotListener((snap,err)->{
+            if(!started || !java.util.Objects.equals(actor,Fb.uid()) || pages==null)return;
+            if(err!=null){pages.observedError();return;}
+            if(snap!=null)pages.acceptObservedFirstPage(snap);
+        });
+    }
+
+    private void renderRequests() {
+        android.app.Activity a=getActivity();if(!started || a==null || cards==null)return;
+        cards.removeAllViews();countT.setText(loaded.size()+" loaded request(s) — newest first within loaded pages");
+        if(loaded.isEmpty())cards.addView(Ui.tv(a,"No requests in loaded pages.",13,Ui.sub(a)));
+        for(DocumentSnapshot doc:loaded)cards.addView(row(a,doc));
     }
 
     @Override
     public void onStop() {
-        super.onStop();
-        if (reg != null) reg.remove();
+        super.onStop();started=false;
+        if(reg!=null){reg.remove();reg=null;}
+        if(pages!=null){pages.close();pages=null;}
     }
 
     private View row(android.app.Activity a, DocumentSnapshot d) {
@@ -95,7 +121,7 @@ public class AdminPaymentsFragment extends Fragment {
         String userId = Format.str(m, "userId");
         String email = Format.str(m, "userEmail");
         String type = Format.str(m, "type");
-        String status = Format.strOr(m, "status", "pending");
+        String status = confirmed.containsKey(d.getId()) ? confirmed.get(d.getId()) : Format.strOr(m, "status", "pending");
         String shot = Format.str(m, "screenshotUrl");
         long amount = Format.intOf(m, "amount");
         String currency = Format.strOr(m, "currency", "PKR");
@@ -156,15 +182,14 @@ public class AdminPaymentsFragment extends Fragment {
             LinearLayout btns = Ui.row(a);
             btns.setPadding(0, Ui.dp(a, 10), 0, 0);
             TextView approve = Ui.btn(a, "✓ Approve");
+            approve.setEnabled(!pending.contains(d.getId()));
             approve.setOnClickListener(v -> confirm(a, "Approve " + typeLabel(type) + "?",
                     manualSubscription ? "Approve only if you confirmed the existing payment externally. Cloudflare will activate the linked subscription for 30 days."
                             : "The feature activates instantly for this user.", () -> approve(d, m)));
             TextView reject = Ui.btnGrey(a, "✕ Reject");
+            reject.setEnabled(!pending.contains(d.getId()));
             reject.setOnClickListener(v -> confirm(a, "Reject?", manualSubscription ? "Reject this existing payment request without activating the subscription?" : "The applicant may submit another free review later.",
-                    () -> d.getReference().update("status", "rejected",
-                            "rejectedBy", Fb.uid(), "rejectedAt", FieldValue.serverTimestamp())
-                            .addOnSuccessListener(x -> Ui.toast(a, "Request rejected"))
-                            .addOnFailureListener(e -> Ui.toast(a, "Couldn't reject request. Please retry."))));
+                    () -> reject(d)));
             LinearLayout.LayoutParams b1 = new LinearLayout.LayoutParams(0, Ui.dp(a, 38), 1);
             LinearLayout.LayoutParams b2 = new LinearLayout.LayoutParams(0, Ui.dp(a, 38), 1);
             b2.leftMargin = Ui.dp(a, 8);
@@ -192,14 +217,29 @@ public class AdminPaymentsFragment extends Fragment {
                 .setNegativeButton("Cancel", null).show();
     }
 
+    private void reject(DocumentSnapshot d) {
+        final String owner=actor,id=d.getId();
+        if(!started || !Admin.isAdmin() || !java.util.Objects.equals(owner,Fb.uid()) || confirmed.containsKey(id) || !pending.add(id))return;
+        renderRequests();
+        d.getReference().update("status","rejected","rejectedBy",owner,"rejectedAt",FieldValue.serverTimestamp())
+                .addOnCompleteListener(task->{
+                    pending.remove(id);if(!java.util.Objects.equals(owner,Fb.uid()))return;
+                    if(task.isSuccessful())confirmed.put(id,"rejected");
+                    if(started && getActivity()!=null){renderRequests();Ui.toast(getActivity(),task.isSuccessful()?"Request rejected":"Couldn't reject request. Please retry.");}
+                });
+    }
+
     /** Approve = write payment approved + activate the purchased thing, in one batch. */
     private void approve(DocumentSnapshot d, java.util.Map<String, Object> m) {
-        android.app.Activity a = getActivity();
+        final String owner=actor,id=d.getId();
         String type = Format.str(m, "type");
         String uid = Format.str(m, "userId");
+        if(uid.isEmpty()){if(started && getActivity()!=null)Ui.toast(getActivity(),"Missing user for request");return;}
+        if(!started || !Admin.isAdmin() || !java.util.Objects.equals(owner,Fb.uid()) || confirmed.containsKey(id) || !pending.add(id))return;
+        renderRequests();
         WriteBatch batch = Fb.db().batch();
         batch.update(d.getReference(), "status", "approved",
-                "approvedBy", Fb.uid(), "approvedAt", FieldValue.serverTimestamp());
+                "approvedBy", owner, "approvedAt", FieldValue.serverTimestamp());
 
         if (type != null && type.startsWith("tick_")) {
             String level = type.substring(5);
@@ -213,14 +253,19 @@ public class AdminPaymentsFragment extends Fragment {
                 batch.update(su, "status", "active");
             }
         }
-        batch.commit().addOnSuccessListener(x -> {
-            if (a == null) return;
-            if (type != null && type.startsWith("tick_")) {
-                Admin.syncAuthorTickLevel(uid, type.substring(5));
+        batch.commit().addOnCompleteListener(task -> {
+            pending.remove(id);if(!java.util.Objects.equals(owner,Fb.uid()))return;
+            if(task.isSuccessful()) {
+                confirmed.put(id,"approved");
+                // Generic document writes cannot modify another author's content.
+                // Do not launch four scans and rejected batches after their approval.
+                if(type != null && type.startsWith("tick_") && owner.equals(uid))Admin.syncAuthorTickLevel(uid,type.substring(5));
+                notifyUser(uid,type);
             }
-            notifyUser(uid, type);
-            Ui.toast(a, "Approved ✓ — activated");
-        }).addOnFailureListener(e -> { if (a != null) Ui.toast(a, "Error: " + e.getMessage()); });
+            if(started && getActivity()!=null) {
+                renderRequests();Ui.toast(getActivity(),task.isSuccessful()?"Approved ✓ — activated":"Approval failed. Please retry.");
+            }
+        });
     }
 
     private void notifyUser(String uid, String type) {

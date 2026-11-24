@@ -50,3 +50,9 @@ class AdminDemand(unittest.TestCase):
             self.assertIn(token,code)
         self.assertNotIn('.limit(1000)',code)
         self.assertNotIn('.addSnapshotListener(',code)
+
+    def test_payment_review_pages_and_cross_author_denied_fanout(self):
+        code=(JAVA/'admin/frag/AdminPaymentsFragment.java').read_text()
+        for token in ['new com.friendbook.social.core.CursorPager(query,10','pages.startObserved()','query.limit(10).addSnapshotListener','pages.next()','pages.close()','pending.add(id)','confirmed.put(id,"approved")','confirmed.put(id,"rejected")','owner.equals(uid))Admin.syncAuthorTickLevel']:
+            self.assertIn(token,code)
+        self.assertNotIn('.limit(100)',code)
