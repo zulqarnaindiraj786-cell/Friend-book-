@@ -7,6 +7,10 @@ class TraceRemoval(unittest.TestCase):
     def test_feature_and_hooks_removed_and_old_local_report_deleted(self):
         self.assertFalse((JAVA/'core/LoopTrace.java').exists())
         self.assertFalse((JAVA/'core/LoopTraceBuffer.java').exists())
+        self.assertFalse((JAVA/'core/CloudflareRequestTrace.java').exists())
+        self.assertFalse((JAVA/'core/RequestWindowCounter.java').exists())
+        self.assertNotIn('quota_trace',(JAVA/'SplashActivity.java').read_text())
+        self.assertNotIn('CloudflareRequestTrace',(JAVA/'core/CloudflareHttp.java').read_text())
         for rel in ['settings/SettingsActivity.java','core/CloudflareHttp.java']:
             self.assertNotIn('LoopTrace',(JAVA/rel).read_text())
         app=(JAVA/'App.java').read_text()

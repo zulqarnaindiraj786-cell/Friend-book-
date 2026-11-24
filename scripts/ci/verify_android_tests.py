@@ -4,7 +4,7 @@ from pathlib import Path
 import xml.etree.ElementTree as ET
 
 SUITES = ('RealtimeSoundGateTest', 'BannerSizeTest', 'R2VideoClientTest',
-          'ProfileReadFlightsTest', 'AdSocialReadGateTest', 'RequestWindowCounterTest')
+          'ProfileReadFlightsTest', 'AdSocialReadGateTest', 'D1HttpTransportTest')
 
 
 def verify(root):

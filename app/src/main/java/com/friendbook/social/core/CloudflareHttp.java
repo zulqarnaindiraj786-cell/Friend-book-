@@ -19,8 +19,6 @@ public final class CloudflareHttp {
     private static final OkHttpClient DOCUMENTS = new OkHttpClient.Builder()
             .followRedirects(false).followSslRedirects(false).retryOnConnectionFailure(false)
             .addNetworkInterceptor(chain -> {
-                // Count actual network attempts, including token retries, not logical reads.
-                CloudflareRequestTrace.record(chain.request());
                 Response response = chain.proceed(chain.request());
                 // Prevent OkHttp's implicit 503 Retry-After replay.
                 return response.code() == 503 ? response.newBuilder().removeHeader("Retry-After").build() : response;
