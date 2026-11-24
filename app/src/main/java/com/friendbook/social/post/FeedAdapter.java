@@ -165,7 +165,9 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
 
     /** Hydrate only submitted pages, never RecyclerView rendering. Missing names use one query per ten IDs. */
     private void hydrateMissingAuthors(List<Models.Post> page) {
-        if(page==null)return;
+        if(page==null || page.stream().noneMatch(p->p!=null && !p.isPagePost()
+                && p.authorId!=null && !p.authorId.isEmpty()
+                && (p.authorName==null || p.authorName.isEmpty())))return;
         final String actor=Fb.uid();
         if(actor==null)return;
         List<String> ids=new ArrayList<>();
