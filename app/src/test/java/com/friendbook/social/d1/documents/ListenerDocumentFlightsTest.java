@@ -29,6 +29,9 @@ public class ListenerDocumentFlightsTest {
             MockedStatic<D1DocumentTransport> transport=mockStatic(D1DocumentTransport.class,CALLS_REAL_METHODS)) {
             identity.when(D1DocumentStore::authenticatedUid).thenReturn("actor");
             transport.when(()->D1DocumentTransport.getDocument("users/u",false)).thenReturn(new JSONObject("{\"data\":{\"displayName\":\"User\"}}"));
+            // CALLS_REAL_METHODS records the stubbing invocation too; count only
+            // the actual queued operation below, not test setup.
+            transport.clearInvocations();
             Queue listener=new Queue(),ordinary=new Queue();
             Task<String> first=store.readDocumentResponse("actor","users/u",false,true,listener);
             for(int i=0;i<100;i++)assertSame(first,store.readDocumentResponse("actor","users/u",false,true,ordinary));
