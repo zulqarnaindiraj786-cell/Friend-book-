@@ -88,4 +88,18 @@ public class HomeVisibleFriendDemandTest {
   }
  }
 
+ @Test public void expiredOrWrongAccountFriendFactCannotRevealCachedContent()throws Exception{
+  try(MockedStatic<Fb> fb=mockStatic(Fb.class)){
+   fb.when(Fb::uid).thenReturn("actor");HomeFragment h=home();field("friendGraphActor").set(h,"actor");
+   ((Set<String>)field("friendIds").get(h)).add("alice");
+   ((Map<String,Long>)field("friendFactsChecked").get(h)).put("alice",android.os.SystemClock.elapsedRealtime());
+   Method check=HomeFragment.class.getDeclaredMethod("isConfirmedFriend",String.class);check.setAccessible(true);
+   assertTrue((Boolean)check.invoke(h,"alice"));
+   Shadows.shadowOf(android.os.Looper.getMainLooper()).idleFor(java.time.Duration.ofSeconds(301));
+   assertFalse((Boolean)check.invoke(h,"alice"));
+   ((Map<String,Long>)field("friendFactsChecked").get(h)).put("alice",android.os.SystemClock.elapsedRealtime());
+   fb.when(Fb::uid).thenReturn("other");assertFalse((Boolean)check.invoke(h,"alice"));
+  }
+ }
+
 }

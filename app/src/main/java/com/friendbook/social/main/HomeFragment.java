@@ -891,12 +891,19 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         }
     }
 
+    private boolean hasFreshFriendFact(String id){
+        if(id==null || !java.util.Objects.equals(friendGraphActor,Fb.uid()))return false;
+        Long checked=friendFactsChecked.get(id);long now=android.os.SystemClock.elapsedRealtime();
+        return checked!=null && now>=checked && now-checked<FRIEND_FACT_TTL_MS;
+    }
+    private boolean isConfirmedFriend(String id){return hasFreshFriendFact(id) && friendIds.contains(id);}
+
     private void renderPymk(){
         List<Models.User> rows=new ArrayList<>();
         List<String> candidateIds=new ArrayList<>();for(Models.User user:pymkCandidates)candidateIds.add(user.uid);
         resolveVisibleFriends(candidateIds);
         if(java.util.Objects.equals(notesActor,Fb.uid())) for(Models.User u:pymkCandidates)
-            if(u.uid!=null && friendFactsChecked.containsKey(u.uid) && !u.uid.equals(Fb.uid()) && !u.deactivated && !friendIds.contains(u.uid)
+            if(u.uid!=null && hasFreshFriendFact(u.uid) && !u.uid.equals(Fb.uid()) && !u.deactivated && !friendIds.contains(u.uid)
                     && (Fb.me==null || !Fb.me.blocked.contains(u.uid)))rows.add(u);
         if(adapter!=null && getActivity()!=null)adapter.setPymk(FeedAlgorithm.rankPymk(getActivity(),rows,10));
     }
@@ -1160,7 +1167,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         }
         if (p.authorId.equals(me)) return true;
         if ("Only me".equalsIgnoreCase(p.privacy)) return false;
-        if ("Friends".equalsIgnoreCase(p.privacy)) return friendIds.contains(p.authorId);
+        if ("Friends".equalsIgnoreCase(p.privacy)) return isConfirmedFriend(p.authorId);
         return true;
     }
 
@@ -1206,7 +1213,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
 
     private boolean storyAllowed(Models.Story story){
         return !story.expired() && com.friendbook.social.core.StoryAudience.visible(Fb.uid(),story.authorId,story.privacy,
-                java.util.Objects.equals(friendGraphActor,Fb.uid()) && friendIds.contains(story.authorId),Fb.me!=null && Fb.me.following.contains(story.authorId),
+                isConfirmedFriend(story.authorId),Fb.me!=null && Fb.me.following.contains(story.authorId),
                 Fb.me!=null && Fb.me.blocked.contains(story.authorId),getActivity()!=null && Prefs.isStoryAuthorMuted(getActivity(),story.authorId));
     }
     private void renderLoadedStories(){
