@@ -37,11 +37,13 @@ public class FriendRequestDemandTest {
  @Test public void failedDeleteRestoresRowLocallyWithoutReload()throws Exception{
   try(MockedStatic<Fb> fb=mockStatic(Fb.class);MockedStatic<com.friendbook.social.main.MainActivity> main=mockStatic(com.friendbook.social.main.MainActivity.class)){
    fb.when(Fb::uid).thenReturn("delete-demand-actor");FriendsFragment f=fragment("delete-demand-actor");UsersAdapter.Row row=request();
+   CursorPager pager=mock(CursorPager.class);field("activePager").set(f,pager);
    Models.FriendRequest original=new Models.FriendRequest();original.id="request";original.fromUid="sender";original.fromName="Sender";original.fromPhoto="";original.status="pending";((List<Models.FriendRequest>)field("incoming").get(f)).add(original);
    D1DocumentStore db=mock(D1DocumentStore.class);fb.when(Fb::db).thenReturn(db);CollectionReference requests=mock(CollectionReference.class);DocumentReference doc=mock(DocumentReference.class);when(db.collection("friend_requests")).thenReturn(requests);when(requests.document("request")).thenReturn(doc);TaskCompletionSource<Void> pending=new TaskCompletionSource<>();when(doc.delete()).thenReturn(pending.getTask());
    for(int i=0;i<100;i++)f.secondary(row);verify(doc,times(1)).delete();
    pending.setException(new java.io.IOException("offline"));Shadows.shadowOf(Looper.getMainLooper()).idle();
    assertTrue(((List<?>)field("incoming").get(f)).contains(original));verify(requests,never()).whereEqualTo(anyString(),any());
+   verify(pager,never()).forget("request");
   }
  }
  @Test public void repeatedPullJoinsOneTenRowHeadAndStopRejectsLateResult()throws Exception{

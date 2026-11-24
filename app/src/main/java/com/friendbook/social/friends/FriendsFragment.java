@@ -402,7 +402,6 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
     private void removeRequestOptimistic(String reqId) {
         if (reqId == null) return;
         dismissedReqIds.add(reqId);
-        if(section==SEC_REQUESTS && activePager!=null)activePager.forget(reqId);
         incoming.removeIf(req -> reqId.equals(req.id));
         if (tabs[SEC_REQUESTS] != null) {
             tabs[SEC_REQUESTS].setText("Requests");
@@ -423,7 +422,10 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
             removeRequestOptimistic(rid);
             Fb.db().collection("friend_requests").document(rid).delete().addOnSuccessListener(v->{
                 pendingActions.remove(action);
-                if(visibleActor(actor))Ui.toast(getActivity(),"Request removed");
+                if(visibleActor(actor)){
+                    if(section==SEC_REQUESTS && activePager!=null)activePager.forget(rid);
+                    Ui.toast(getActivity(),"Request removed");
+                }
             }).addOnFailureListener(error->{
                 pendingActions.remove(action);
                 if(!java.util.Objects.equals(actor,Fb.uid()))return;
@@ -504,8 +506,12 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
             pendingActions.remove(action);
             if(!me.equals(Fb.uid()))return;
             // The server atomically resolves historical duplicates from the same sender.
-            for(Models.FriendRequest duplicate:new ArrayList<>(incoming))if(from.equals(duplicate.fromUid))removeRequestOptimistic(duplicate.id);
+            for(Models.FriendRequest duplicate:new ArrayList<>(incoming))if(from.equals(duplicate.fromUid)){
+                removeRequestOptimistic(duplicate.id);
+                if(visibleActor(me) && section==SEC_REQUESTS && activePager!=null)activePager.forget(duplicate.id);
+            }
             if(!visibleActor(me))return;
+            if(section==SEC_REQUESTS && activePager!=null)activePager.forget(rid);
             Notify.send(from, "friend_accept", "accepted your friend request");
             Ui.toast(getActivity(), "You're now friends with " + r.user.displayName + " 🎉");
         }).addOnFailureListener(error->{
