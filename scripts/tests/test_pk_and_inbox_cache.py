@@ -4,9 +4,10 @@ import unittest
 JAVA = Path(__file__).resolve().parents[2] / 'app/src/main/java/com/friendbook/social'
 
 class PkAndInboxCacheTest(unittest.TestCase):
-    def test_home_tab_switch_preserves_open_inline_suggestions(self):
+    def test_home_tab_switch_closes_inline_network_ownership(self):
         friends = (JAVA / 'friends/FriendsFragment.java').read_text()
-        self.assertIn('closePage(true);', friends)
+        self.assertIn('closePage(false);', friends)
+        self.assertIn('suggestionPager.startCachedFor(300_000L)',friends)
         self.assertIn('!keepInline && suggestionPager!=null', friends)
         self.assertIn('me.equals(pageActor)', friends)
         self.assertIn('.orderBy("createdAt",Query.Direction.DESCENDING)', friends)
