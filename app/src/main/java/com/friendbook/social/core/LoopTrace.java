@@ -18,7 +18,26 @@ public final class LoopTrace {
     private static long now(){return SystemClock.elapsedRealtime();}
     static synchronized long begin(okhttp3.Request request){
         long at=now(),session=generation;
-        return BUFFER.begin(at,screen,request.method(),request.url().encodedPath(),App.isForeground())?session:-1L;
+        return BUFFER.begin(at,screen,request.method(),request.url().encodedPath(),App.isForeground(),context(request))?session:-1L;
+    }
+    /** Structural metadata only. Never retains IDs, filter values, cursors or raw JSON. */
+    static String context(okhttp3.Request request){
+        String path=request.url().encodedPath();String parent=null;String limit="none";
+        try {
+            if(path.equals("/v1/firestore/query") && "POST".equals(request.method())){
+                okhttp3.RequestBody body=request.body();
+                if(body==null || body.isOneShot() || body.isDuplex() || body.contentLength()<0 || body.contentLength()>16384)return "";
+                okio.Buffer bytes=new okio.Buffer();body.writeTo(bytes);
+                org.json.JSONObject json=new org.json.JSONObject(bytes.readUtf8());
+                parent=json.optString("parent","");
+                int size=json.optInt("limit",-1);if(size>=0 && size<=9999)limit=Integer.toString(size);
+            }else if(path.equals("/v1/firestore/document"))parent=request.url().queryParameter("path");
+            else if(path.equals("/v1/firestore/count"))parent=request.url().queryParameter("parent");
+            else return "";
+            String root=parent==null?"other":parent.split("/",2)[0];
+            if(!java.util.Arrays.asList("users","posts","reels","chats","notifications","friends","friend_requests","stories","groups","pages","referrals").contains(root))root="other";
+            return "root="+root+" limit="+limit;
+        }catch(Exception ignored){return "";}
     }
     static synchronized void end(long session,int status,long duration){if(session==generation)BUFFER.end(now(),status,duration);}
     private static String report(){return "Version "+BuildConfig.VERSION_NAME+" ("+BuildConfig.VERSION_CODE+")\n"+BUFFER.report(now());}

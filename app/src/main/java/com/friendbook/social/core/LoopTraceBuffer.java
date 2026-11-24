@@ -13,6 +13,9 @@ final class LoopTraceBuffer {
     static String route(String path){
         if(path==null)return "other";
         if(path.matches("/v1/firestore/(document|query|count|batch|transaction|profile-bootstrap|story-engagement|claim-referral)"))return path;
+        if(path.matches("/v1/engagement/(posts|reels)/[^/]+/(reactions|reactors|comments)(/[^/]+)?")){
+            String[] p=path.split("/");return "/v1/engagement/"+p[3]+"/:id/"+p[5];
+        }
         if(path.matches("/v1/(posts|reels)/[^/]+/(reactions|reactors|comments)(/[^/]+)?")){
             String[] p=path.split("/");return "/v1/"+p[2]+"/:id/"+p[4];
         }
@@ -25,8 +28,12 @@ final class LoopTraceBuffer {
     private static String method(String method){return Arrays.asList("GET","POST","PUT","PATCH","DELETE").contains(method)?method:"OTHER";}
     private static String screen(String screen){return screen!=null && screen.matches("[A-Za-z0-9_$]{1,90}")?screen:"unknown";}
     synchronized boolean begin(long now,String screen,String method,String path,boolean foreground){
+        return begin(now,screen,method,path,foreground,"");
+    }
+    synchronized boolean begin(long now,String screen,String method,String path,boolean foreground,String detail){
         if(!active(now))return false;
-        attempts++;String key=screen(screen)+" "+method(method)+" "+route(path)+" "+(foreground?"FG":"BG");
+        if(detail==null || !detail.matches("root=(users|posts|reels|chats|notifications|friends|friend_requests|stories|groups|pages|referrals|other) limit=(none|[0-9]{1,4})"))detail="";
+        attempts++;String key=screen(screen)+" "+method(method)+" "+route(path)+" "+(foreground?"FG":"BG")+(detail.isEmpty()?"":" "+detail);
         if(!counts.containsKey(key) && counts.size()>=MAX_KEYS)key="overflow";
         counts.put(key,counts.getOrDefault(key,0)+1);event((now-start)+"ms START "+key);return true;
     }
