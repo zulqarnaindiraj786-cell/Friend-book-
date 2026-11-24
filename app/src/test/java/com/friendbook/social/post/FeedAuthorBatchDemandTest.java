@@ -67,7 +67,7 @@ public class FeedAuthorBatchDemandTest {
    adapter.setAuthorLookupsEnabled(false);for(int i=0;i<100;i++)hydrate.invoke(adapter,Collections.singletonList(post));
    fb.verify(Fb::db,never());
    adapter.setAuthorLookupsEnabled(true);hydrate.invoke(adapter,Collections.singletonList(post));verify(bounded,times(1)).get();
-   adapter.setAuthorLookupsEnabled(false);DocumentSnapshot row=mock(DocumentSnapshot.class);
+   adapter.setAuthorLookupsEnabled(false);QueryDocumentSnapshot row=mock(QueryDocumentSnapshot.class);
    pending.setResult(new QuerySnapshot(Collections.singletonList(row),null,new SnapshotMetadata(false,false)));Shadows.shadowOf(Looper.getMainLooper()).idle();
    cache.verify(()->FastCache.putUser(any()),never());verifyNoInteractions(row);
   }
