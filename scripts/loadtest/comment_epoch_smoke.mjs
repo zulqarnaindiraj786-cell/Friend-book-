@@ -9,7 +9,17 @@ export async function checkCommentEpoch(fetchFn,token,nonce){
  const resources=Array.from({length:10},(_,i)=>`posts/__quota_epoch_${nonce}_${i}`);
  async function query(stage,statement){
   const response=await fetchFn(endpoint,{method:'POST',headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json'},body:JSON.stringify(statement)});
-  if(!response.ok)throw Error(`${stage}: HTTP ${response.status}`);
+  if(!response.ok){
+   let diagnosis='unknown';
+   try {const data=await response.json();const message=String(data?.errors?.[0]?.message||'').toLowerCase();
+    if(/bind|parameter|variable/.test(message))diagnosis='binding';
+    else if(/size|length|too (?:many|large)|limit/.test(message))diagnosis='limit';
+    else if(/syntax|parse|near/.test(message))diagnosis='syntax';
+    else if(/no such|missing/.test(message))diagnosis='missing schema';
+    else if(/authoriz|permission/.test(message))diagnosis='permission';
+   } catch {}
+   throw Error(`${stage}: HTTP ${response.status} (${diagnosis})`);
+  }
   const payload=await response.json(),result=payload?.result?.[0];
   if(!payload?.success || payload.result.length!==1 || !result?.success || !Array.isArray(result.results))throw Error(`${stage}: D1 response unsuccessful`);
   return result;
@@ -29,7 +39,7 @@ if(process.argv[1] && import.meta.url===pathToFileURL(process.argv[1]).href){
   const nonce=crypto.randomUUID().replaceAll('-','');
   console.log('::notice:: Synthetic comment-epoch SQL smoke '+JSON.stringify(await checkCommentEpoch(fetch,process.env.CLOUDFLARE_API_TOKEN,nonce)));
  } catch (error) {
-  const allowed=/^(?:epoch|original|candidate): (?:HTTP [0-9]{3}|D1 response unsuccessful)$|^Unexpected smoke result count$|^Synthetic count parity failed$|^Invalid smoke configuration$/;
+  const allowed=/^(?:epoch|original|candidate): (?:HTTP [0-9]{3} \((?:binding|limit|syntax|missing schema|permission|unknown)\)|D1 response unsuccessful)$|^Unexpected smoke result count$|^Synthetic count parity failed$|^Invalid smoke configuration$/;
   console.error('::error::Synthetic read-only comment SQL smoke failed: '+(allowed.test(error?.message)?error.message:'network or unexpected error'));process.exitCode=1;
  }
 }
