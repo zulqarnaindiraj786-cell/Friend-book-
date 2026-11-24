@@ -355,6 +355,10 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
     }
 
     private void refreshPostsIfNeeded() {
+        // Returning to Home alone is not new data. Keep an already loaded head
+        // until a local/push invalidation or an explicit refresh asks for one.
+        if (loadedPosts && java.util.Objects.equals(feedAccount,Fb.uid())
+                && lastFeedWriteVersion == Fb.db().postWriteVersion()) return;
         // A warm tab return must not replace loaded older pages with the first ten.
         if (loadedPosts && java.util.Objects.equals(feedAccount,Fb.uid()) && rv!=null
                 && rv.getLayoutManager() instanceof LinearLayoutManager) {

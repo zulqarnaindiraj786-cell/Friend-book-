@@ -80,8 +80,13 @@ public class App extends Application implements SensorEventListener {
                     timeHandler.postDelayed(timeTick, 30_000L);
                 }
                 resumedCount++;
-                if (resumedCount==1 && android.os.SystemClock.elapsedRealtime()-backgroundSince>=3000L)
-                    com.friendbook.social.d1.documents.D1DocumentStore.getInstance().refreshOnForeground();
+                if (resumedCount==1) {
+                    // A listener whose initial load or invalidation arrived while
+                    // paused must resume even after a brief activity transition.
+                    com.friendbook.social.d1.documents.D1DocumentStore.getInstance().resumeDeferredQueryListeners();
+                    if (android.os.SystemClock.elapsedRealtime()-backgroundSince>=3000L)
+                        com.friendbook.social.d1.documents.D1DocumentStore.getInstance().refreshOnForeground();
+                }
                 com.friendbook.social.core.SoundEffects.warmUp(App.this);
             }
             @Override public void onActivityPaused(Activity a) {

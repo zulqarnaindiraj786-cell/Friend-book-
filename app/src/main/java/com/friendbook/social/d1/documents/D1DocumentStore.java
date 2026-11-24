@@ -162,6 +162,13 @@ public class D1DocumentStore {
         return false;
     }
 
+    /** Resume only listener demands deferred while no Activity was resumed. */
+    public void resumeDeferredQueryListeners() {
+        if (!com.friendbook.social.App.isForeground()) return;
+        for (QueryListenerEntry entry : queryListeners)
+            if (entry.refreshPending.get()) scheduleQueryRead(entry);
+    }
+
     /** A single authenticated refresh when the process actually returns to foreground. */
     public void refreshOnForeground() {
         long now=android.os.SystemClock.elapsedRealtime();
@@ -566,7 +573,7 @@ public class D1DocumentStore {
                 .putLong("invalidated_"+cacheHash(authenticatedUid()+"|"+parentPath),System.currentTimeMillis()).apply();
         for (QueryListenerEntry e : queryListeners) {
             if (e.active && parentPath.equals(e.query.parentPath)) {
-                e.refreshPending.set(true);
+                synchronized (e) { e.refreshPending.set(true); }
                 scheduleQueryRead(e);
             }
         }
@@ -626,21 +633,36 @@ public class D1DocumentStore {
     }
 
     private void scheduleQueryRead(QueryListenerEntry entry) {
-        if (!entry.cacheReady || !entry.active || !entry.actor.equals(authenticatedUid()) || !entry.inFlight.compareAndSet(false, true)) return;
+        if (!entry.cacheReady || !entry.active || !entry.actor.equals(authenticatedUid())) return;
+        boolean forceDelivery;
+        synchronized (entry) {
+            if (!com.friendbook.social.App.isForeground() && !entry.forceDelivery.get()) {
+                entry.refreshPending.set(true);
+                // Close the race where onResume ran just before the pending flag.
+                if (com.friendbook.social.App.isForeground()) scheduleQueryRead(entry);
+                return;
+            }
+            if (!entry.inFlight.compareAndSet(false, true)) return;
+            entry.refreshPending.set(false);
+            forceDelivery = entry.forceDelivery.getAndSet(false);
+        }
         String path = entry.query.parentPath;
         boolean inbox = ListenerPollingPolicy.isChatMessages(path) || "chats".equals(path)
                 || "notifications".equals(path) || "friend_requests".equals(path);
         ExecutorService lane = ListenerPollingPolicy.isChatMessages(path) ? chatReadExecutor
                 : inbox ? inboxExecutor : listenerExecutor;
-        entry.refreshPending.set(false);
-        boolean forceDelivery=entry.forceDelivery.getAndSet(false);
         entry.lastAttemptMs=android.os.SystemClock.elapsedRealtime();
         try {
             org.json.JSONObject body=toQueryJson(entry.query);
             if(entry.query.limitValue!=null && entry.query.limitValue<=40)
                 body.put("knownRevisions",entry.revisions);
-            readListenerQueryResponse(entry.actor,body,lane).addOnCompleteListener(Runnable::run,completed->{
-                try { deliverQuery(entry,forceDelivery,completed); }
+            readListenerQueryResponse(entry.actor,body,lane,forceDelivery).addOnCompleteListener(Runnable::run,completed->{
+                try {
+                    if (completed.getException() instanceof BackgroundQueryDeferred) {
+                        entry.refreshPending.set(true);
+                        if (forceDelivery) entry.forceDelivery.set(true);
+                    } else deliverQuery(entry,forceDelivery,completed);
+                }
                 finally {
                     entry.inFlight.set(false);
                     if(entry.refreshPending.get())scheduleQueryRead(entry);
@@ -653,15 +675,25 @@ public class D1DocumentStore {
         }
     }
 
+    private static final class BackgroundQueryDeferred extends Exception { }
+
     /** Exact revision-bearing listener requests share the queued operation, not mutable deltas. */
     Task<String> readListenerQueryResponse(String actor,org.json.JSONObject body,ExecutorService lane) {
+        return readListenerQueryResponse(actor, body, lane, false);
+    }
+
+    private Task<String> readListenerQueryResponse(String actor,org.json.JSONObject body,ExecutorService lane,boolean explicit) {
         final String wire=body.toString();
-        return listenerQueryReadFlights.read(actor,wire,true,()->{
+        // Explicit chat retry must not join a deferred automatic operation.
+        return listenerQueryReadFlights.read(actor,(explicit ? "explicit:" : "automatic:")+wire,true,()->{
             TaskCompletionSource<String> result=new TaskCompletionSource<>();
             try { lane.execute(()->{
                 try {
                     String response=D1DocumentTransport.runForActor(actor,()->{
                         if(!actor.equals(authenticatedUid()))throw new D1DocumentStoreException(D1DocumentStoreException.Code.CANCELLED,"Account changed before listener query");
+                        // An active listener can have waited in the executor
+                        // while its Activity went away. Do not start HTTP now.
+                        if(!explicit && !com.friendbook.social.App.isForeground())throw new BackgroundQueryDeferred();
                         return D1DocumentTransport.listenerQuery(new org.json.JSONObject(wire)).toString();
                     });
                     if(!actor.equals(authenticatedUid()))throw new D1DocumentStoreException(D1DocumentStoreException.Code.CANCELLED,"Account changed during listener query");

@@ -28,4 +28,19 @@ public class HomeRefreshDemandTest {
    cache.verify(()->FastCache.saveFeed(isNull(),argThat(List::isEmpty)),times(1));
   }
  }
+ @Test public void loadedHomeDoesNotRefreshOnRepeatedReturnWithoutInvalidation()throws Exception{
+  try(MockedStatic<Fb> fb=mockStatic(Fb.class)){
+   fb.when(Fb::uid).thenReturn("actor");
+   com.friendbook.social.d1.documents.D1DocumentStore db=mock(com.friendbook.social.d1.documents.D1DocumentStore.class);
+   when(db.postWriteVersion()).thenReturn(7L);fb.when(Fb::db).thenReturn(db);
+   HomeFragment home=spy(new HomeFragment());doReturn(false).when(home).isHidden();
+   java.lang.reflect.Field loaded=HomeFragment.class.getDeclaredField("loadedPosts");loaded.setAccessible(true);loaded.setBoolean(home,true);
+   java.lang.reflect.Field actor=HomeFragment.class.getDeclaredField("feedAccount");actor.setAccessible(true);actor.set(home,"actor");
+   java.lang.reflect.Field version=HomeFragment.class.getDeclaredField("lastFeedWriteVersion");version.setAccessible(true);version.setLong(home,7L);
+   java.lang.reflect.Method refresh=HomeFragment.class.getDeclaredMethod("refreshPostsIfNeeded");refresh.setAccessible(true);
+   for(int i=0;i<100;i++)refresh.invoke(home);
+   verify(db,never()).collection(anyString());
+  }
+ }
+
 }

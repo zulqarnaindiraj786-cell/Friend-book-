@@ -1,6 +1,7 @@
 package com.friendbook.social.d1.documents;
 
 import com.google.android.gms.tasks.Task;
+import com.friendbook.social.App;
 import org.json.JSONObject;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -16,8 +17,10 @@ public class ListenerQueryFlightsTest {
     @Test public void hundredIdenticalListenersQueueOneTransportWithIndependentJson() throws Exception {
         D1DocumentStore store=D1DocumentStore.getInstance();store.listenerQueryReadFlights.invalidateAll();
         for(String parent:new String[]{"posts","users","notifications","chats"}) {
-            try(MockedStatic<D1DocumentStore> identity=mockStatic(D1DocumentStore.class,CALLS_REAL_METHODS);
+            try(MockedStatic<App> foreground=mockStatic(App.class,CALLS_REAL_METHODS);
+                MockedStatic<D1DocumentStore> identity=mockStatic(D1DocumentStore.class,CALLS_REAL_METHODS);
                 MockedStatic<D1DocumentTransport> transport=mockStatic(D1DocumentTransport.class,CALLS_REAL_METHODS)) {
+                foreground.when(App::isForeground).thenReturn(true);
                 identity.when(D1DocumentStore::authenticatedUid).thenReturn("actor");
                 transport.when(()->D1DocumentTransport.listenerQuery(any(JSONObject.class)))
                     .thenReturn(new JSONObject("{\"documents\":[],\"revisions\":{}}"));
@@ -37,9 +40,11 @@ public class ListenerQueryFlightsTest {
     }
     @Test public void revisionsAccountAndMutationAreIsolatedAndQueuedBodyIsFrozen() throws Exception {
         D1DocumentStore store=D1DocumentStore.getInstance();store.listenerQueryReadFlights.invalidateAll();
-        try(MockedStatic<D1DocumentStore> identity=mockStatic(D1DocumentStore.class,CALLS_REAL_METHODS);
+        try(MockedStatic<App> foreground=mockStatic(App.class,CALLS_REAL_METHODS);
+                MockedStatic<D1DocumentStore> identity=mockStatic(D1DocumentStore.class,CALLS_REAL_METHODS);
             MockedStatic<D1DocumentTransport> transport=mockStatic(D1DocumentTransport.class,CALLS_REAL_METHODS)) {
-            identity.when(D1DocumentStore::authenticatedUid).thenReturn("actor");
+            foreground.when(App::isForeground).thenReturn(true);
+                identity.when(D1DocumentStore::authenticatedUid).thenReturn("actor");
             transport.when(()->D1DocumentTransport.listenerQuery(any(JSONObject.class))).thenAnswer(call->{
                 JSONObject body=call.getArgument(0);assertFalse(body.has("mutated"));
                 return new JSONObject("{\"documents\":[]}");
@@ -59,9 +64,11 @@ public class ListenerQueryFlightsTest {
     }
     @Test public void queueRejectionAndTransportFailureNeverPoisonFutureReads() throws Exception {
         D1DocumentStore store=D1DocumentStore.getInstance();store.listenerQueryReadFlights.invalidateAll();
-        try(MockedStatic<D1DocumentStore> identity=mockStatic(D1DocumentStore.class,CALLS_REAL_METHODS);
+        try(MockedStatic<App> foreground=mockStatic(App.class,CALLS_REAL_METHODS);
+                MockedStatic<D1DocumentStore> identity=mockStatic(D1DocumentStore.class,CALLS_REAL_METHODS);
             MockedStatic<D1DocumentTransport> transport=mockStatic(D1DocumentTransport.class,CALLS_REAL_METHODS)) {
-            identity.when(D1DocumentStore::authenticatedUid).thenReturn("actor");
+            foreground.when(App::isForeground).thenReturn(true);
+                identity.when(D1DocumentStore::authenticatedUid).thenReturn("actor");
             java.util.concurrent.ExecutorService rejected=mock(java.util.concurrent.ExecutorService.class);
             doThrow(new java.util.concurrent.RejectedExecutionException("full")).when(rejected).execute(any(Runnable.class));
             JSONObject body=new JSONObject().put("parent","users").put("limit",20);
