@@ -43,3 +43,10 @@ class AdminDemand(unittest.TestCase):
         for token in ['new com.friendbook.social.core.CursorPager(query,10','pages.startObserved()','query.limit(10).addSnapshotListener','pages.next()','pages.close()','pendingEnds.add(id)','if(task.isSuccessful())endedIds.add(id)','Objects.equals(owner,Fb.uid())']:
             self.assertIn(token,code)
         self.assertNotIn('.limit(50)',code)
+
+    def test_earnings_figures_label_partial_pages_and_never_fetch_thousands(self):
+        code=(JAVA/'admin/frag/AdminEarningsFragment.java').read_text()
+        for token in ['Figures and chart cover loaded records only, not full totals', '10,"approved-payments"','10,"live-gifts"', 'if(!payReady || !giftReady)', 'Waiting for loaded pages; not a total', 'payReg.remove()', 'giftReg.remove()']:
+            self.assertIn(token,code)
+        self.assertNotIn('.limit(1000)',code)
+        self.assertNotIn('.addSnapshotListener(',code)
