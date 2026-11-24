@@ -35,6 +35,16 @@ public class Notify {
 
     /** Creates a notification doc. Silently skips self-notifications except security login alerts. */
     public static void send(String toUid, String type, String text, @Nullable String postId) {
+        sendInternal(toUid,type,text,postId,null);
+    }
+
+    /** Stable saved-comment identity prevents replay callbacks creating new inbox rows. */
+    public static void sendForComment(String toUid,String type,String text,String collection,String postId,String commentId) {
+        String eventKey=NotificationEventKey.forComment(Fb.uid(),toUid,type,collection+"/"+postId,commentId);
+        sendInternal(toUid,type,text,postId,eventKey);
+    }
+
+    private static void sendInternal(String toUid,String type,String text,@Nullable String postId,@Nullable String savedEventKey) {
         String me = Fb.uid();
         if (me == null || toUid == null || toUid.isEmpty()) {
             com.friendbook.social.push.PushTrace.stage("notification_skipped", "reason=missing_actor_or_receiver"); return;
@@ -58,7 +68,7 @@ public class Notify {
         if (postId != null) n.put("postId", postId);
         n.put("isRead", false);
         n.put("createdAt", FieldValue.serverTimestamp());
-        String eventKey=NotificationEventKey.forAction(me,toUid,type,postId);
+        String eventKey=savedEventKey!=null?savedEventKey:NotificationEventKey.forAction(me,toUid,type,postId);
         if (eventKey != null) {
             DocumentReference ref=Fb.db().collection("notifications").document(eventKey);
             ref.create(n).addOnSuccessListener(v -> {

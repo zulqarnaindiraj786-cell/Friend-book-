@@ -21,8 +21,8 @@ public class CommentsEngine {
     public static void showD1Drafts(android.app.Activity activity,String collection,String id){
         D1Drafts.show(activity,collection,id,data->{d1Changed(collection,id,data);
             String me=Fb.uid(),owner=data.optString("owner"),reply=data.optString("replyTo");org.json.JSONObject row=data.optJSONObject("comment");if(me==null||row==null)return;
-            if(!owner.isEmpty()&&!owner.equals(me))com.friendbook.social.core.Notify.send(owner,"posts".equals(collection)?"comment":"reel_comment",Fb.myName()+" commented",id);
-            if(!reply.isEmpty()&&!reply.equals(me))com.friendbook.social.core.Notify.send(reply,"reply",Fb.myName()+" replied to your comment",id);
+            if(!owner.isEmpty()&&!owner.equals(me))com.friendbook.social.core.Notify.sendForComment(owner,"posts".equals(collection)?"comment":"reel_comment",Fb.myName()+" commented",collection,id,row.optString("id"));
+            if(!reply.isEmpty()&&!reply.equals(me))com.friendbook.social.core.Notify.sendForComment(reply,"reply",Fb.myName()+" replied to your comment",collection,id,row.optString("id"));
             Models.Comment comment=fromD1(row,id);if("posts".equals(collection)&&com.friendbook.social.core.Mentions.hasBulk(comment.mentions))com.friendbook.social.push.FCMPush.bulkMention(id,comment.id);
         });
     }
@@ -268,6 +268,7 @@ public class CommentsEngine {
 
     public interface PostCallback {
         void onComplete(boolean success, String errorMessage);
+        default void onSaved(String commentId) { onComplete(true,null); }
     }
 
     /**
@@ -325,7 +326,7 @@ public class CommentsEngine {
                 h.revision++;h.pendingD1.add(local.id);h.deleted.remove(local.id);h.latest.put(local.id,local);
             }
             com.friendbook.social.core.D1Client.request(collection,docId,"comments","POST",body,null).addOnSuccessListener(data->{
-                if(!java.util.Objects.equals(me,Fb.uid()))return;D1Drafts.ack(com.friendbook.social.App.instance,me,collection,docId,newId);d1Changed(collection,docId,data);if("posts".equals(collection)&&com.friendbook.social.core.Mentions.hasBulk(local.mentions))com.friendbook.social.push.FCMPush.bulkMention(docId,newId);if(cb!=null)cb.onComplete(true,null);
+                if(!java.util.Objects.equals(me,Fb.uid()))return;D1Drafts.ack(com.friendbook.social.App.instance,me,collection,docId,newId);d1Changed(collection,docId,data);if("posts".equals(collection)&&com.friendbook.social.core.Mentions.hasBulk(local.mentions))com.friendbook.social.push.FCMPush.bulkMention(docId,newId);if(cb!=null)cb.onSaved(newId);
             }).addOnFailureListener(e->{if(!java.util.Objects.equals(me,Fb.uid()))return;
                 d1Changed(collection,docId,com.friendbook.social.core.D1Client.object("removed",newId));if(cb!=null)cb.onComplete(false,"Comment not confirmed. Use Unsent comments to retry the same draft safely.");});
             return local;
@@ -345,7 +346,7 @@ public class CommentsEngine {
         batch.update(parentRef,patch);
         batch.commit().addOnSuccessListener(v -> {
             if(me.equals(Fb.uid()) && "posts".equals(collection) && com.friendbook.social.core.Mentions.hasBulk(local.mentions)) com.friendbook.social.push.FCMPush.bulkMention(docId,newId);
-            if(cb!=null) cb.onComplete(true,null);
+            if(cb!=null) cb.onSaved(newId);
         }).addOnFailureListener(error -> { if(cb!=null) cb.onComplete(false,error.getMessage()); });
 
         return local;

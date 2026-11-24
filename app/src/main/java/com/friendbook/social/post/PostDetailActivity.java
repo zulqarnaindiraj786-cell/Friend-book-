@@ -456,18 +456,19 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
 
         // Writes atomically to posts/{postId}.commentsMap.<newId> (100% visible to ALL users!) + mirrors!
         Models.Comment local = CommentsEngine.sendComment("posts", postId, postId, text, mediaUrl, parentId, mentions,
-                (ok, errMsg) -> {
-                    if (ok) {
+                new CommentsEngine.PostCallback() {
+                    @Override public void onSaved(String commentId) {
                         if (post != null && !me.equals(post.authorId)) {
-                            Notify.send(post.authorId, "comment",
-                                    Fb.myName() + " commented on your post", postId);
+                            Notify.sendForComment(post.authorId, "comment",
+                                    Fb.myName() + " commented on your post", "posts",postId,commentId);
                         }
                         if (replyTarget != null && !me.equals(replyTarget.authorId)) {
-                            Notify.send(replyTarget.authorId, "reply",
-                                    Fb.myName() + " replied to your comment", postId);
+                            Notify.sendForComment(replyTarget.authorId, "reply",
+                                    Fb.myName() + " replied to your comment", "posts",postId,commentId);
                         }
-                    } else {
-                        Ui.toast(PostDetailActivity.this, errMsg != null ? errMsg : "Comment failed");
+                    }
+                    @Override public void onComplete(boolean ok,String errMsg) {
+                        if(!ok)Ui.toast(PostDetailActivity.this, errMsg != null ? errMsg : "Comment failed");
                     }
                 });
 

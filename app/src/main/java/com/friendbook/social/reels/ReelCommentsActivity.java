@@ -271,16 +271,17 @@ public class ReelCommentsActivity extends Activity implements CommentsAdapter.Ho
         input.setText("");
 
         Models.Comment local = CommentsEngine.sendComment(collection, reelId, commentsKey, text, "", parentId, mentions,
-                (ok, errMsg) -> {
-                    if (ok) {
+                new CommentsEngine.PostCallback() {
+                    @Override public void onSaved(String commentId) {
                         if (author != null && !me.equals(author)) {
-                            Notify.send(author, "reel_comment", Fb.myName() + " commented on your reel", reelId);
+                            Notify.sendForComment(author, "reel_comment", Fb.myName() + " commented on your reel", collection,reelId,commentId);
                         }
                         if (replyTarget != null && !me.equals(replyTarget.authorId)) {
-                            Notify.send(replyTarget.authorId, "reel_comment_reply", Fb.myName() + " replied to your comment", reelId);
+                            Notify.sendForComment(replyTarget.authorId, "reel_comment_reply", Fb.myName() + " replied to your comment", collection,reelId,commentId);
                         }
-                    } else {
-                        Ui.toast(ReelCommentsActivity.this, errMsg != null ? errMsg : "Failed to post comment");
+                    }
+                    @Override public void onComplete(boolean ok,String errMsg) {
+                        if(!ok)Ui.toast(ReelCommentsActivity.this, errMsg != null ? errMsg : "Failed to post comment");
                     }
                 });
 
