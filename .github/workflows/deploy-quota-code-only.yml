@@ -1,4 +1,5 @@
-# Code-only rollout: remove legacy mirror reads from opt-in profile audience counts.
+# Owner-authorized code-only rollout: canonical content GET/list ACL snapshot reuse
+# and zero-visible engagement blocked-history scan suppression. No D1 migrations.
 name: Deploy quota fixes without database migrations
 on:
   push:
