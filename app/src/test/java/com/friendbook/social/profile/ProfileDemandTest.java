@@ -70,4 +70,15 @@ public class ProfileDemandTest {
    for(int i=0;i<100;i++)call(a,"loadHighlightPage",new Class<?>[]{});verify(q,times(1)).get();verify(stories).whereIn(any(FieldPath.class),argThat(ids->ids.size()==10));
   }
  }
+ @Test public void requestBurstWritesOnceAndOldActorCompletionCannotNotify()throws Exception{
+  try(MockedStatic<Fb> fb=mockStatic(Fb.class);MockedStatic<Notify> notifications=mockStatic(Notify.class)){
+   fb.when(Fb::uid).thenReturn("request-profile-actor");ProfileActivity a=activity("request-profile-actor","request-profile-target");
+   D1DocumentStore db=mock(D1DocumentStore.class);fb.when(Fb::db).thenReturn(db);CollectionReference requests=mock(CollectionReference.class);when(db.collection("friend_requests")).thenReturn(requests);TaskCompletionSource<DocumentReference> pending=new TaskCompletionSource<>();when(requests.add(any())).thenReturn(pending.getTask());
+   for(int i=0;i<100;i++)call(a,"sendProfileRequest",new Class<?>[]{boolean.class},false);
+   verify(requests,times(1)).add(any());assertTrue(field("requestBusy").getBoolean(a));
+   fb.when(Fb::uid).thenReturn("different-profile-actor");pending.setResult(mock(DocumentReference.class));Shadows.shadowOf(Looper.getMainLooper()).idle();
+   assertFalse(field("hasOut").getBoolean(a));notifications.verifyNoInteractions();
+  }
+ }
+
 }
