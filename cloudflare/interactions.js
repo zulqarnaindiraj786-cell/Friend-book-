@@ -1,4 +1,5 @@
-import { commentsAPI, reactorsAPI, commentSelect, normalized, legacyCommentCount, legacyCommentCountsStatement, legacyPage } from './comment-api.js';
+import { commentsAPI, reactorsAPI, commentSelect, normalized, legacyCommentCount, legacyCommentCountsStatement, legacyCommentCountsWithCandidatesStatement, legacyPage } from './comment-api.js';
+import { legacyEpoch, legacyNoCandidates, rememberLegacyNoCandidates } from './legacy-comment-negative-cache.js';
 import { requestAccountReads } from './app-documents.js';
 import { authorizePost } from './firebase-post-access.js';
 const json = (body, status = 200) => Response.json(body, {
@@ -83,7 +84,7 @@ export async function engagementSummary(db, resource, uid, owner, blocked = [], 
     }
   };
   const legacySummary = async () => {
-    const count = preloaded ? preloaded.count : await legacyCommentCount(db,resource,blocked);
+    const count=preloaded?preloaded.count:await legacyCommentCount(db,resource,blocked);
     return {count,preview:count ? await legacyPage(db,resource,uid,blocked,[Number.MAX_SAFE_INTEGER,''],null,2) : []};
   };
   const [combined,legacy] = await Promise.all([preloaded ? preloaded.canonical : canonicalSummary(),legacySummary()]);
@@ -103,20 +104,48 @@ export const MAX_FEED_ENGAGEMENT_PAGE = 20;
 
 // A small authorized Home page can fetch summary rows in one D1 round trip.
 // Preserve the existing individual read path for incomplete schemas and failures.
-export async function batchEngagementReads(db, resources, uid, blocked) {
+export async function batchEngagementReads(db, resources, uid, blocked, cacheScope = null) {
   if (resources.length < 2 || resources.length > MAX_FEED_ENGAGEMENT_PAGE || typeof db.batch !== 'function') return new Map();
-  try {
-    const rows=await db.batch([
-      ...resources.map(resource=>engagementStatement(db,resource,uid,blocked)),
-      legacyCommentCountsStatement(db,resources,blocked),
-    ]);
-    const counts=rows.at(-1)?.results;
-    if(rows.length!==resources.length+1 || rows.some(row=>row.success===false)
-        || rows.slice(0,-1).some(row=>!row.results?.[0]) || !counts || counts.length!==resources.length)return new Map();
-    const bySlot=new Map(counts.map(row=>[row.slot,row.n]));
-    if(bySlot.size!==resources.length || resources.some((_,i)=>!bySlot.has(i)))return new Map();
-    return new Map(resources.map((resource,i)=>[resource,{canonical:rows[i].results[0],count:Number(bySlot.get(i))||0}]));
-  } catch { return new Map(); }
+  // Each validation uses a *new* primary-first session: after a concurrent
+  // external write, a later read on the original session could otherwise hit
+  // a replica that has only caught up to the first epoch's bookmark.
+  const freshEpoch=async()=>{
+    if(!cacheScope || typeof cacheScope.withSession!=='function')return null;
+    try {return await legacyEpoch(cacheScope.withSession('first-primary'));}
+    catch {return null;}
+  };
+  const read=async(useHints)=>{
+    const epoch=useHints?await freshEpoch():null;
+    const missing=resources.filter(resource=>!legacyNoCandidates(cacheScope,resource,epoch));
+    const withCandidates=Boolean(epoch) && missing.length>0;
+    const statements=[...resources.map(resource=>engagementStatement(db,resource,uid,blocked))];
+    if(missing.length)statements.push(withCandidates?legacyCommentCountsWithCandidatesStatement(db,missing,blocked):legacyCommentCountsStatement(db,missing,blocked));
+    const rows=await db.batch(statements);
+    // A concurrent root-comment write between the epoch read and this batch
+    // invalidates all skipped counts. Retry the original complete batch.
+    if(epoch && missing.length<resources.length && await freshEpoch()!==epoch)
+      throw Error('Legacy comment epoch changed during batch');
+    const counts=missing.length?rows.at(-1)?.results:[];
+    if(rows.length!==resources.length+(missing.length?1:0) || rows.some(row=>row.success===false)
+        || rows.slice(0,resources.length).some(row=>!row.results?.[0]) || !counts || counts.length!==missing.length)return new Map();
+    const bySlot=new Map(counts.map(row=>[row.slot,row]));
+    if(bySlot.size!==missing.length || missing.some((_,i)=>!bySlot.has(i)))return new Map();
+    const countsByResource=new Map(resources.map(resource=>[resource,0]));
+    for(let i=0;i<missing.length;i++){
+      const row=bySlot.get(i),count=Number(row.n)||0;
+      countsByResource.set(missing[i],count);
+      if(withCandidates && row.has_candidates===0 && Number.isSafeInteger(row.n) && row.n===0)
+        rememberLegacyNoCandidates(cacheScope,missing[i],epoch);
+    }
+    return new Map(resources.map((resource,i)=>[resource,{canonical:rows[i].results[0],count:countsByResource.get(resource)}]));
+  };
+  try { return await read(!!cacheScope); }
+  catch {
+    // Older schema or an unavailable optional hint must keep the exact original
+    // grouped-count path, without masking failure of its actual reads.
+    if(cacheScope)try {return await read(false);} catch { /* existing fallback below */ }
+    return new Map();
+  }
 }
 
 export async function interactions(request, env, identity, match, authorize = authorizePost) {

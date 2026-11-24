@@ -35,11 +35,11 @@ const legacyRowGuard=(blocked='?',resource='?')=>`json_valid(a.document_json)
  AND typeof(${legacyAuthor})='text' AND length(${legacyAuthor})>0
  AND ${legacyAuthor} NOT IN (SELECT value FROM json_each(${blocked}))
  AND NOT EXISTS (SELECT 1 FROM friendbook_cf_comments c WHERE c.resource=${resource} AND c.id=a.doc_id)`;
-const legacyPredicate=(id='?',resource='?',blocked='?')=>`a.path IN (
+const legacyCandidatePaths=(id='?',resource='?')=>`
   SELECT a.path FROM friendbook_cf_firestore_documents a WHERE a.parent_path='comments' AND ${legacyField('postId')}=${id}
   UNION SELECT a.path FROM friendbook_cf_firestore_documents a WHERE a.parent_path='comments' AND ${legacyField('post_id')}=${id}
-  UNION SELECT a.path FROM friendbook_cf_firestore_documents a WHERE a.parent_path='comments' AND ${legacyField('resource')}=${resource}
- ) AND ${legacyRowGuard(blocked,resource)}`;
+  UNION SELECT a.path FROM friendbook_cf_firestore_documents a WHERE a.parent_path='comments' AND ${legacyField('resource')}=${resource}`;
+const legacyPredicate=(id='?',resource='?',blocked='?')=>`a.path IN (${legacyCandidatePaths(id,resource)}) AND ${legacyRowGuard(blocked,resource)}`;
 const legacyWhere=legacyPredicate();
 function legacyBindings(resource,blocked) {
   const id=resource.slice(resource.indexOf('/')+1);
@@ -63,6 +63,25 @@ export function legacyCommentCountsStatement(db,resources,blocked=[]) {
   });
   return db.prepare(selects.join(' UNION ALL ')).bind(...bindings);
 }
+// Return exact counts AND whether any raw route candidate exists. Only an
+// empty candidate set is independent of blocked authors, deletion and shadowing.
+// Each candidate CTE is evaluated once for both the count and the existence bit.
+export function legacyCommentCountsWithCandidatesStatement(db,resources,blocked=[]) {
+  if(!Array.isArray(resources) || resources.length<1 || resources.length>20)throw Error('Invalid count batch');
+  const bindings=[JSON.stringify(blocked||[])];
+  const ctes=[],selects=[];
+  resources.forEach((resource,i)=>{
+    const post=resource.slice(resource.indexOf('/')+1);
+    bindings.push(resource,post);
+    const res=`?${2+i*2}`,id=`?${3+i*2}`,name=`quota_comment_candidates_${i}`;
+    ctes.push(`${name} AS MATERIALIZED (${legacyCandidatePaths(id,res)})`);
+    selects.push(`SELECT ${i} AS slot, (SELECT COUNT(*) FROM friendbook_cf_firestore_documents a
+      WHERE a.path IN (SELECT path FROM ${name}) AND ${legacyRowGuard('?1',res)}) AS n,
+      EXISTS(SELECT 1 FROM ${name}) AS has_candidates`);
+  });
+  return db.prepare(`WITH ${ctes.join(',')} ${selects.join(' UNION ALL ')}`).bind(...bindings);
+}
+
 export async function legacyCommentCount(db,resource,blocked=[]) {
   const row=await legacyCommentCountStatement(db,resource,blocked).first();
   return Number(row?.n)||0;
