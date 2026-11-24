@@ -80,11 +80,13 @@ public class AdminLiveFragment extends Fragment {
             if(!busy && (error.isEmpty() || !docs.isEmpty())){loaded.clear();loaded.addAll(docs);renderRooms();}
             if(!error.isEmpty())Ui.toast(getActivity(),error);
         });
-        pages.startObserved();
+        final com.friendbook.social.core.CursorPager observed=pages;
+        observed.startObserved();
         reg=query.limit(10).addSnapshotListener((snap,err)->{
-            if(!started || !java.util.Objects.equals(actor,Fb.uid()) || pages==null)return;
-            if(err!=null){pages.observedError();return;}
-            if(snap!=null)pages.acceptObservedFirstPage(snap);
+            // A removed observer can still have a queued callback after refresh.
+            if(!started || !java.util.Objects.equals(actor,Fb.uid()) || pages!=observed)return;
+            if(err!=null){observed.observedError();return;}
+            if(snap!=null)observed.acceptObservedFirstPage(snap);
         });
     }
 

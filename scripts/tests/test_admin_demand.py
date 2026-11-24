@@ -40,7 +40,7 @@ class AdminDemand(unittest.TestCase):
 
     def test_admin_live_pages_and_confirms_end_once(self):
         code=(JAVA/'admin/frag/AdminLiveFragment.java').read_text()
-        for token in ['new com.friendbook.social.core.CursorPager(query,10','pages.startObserved()','query.limit(10).addSnapshotListener','pages.next()','pages.close()','pendingEnds.add(id)','if(task.isSuccessful())endedIds.add(id)','Objects.equals(owner,Fb.uid())']:
+        for token in ['new com.friendbook.social.core.CursorPager(query,10','observed.startObserved()','query.limit(10).addSnapshotListener','pages.next()','pages.close()','pendingEnds.add(id)','if(task.isSuccessful())endedIds.add(id)','Objects.equals(owner,Fb.uid())']:
             self.assertIn(token,code)
         self.assertNotIn('.limit(50)',code)
 
@@ -53,6 +53,12 @@ class AdminDemand(unittest.TestCase):
 
     def test_payment_review_pages_and_cross_author_denied_fanout(self):
         code=(JAVA/'admin/frag/AdminPaymentsFragment.java').read_text()
-        for token in ['new com.friendbook.social.core.CursorPager(query,10','pages.startObserved()','query.limit(10).addSnapshotListener','pages.next()','pages.close()','pending.add(id)','confirmed.put(id,"approved")','confirmed.put(id,"rejected")','owner.equals(uid))Admin.syncAuthorTickLevel']:
+        for token in ['new com.friendbook.social.core.CursorPager(query,10','observed.startObserved()','query.limit(10).addSnapshotListener','pages.next()','pages.close()','pending.add(id)','confirmed.put(id,"approved")','confirmed.put(id,"rejected")','owner.equals(uid))Admin.syncAuthorTickLevel']:
             self.assertIn(token,code)
         self.assertNotIn('.limit(100)',code)
+
+    def test_observer_callbacks_cannot_target_a_replacement_pager(self):
+        for file in ['AdminLiveFragment.java','AdminPaymentsFragment.java']:
+            code=(JAVA/'admin/frag'/file).read_text()
+            self.assertIn('pages!=observed',code)
+            self.assertIn('observed.acceptObservedFirstPage(snap)',code)
