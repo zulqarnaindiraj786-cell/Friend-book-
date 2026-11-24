@@ -1,6 +1,6 @@
 # Targeted code-only default people picker cursor seek.
 # Never execute the full migration chain or remove existing indexes/data.
-# Explicit rollout tag required; source 9847f59 passed Worker and Android CI.
+# Explicit rollout tag required; source efefb6a passed Worker and Android CI.
 name: Deploy people cursor seek
 on:
   push:
