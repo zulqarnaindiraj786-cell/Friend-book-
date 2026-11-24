@@ -1,4 +1,5 @@
-package com.friendbook.social.core;
+package com.friendbook.social.d1.documents;
+import com.friendbook.social.core.FeedHeadReads;
 
 import com.friendbook.social.d1.documents.*;
 import com.google.android.gms.tasks.*;
