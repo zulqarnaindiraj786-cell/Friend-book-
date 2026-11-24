@@ -31,7 +31,7 @@ class FeedReadBudgetTest(unittest.TestCase):
     def test_pages_reuse_query_guard_duplicates_and_unlock_on_error(self):
         source=(JAVA/'main/HomeFragment.java').read_text()
         more=source.split('public void loadMore()',1)[1].split('public boolean hasMore()',1)[0]
-        for token in ['if(loadingPosts','feedQuery.startAfter(lastDoc).limit(PAGE)','loadedPostIds.add','generation!=feedGeneration','addOnFailureListener','loadingPosts=false','matchesFilter(post,filter)']:
+        for token in ['if(!homeStarted || isHidden() || loadingPosts','feedQuery.startAfter(lastDoc).limit(PAGE)','loadedPostIds.add','generation!=feedGeneration','addOnFailureListener','loadingPosts=false','matchesFilter(post,filter)']:
             self.assertIn(token,more)
         self.assertIn('existing.add(post.id)',(JAVA/'post/FeedAdapter.java').read_text())
     def test_stories_have_cursor_pages_and_discoverable_more_control(self):

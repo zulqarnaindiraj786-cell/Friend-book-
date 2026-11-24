@@ -85,6 +85,20 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
     private static final long HOME_SECONDARY_MAX_WAIT_MS = 3000L;
     private Runnable pendingHomeSecondary;
     private boolean homeStarted;
+    private int homeReadGeneration;
+    private boolean activeHomeRead(String actor,int generation){
+        return generation==homeReadGeneration && homeStarted && !isHidden() && isAdded()
+                && rv!=null && adapter!=null && java.util.Objects.equals(actor,Fb.uid());
+    }
+    private void invalidateHomeReads(){
+        homeReadGeneration++;cancelHomeSecondary();engagementHandler.removeCallbacksAndMessages(null);
+        feedGeneration++;loadingPosts=false;
+        storyGeneration++;loadingStories=false;
+        // A canceled first story page must be retryable on the next visible entry.
+        if(storyCursor==null && loadedStoryDocs.isEmpty())storyQuery=null;
+        if(notesInFlight){notesInFlight=false;notesReadAt=-com.friendbook.social.core.OnDemandLoads.PYMK_CACHE_MS;}
+        headerRequested=false;
+    }
 
     private void cancelHomeSecondary() {
         if (pendingHomeSecondary != null) engagementHandler.removeCallbacks(pendingHomeSecondary);
@@ -295,7 +309,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         super.onHiddenChanged(hidden);
         if (adapter != null) adapter.setFeedBannersVisible(homeStarted && !hidden);
         if (hidden) {
-            cancelHomeSecondary();
+            invalidateHomeReads();
             stopHomeWatchers();
         } else if (adapter != null && isResumed()) {
             refreshPostsIfNeeded();
@@ -556,6 +570,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
     }
 
     private void loadNotesUsers(boolean forced) {
+        final int readGeneration=homeReadGeneration;
         String actor = Fb.uid();
         if (actor == null) return;
         if (!actor.equals(notesActor)) {
@@ -578,8 +593,8 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         notesReadAt = attempt;
         // Fetch only the visible suggestion-card window, and reuse it for Notes.
         Fb.db().collection("users").limit(3).getCachedOrFetch(forced).addOnSuccessListener(snap -> {
+            if (!activeHomeRead(actor,readGeneration) || notesReadAt != attempt) return;
             notesInFlight = false;
-            if (!isAdded() || !actor.equals(Fb.uid()) || notesReadAt != attempt) return;
             if (snap == null || (snap.getMetadata().isFromCache() && snap.isEmpty())) return;
             notesLoaded = true;
             noteUsers.clear();
@@ -599,7 +614,9 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
             persistPymk(actor);
             renderNotesRow();
             renderPymk();
-        }).addOnFailureListener(e -> notesInFlight = false);
+        }).addOnFailureListener(e -> {
+            if(activeHomeRead(actor,readGeneration) && notesReadAt==attempt)notesInFlight=false;
+        });
     }
 
     /** friendbook 525 feed sort & filter strip: Top / Most Recent / Favorites / Photos / Videos / Marketplace / Text. */
@@ -683,12 +700,18 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         homeStarted=false;
         if (adapter != null) adapter.setFeedBannersVisible(false);
         super.onStop();
-        cancelHomeSecondary();
+        invalidateHomeReads();
         FastCache.removeReactionObserver(reactionObserver);
-        feedGeneration++; loadingPosts=false; storyGeneration++; loadingStories=false;
         if (storiesReg != null) storiesReg.remove();
         stopHomeWatchers();
         com.friendbook.social.core.AdsConfig.setChangeListener(null);
+    }
+
+    @Override public void onDestroyView(){
+        invalidateHomeReads();homeStarted=false;
+        if(rv!=null)rv.setAdapter(null);
+        rv=null;adapter=null;swipe=null;notesRow=null;notesScroll=null;freshPill=null;
+        super.onDestroyView();
     }
 
     private void startVisibleHomeContent() {
@@ -735,7 +758,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
 
     // ---------- 🔴 active lives strip ----------
     private void startLivesListener() {
-        final String actor=Fb.uid();
+        final String actor=Fb.uid();final int readGeneration=homeReadGeneration;
         // QUOTA: live rooms refresh on Home open. A listener here re-read all 25 rows on every
         // host heartbeat while anything was live.
         Fb.db().collection("lives")
@@ -743,7 +766,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
                 .limit(3)
                 .getCachedOrFetch(forceSections)
                 .addOnSuccessListener((snap) -> {
-                    if (!isAdded() || !java.util.Objects.equals(actor,Fb.uid())) return;
+                    if (!activeHomeRead(actor,readGeneration)) return;
                     List<Map<String, Object>> lives = new ArrayList<>();
                     long now = System.currentTimeMillis();
                     if (snap != null) {
@@ -770,6 +793,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
     private static final long FRIEND_GRAPH_TTL_MS = 15 * 60 * 1000L;
 
     private void startFriendsListener() {
+        final int readGeneration=homeReadGeneration;
         String me = Fb.uid();
         if (me == null) return;
         if(!java.util.Objects.equals(friendGraphActor,me)){friendIds.clear();friendIds.add(me);friendGraphActor=me;}
@@ -794,7 +818,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
                 .limit(com.friendbook.social.core.OnDemandLoads.FRIEND_GRAPH_LIMIT)
                 .getCachedOrFetch(forceSections)
                 .addOnSuccessListener((snap) -> {
-                    if(snap==null || !java.util.Objects.equals(me,Fb.uid()) || !isAdded())return;
+                    if(snap==null || !activeHomeRead(me,readGeneration))return;
                     friendIds.clear();
                     friendIds.add(me);
                     if (snap != null) {
@@ -849,6 +873,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
     }
 
     private void startPostsQuery(boolean forceReload) {
+        if(!homeStarted || isHidden() || adapter==null)return;
         final int generation=++feedGeneration;
         final DocumentSnapshot previousCursor=lastDoc;
         final boolean previousMore=moreAvailable;
@@ -865,13 +890,13 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         final long requestedAt=android.os.SystemClock.elapsedRealtime();
         // A queued or stalled request must not leave pull-to-refresh spinning forever.
         engagementHandler.postDelayed(()->{
-            if(generation!=feedGeneration || !java.util.Objects.equals(actor,Fb.uid()) || !isAdded() || !loadingPosts)return;
+            if(generation!=feedGeneration || !java.util.Objects.equals(actor,Fb.uid()) || !isAdded() || !homeStarted || isHidden() || !loadingPosts)return;
             // Unlock Retry while allowing a late result until a newer request starts.
             loadingPosts=false;pageError=true;updatePagingUi();releaseHomeSecondary();
         },20000L);
         final boolean[] usedDelta={false};
         java.util.function.Consumer<com.friendbook.social.d1.documents.QuerySnapshot> apply = snapshot -> {
-            if(generation!=feedGeneration || !java.util.Objects.equals(actor,Fb.uid()) || !isAdded()) return;
+            if(generation!=feedGeneration || !java.util.Objects.equals(actor,Fb.uid()) || !isAdded() || !homeStarted || isHidden()) return;
             if(snapshot.getMetadata().isFromCache() && sameAccount && (!loadedPostIds.isEmpty() || snapshot.isEmpty())) {
                 lastDoc=previousCursor;moreAvailable=previousMore;
                 loadingPosts=false;loadedPosts=true;pageError=true;updatePagingUi();releaseHomeSecondary();return;
@@ -918,7 +943,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
             // Keep cached posts and the inline retry; do not issue a second query on network failure.
         };
         com.friendbook.social.core.FeedHeadReads.load(first,forceReload,
-                ()->generation==feedGeneration && java.util.Objects.equals(actor,Fb.uid()) && isAdded(),
+                ()->generation==feedGeneration && java.util.Objects.equals(actor,Fb.uid()) && isAdded() && homeStarted && !isHidden(),
                 (saved,reusable)->{
             if(reusable){
                 loadedPostIds.clear();
@@ -1108,12 +1133,13 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
 
     @Override public boolean hasMoreStories() { return moreStories; }
     @Override public void loadMoreStories() {
+        if(!homeStarted || isHidden())return;
         if(loadingStories || !moreStories || storyQuery==null) return;
         loadingStories=true; final int generation=storyGeneration; final String actor=Fb.uid();
         final boolean first=storyCursor==null;
         Query page=first?storyQuery:storyQuery.startAfter(storyCursor);
         page.limit(3).getCachedOrFetch(forceSections).addOnSuccessListener(snapshot -> {
-            if(generation!=storyGeneration || !java.util.Objects.equals(actor,Fb.uid()) || !isAdded()) return;
+            if(generation!=storyGeneration || !java.util.Objects.equals(actor,Fb.uid()) || !isAdded() || !homeStarted || isHidden()) return;
             loadingStories=false;lastStoryFetch=android.os.SystemClock.elapsedRealtime(); moreStories=snapshot.size()==3;
             if(first)loadedStoryDocs.clear();
             if(!snapshot.isEmpty())storyCursor=snapshot.getDocuments().get(snapshot.size()-1);
@@ -1185,7 +1211,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
 
     @Override
     public void loadMore() {
-        if(loadingPosts)return;
+        if(!homeStarted || isHidden() || loadingPosts)return;
         if(lastDoc==null){if(pageError)restartPostsListener();return;}
         if(!moreAvailable || feedQuery==null){
             return;
@@ -1193,12 +1219,12 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         pageError=false;loadingPosts=true;updatePagingUi();
         final int generation=++feedGeneration; final String actor=feedAccount;
         engagementHandler.postDelayed(()->{
-            if(generation!=feedGeneration || !java.util.Objects.equals(actor,Fb.uid()) || !isAdded() || !loadingPosts)return;
+            if(generation!=feedGeneration || !java.util.Objects.equals(actor,Fb.uid()) || !isAdded() || !homeStarted || isHidden() || !loadingPosts)return;
             feedGeneration++;loadingPosts=false;pageError=true;updatePagingUi();
         },20000L);
         final long requestedAt=android.os.SystemClock.elapsedRealtime();
         feedQuery.startAfter(lastDoc).limit(PAGE).getCachedOrFetch(false).addOnSuccessListener(snapshot -> {
-            if(generation!=feedGeneration || !java.util.Objects.equals(actor,Fb.uid()) || !isAdded()) return;
+            if(generation!=feedGeneration || !java.util.Objects.equals(actor,Fb.uid()) || !isAdded() || !homeStarted || isHidden()) return;
             loadingPosts=false;
             // getCachedOrFetch returns a complete exact-query page, not a partial document cache.
             moreAvailable=snapshot.size()==PAGE;

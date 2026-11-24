@@ -33,5 +33,6 @@ class HomeNetworkPriorityTest(unittest.TestCase):
     def test_secondary_work_cancels_on_hide_and_stop(self):
         source = HOME.read_text()
         for method in ('void onHiddenChanged(boolean hidden)', 'void onStop()'):
-            self.assertIn('cancelHomeSecondary()', source.split(method, 1)[1][:280])
+            self.assertIn('invalidateHomeReads()', source.split(method, 1)[1][:360])
+        self.assertIn('homeReadGeneration++;cancelHomeSecondary()', source)
         self.assertIn('consumePostsSnapshot(results,!offline);\n            releaseHomeSecondary();', source)
