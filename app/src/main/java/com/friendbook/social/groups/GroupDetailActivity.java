@@ -755,11 +755,11 @@ public class GroupDetailActivity extends Activity implements FeedAdapter.Host {
         com.friendbook.social.d1.documents.Query query=groupPostQuery().whereEqualTo("groupApprovalStatus","pending");
         final Set<String> resolvedPosts=new LinkedHashSet<>();
         com.friendbook.social.core.CursorPager pager=new com.friendbook.social.core.CursorPager(query,
-                10,"group-pending:"+id,(docs,more,loading,error)->{
+                10,"group-pending:"+id,(docs,more,loading,pageError)->{
             if(!dlg.isShowing())return;
-            morePosts.setText(loading?"Loading…":!error.isEmpty()?"Retry posts":more?"Load 10 more":"All records loaded");
+            morePosts.setText(loading?"Loading…":!pageError.isEmpty()?"Retry posts":more?"Load 10 more":"All records loaded");
             morePosts.setEnabled(!loading && more);
-            if(loading || !error.isEmpty())return;
+            if(loading || !pageError.isEmpty())return;
             cards.removeAllViews();
             for(DocumentSnapshot doc:docs){
                 final Models.Post p=Models.Post.fromDoc(doc);
@@ -895,11 +895,11 @@ public class GroupDetailActivity extends Activity implements FeedAdapter.Host {
         com.friendbook.social.d1.documents.Query query=groupPostQuery();
         final Set<String> resolvedPosts=new LinkedHashSet<>();
         com.friendbook.social.core.CursorPager pager=new com.friendbook.social.core.CursorPager(query,
-                10,"group-manage:"+id,(docs,more,loading,error)->{
+                10,"group-manage:"+id,(docs,more,loading,pageError)->{
             if(!dlg.isShowing())return;
-            morePosts.setText(loading?"Loading…":!error.isEmpty()?"Retry posts":more?"Load 10 more":"All records loaded");
+            morePosts.setText(loading?"Loading…":!pageError.isEmpty()?"Retry posts":more?"Load 10 more":"All records loaded");
             morePosts.setEnabled(!loading && more);
-            if(loading || !error.isEmpty())return;
+            if(loading || !pageError.isEmpty())return;
             cards.removeAllViews();
             for(DocumentSnapshot doc:docs){
                 final Models.Post p=Models.Post.fromDoc(doc);
