@@ -134,3 +134,21 @@ test('actual authorized feed query reuses absent-route hints and observes later 
  const updated=await request();assert.equal(candidateQueries,2);assert.equal(updated.find(d=>d.id==='p1').engagement.comments,1);
  assert.ok(primarySessions>=3,'epoch validation uses primary-first sessions');
 });
+
+test('twenty-resource pages split legacy SQL into D1-safe groups in one batch',async t=>{
+ const f=setup(t),base=f.env.DB,add=canonicalSeed(f.sql),resources=Array.from({length:20},(_,i)=>`posts/p${i}`);
+ add.run('comments/x','comments','x','a',JSON.stringify({postId:'p19',authorId:'alice'}),1);
+ let grouped=0,batches=0,epochError=false;
+ const db={...base,withSession(){return this;},prepare(q){
+  if(epochError && q.includes('FROM friendbook_cf_legacy_comment_epoch WHERE id=1'))throw Error('unavailable');
+  if(q.includes('AS slot')){grouped++;assert.ok((q.match(/AS slot/g)||[]).length<=5,'D1 compound SELECT limit');}
+  return base.prepare(q);
+ },async batch(statements){batches++;return base.batch(statements);}};
+ let result=await batchEngagementReads(db,resources,'user1',[],db);
+ assert.deepEqual(resources.map(r=>result.get(r).count),resources.map((_,i)=>i===19?1:0));
+ assert.equal(grouped,4);assert.equal(batches,1);
+ result=await batchEngagementReads(db,resources,'user1',[],db);
+ assert.equal(result.get('posts/p19').count,1);assert.equal(grouped,5);assert.equal(batches,2);
+ epochError=true;result=await batchEngagementReads(db,resources,'user1',[],db);
+ assert.equal(result.get('posts/p19').count,1);assert.equal(grouped,9);assert.equal(batches,3);
+});

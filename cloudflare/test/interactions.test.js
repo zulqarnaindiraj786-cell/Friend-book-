@@ -478,7 +478,7 @@ test('a full 20-post Feed page batches engagement without individual summary req
   let batchCalls=0;
   const db={...f.env.DB,async batch(statements){
     batchCalls++;
-    assert.equal(statements.length,21);
+    assert.equal(statements.length,24); // 20 summaries plus four D1-safe count groups
     return f.env.DB.batch(statements);
   }};
   const result=await batchEngagementReads(db,resources,'user1',[]);

@@ -10,14 +10,14 @@ test('twenty Home cards share one batch and reuse the returned counts and viewer
     prepare(sql){return {bind(...args){return {sql,args,first(){throw Error('unexpected individual read');}};}};},
     async batch(statements){
       calls++;
-      assert.equal(statements.length,21);
+      assert.equal(statements.length,24);
       return statements.map(({args,sql},i)=>{
-        if(i===20) {
-          assert.equal(args.length,41);
+        if(i>=20) {
+          assert.equal(args.length,11);
           assert.equal(args[0],'["blocked"]');
-          assert.equal((sql.match(/COUNT\(\*\)/g)||[]).length,20);
+          assert.equal((sql.match(/COUNT\(\*\)/g)||[]).length,5);
           // Do not depend on a database preserving compound-result ordering.
-          return {results:resources.map((_,slot)=>({slot,n:0})).reverse()};
+          return {results:Array.from({length:5},(_,slot)=>({slot,n:0})).reverse()};
         }
         assert.equal(args[0],'viewer');
         assert.equal(args[1],resources[i]);
@@ -40,6 +40,6 @@ test('an unavailable or incomplete batch leaves existing per-post reads in charg
   assert.equal((await batchEngagementReads(db,resources,'viewer',[])).size,0);
   const incomplete={...db,async batch(){return [...resources.map(()=>({results:[{types_json:'[]'}]})),{results:[{slot:0,n:0}]}];}};
   assert.equal((await batchEngagementReads(incomplete,resources,'viewer',[])).size,0);
-  const duplicate={...db,async batch(){return [...resources.map(()=>({results:[{types_json:'[]'}]})),{results:resources.map(()=>({slot:0,n:0}))}];}};
+  const duplicate={...db,async batch(){return [...resources.map(()=>({results:[{types_json:'[]'}]})),...Array.from({length:4},()=>({results:Array.from({length:5},()=>({slot:0,n:0}))}))];}};
   assert.equal((await batchEngagementReads(duplicate,resources,'viewer',[])).size,0);
 });
