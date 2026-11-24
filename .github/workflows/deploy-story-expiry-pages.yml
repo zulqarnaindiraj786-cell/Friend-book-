@@ -1,5 +1,6 @@
 # Targeted story rail fix: add only reviewed story expiry page indexes, then deploy.
 # Never execute the full migration chain or remove existing indexes/data.
+# Roll out only after source 251589b passed Android and Worker validation.
 name: Deploy bounded story expiry pages
 on:
   push:
