@@ -892,6 +892,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
 
     private int profileStartGeneration;
     private boolean profileStarted,profileResumed,profileInitialStarted,profilePostLoading,profilePostError;
+    private com.friendbook.social.d1.documents.ForegroundReadScope profileReadScope;
     private long profileScrollIntentAt=-10_000L;
     private String profileActor;
     private boolean activeProfile(String actor,int generation){
@@ -918,6 +919,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
         if(actor==null || (profileActor!=null && !java.util.Objects.equals(profileActor,actor))){finish();return;}
         if(profileStarted)return;
         profileActor=actor;profileStarted=true;
+        profileReadScope=new com.friendbook.social.d1.documents.ForegroundReadScope();
         FastCache.addReactionObserver(reactionObserver);
         ++profileStartGeneration;
         profileInitialStarted=false;
@@ -993,7 +995,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
         if (me != null && !mine) {
             // Relationship existence is a two-user lookup, not a scan of either person's entire friend list.
             Fb.db().collection("friends").whereIn("participants",java.util.Arrays.asList(
-                    java.util.Arrays.asList(me,uid),java.util.Arrays.asList(uid,me))).limit(1).getCachedOrFetch(false,300_000L).addOnSuccessListener(snap->{
+                    java.util.Arrays.asList(me,uid),java.util.Arrays.asList(uid,me))).limit(1).getCachedOrFetchAutomatic(profileReadScope,300_000L).addOnSuccessListener(snap->{
                 if(!activeProfile(actor,generation) || requestBusy)return;
                 if (snap==null) return; // keep the last confirmed relationship on a transient error
                 viewerFriendKnown=true;
@@ -1002,7 +1004,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
             });
             Fb.db().collection("friend_requests")
                     .whereEqualTo("fromUid", me).whereEqualTo("toUid", uid).whereEqualTo("status", "pending").limit(1)
-                    .getCachedOrFetch(false,300_000L).addOnSuccessListener(snap -> {
+                    .getCachedOrFetchAutomatic(profileReadScope,300_000L).addOnSuccessListener(snap -> {
                         if(!activeProfile(actor,generation))return;
                         if (snap == null) return;
                         if (requestBusy || !me.equals(Fb.uid())) return;
@@ -1013,7 +1015,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
                     });
             Fb.db().collection("friend_requests")
                     .whereEqualTo("fromUid", uid).whereEqualTo("toUid", me).whereEqualTo("status", "pending").limit(1)
-                    .getCachedOrFetch(false,300_000L).addOnSuccessListener(snap -> {
+                    .getCachedOrFetchAutomatic(profileReadScope,300_000L).addOnSuccessListener(snap -> {
                         if(!activeProfile(actor,generation))return;
                         if (snap == null || requestBusy) return;
                         hasIn = !snap.isEmpty();
@@ -1086,7 +1088,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
 
             if(!error.isEmpty())Ui.toast(this,error);
         });
-        postPager.startCachedFor(120_000L);
+        postPager.startCachedForForeground(120_000L);
         refreshPostCount(generation);
     }
 
@@ -1104,7 +1106,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
         countLoading=true;
         if (postCountReg != null) postCountReg.remove();
         // Independent from the page request and canceled when the profile stops.
-        postCountReg=com.friendbook.social.core.CountReads.once(Fb.db().collection("posts").whereEqualTo("authorId",uid), count -> {
+        postCountReg=com.friendbook.social.core.CountReads.onceAutomatic(Fb.db().collection("posts").whereEqualTo("authorId",uid), profileReadScope, count -> {
             if(!activeProfile(actor,generation))return;
             countLoading=false;countWriteVersion=version;countFetchedAt=android.os.SystemClock.elapsedRealtime();
             PROFILE_COUNTS.put(cacheKey,new ProfileCount(count,version));
@@ -1178,6 +1180,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
     @Override
     protected void onStop() {
         profileStarted=false;countLoading=false;
+        if(profileReadScope!=null){profileReadScope.close();profileReadScope=null;}
         profileUserAttempts.clear();profileUserQueue.clear();
         if(highlightsBusy){highlightsBusy=false;highlightLimit=0;highlightAttempts.clear();}
         profileStartGeneration++;

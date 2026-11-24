@@ -16,7 +16,7 @@ public class ProfileDemandTest {
  private java.lang.reflect.Field field(String n)throws Exception{java.lang.reflect.Field f=ProfileActivity.class.getDeclaredField(n);f.setAccessible(true);return f;}
  private Object call(ProfileActivity a,String n,Class<?>[] types,Object...args)throws Exception{java.lang.reflect.Method m=ProfileActivity.class.getDeclaredMethod(n,types);m.setAccessible(true);return m.invoke(a,args);}
  private ProfileActivity activity(String actor,String target)throws Exception{
-  ProfileActivity a=Robolectric.buildActivity(ProfileActivity.class).get();field("profileActor").set(a,actor);field("uid").set(a,target);field("mine").setBoolean(a,actor.equals(target));field("profileStarted").setBoolean(a,true);return a;
+  ProfileActivity a=Robolectric.buildActivity(ProfileActivity.class).get();field("profileActor").set(a,actor);field("uid").set(a,target);field("mine").setBoolean(a,actor.equals(target));field("profileStarted").setBoolean(a,true);field("profileReadScope").set(a,new ForegroundReadScope());return a;
  }
  @Test public void ownAndVisitorRepeatedStartOnlyStartOnePostHeadAndVisitorRelationshipDemand()throws Exception{
   for(boolean own:new boolean[]{true,false}){
@@ -28,7 +28,7 @@ public class ProfileDemandTest {
     when(db.collection("users")).thenReturn(users);when(users.document(target)).thenReturn(profile);when(profile.withProfileAudience()).thenReturn(profile);when(profile.addSnapshotListener(any())).thenReturn(mock(ListenerRegistration.class));
     when(db.collection("posts")).thenReturn(posts);when(posts.whereEqualTo("authorId",target)).thenReturn(post);when(post.orderBy(eq("createdAt"),any(Query.Direction.class))).thenReturn(post);when(post.withFeedEngagement()).thenReturn(post);when(post.limit(10)).thenReturn(post);when(post.get(Source.CACHE)).thenReturn(new TaskCompletionSource<QuerySnapshot>().getTask());
     when(db.collection("friends")).thenReturn(friends);when(friends.whereIn(eq("participants"),anyList())).thenReturn(relationship);
-    when(db.collection("friend_requests")).thenReturn(requests);when(requests.whereEqualTo(eq("fromUid"),any())).thenReturn(relationship);when(relationship.whereEqualTo(anyString(),any())).thenReturn(relationship);when(relationship.limit(1)).thenReturn(relationship);when(relationship.getCachedOrFetch(false,300_000L)).thenReturn(new TaskCompletionSource<QuerySnapshot>().getTask());
+    when(db.collection("friend_requests")).thenReturn(requests);when(requests.whereEqualTo(eq("fromUid"),any())).thenReturn(relationship);when(relationship.whereEqualTo(anyString(),any())).thenReturn(relationship);when(relationship.limit(1)).thenReturn(relationship);when(relationship.getCachedOrFetchAutomatic(any(ForegroundReadScope.class),eq(300_000L))).thenReturn(new TaskCompletionSource<QuerySnapshot>().getTask());
     for(int i=0;i<100;i++)call(a,"onStart",new Class<?>[]{});
     int generation=field("profileStartGeneration").getInt(a);
     // Started-but-not-resumed and background states must not initiate reads.
@@ -40,7 +40,7 @@ public class ProfileDemandTest {
     verify(db,never()).collection(anyString());
     app.when(com.friendbook.social.App::isForeground).thenReturn(true);
     for(int i=0;i<100;i++)call(a,"startResumedProfile",new Class<?>[]{String.class,int.class},actor,generation);
-    verify(post,times(1)).get(Source.CACHE);verify(profile,times(1)).addSnapshotListener(any());verify(relationship,times(own?0:3)).getCachedOrFetch(false,300_000L);verify(db,never()).collection("subscriptions");
+    verify(post,times(1)).get(Source.CACHE);verify(profile,times(1)).addSnapshotListener(any());verify(relationship,times(own?0:3)).getCachedOrFetchAutomatic(any(ForegroundReadScope.class),eq(300_000L));verify(db,never()).collection("subscriptions");
     call(a,"onStop",new Class<?>[]{});
    }
   }
@@ -48,11 +48,11 @@ public class ProfileDemandTest {
  @Test public void countIsSingleFlightReusedAcrossProfileOpensAndInvalidatedByPostWrites()throws Exception{
   try(MockedStatic<Fb> fb=mockStatic(Fb.class);MockedStatic<CountReads> counts=mockStatic(CountReads.class)){
    fb.when(Fb::uid).thenReturn("count-profile-actor");D1DocumentStore db=mock(D1DocumentStore.class);fb.when(Fb::db).thenReturn(db);CollectionReference posts=mock(CollectionReference.class);Query q=mock(Query.class);when(db.collection("posts")).thenReturn(posts);when(posts.whereEqualTo("authorId","count-profile-target")).thenReturn(q);
-   final java.util.function.LongConsumer[] completion={null};counts.when(()->CountReads.once(eq(q),any(java.util.function.LongConsumer.class),any())).thenAnswer(inv->{completion[0]=inv.getArgument(1);return mock(ListenerRegistration.class);});
+   final java.util.function.LongConsumer[] completion={null};counts.when(()->CountReads.onceAutomatic(eq(q),any(ForegroundReadScope.class),any(java.util.function.LongConsumer.class),any())).thenAnswer(inv->{completion[0]=inv.getArgument(2);return mock(ListenerRegistration.class);});
    ProfileActivity a=activity("count-profile-actor","count-profile-target");for(int i=0;i<100;i++)call(a,"refreshPostCount",new Class<?>[]{int.class},0);completion[0].accept(42);
    ProfileActivity next=activity("count-profile-actor","count-profile-target");for(int i=0;i<100;i++)call(next,"refreshPostCount",new Class<?>[]{int.class},0);
-   counts.verify(()->CountReads.once(eq(q),any(java.util.function.LongConsumer.class),any()),times(1));assertEquals(42,field("userPostCount").getInt(next));
-   when(db.postWriteVersion()).thenReturn(1L);call(next,"refreshPostCount",new Class<?>[]{int.class},0);counts.verify(()->CountReads.once(eq(q),any(java.util.function.LongConsumer.class),any()),times(2));
+   counts.verify(()->CountReads.onceAutomatic(eq(q),any(ForegroundReadScope.class),any(java.util.function.LongConsumer.class),any()),times(1));assertEquals(42,field("userPostCount").getInt(next));
+   when(db.postWriteVersion()).thenReturn(1L);call(next,"refreshPostCount",new Class<?>[]{int.class},0);counts.verify(()->CountReads.onceAutomatic(eq(q),any(ForegroundReadScope.class),any(java.util.function.LongConsumer.class),any()),times(2));
   }
  }
  @Test public void friendsProfilesBatchOnceAndStoppedResponseDoesNotPopulateCache()throws Exception{

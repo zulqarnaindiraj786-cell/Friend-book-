@@ -12,7 +12,7 @@ class RemainingPaging(unittest.TestCase):
         source=(JAVA/'core/QueryActions.java').read_text()
         for token in ['page.limit(50).get(Source.SERVER)','query.startAfter(cursor)','batch.commit()','Objects.equals(actor,Fb.uid())','done::trySetException','else deletePage(query,last,actor,done)','else updatePage(query,last,actor,patch,total+snap.size(),done)']:self.assertIn(token,source)
     def test_exact_counts_do_not_download_members(self):
-        source=(JAVA/'core/CountReads.java').read_text();self.assertIn('query.count().get(AggregateSource.SERVER)',source)
+        source=(JAVA/'core/CountReads.java').read_text();self.assertIn('AggregateQuery aggregate=query.count()',source);self.assertIn('aggregate.get(AggregateSource.SERVER)',source)
         for name in ['bluetick/MonetizationActivity.java','settings/SettingsActivity.java']:
             self.assertIn('CountReads.once',(JAVA/name).read_text())
         self.assertIn('Fb.db().referralStatus()',(JAVA/'bluetick/BlueTickActivity.java').read_text())

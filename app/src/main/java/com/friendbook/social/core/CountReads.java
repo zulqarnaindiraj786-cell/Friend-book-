@@ -10,6 +10,14 @@ public final class CountReads {
     }
     public static ListenerRegistration once(Query query,LongConsumer result,
                                              java.util.function.Consumer<Exception> failed) {
+        return once(query,null,result,failed);
+    }
+    public static ListenerRegistration onceAutomatic(Query query,ForegroundReadScope scope,LongConsumer result,
+                                             java.util.function.Consumer<Exception> failed) {
+        return once(query,scope,result,failed);
+    }
+    private static ListenerRegistration once(Query query,ForegroundReadScope scope,LongConsumer result,
+                                             java.util.function.Consumer<Exception> failed) {
         final String actor=Fb.uid();
         final boolean[] closed={false};
         final int[] attempts={0};
@@ -17,7 +25,8 @@ public final class CountReads {
         Runnable retry=new Runnable(){ @Override public void run() {
             if(closed[0] || actor==null || !Objects.equals(actor,Fb.uid())) return;
             attempts[0]++;
-            query.count().get(AggregateSource.SERVER).addOnSuccessListener(count->{
+            AggregateQuery aggregate=query.count();
+            (scope==null ? aggregate.get(AggregateSource.SERVER) : aggregate.getAutomatic(scope)).addOnSuccessListener(count->{
                 if(!closed[0] && Objects.equals(actor,Fb.uid())) {
                     closed[0]=true;result.accept(count.getCount());
                 }

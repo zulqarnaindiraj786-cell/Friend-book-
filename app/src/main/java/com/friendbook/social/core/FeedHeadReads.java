@@ -8,6 +8,10 @@ public final class FeedHeadReads {
     private FeedHeadReads(){}
     public static void load(Query first,boolean forced,BooleanSupplier active,
             BiConsumer<QuerySnapshot,Boolean> cached,Consumer<QuerySnapshot> fresh,Consumer<Exception> failed){
+        load(first,forced,null,active,cached,fresh,failed);
+    }
+    public static void load(Query first,boolean forced,ForegroundReadScope scope,BooleanSupplier active,
+            BiConsumer<QuerySnapshot,Boolean> cached,Consumer<QuerySnapshot> fresh,Consumer<Exception> failed){
         if(!active.getAsBoolean())return;
         if(forced){first.get(Source.SERVER).addOnSuccessListener(s->{if(active.getAsBoolean())fresh.accept(s);})
                 .addOnFailureListener(e->{if(active.getAsBoolean())failed.accept(e);});return;}
@@ -19,7 +23,8 @@ public final class FeedHeadReads {
             if(reusable || !active.getAsBoolean())return;
             // A delta only discovers newer IDs; it cannot remove deleted posts or
             // refresh edited/privacy-changed rows. Revalidate the bounded head once.
-            first.get(Source.DEFAULT).addOnSuccessListener(s->{if(active.getAsBoolean())fresh.accept(s);})
+            (scope==null ? first.get(Source.DEFAULT) : first.getAutomatic(scope))
+                    .addOnSuccessListener(s->{if(active.getAsBoolean())fresh.accept(s);})
                     .addOnFailureListener(e->{if(active.getAsBoolean())failed.accept(e);});
         });
     }

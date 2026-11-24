@@ -10,9 +10,10 @@ class QueryReadFlightsWiring(unittest.TestCase):
         source = (BASE / 'Query.java').read_text()
         read = source.split('public Task<QuerySnapshot> get(Source source)', 1)[1].split('public boolean hasFreshLocalPage', 1)[0]
         self.assertIn('D1DocumentStore.queryCacheKey(this, actor)', read)
-        self.assertIn('queryReadFlights.read(actor, key, source == Source.DEFAULT', read)
-        self.assertIn('() -> firstFeedPage ? firestore.runFeedFirstPage(fetch) : firestore.runAsync(fetch)', read)
-        cache = read.split('java.util.concurrent.Callable<QuerySnapshot> fetch', 1)[0]
+        self.assertIn('queryReadFlights.readPromotable(', read)
+        self.assertIn('actor,key,source == Source.DEFAULT,!automatic', read)
+        self.assertIn('return firstFeedPage ? firestore.runFeedFirstPage(fetch) : firestore.runAsync(fetch)', read)
+        cache = read.split('boolean firstFeedPage', 1)[0]
         self.assertNotIn('queryReadFlights', cache)
         cached = source.split('public Task<QuerySnapshot> getCachedOrFetch(boolean force,long maxAgeMs)', 1)[1].split('public Task<QuerySnapshot> get(Source source)', 1)[0]
         self.assertIn('if (force) return get(Source.SERVER)', cached)

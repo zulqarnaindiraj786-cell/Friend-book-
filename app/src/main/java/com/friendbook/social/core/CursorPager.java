@@ -24,6 +24,7 @@ public final class CursorPager {
     private boolean receivedObserved;
     private boolean more=true,loading,closed,serverReceived;
     private boolean reuseExactPages;
+    private ForegroundReadScope initialForegroundScope;
     private int requestGeneration;
     private final android.os.Handler timeoutHandler=new android.os.Handler(android.os.Looper.getMainLooper());
     private Runnable timeout;
@@ -39,11 +40,29 @@ public final class CursorPager {
     public void startCachedDay() { startLocal(24*60*60*1000L,true); }
     /** Short exact-query reuse across search terms over the same recent posts. */
     public void startCachedFor(long maxAgeMs) { startLocal(Math.max(0L,maxAgeMs),true); }
+    /** Screen-owned initial page; scrolling and explicit retries remain user reads. */
+    public void startCachedForForeground(long maxAgeMs) {
+        if (initialForegroundScope==null) initialForegroundScope=new ForegroundReadScope();
+        startLocal(Math.max(0L,maxAgeMs),true);
+    }
     private void startLocal(long maxAgeMs,boolean full) {
         if(!active() || loading)return;
         loading=true;
         final int request=++requestGeneration;
-        timeout=()->{if(active() && loading && request==requestGeneration){requestGeneration++;loading=false;emit("Loading is taking too long. Tap to retry.");}};
+        final ForegroundReadScope automaticScope=maxAgeMs>0 ? initialForegroundScope : null;
+        timeout=()->{
+            if(!active() || !loading || request!=requestGeneration)return;
+            if(automaticScope!=null && !com.friendbook.social.App.isForeground()) {
+                // Do not time out a read that is deliberately waiting for resume.
+                automaticScope.whenForeground().addOnSuccessListener(ignored->{
+                    if(active() && loading && request==requestGeneration)timeoutHandler.postDelayed(timeout,20000L);
+                });
+                return;
+            }
+            requestGeneration++;loading=false;
+            if(automaticScope!=null)automaticScope.close();
+            emit("Loading is taking too long. Tap to retry.");
+        };
         timeoutHandler.postDelayed(timeout,20000L);
         Query head=query.limit(size);
         head.get(Source.CACHE).addOnCompleteListener(cache -> {
@@ -69,7 +88,9 @@ public final class CursorPager {
             // Initial cache-first loads still require a network response on a
             // miss, but may share that exact in-flight operation. Only an
             // explicit refresh (zero max age) forces an independent read.
-            (full ? head.get(maxAgeMs>0 ? Source.DEFAULT : Source.SERVER) : head.refreshCachedHead(cached)).addOnSuccessListener(page -> {
+            (full ? (automaticScope!=null ? head.getAutomatic(automaticScope)
+                    : head.get(maxAgeMs>0 ? Source.DEFAULT : Source.SERVER))
+                    : head.refreshCachedHead(cached)).addOnSuccessListener(page -> {
                 if(!active() || request!=requestGeneration)return;
                 timeoutHandler.removeCallbacks(timeout);loading=false;
                 acceptObservedFirstPage(page);
@@ -167,5 +188,6 @@ public final class CursorPager {
     public void forget(String id){records.remove(id);CACHE.remove(key);}
     public boolean hasMore(){return more;}
     public boolean isLoading(){return loading;}
-    public void close(){closed=true;requestGeneration++;if(timeout!=null)timeoutHandler.removeCallbacks(timeout);}
+    public void close(){closed=true;requestGeneration++;if(timeout!=null)timeoutHandler.removeCallbacks(timeout);
+        if(initialForegroundScope!=null){initialForegroundScope.close();initialForegroundScope=null;}}
 }

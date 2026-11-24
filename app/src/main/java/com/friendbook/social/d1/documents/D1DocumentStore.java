@@ -711,7 +711,7 @@ public class D1DocumentStore {
         }
     }
 
-    private static final class BackgroundQueryDeferred extends Exception { }
+    static final class BackgroundQueryDeferred extends Exception { }
 
     /** Exact revision-bearing listener requests share the queued operation, not mutable deltas. */
     Task<String> readListenerQueryResponse(String actor,org.json.JSONObject body,ExecutorService lane) {

@@ -8,7 +8,7 @@ class ProfileDemandQuota(unittest.TestCase):
   self.assertIn('10,"profile-posts:"',S)
   self.assertIn('10,"profile-reels:"',S)
   self.assertIn('friendPager.startCachedFor(300_000L)',S)
-  self.assertIn('postPager.startCachedFor(120_000L)',S)
+  self.assertIn('postPager.startCachedForForeground(120_000L)',S)
   self.assertIn('videoPager.startCachedFor(120_000L)',S)
  def test_batching_and_no_bind_time_highlight_reads(self):
   render=S.split('private void renderPersonalDetailsAndHighlights',1)[1].split('private void loadHighlightPage',1)[0]

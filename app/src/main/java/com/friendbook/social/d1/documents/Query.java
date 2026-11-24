@@ -269,8 +269,29 @@ public class Query {
                         : get(Source.DEFAULT));
     }
 
-    public Task<QuerySnapshot> get(Source source) {
-        final String actor = D1DocumentStore.authenticatedUid();
+    /** Automatic screen-owned reads wait for foreground and are cancelled when the screen stops. */
+    public Task<QuerySnapshot> getAutomatic(ForegroundReadScope scope) {
+        return getAutomatic(scope,D1DocumentStore.authenticatedUid());
+    }
+
+    private Task<QuerySnapshot> getAutomatic(ForegroundReadScope scope,String actor) {
+        return scope.read(() -> get(Source.DEFAULT,true,actor));
+    }
+
+    public Task<QuerySnapshot> getCachedOrFetchAutomatic(ForegroundReadScope scope,long maxAgeMs) {
+        String actor=D1DocumentStore.authenticatedUid();
+        if (!hasFreshLocalPage(maxAgeMs)) return getAutomatic(scope,actor);
+        return get(Source.CACHE,false,actor).continueWithTask(Runnable::run, task ->
+                task.isSuccessful() ? com.google.android.gms.tasks.Tasks.forResult(task.getResult())
+                        : getAutomatic(scope,actor));
+    }
+
+    public Task<QuerySnapshot> get(Source source) { return get(source,false,null); }
+
+    private Task<QuerySnapshot> get(Source source,boolean automatic,String requestedActor) {
+        final String actor = requestedActor == null ? D1DocumentStore.authenticatedUid() : requestedActor;
+        if (!actor.equals(D1DocumentStore.authenticatedUid())) return com.google.android.gms.tasks.Tasks.forException(
+                new D1DocumentStoreException(D1DocumentStoreException.Code.CANCELLED,"Account changed before query"));
         final String key = D1DocumentStore.queryCacheKey(this, actor);
         if (source == Source.CACHE) {
             return firestore.runCacheRead(() -> {
@@ -287,22 +308,33 @@ public class Query {
                 return snapshot;
             });
         }
-        java.util.concurrent.Callable<QuerySnapshot> fetch = () -> {
-            if (!actor.equals(D1DocumentStore.authenticatedUid()))
-                throw new D1DocumentStoreException(D1DocumentStoreException.Code.CANCELLED, "Account changed before queued query");
-            JSONArray arr = D1DocumentTransport.query(toQueryBody());
-            if (!actor.equals(D1DocumentStore.authenticatedUid()))
-                throw new D1DocumentStoreException(D1DocumentStoreException.Code.CANCELLED, "Account changed during query");
-            firestore.cacheQuery(key, arr.toString());
-            return parseQuerySnapshot(arr);
-        };
         boolean firstFeedPage = "posts".equals(parentPath) && feedEngagement && limitValue != null
                 && startAfterValues == null && startAtValues == null && endBeforeValues == null && endAtValues == null;
-        // Share the entire queued operation, not just overlapping HTTP I/O.
-        // The exact serialized request key includes collection, filters, order,
-        // cursor, limit and feed engagement. SERVER remains independent.
-        return firestore.queryReadFlights.read(actor, key, source == Source.DEFAULT,
-                () -> firstFeedPage ? firestore.runFeedFirstPage(fetch) : firestore.runAsync(fetch));
+        // An explicit DEFAULT read may promote an identical queued automatic
+        // flight; SERVER remains independent and never joins.
+        DocumentReadFlights.Access<QuerySnapshot> access = firestore.queryReadFlights.readPromotable(
+                actor,key,source == Source.DEFAULT,!automatic,allowBackground -> {
+            java.util.concurrent.Callable<QuerySnapshot> fetch = () -> {
+                if (!actor.equals(D1DocumentStore.authenticatedUid()))
+                    throw new D1DocumentStoreException(D1DocumentStoreException.Code.CANCELLED, "Account changed before queued query");
+                if (!allowBackground.get() && !com.friendbook.social.App.isForeground())
+                    throw new D1DocumentStore.BackgroundQueryDeferred();
+                JSONArray arr = D1DocumentTransport.query(toQueryBody());
+                if (!actor.equals(D1DocumentStore.authenticatedUid()))
+                    throw new D1DocumentStoreException(D1DocumentStoreException.Code.CANCELLED, "Account changed during query");
+                firestore.cacheQuery(key, arr.toString());
+                return parseQuerySnapshot(arr);
+            };
+            return firstFeedPage ? firestore.runFeedFirstPage(fetch) : firestore.runAsync(fetch);
+        });
+        if (!automatic && access.promotedAutomatic) {
+            // Promotion can race the worker's foreground decision. A user read
+            // must still run even if the automatic attempt was already deferred.
+            return access.task.continueWithTask(Runnable::run, completed ->
+                    completed.getException() instanceof D1DocumentStore.BackgroundQueryDeferred
+                            ? get(source,false,actor) : completed);
+        }
+        return access.task;
     }
 
     public boolean hasFreshLocalPage(long maxAgeMs) {

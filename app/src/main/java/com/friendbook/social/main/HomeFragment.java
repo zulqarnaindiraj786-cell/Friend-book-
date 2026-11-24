@@ -80,6 +80,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
     private final List<Models.Reel> featuredReels=new ArrayList<>();
     private final Map<String,DocumentSnapshot> loadedStoryDocs=new java.util.LinkedHashMap<>();
     private int feedGeneration;
+    private com.friendbook.social.d1.documents.ForegroundReadScope feedReadScope;
     private long lastFeedFetch, lastFeedWriteVersion;
     private final android.os.Handler engagementHandler=new android.os.Handler(android.os.Looper.getMainLooper());
     private static final long HOME_SECONDARY_MAX_WAIT_MS = 3000L;
@@ -94,6 +95,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         homeReadGeneration++;friendFactsGeneration++;friendFactsPending.clear();friendFactsFailed.clear();
         cancelHomeSecondary();engagementHandler.removeCallbacksAndMessages(null);
         feedGeneration++;loadingPosts=false;
+        if(feedReadScope!=null){feedReadScope.close();feedReadScope=null;}
         storyGeneration++;loadingStories=false;
         // A canceled first story page must be retryable on the next visible entry.
         if(storyCursor==null && loadedStoryDocs.isEmpty())storyQuery=null;
@@ -968,6 +970,9 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
     private void startPostsQuery(boolean forceReload) {
         if(!homeStarted || isHidden() || adapter==null)return;
         final int generation=++feedGeneration;
+        if(feedReadScope!=null)feedReadScope.close();
+        feedReadScope=forceReload ? null : new com.friendbook.social.d1.documents.ForegroundReadScope();
+        final com.friendbook.social.d1.documents.ForegroundReadScope automaticScope=feedReadScope;
         final DocumentSnapshot previousCursor=lastDoc;
         final boolean previousMore=moreAvailable;
         final boolean sameAccount=java.util.Objects.equals(feedAccount,Fb.uid());
@@ -1020,7 +1025,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
             releaseHomeSecondary();
             // Keep cached posts and the inline retry; do not issue a second query on network failure.
         };
-        com.friendbook.social.core.FeedHeadReads.load(first,forceReload,
+        com.friendbook.social.core.FeedHeadReads.load(first,forceReload,automaticScope,
                 ()->generation==feedGeneration && java.util.Objects.equals(actor,Fb.uid()) && isAdded() && homeStarted && !isHidden(),
                 (saved,reusable)->{
             if(reusable){
