@@ -738,20 +738,27 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
     @Override
     protected void onActivityResult(int req, int res, Intent data) {
         super.onActivityResult(req, res, data);
-        if (res != RESULT_OK || data == null || data.getData() == null || !mine) return;
+        if (res != RESULT_OK || data == null || data.getData() == null || !mine
+                || (req!=REQ_PICK_AVATAR && req!=REQ_PICK_COVER) || photoUploadBusy
+                || !java.util.Objects.equals(profileActor,Fb.uid())) return;
+        final String uploadActor=profileActor;
+        photoUploadBusy=true;
         Uri uri = data.getData();
         boolean isAvatar = (req == REQ_PICK_AVATAR);
         Ui.toast(this, isAvatar ? "Uploading HD profile photo…" : "Uploading HD cover photo…");
         String path = (isAvatar ? "avatars/" : "covers/") + uid + "_" + System.currentTimeMillis() + ".jpg";
         Cloudinary.uploadOrFirebase(this, path, uri)
                 .addOnSuccessListener(url -> {
+                    if(!java.util.Objects.equals(uploadActor,Fb.uid())){photoUploadBusy=false;return;}
                     Map<String, Object> up = new HashMap<>();
                     up.put(isAvatar ? "photoUrl" : "coverUrl", url);
                     Fb.patchMe(up).addOnSuccessListener(saved -> {
+                    photoUploadBusy=false;
+                    if(!java.util.Objects.equals(uploadActor,Fb.uid()))return;
                     if (user != null) {
                         if (isAvatar) user.photoUrl = url;
                         else user.coverUrl = url;
-                        bindUser();
+                        if(activeProfile())bindUser();
                     }
                     // friendbook signature feature: Share full DP / Cover update onto News Feed!
                     if (com.friendbook.social.core.Prefs.shareDpToFeed(ProfileActivity.this)) {
@@ -770,15 +777,20 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
                                 "savedBy", new ArrayList<String>(),
                                 "createdAt", FieldValue.serverTimestamp());
                         Fb.db().collection("posts").add(dpPost)
-                                .addOnFailureListener(e -> Ui.toast(ProfileActivity.this, "Photo saved, but couldn't share the post."));
+                                .addOnFailureListener(e -> {if(activeProfile() && java.util.Objects.equals(uploadActor,Fb.uid()))Ui.toast(ProfileActivity.this, "Photo saved, but couldn't share the post.");});
                     }
-                    Ui.toast(ProfileActivity.this, isAvatar
+                    if(activeProfile())Ui.toast(ProfileActivity.this, isAvatar
                             ? "Profile picture updated ✓"
                             : "Cover photo updated ✓");
-                    }).addOnFailureListener(e -> Ui.toast(ProfileActivity.this, "Couldn't save photo. Please try again."));
+                    }).addOnFailureListener(e -> {
+                        photoUploadBusy=false;
+                        if(activeProfile() && java.util.Objects.equals(uploadActor,Fb.uid()))Ui.toast(ProfileActivity.this, "Couldn't save photo. Please try again.");
+                    });
                 })
-                .addOnFailureListener(err ->
-                        Ui.toast(ProfileActivity.this, "Upload failed: " + err.getMessage()));
+                .addOnFailureListener(err -> {
+                    photoUploadBusy=false;
+                    if(activeProfile() && java.util.Objects.equals(uploadActor,Fb.uid()))Ui.toast(ProfileActivity.this, "Upload failed: " + err.getMessage());
+                });
     }
 
     private void showProfileSearchDialog() {
@@ -891,7 +903,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
     private long countFetchedAt=-120_000L,countWriteVersion=-1;
     private boolean countLoading;
     private int subscriptionGeneration=-1;
-    private boolean followBusy,subscribeBusy;
+    private boolean followBusy,subscribeBusy,photoUploadBusy;
     private static final class ProfileCount {final long value,version,at;ProfileCount(long value,long version){this.value=value;this.version=version;this.at=android.os.SystemClock.elapsedRealtime();}}
     private static final android.util.LruCache<List<String>,ProfileCount> PROFILE_COUNTS=new android.util.LruCache<>(64);
     private final Map<String,Models.Story> highlightCache=new java.util.LinkedHashMap<>();
@@ -959,7 +971,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
             // Relationship existence is a two-user lookup, not a scan of either person's entire friend list.
             Fb.db().collection("friends").whereIn("participants",java.util.Arrays.asList(
                     java.util.Arrays.asList(me,uid),java.util.Arrays.asList(uid,me))).limit(1).getCachedOrFetch(false,300_000L).addOnSuccessListener(snap->{
-                if(!activeProfile(actor,generation))return;
+                if(!activeProfile(actor,generation) || requestBusy)return;
                 if (snap==null) return; // keep the last confirmed relationship on a transient error
                 viewerFriendKnown=true;
                 friendIds.clear();if(!snap.isEmpty())friendIds.add(uid);
@@ -980,7 +992,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
                     .whereEqualTo("fromUid", uid).whereEqualTo("toUid", me).whereEqualTo("status", "pending").limit(1)
                     .getCachedOrFetch(false,300_000L).addOnSuccessListener(snap -> {
                         if(!activeProfile(actor,generation))return;
-                        if (snap == null) return;
+                        if (snap == null || requestBusy) return;
                         hasIn = !snap.isEmpty();
                         incomingRequestId = hasIn ? snap.getDocuments().get(0).getId() : null;
                         computeFriendState();
@@ -1143,6 +1155,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
     @Override
     protected void onStop() {
         profileStarted=false;countLoading=false;
+        profileUserAttempts.clear();profileUserQueue.clear();
         if(highlightsBusy){highlightsBusy=false;highlightLimit=0;highlightAttempts.clear();}
         profileStartGeneration++;
         super.onStop();
