@@ -1495,6 +1495,56 @@ async function boundedRecentPeoplePage(db,env,uid,spec) {
   }
 }
 
+// Reel discovery's video-post query has no explicit order: Firestore's default
+// is ascending document ID. Seek only video rows and authorize before LIMIT.
+// Non-ASCII/malformed IDs use the existing evaluator because SQLite binary and
+// JavaScript UTF-16 order are not generally equivalent.
+async function boundedVideoPostPage(db,uid,spec,requestUserReads) {
+  const filters=spec?.filters;
+  if(spec?.parent!=='posts' || !Array.isArray(filters) || filters.length!==1
+      || filters[0]?.field!=='mediaType' || filters[0]?.op!=='==' || filters[0]?.value!=='video'
+      || !Array.isArray(spec.orderBy) || spec.orderBy.length || spec.limitToLast
+      || spec.startAt || spec.endAt || spec.endBefore || !Number.isInteger(spec.limit)
+      || spec.limit<1 || spec.limit>100) return null;
+  let cursor=null;
+  if(spec.startAfter) {
+    if(!Array.isArray(spec.startAfter) || spec.startAfter.length!==1
+        || typeof spec.startAfter[0]!=='string' || !/^[\x20-\x7e]+$/.test(spec.startAfter[0])) return null;
+    cursor=spec.startAfter[0];
+  }
+  const exception=`(doc_id='' OR doc_id GLOB '*[^ -~]*' OR instr(doc_id,char(0))>0 OR instr(doc_id,'/')>0 OR path<>'posts/'||doc_id)`;
+  try {
+    const unusual=await db.prepare(`SELECT doc_id FROM friendbook_cf_firestore_documents INDEXED BY idx_cf_video_post_exceptions
+      WHERE parent_path='posts' AND json_extract(document_json,'$.mediaType')='video' AND ${exception} LIMIT 1`).bind().all();
+    if((unusual.results||[]).length) return null;
+    const visible=[];
+    let deniedBurst=1;
+    for(;;) {
+      const chunk=Math.min(100,Math.max(deniedBurst,spec.limit-visible.length));
+      const bound=cursor===null?'':' AND doc_id>?';
+      const args=cursor===null?[chunk]:[cursor,chunk];
+      const page=await db.prepare(`SELECT path,parent_path,collection_id,doc_id,owner_uid,document_json,create_time,update_time
+        FROM friendbook_cf_firestore_documents INDEXED BY idx_cf_video_post_page
+        WHERE parent_path='posts' AND json_extract(document_json,'$.mediaType')='video'${bound}
+        ORDER BY doc_id ASC LIMIT ?`).bind(...args).all();
+      const rows=page.results||[];
+      const docs=rows.map(canonicalContentDocument).filter(Boolean);
+      // Loaded rows are canonical; maintain the same request-local, fresh ACL.
+      const allowed=await visibleDocuments(db,uid,'posts',docs,requestUserReads);
+      visible.push(...allowed);
+      deniedBurst=allowed.length?1:Math.min(100,chunk*2);
+      if(visible.length>=spec.limit)return visible.slice(0,spec.limit);
+      if(rows.length<chunk)break;
+      cursor=rows.at(-1).doc_id;
+    }
+    return visible;
+  } catch(error) {
+    // Rolling deploys without the new indexes retain the exact old evaluator.
+    if(/no such index: idx_cf_video_post_(?:page|exceptions)/.test(String(error)))return null;
+    throw error;
+  }
+}
+
 async function boundedFeedPage(db,uid,spec,requestUserReads) {
   const root=spec?.parent;
   if (root!=='posts' && root!=='reels') return null;
@@ -3521,7 +3571,7 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0, ct
         if(inbox!==null)return queryResponse(parent,inbox,body.knownRevisions);
         const people=await boundedNamePage(db,env,uid,body) ?? await boundedPeoplePage(db,env,uid,body) ?? await boundedRecentPeoplePage(db,env,uid,body);
         if (people!==null) return queryResponse(parent,people,body.knownRevisions);
-        const page=parent==='notifications'?await boundedNotificationPage(db,uid,body):await boundedFeedPage(db,uid,body,requestUserReads);
+        const page=parent==='notifications'?await boundedNotificationPage(db,uid,body):await boundedVideoPostPage(db,uid,body,requestUserReads) ?? await boundedFeedPage(db,uid,body,requestUserReads);
         if (page!==null) return queryResponse(parent,await feedEngagement(db,env,uid,body,page,requestUserReads),body.knownRevisions);
         rows = await readCollectionRows(db, parent, uid, body?.filters, body, env);
       }

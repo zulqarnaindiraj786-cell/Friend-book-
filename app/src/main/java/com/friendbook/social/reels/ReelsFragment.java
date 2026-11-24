@@ -341,13 +341,10 @@ public class ReelsFragment extends Fragment {
                     FeedAlgorithm.recordVideoImpression(getActivity(), cur.id);
                 }
                 int rIdx = adapter.reelIndexForPos(position);
-                if(rIdx>=adapter.rawReels().size()-3) {
-                    if (!moreReels && !moreVideoPosts) {
-                        appendEndlessCycleIfNeeded();
-                    } else {
-                        loadNextVideos();
-                    }
-                }
+                // More videos is explicit demand. A selection/bind, including the
+                // initial page callback, must not prefetch another network page.
+                if(cur!=null && rIdx>=adapter.rawReels().size()-3 && !moreReels && !moreVideoPosts)
+                    appendEndlessCycleIfNeeded();
             }
         });
         // Banner is outside the pager so it cannot cover the right-side controls.
@@ -525,10 +522,6 @@ public class ReelsFragment extends Fragment {
     public void onStart() {
         super.onStart();
         ReelUploadManager.addListener(bgUploadListener);
-        if (fromReels.isEmpty() && fromPosts.isEmpty()) {
-            resetVideoPages();
-        }
-
         if (!isHidden() && pager != null && adapter != null && adapter.getItemCount() > 0) {
             pager.post(() -> {
                 if (!isHidden() && pager != null) adapter.playOnly(pager, pager.getCurrentItem());
@@ -687,7 +680,7 @@ public class ReelsFragment extends Fragment {
         rebuildMergedFeed(wasEmpty);
     }
     private void loadNextVideos() {
-        if(pagingVideos || (!moreReels && !moreVideoPosts) || !isAdded()) return;
+        if(pagingVideos || (!moreReels && !moreVideoPosts) || !isAdded() || !isResumed() || isHidden()) return;
         pagingVideos=true; reelsLoadFailed=false; final int generation=videoGeneration; final String actor=Fb.uid();
         // A Firestore get() on a black-hole network calls NEITHER listener. Without this watchdog the
         // opening spinner would spin forever; after 15s the user gets the failure state and a Retry.
@@ -768,8 +761,17 @@ public class ReelsFragment extends Fragment {
         }
     }
 
+    private void startVisibleVideosIfNeeded() {
+        if(isAdded() && isResumed() && !isHidden() && !pagingVideos && !reelsLoadFailed
+                && fromReels.isEmpty() && fromPosts.isEmpty()) resetVideoPages();
+    }
+    private void retireVideoLoad() {
+        videoGeneration++;pagingVideos=false;watchdogGen++;
+        reelsWatchdog.removeCallbacksAndMessages(null);
+    }
     @Override public void onResume(){
         super.onResume();
+        startVisibleVideosIfNeeded();
         if (getActivity() != null) ConsentManager.retryConsentOnResume(getActivity());
         updateReelBanner();
         if(pager!=null && adapter!=null){
@@ -778,6 +780,7 @@ public class ReelsFragment extends Fragment {
         }
     }
     @Override public void onPause(){
+        retireVideoLoad();
         if(reelBanners!=null)reelBanners.setActive(false);
         if(adapter!=null && pager!=null)adapter.pauseAll(pager);
         super.onPause();
@@ -796,13 +799,10 @@ public class ReelsFragment extends Fragment {
         updateReelBanner();
         if (adapter == null || pager == null) return;
         if (hidden) {
+            retireVideoLoad();
             adapter.pauseAll(pager);
         } else {
-            if (adapter.rawReels().isEmpty()) {
-                resetVideoPages();
-            } else if (adapter.rawReels().size() < 4 && (moreReels || moreVideoPosts)) {
-                loadNextVideos();
-            }
+            startVisibleVideosIfNeeded();
             pager.post(() -> {
                 adapter.playOnly(pager, pager.getCurrentItem());
             });
