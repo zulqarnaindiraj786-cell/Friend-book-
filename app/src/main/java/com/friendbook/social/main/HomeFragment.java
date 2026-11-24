@@ -664,9 +664,8 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
                 Prefs.setFeedFilter(a, key);
                 if ("recent".equals(key)) Prefs.setFeedSort(a, "recent");
                 else if ("all".equals(key)) Prefs.setFeedSort(a, "top");
-                // Instant 0ms filter apply over cached feed first, then live sync!
+                // Filters operate on the loaded session; they must not reset its cursor.
                 applyFilterOnCachedFeed();
-                restartPostsListener();
                 View parent = (View) v.getParent().getParent().getParent();
                 if (parent instanceof LinearLayout) {
                     ((LinearLayout) parent).removeViewAt(0);
@@ -971,16 +970,8 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
                 ()->generation==feedGeneration && java.util.Objects.equals(actor,Fb.uid()) && isAdded() && homeStarted && !isHidden(),
                 (saved,reusable)->{
             if(reusable){
-                loadedPostIds.clear();
-                for(DocumentSnapshot doc:saved){
-                    loadedPostIds.add(doc.getId());
-                    com.friendbook.social.post.D1Reactions.seedFeed(getActivity(),doc,requestedAt);
-                }
-                // A return with a loaded tail must never rewind its cursor.
-                lastDoc=saved.isEmpty()?null:saved.getDocuments().get(saved.size()-1);
-                moreAvailable=saved.size()==PAGE;
-                loadingPosts=false;loadedPosts=true;pageError=false;lastFeedWriteVersion=writeVersion;
-                consumePostsSnapshot(saved.getDocuments(),false);updatePagingUi();releaseHomeSecondary();return;
+                applyReusableFeedHead(saved,previousCursor,previousMore,writeVersion,requestedAt);
+                return;
             }
             usedDelta[0]=!saved.isEmpty();
             if(adapter!=null && adapter.getPosts().isEmpty()){
@@ -988,6 +979,25 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
                 consumePostsSnapshot(saved.getDocuments(),false);
             }
         },apply,failed);
+    }
+
+    private void applyReusableFeedHead(com.friendbook.social.d1.documents.QuerySnapshot saved,
+            DocumentSnapshot previousCursor,boolean previousMore,long writeVersion,long requestedAt){
+        // Cache head reuse must not discard pages fetched before a stopped/interrupted request.
+        boolean keepTail=previousCursor!=null && lastPostDocs.size()>PAGE;
+        if(keepTail){lastDoc=previousCursor;moreAvailable=previousMore;}
+        else {
+            loadedPostIds.clear();
+            for(DocumentSnapshot doc:saved){
+                loadedPostIds.add(doc.getId());
+                com.friendbook.social.post.D1Reactions.seedFeed(getActivity(),doc,requestedAt);
+            }
+            lastDoc=saved.isEmpty()?null:saved.getDocuments().get(saved.size()-1);
+            moreAvailable=saved.size()==PAGE;
+            consumePostsSnapshot(saved.getDocuments(),false);
+        }
+        loadingPosts=false;loadedPosts=true;pageError=false;lastFeedWriteVersion=writeVersion;
+        updatePagingUi();releaseHomeSecondary();
     }
 
     private void setPostsKeepingScroll(List<Models.Post> posts) {
@@ -1251,6 +1261,9 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         feedQuery.startAfter(lastDoc).limit(PAGE).getCachedOrFetch(false).addOnSuccessListener(snapshot -> {
             if(generation!=feedGeneration || !java.util.Objects.equals(actor,Fb.uid()) || !isAdded() || !homeStarted || isHidden()) return;
             loadingPosts=false;
+            if(snapshot.getMetadata().isFromCache()){
+                pageError=true;updatePagingUi();return; // Keep authoritative cursor for explicit retry.
+            }
             // getCachedOrFetch returns a complete exact-query page, not a partial document cache.
             moreAvailable=snapshot.size()==PAGE;
             if(!snapshot.isEmpty()) lastDoc=snapshot.getDocuments().get(snapshot.size()-1);
@@ -1262,7 +1275,14 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
                 com.friendbook.social.post.D1Reactions.seedFeed(getActivity(),doc,requestedAt);
                 Models.Post post=Models.Post.fromDoc(doc);
                 com.friendbook.social.post.D1Reactions.hydrate(post);
-                if(Boolean.TRUE.equals(doc.getBoolean("safetyFlagged"))) continue;
+                if(Boolean.TRUE.equals(doc.getBoolean("safetyFlagged"))){
+                    com.friendbook.social.core.ContentSafetyEngine.autoDeleteContent(getActivity(),"posts",post.id,post.authorId,
+                            "policy_violation","Safety flagged post",null);
+                    continue;
+                }
+                String mediaCheck=(post.mediaUrls!=null && !post.mediaUrls.isEmpty())?post.mediaUrls.get(0):post.mediaUrl;
+                if(com.friendbook.social.core.ContentSafetyEngine.checkAndAutoDeleteIfTextUnsafe(
+                        getActivity(),"posts",post.id,post.authorId,post.content,mediaCheck,null))continue;
                 if(visible(post) && matchesFilter(post,filter)) page.add(post);
             }
             page = rankAccordingToMode(getActivity(), page);
@@ -1273,7 +1293,8 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
             // Also refresh footer on empty/filtered final pages. No automatic drain loop.
             if (page.isEmpty()) adapter.notifyDataSetChanged();
         }).addOnFailureListener(error -> {
-            if(generation!=feedGeneration) return;
+            if(generation!=feedGeneration || !java.util.Objects.equals(actor,Fb.uid())
+                    || !homeStarted || isHidden() || !isAdded())return;
             loadingPosts=false;pageError=true;updatePagingUi();
         });
     }
@@ -1336,7 +1357,6 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
             if ("recent".equals(key)) Prefs.setFeedSort(a, "recent");
             else if ("all".equals(key)) Prefs.setFeedSort(a, "top");
             applyFilterOnCachedFeed();
-            restartPostsListener();
             Ui.toast(a, "Showing: " + labels[idx]);
         });
     }

@@ -14,4 +14,4 @@ class AuthorFailureBudget(unittest.TestCase):
         s=(JAVA/'main/HomeFragment.java').read_text()
         self.assertIn('if (explicitUserRefresh && adapter!=null) adapter.resetAuthorLookupAttempts()',s)
         s=(JAVA/'post/FeedAdapter.java').read_text()
-        self.assertIn('resetAuthorLookupAttempts() { requestedAuthors.clear(); }',s)
+        self.assertIn('resetAuthorLookupAttempts() { authorReadGeneration++; requestedAuthors.clear(); }',s)
