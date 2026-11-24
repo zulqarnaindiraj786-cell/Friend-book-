@@ -74,6 +74,13 @@ jobs:
           RESULT=$?
           grep -E "d1.documents.ListenerPollingPolicyTest|tests completed|FAILED" unit-tests.log | tail -30
           if [ "$RESULT" != "0" ]; then
+            python3 - <<'PYTEST'
+          import glob, xml.etree.ElementTree as ET
+          for path in glob.glob('app/build/test-results/testDebugUnitTest/TEST-*ListenerDocumentFlightsTest.xml'):
+              for failure in ET.parse(path).iter('failure'):
+                  for line in (failure.text or '').splitlines()[:8]:
+                      print('::error::Listener document regression: '+line[:350])
+          PYTEST
             grep -nE "error: |FAILED|expected:|Tests? .*failed|AssertionError|Exception|Failed to fetch|Server returned HTTP" unit-tests.log \
               | head -40 | while IFS= read -r line; do echo "::error::${line:0:400}"; done
             tail -40 unit-tests.log | while IFS= read -r line; do echo "::warning::${line:0:400}"; done
