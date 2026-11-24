@@ -1,3 +1,4 @@
+# Owner-requested verification refresh; analytics only, no load or deployment.
 # Owner-requested strict daily verification after notification-index retirement; analytics only.
 name: Strict quota target verification (not a guarantee)
 on:
