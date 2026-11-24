@@ -62,3 +62,9 @@ class AdminDemand(unittest.TestCase):
             code=(JAVA/'admin/frag'/file).read_text()
             self.assertIn('pages!=observed',code)
             self.assertIn('observed.acceptObservedFirstPage(snap)',code)
+
+    def test_moderator_management_is_paged_and_gates_writes(self):
+        code=(JAVA/'admin/frag/AdminModeratorsFragment.java').read_text()
+        for token in ['PagedLists.attach','10,"admin-moderators"','Moderators and search results cover loaded users only','Moderators in loaded users','pending.add(id)','if(task.isSuccessful())','Objects.equals(owner,Fb.uid())','reg.remove()']:
+            self.assertIn(token,code)
+        self.assertNotIn('.limit(400)',code)
