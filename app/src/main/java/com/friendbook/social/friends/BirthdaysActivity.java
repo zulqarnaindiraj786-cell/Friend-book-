@@ -37,7 +37,8 @@ public class BirthdaysActivity extends Activity {
     private ListenerRegistration friendsReg;
     private TextView empty;
     private final List<String> friendIds = new ArrayList<>();
-    private int pendingUsers = 0;
+    private int loadGeneration = 0;
+    private boolean started;
 
     static class RowItem {
         Models.User user;
@@ -81,6 +82,7 @@ public class BirthdaysActivity extends Activity {
         super.onStart();
         String me = Fb.uid();
         if (me == null) { finish(); return; }
+        started=true;
         friendsReg=com.friendbook.social.core.PagedLists.attach(this,pageControls,
                 Fb.db().collection("friends").whereArrayContains("participants",me),20,"friend-list:"+getClass().getSimpleName(),(snap,err)-> {
                     friendIds.clear();
@@ -96,16 +98,22 @@ public class BirthdaysActivity extends Activity {
     @Override
     protected void onStop() {
         super.onStop();
-        if (friendsReg != null) friendsReg.remove();
+        started=false;loadGeneration++;
+        if (friendsReg != null) { friendsReg.remove(); friendsReg=null; }
     }
 
     private void loadUsers() {
         rows.clear();
         adapter.notifyDataSetChanged();
-        if (friendIds.isEmpty()) { render(); return; }
-        pendingUsers = friendIds.size();
-        for (String uid : friendIds) {
-            Fb.getUser(uid).addOnSuccessListener(u -> {
+        if (friendIds.isEmpty()) { loadGeneration++; render(); return; }
+        final String actor=Fb.uid();
+        final int generation=++loadGeneration;
+        java.util.Set<String> unique=new java.util.LinkedHashSet<>(friendIds);
+        final int[] pendingUsers={unique.size()};
+        for (String uid : unique) {
+            Fb.getUser(uid).addOnCompleteListener(task -> {
+                if(!started || generation!=loadGeneration || !java.util.Objects.equals(actor,Fb.uid()))return;
+                Models.User u=task.isSuccessful()?task.getResult():null;
                 if (u != null && u.birthday != null && !u.birthday.isEmpty()) {
                     int days = daysUntil(u.birthday);
                     if (days >= 0 && days <= 30) {
@@ -116,7 +124,7 @@ public class BirthdaysActivity extends Activity {
                         rows.add(r);
                     }
                 }
-                if (--pendingUsers <= 0) render();
+                if (--pendingUsers[0] == 0) render();
             });
         }
     }

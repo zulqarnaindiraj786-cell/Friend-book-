@@ -231,7 +231,7 @@ public class StoryViewerActivity extends Activity {
         Ui.pad(moreStories,12,8,12,8);moreStories.setBackgroundColor(0x88000000);
         FrameLayout.LayoutParams moreParams=new FrameLayout.LayoutParams(-2,-2,Gravity.TOP|Gravity.END);
         moreParams.topMargin=Ui.dp(this,92);root.addView(moreStories,moreParams);
-        moreStories.setOnClickListener(v->{if(storyPages!=null)storyPages.next();});
+        moreStories.setOnClickListener(v->{if(storyPages!=null){advanceAfterPage=!stories.isEmpty();storyPages.next();}});
         storyStatus=Ui.tvBold(this,"Loading story…",16,Color.WHITE);
         Ui.pad(storyStatus,16,10,16,10);
         storyStatus.setBackgroundColor(0xCC202020);
@@ -288,12 +288,15 @@ public class StoryViewerActivity extends Activity {
             stories.clear();for(DocumentSnapshot doc:docs){Models.Story story=Models.Story.fromDoc(doc);if(!story.expired() && allowedStory(story))stories.add(story);}
             // Keep append order stable: cursor doc-ID order, never re-sort a growing sequence under the viewer.
             if(advanceAfterPage){advanceAfterPage=false;int found=-1;for(int i=0;i<stories.size();i++)if(stories.get(i).id.equals(current))found=i;
-                if(found+1<stories.size())index=found+1;else if(!more){finish();return;}
+                if(found+1<stories.size())index=found+1;
+                else if(!more){finish();return;}
+                else {stopTimer();status("No active stories on this page · Tap More stories",null);return;}
             }else if(current!=null){for(int i=0;i<stories.size();i++)if(stories.get(i).id.equals(current))index=i;}
-            // A page can contain only expired or audience-filtered stories. Do
-            // not leave an empty viewer waiting for the user to discover paging.
+            // Never drain filtered or expired pages in the background. A user
+            // can explicitly request the next page when this one is empty.
             if(stories.isEmpty()){
-                if(!more)status("No active stories",null);else if(storyPages!=null)storyPages.next();
+                if(!more)status("No active stories",null);
+                else status("No active stories on this page · Tap More stories",null);
                 return;
             }
             index=Math.min(index,stories.size()-1);show();

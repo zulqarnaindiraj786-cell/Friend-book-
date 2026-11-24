@@ -63,6 +63,7 @@ public class MarketplaceActivity extends Activity {
     private String searchQuery = "";
     private Adapter adapter;
     private ListenerRegistration reg;
+    private LinearLayout pageControls;
     private TextView empty;
     private Uri pendingPhotoUri;
     private ImageView pendingPhotoPreview;
@@ -132,6 +133,9 @@ public class MarketplaceActivity extends Activity {
         adapter = new Adapter();
         rv.setAdapter(adapter);
         root.addView(rv, new LinearLayout.LayoutParams(-1, 0, 1));
+        pageControls=Ui.col(this);
+        pageControls.addView(Ui.tv(this,"Search and filters apply to loaded items.",12,Ui.sub(this)));
+        root.addView(pageControls);
         setContentView(root);
     }
 
@@ -147,9 +151,9 @@ public class MarketplaceActivity extends Activity {
     @Override
     protected void onStart() {
         super.onStart();
-        reg = Fb.db().collection("posts")
-                .orderBy("createdAt", Query.Direction.DESCENDING).limit(200)
-                .addSnapshotListener((snap, err) -> {
+        if(reg!=null)reg.remove();
+        reg = com.friendbook.social.core.PagedLists.attach(this,pageControls,Fb.db().collection("posts")
+                .orderBy("createdAt", Query.Direction.DESCENDING),10,"marketplace",(snap, err) -> {
                     allItems.clear();
                     if (snap != null) {
                         for (DocumentSnapshot d : snap) {
@@ -190,7 +194,7 @@ public class MarketplaceActivity extends Activity {
     @Override
     protected void onStop() {
         super.onStop();
-        if (reg != null) reg.remove();
+        if (reg != null) { reg.remove(); reg=null; }
     }
 
     private void showSellDialog() {

@@ -52,6 +52,7 @@ public class PagesActivity extends Activity {
     private final TextView[] tabs = new TextView[3];
     private Adapter adapter;
     private ListenerRegistration reg;
+    private LinearLayout pageControls;
     private TextView empty;
 
     @Override
@@ -115,6 +116,9 @@ public class PagesActivity extends Activity {
         adapter = new Adapter();
         rv.setAdapter(adapter);
         root.addView(rv, new LinearLayout.LayoutParams(-1, 0, 1));
+        pageControls=Ui.col(this);
+        pageControls.addView(Ui.tv(this,"Search and filters apply to loaded items.",12,Ui.sub(this)));
+        root.addView(pageControls);
         setContentView(root);
     }
 
@@ -168,8 +172,8 @@ public class PagesActivity extends Activity {
     @Override
     protected void onStart() {
         super.onStart();
-        reg = Fb.db().collection("pages").limit(100)
-                .addSnapshotListener((snap, err) -> {
+        if(reg!=null)reg.remove();
+        reg = com.friendbook.social.core.PagedLists.attach(this,pageControls,Fb.db().collection("pages"),10,"pages",(snap, err) -> {
                     allPages.clear();
                     if (snap != null) for (DocumentSnapshot d : snap) {
                         Page p = new Page();
@@ -208,7 +212,7 @@ public class PagesActivity extends Activity {
     @Override
     protected void onStop() {
         super.onStop();
-        if (reg != null) reg.remove();
+        if (reg != null) { reg.remove(); reg=null; }
     }
 
     class Adapter extends RecyclerView.Adapter<Adapter.VH> {
