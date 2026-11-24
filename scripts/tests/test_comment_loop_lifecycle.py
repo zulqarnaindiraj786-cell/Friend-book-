@@ -13,4 +13,4 @@ class CommentLoopLifecycle(unittest.TestCase):
   self.assertIn('conflictAttempts>=3',conflict)
   self.assertIn('pageHandler.postDelayed(conflictRetry,2_000L)',conflict)
   self.assertNotIn('d1Page(first,background)',conflict)
-  self.assertIn('closed=true;cancelConflictRetry();clearPageDeadline()',s)
+  self.assertIn('closed=true;D1_HANDLES.remove(this);listener=null;cancelConflictRetry();clearPageDeadline()',s)
