@@ -53,8 +53,8 @@ public class OnDemandLoadsTest {
                 home.contains("loadNotesUsers(discoveryRefresh)") && home.contains("public void onDiscoveryVisible()"));
         assertFalse("Suggestions must not be re-read on every tab return",
                 home.contains("pendingHomeSecondary = () -> {\n            pendingHomeSecondary = null;\n            if (!homeStarted || !isAdded() || isHidden() || !actor.equals(Fb.uid())) return;\n            startHomeWatchers();\n            startStoriesListener();\n            loadFeaturedReelsForHome();\n            loadNotesUsers(true);"));
-        assertTrue("Referral totals must not join the cold-start burst",
-                main.contains("if(!referralCountLoaded)referralHandler.postDelayed(referralRefresh, 4_000L)"));
+        assertFalse("Referral totals must not join the cold-start burst",
+                main.contains("watchReferralsForFreeTick"));
     }
 
     private static String read(String relative) throws Exception {

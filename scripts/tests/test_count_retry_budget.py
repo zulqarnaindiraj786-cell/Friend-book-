@@ -18,11 +18,12 @@ class CountRetryBudget(unittest.TestCase):
         self.assertIn('summaryLoading=false',stop)
         self.assertIn("Couldn't load account summary. Tap to retry.",s)
 
-    def test_referral_count_is_owned_by_visible_main_screen(self):
-        s=(JAVA/'main/MainActivity.java').read_text()
-        pause=s.split('protected void onPause()',1)[1].split('protected void onResume()',1)[0]
-        self.assertIn('referralHandler.removeCallbacks(referralRefresh)',pause)
-        self.assertIn('referralReg.remove()',pause)
-        self.assertIn('if(!referralCountLoaded)referralHandler.postDelayed',s)
-        self.assertIn('referralCountLoaded=true',s)
-        self.assertIn('me == null || !permissionHostResumed',s)
+    def test_referral_reconciliation_is_only_started_by_verification_screen(self):
+        main=(JAVA/'main/MainActivity.java').read_text()
+        screen=(JAVA/'bluetick/BlueTickActivity.java').read_text()
+        self.assertNotIn('watchReferralsForFreeTick',main)
+        self.assertNotIn('referralHandler',main)
+        self.assertIn('Fb.db().referralStatus()',screen)
+        self.assertIn('generation!=screenGeneration',screen)
+        self.assertIn('screenGeneration++',screen)
+        self.assertNotIn('autoGrantByReferrals',screen)

@@ -2367,6 +2367,54 @@ async function friendshipFacts(request,db,uid) {
   } catch {return json({error:'Friendship facts unavailable'},503);}
 }
 
+// Referral rows are server-owned; historical canonical rows use the same
+// refBy count as the previous client. Count at most 50 (the highest threshold).
+// The rank comparison happens inside the transaction against the CURRENT
+// profile, so concurrent paid/admin upgrades cannot be downgraded or lost.
+function referralAwardStatements(db,uid,now) {
+  const profile=`users/${uid}`;
+  const award=db.prepare(`WITH referral(n) AS (
+      SELECT COUNT(*) FROM (SELECT path FROM friendbook_cf_firestore_documents INDEXED BY idx_cf_referrals_from
+        WHERE parent_path='referrals' AND json_extract(document_json,'$.refBy')=? LIMIT 50)
+    ), earned(rank) AS (SELECT CASE WHEN n>=50 THEN 3 WHEN n>=20 THEN 2 WHEN n>=5 THEN 1 ELSE 0 END FROM referral)
+    UPDATE friendbook_cf_firestore_documents SET
+      document_json=json_set(document_json,'$.tickLevel',
+        (SELECT CASE rank WHEN 3 THEN 'diamond' WHEN 2 THEN 'gold' ELSE 'blue' END FROM earned),
+        '$.isVerified',json('true')), update_time=?
+    WHERE path=? AND json_type(document_json,'$.fields') IS NOT 'object'
+      AND (json_type(document_json,'$.tickLevel') IS NULL
+        OR json_type(document_json,'$.tickLevel')='null'
+        OR json_extract(document_json,'$.tickLevel') IN ('none','blue','gold','diamond'))
+      AND (SELECT rank FROM earned) > CASE json_extract(document_json,'$.tickLevel')
+        WHEN 'diamond' THEN 3 WHEN 'gold' THEN 2 WHEN 'blue' THEN 1
+        ELSE CASE WHEN json_type(document_json,'$.isVerified')='true' THEN 1 ELSE 0 END END`)
+    .bind(uid,now,profile);
+  // db.batch executes these sequentially in one transaction. Mirror only if
+  // the immediately preceding canonical UPDATE changed a profile.
+  const mirror=db.prepare(`INSERT INTO friendbook_cf_documents(path,collection,doc_id,owner_uid,document_json,updated_at)
+    SELECT path,collection_id,doc_id,owner_uid,json_set(document_json,'$.id',doc_id),update_time
+    FROM friendbook_cf_firestore_documents WHERE path=? AND changes()=1
+    ON CONFLICT(path) DO UPDATE SET owner_uid=excluded.owner_uid,
+      document_json=excluded.document_json,updated_at=excluded.updated_at`).bind(profile);
+  return [award,mirror];
+}
+async function referralStatus(request,db,uid,now) {
+  if(request.method!=='POST')return json({error:'Method not allowed'},405);
+  if(typeof db.batch!=='function')return json({error:'Atomic storage unavailable'},503);
+  try {
+    const result=await db.batch(referralAwardStatements(db,uid,now));
+    const awarded=Number(result?.[0]?.meta?.changes ?? result?.[0]?.changes ?? 0)>0;
+    const [count,row]=await Promise.all([
+      db.prepare(`SELECT COUNT(*) AS n FROM (SELECT path FROM friendbook_cf_firestore_documents INDEXED BY idx_cf_referrals_from
+        WHERE parent_path='referrals' AND json_extract(document_json,'$.refBy')=? LIMIT 50)`).bind(uid).first(),
+      readRow(db,`users/${uid}`)
+    ]);
+    if(!row)return json({error:'Profile unavailable'},404);
+    const profile=decodeValue(JSON.parse(row.document_json));
+    return json({count:Number(count?.n||0),tickLevel:typeof profile.tickLevel==='string'?profile.tickLevel:(profile.isVerified?'blue':'none'),isVerified:profile.isVerified===true,awarded});
+  } catch {return json({error:'Referral status unavailable'},503);}
+}
+
 async function claimReferral(request,db,uid,now) {
   if (request.method!=='POST') return json({error:'Method not allowed'},405);
   let body; try { body=await request.json(); } catch { return json({error:'Invalid JSON'},400); }
@@ -2389,6 +2437,7 @@ async function claimReferral(request,db,uid,now) {
       )`).bind(uid),
       db.prepare('INSERT INTO friendbook_cf_referral_claims(referred_uid,inviter_uid,created_at) VALUES (?,?,?)').bind(uid,inviter,now),
       ...broadcastWrites(db,path,{refBy:inviter,refTo:uid,status:'completed',date,createdAt:date},uid,null,now),
+      ...referralAwardStatements(db,inviter,now),
       db.prepare('DELETE FROM friendbook_cf_social_guards').bind()]);
     return json({ok:true},201);
   } catch (error) {
@@ -3055,6 +3104,7 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0, ct
 
 
   if (path === '/v1/firestore/friendship-facts') return friendshipFacts(request,db,uid);
+  if (path === '/v1/firestore/referral-status') return referralStatus(request,db,uid,now);
   if (path === '/v1/firestore/claim-referral') return claimReferral(request,db,uid,now);
   if (path === '/v1/chat/call') return signalChatCall(request,db,uid,now,identity);
   if (path === '/v1/live/pk') return livePk(request,db,uid,now,identity);

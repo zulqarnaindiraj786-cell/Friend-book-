@@ -3,7 +3,6 @@ package com.friendbook.social.core;
 import android.content.Context;
 
 import com.friendbook.social.models.Models;
-import com.friendbook.social.d1.documents.FieldValue;
 import com.friendbook.social.d1.documents.WriteBatch;
 
 /** Admin gating + tick/boost management. Owner: zulqarnaindiraj786@gmail.com */
@@ -218,38 +217,6 @@ public class Admin {
                         b.commit();
                     });
         }
-    }
-
-    /**
-     * Auto-grant the highest referral-earned tick (called when a user's referral count changes).
-     * Only ever upgrades (or confirms), never downgrades a higher tick earned some other way.
-     */
-    public static void autoGrantByReferrals(final Context c, int referralCount) {
-        final String uid = Fb.uid();
-        if (uid == null) return;
-        final String level = referralCount >= REFERRALS_DIAMOND ? "diamond"
-                : referralCount >= REFERRALS_GOLD ? "gold"
-                : referralCount >= REFERRALS_BLUE ? "blue" : "none";
-        if ("none".equals(level)) return;
-        Models.User me = Fb.me;
-        int currentRank = me != null ? me.tickRank() : 0;
-        if (currentRank >= Icons.tickRank(level)) return; // already this good or better
-        Fb.db().collection("users").document(uid)
-                .set(Fb.map("tickLevel", level, "isVerified", true),
-                        com.friendbook.social.d1.documents.SetOptions.merge())
-                .addOnSuccessListener(x -> {
-                    java.util.Map<String, Object> n = Fb.map(
-                            "toUserId", uid,
-                            "fromUserId", uid,
-                            "fromUserName", "friendbook",
-                            "fromUserPhotoUrl", "",
-                            "type", "tick",
-                            "text", "🎉 Congratulations! " + referralCount + " friends joined from your invite — you earned the " + tickLabel(level) + " for FREE!",
-                            "isRead", false,
-                            "createdAt", FieldValue.serverTimestamp());
-                    Fb.db().collection("notifications").add(n);
-                    Ui.toast(c, "🎉 You earned the " + tickLabel(level) + "!");
-                });
     }
 
     /** Referral invite link for a user (official Google Play Store URL). */

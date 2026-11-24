@@ -122,6 +122,10 @@ final class D1DocumentTransport {
         return new JSONObject(response); // Never share mutable JSON across consumers.
     }
 
+    static JSONObject referralStatus() throws Exception {
+        return read("POST","/v1/firestore/referral-status",new JSONObject());
+    }
+
     static JSONObject friendshipFacts(java.util.List<String> candidates) throws Exception {
         return read("POST","/v1/firestore/friendship-facts",
                 new JSONObject().put("candidates",new JSONArray(candidates)));

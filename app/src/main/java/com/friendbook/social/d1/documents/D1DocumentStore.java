@@ -226,6 +226,11 @@ public class D1DocumentStore {
         return runAsync(() -> FriendshipFactsResponse.parse(D1DocumentTransport.friendshipFacts(submitted),submitted));
     }
 
+    /** Explicit verification-screen reconciliation, computed and awarded by the Worker. */
+    public Task<org.json.JSONObject> referralStatus() {
+        return runAsync(D1DocumentTransport::referralStatus);
+    }
+
     public Task<Void> claimReferral(String inviter) {
         return runAsync(() -> {
             D1DocumentTransport.request("POST", "/v1/firestore/claim-referral",

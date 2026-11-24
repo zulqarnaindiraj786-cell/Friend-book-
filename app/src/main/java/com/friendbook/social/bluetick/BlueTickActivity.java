@@ -40,7 +40,8 @@ public class BlueTickActivity extends Activity {
 
     private ImageView heroBadge;
     private TextView heroStatus, reviewT;
-    private ListenerRegistration refsReg, meReg, reqReg;
+    private ListenerRegistration reqReg;
+    private int screenGeneration;
 
     @Override
     protected void onCreate(Bundle b) {
@@ -117,7 +118,7 @@ public class BlueTickActivity extends Activity {
         LinearLayout.LayoutParams bp = new LinearLayout.LayoutParams(-1, -2);
         bp.setMargins(0, Ui.dp(this, 6), 0, 0);
         card.addView(bars[i], bp);
-        progT[i] = Ui.tv(this, "0/" + NEED[i] + " invited", 12, Ui.sub(this));
+        progT[i] = Ui.tv(this, "Loading invite progress…", 12, Ui.sub(this));
         card.addView(progT[i]);
         TextView share = Ui.btnOutline(this, "🔗 Share my Google Play invite link", Icons.BLUE);
         LinearLayout.LayoutParams shp = new LinearLayout.LayoutParams(-1, -2);
@@ -171,35 +172,42 @@ public class BlueTickActivity extends Activity {
         super.onStart();
         String uid = Fb.uid();
         if (uid == null) { finish(); return; }
-        meReg = Fb.db().collection("users").document(uid)
-                .addSnapshotListener((d, err) -> {
-                    if (d == null || !d.exists()) return;
-                    String level = Format.strOr(d.getData(), "tickLevel",
-                            Format.boolOf(d.getData(), "isVerified") ? "blue" : "none");
-                    Icons.setTickBadge(heroBadge, level, true);
-                    heroStatus.setText(Icons.tickRank(level) > 0
-                            ? "You have the " + Admin.tickLabel(level) + " 🎉" : "No badge yet");
-                    int rank = Icons.tickRank(level);
-                    for (int i = 0; i < 3; i++) {
-                        ctaBox[i].setVisibility(rank >= Icons.tickRank(LEVELS[i]) ? View.GONE : View.VISIBLE);
-                    }
-                });
-        refsReg=com.friendbook.social.core.CountReads.once(Fb.db().collection("referrals").whereEqualTo("refBy",uid),total->{
-                    int count=(int)Math.min(Integer.MAX_VALUE,total);
-                    for (int i = 0; i < 3; i++) {
-                        bars[i].setProgress(Math.min(count, NEED[i]));
-                        progT[i].setText(Math.min(count, NEED[i]) + "/" + NEED[i] + " invited"
-                                + (count >= NEED[i] ? " — badge unlocked! 🎉" : ""));
-                    }
-                    if (count >= Admin.REFERRALS_BLUE) {
-                        Admin.autoGrantByReferrals(this, count);
-                    }
-                });
+        final int generation=++screenGeneration;
+        heroStatus.setText("Loading badge status…");
+        for(TextView progress:progT)progress.setText("Loading invite progress…");
+        Fb.db().referralStatus().addOnSuccessListener(result -> {
+            if(generation!=screenGeneration || !uid.equals(Fb.uid()) || isFinishing() || isDestroyed())return;
+            Object rawCount=result.opt("count"),rawLevel=result.opt("tickLevel"),rawVerified=result.opt("isVerified"),rawAwarded=result.opt("awarded");
+            if(!(rawCount instanceof Number) || !(rawLevel instanceof String) || !(rawVerified instanceof Boolean) || !(rawAwarded instanceof Boolean)
+                    || ((Number)rawCount).intValue()<0 || ((Number)rawCount).intValue()>50){
+                heroStatus.setText("Couldn't load badge status");
+                for(TextView progress:progT)progress.setText("Couldn't load invite progress. Reopen to retry.");return;
+            }
+            int count=((Number)rawCount).intValue();String level=(String)rawLevel;
+            Icons.setTickBadge(heroBadge,level,true);
+            heroStatus.setText(Icons.tickRank(level)>0?"You have the "+Admin.tickLabel(level)+" 🎉":"No badge yet");
+            for(int i=0;i<3;i++){
+                ctaBox[i].setVisibility(Icons.tickRank(level)>=Icons.tickRank(LEVELS[i])?View.GONE:View.VISIBLE);
+                bars[i].setProgress(Math.min(count,NEED[i]));
+                progT[i].setText(Math.min(count,NEED[i])+"/"+NEED[i]+" invited"
+                        +(Icons.tickRank(level)>=Icons.tickRank(LEVELS[i])?" — badge unlocked! 🎉":""));
+            }
+            if(Fb.me!=null && uid.equals(Fb.me.uid)){
+                Fb.me.tickLevel=level;Fb.me.isVerified=(Boolean)rawVerified;
+                com.friendbook.social.core.TickCache.put(uid,level);
+            }
+        }).addOnFailureListener(error -> {
+            if(generation!=screenGeneration || !uid.equals(Fb.uid()) || isFinishing() || isDestroyed())return;
+            heroStatus.setText("Couldn't load badge status");
+            for(TextView progress:progT)progress.setText("Couldn't load invite progress. Reopen to retry.");
+        });
         reqReg = Fb.db().collection("payments")
                 .whereEqualTo("userId", uid)
                 .whereEqualTo("status", "pending")
                 .limit(1)
                 .addSnapshotListener((snap, err) -> {
+                    if(generation!=screenGeneration || !uid.equals(Fb.uid()) || isFinishing() || isDestroyed())return;
+                    if (err != null) { reviewT.setText("Couldn't load review status"); return; }
                     if (snap == null || snap.isEmpty()) { reviewT.setText(""); return; }
                     String type = Format.str(snap.getDocuments().get(0).getData(), "type");
                     String label = type != null && type.startsWith("tick_")
@@ -212,8 +220,7 @@ public class BlueTickActivity extends Activity {
     @Override
     protected void onStop() {
         super.onStop();
-        if (refsReg != null) refsReg.remove();
-        if (meReg != null) meReg.remove();
+        screenGeneration++;
         if (reqReg != null) reqReg.remove();
     }
 }
