@@ -15,7 +15,7 @@ public final class D1Reactions {
  private static final android.os.Handler MAIN=new android.os.Handler(android.os.Looper.getMainLooper());
  private static final android.util.LruCache<String,JSONObject> CACHE=new android.util.LruCache<>(512);
  private static final android.util.LruCache<String,Long> FETCHED_AT=new android.util.LruCache<>(512);
- private static final long REFRESH_MS=8000;
+ private static final long REFRESH_MS=com.friendbook.social.core.FeedReadPolicy.REUSE_MS;
  private static final android.util.LruCache<String,java.lang.ref.WeakReference<Models.Post>> POSTS=new android.util.LruCache<>(512);
  private static final Set<String> LOADING=new HashSet<>(),FAILED=new HashSet<>(),WRITING=new HashSet<>();
  private static final Set<String> UNCONFIRMED=new HashSet<>();
