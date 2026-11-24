@@ -37,4 +37,21 @@ public class FeedAuthorBatchDemandTest {
    adapter.resetAuthorLookupAttempts();hydrate.invoke(adapter,page);verify(bounded,times(2)).get();
   }
  }
+ @Test public void detachedAdapterRejectsLateAuthorResponse() throws Exception {
+  try(MockedStatic<Fb> fb=mockStatic(Fb.class);MockedStatic<FastCache> cache=mockStatic(FastCache.class);
+      MockedStatic<AdsConfig> ads=mockStatic(AdsConfig.class);MockedStatic<ConsentManager> consent=mockStatic(ConsentManager.class)) {
+   Activity activity=Robolectric.buildActivity(Activity.class).setup().get();
+   D1DocumentStore db=mock(D1DocumentStore.class);CollectionReference users=mock(CollectionReference.class);Query bounded=mock(Query.class);
+   fb.when(Fb::uid).thenReturn("late-author-actor");fb.when(Fb::db).thenReturn(db);
+   when(db.collection("users")).thenReturn(users);when(users.whereIn(any(FieldPath.class),anyList())).thenReturn(bounded);when(bounded.limit(10)).thenReturn(bounded);
+   com.google.android.gms.tasks.TaskCompletionSource<QuerySnapshot> pending=new com.google.android.gms.tasks.TaskCompletionSource<>();when(bounded.get()).thenReturn(pending.getTask());
+   FeedAdapter adapter=new FeedAdapter(activity,null);Models.Post post=new Models.Post();post.id="post";post.authorId="author";post.authorName="";
+   java.lang.reflect.Method hydrate=FeedAdapter.class.getDeclaredMethod("hydrateMissingAuthors",List.class);hydrate.setAccessible(true);hydrate.invoke(adapter,Collections.singletonList(post));
+   adapter.onDetachedFromRecyclerView(new androidx.recyclerview.widget.RecyclerView(activity));
+   pending.setResult(new QuerySnapshot(Collections.emptyList(),null,new SnapshotMetadata(false,false)));Shadows.shadowOf(Looper.getMainLooper()).idle();
+   // A rejected completion must not even read actor identity or touch shared user cache.
+   fb.verify(Fb::uid,times(1));cache.verify(()->FastCache.putUser(any()),never());
+  }
+ }
+
 }

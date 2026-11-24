@@ -74,7 +74,8 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     // launch a network request on every bind.
     private final Set<String> requestedAuthors = new HashSet<>();
     /** Explicit user retry only: a missing/offline author must not cause a bind/request loop. */
-    public void resetAuthorLookupAttempts() { requestedAuthors.clear(); }
+    private int authorReadGeneration;
+    public void resetAuthorLookupAttempts() { authorReadGeneration++; requestedAuthors.clear(); }
     private List<StoriesAdapter.Group> storyGroups = new ArrayList<>();
     public boolean showHeader = true;
     public boolean showFooter = true;
@@ -124,6 +125,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     }
 
     @Override public void onDetachedFromRecyclerView(@NonNull RecyclerView recyclerView) {
+        resetAuthorLookupAttempts();
         com.friendbook.social.core.AdsConfig.removePlacementListener(nativePlacementListener);
         super.onDetachedFromRecyclerView(recyclerView);
     }
@@ -169,6 +171,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                 && p.authorId!=null && !p.authorId.isEmpty()
                 && (p.authorName==null || p.authorName.isEmpty())))return;
         final String actor=Fb.uid();
+        final int generation=authorReadGeneration;
         if(actor==null)return;
         List<String> ids=new ArrayList<>();
         for(Models.Post p:page) {
@@ -180,7 +183,8 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         for(List<String> chunk:Ui.chunks(ids,10)) {
             Fb.db().collection("users").whereIn(com.friendbook.social.d1.documents.FieldPath.documentId(),chunk)
                     .limit(10).get().addOnSuccessListener(loaded->{
-                if(!java.util.Objects.equals(actor, Fb.uid()) || activity.isFinishing())return;
+                if(generation!=authorReadGeneration || !java.util.Objects.equals(actor, Fb.uid())
+                        || activity.isFinishing() || activity.isDestroyed())return;
                 for(com.friendbook.social.d1.documents.DocumentSnapshot doc:loaded)
                     com.friendbook.social.core.FastCache.putUser(Models.User.fromDoc(doc));
                 if(!loaded.isEmpty())notifyDataSetChanged();
