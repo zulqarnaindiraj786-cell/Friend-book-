@@ -25,7 +25,7 @@ class PkAndInboxCacheTest(unittest.TestCase):
     def test_pk_search_is_bounded_and_guest_pause_uses_guest_engine(self):
         sheet = (JAVA / 'live/LivePkAndGiftsUi.java').read_text()
         self.assertIn('pkPeoplePrefix(typed).get()', sheet)
-        self.assertIn('name + "\\uf8ff").limit(12)', sheet)
+        self.assertIn('name + "\\uf8ff").limit(10)', sheet)
         live = (JAVA / 'live/LiveActivity.java').read_text()
         toggle = live.split('private void toggleActiveUserCameraPause()', 1)[1].split('private void toggleHostMic', 1)[0]
         self.assertIn('pkGuestEngine.setCameraPaused(paused)', toggle)

@@ -59,3 +59,11 @@ class LiveScreenDemand(unittest.TestCase):
         code=(JAVA/'core/FriendPicker.java').read_text()
         for token in ['PagedLists.attach','whereArrayContains("participants",actor)','onActivityStopped','dialog.dismiss()','generation[0]++;reg.remove()','unregisterActivityLifecycleCallbacks','Objects.equals(actor,Fb.uid())']:
             self.assertIn(token,code)
+    def test_pk_room_discovery_is_demand_paged_and_scoped_to_dialog(self):
+        code=(JAVA/'live/LivePkAndGiftsUi.java').read_text()
+        pk=code.split('public static void showPkChallengeDrawer',1)[1].split('private static com.friendbook.social.d1.documents.Query pkPeoplePrefix',1)[0]
+        for token in ['PagedLists.attach','10,"live-discovery-pk:"','LIVE CREATORS IN LOADED ROOMS','!dialog.isShowing()','!me.equals(Fb.uid())','onActivityStopped','livePages[0].remove()','searchVersion[0]++']:
+            self.assertIn(token,pk)
+        self.assertNotIn('.limit(25)',pk)
+        prefix=code.split('private static com.friendbook.social.d1.documents.Query pkPeoplePrefix',1)[1].split('private static LinearLayout buildOpponentRow',1)[0]
+        self.assertIn('.limit(10)',prefix)

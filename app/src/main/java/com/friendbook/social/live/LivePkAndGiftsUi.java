@@ -911,7 +911,7 @@ public final class LivePkAndGiftsUi {
         // Quick Random Match Button
         final List<Map<String, Object>> otherLiveRooms = new ArrayList<>();
         final TextView quickMatchBtn = com.friendbook.social.core.StudioVectorIcons.iconChip(
-                a, "dice", "Random Quick Match (Auto-Pair)", 13.5f, 0, Color.WHITE, Color.WHITE);
+                a, "dice", "Quick Match from Loaded Rooms", 13.5f, 0, Color.WHITE, Color.WHITE);
         quickMatchBtn.setGravity(Gravity.CENTER);
         GradientDrawable qmBg = new GradientDrawable(
                 GradientDrawable.Orientation.LEFT_RIGHT,
@@ -928,7 +928,7 @@ public final class LivePkAndGiftsUi {
         android.widget.EditText pkSearch = new android.widget.EditText(a);
         pkSearch.setTextColor(Color.WHITE);
         pkSearch.setHintTextColor(0xAAFFFFFF);
-        pkSearch.setHint("Search by name");
+        pkSearch.setHint("Search name (first 10 matches)");
         pkSearch.setSingleLine(true);
         pkSearch.setImeOptions(android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH);
         searchRow.addView(pkSearch, new LinearLayout.LayoutParams(0, -2, 1f));
@@ -960,7 +960,7 @@ public final class LivePkAndGiftsUi {
                 for (DocumentSnapshot d : found) {
                     Models.User u = Models.User.fromDoc(d);
                     if (me.equals(u.uid) || u.deactivated || Boolean.TRUE.equals(d.getBoolean("banned"))
-                            || "Only me".equalsIgnoreCase(u.lookupPrivacy) || (Fb.me != null && Fb.me.blocked.contains(u.uid))) continue;
+                            || "Only me".equalsIgnoreCase(u.lookupPrivacy) || (Fb.me != null && Fb.me.blocked != null && Fb.me.blocked.contains(u.uid))) continue;
                     searchResults.addView(buildOpponentRow(a, u.photoUrl, u.displayName, "Invite to your PK match", "Invite PK", v -> {
                         dialog.dismiss();
                         cb.onChallengeViewerOrFriend(u.uid, u.displayName, u.photoUrl, durationsSec[selDurIdx[0]]);
@@ -988,9 +988,53 @@ public final class LivePkAndGiftsUi {
         Ui.pad(loading, 4, 10, 4, 10);
         listCol.addView(loading);
 
-        Fb.db().collection("lives").whereEqualTo("status", "live").limit(25).get()
-                .addOnSuccessListener(snap -> {
-                    if (a.isFinishing()) return;
+        final LinearLayout liveControls=Ui.col(a);sheet.addView(liveControls);
+        final com.friendbook.social.d1.documents.ListenerRegistration[] livePages={null};
+
+        quickMatchBtn.setOnClickListener(v -> {
+            if (!otherLiveRooms.isEmpty()) {
+                Map<String, Object> rm = otherLiveRooms.get(0);
+                dialog.dismiss();
+                cb.onChallengeLiveHost(
+                        Format.str(rm, "_id"),
+                        Format.str(rm, "hostId"),
+                        Format.strOr(rm, "hostName", "Creator"),
+                        Format.strOr(rm, "hostPhotoUrl", Format.str(rm, "hostPhoto")),
+                        durationsSec[selDurIdx[0]]);
+            } else {
+                for (Map.Entry<String, String> e : roomViewerNames.entrySet()) {
+                    if (!e.getKey().equals(me)) {
+                        dialog.dismiss();
+                        cb.onChallengeViewerOrFriend(
+                                e.getKey(), e.getValue(),
+                                roomViewerPhotos.getOrDefault(e.getKey(), ""),
+                                durationsSec[selDurIdx[0]]);
+                        return;
+                    }
+                }
+                Ui.toast(a, "No creator in loaded rooms or viewer available — load more or search");
+            }
+        });
+
+        android.app.Application.ActivityLifecycleCallbacks lifecycle=new android.app.Application.ActivityLifecycleCallbacks(){
+            public void onActivityCreated(Activity activity,android.os.Bundle state){}
+            public void onActivityStarted(Activity activity){}
+            public void onActivityResumed(Activity activity){}
+            public void onActivityPaused(Activity activity){}
+            public void onActivityStopped(Activity activity){if(activity==a && dialog.isShowing())dialog.dismiss();}
+            public void onActivitySaveInstanceState(Activity activity,android.os.Bundle state){}
+            public void onActivityDestroyed(Activity activity){if(activity==a && dialog.isShowing())dialog.dismiss();}
+        };
+        a.getApplication().registerActivityLifecycleCallbacks(lifecycle);
+        dialog.setOnDismissListener(ignored->{
+            searchVersion[0]++;
+            if(livePages[0]!=null){livePages[0].remove();livePages[0]=null;}
+            a.getApplication().unregisterActivityLifecycleCallbacks(lifecycle);
+        });
+        presentBottomDialog(dialog, sheet);
+        livePages[0]=com.friendbook.social.core.PagedLists.attach(a,liveControls,
+                Fb.db().collection("lives").whereEqualTo("status","live"),10,"live-discovery-pk:"+myLiveId,(snap,err)->{
+                    if (!dialog.isShowing() || a.isFinishing() || a.isDestroyed() || !me.equals(Fb.uid()) || snap==null) return;
                     listCol.removeAllViews();
                     otherLiveRooms.clear();
                     long now = System.currentTimeMillis();
@@ -1011,13 +1055,13 @@ public final class LivePkAndGiftsUi {
                     }
 
                     // 1. Active Live Streamers Section
-                    TextView sec1 = Ui.tvBold(a, "CREATORS LIVE RIGHT NOW (" + otherLiveRooms.size() + ")", 11f, 0xFFFFD54F);
+                    TextView sec1 = Ui.tvBold(a, "LIVE CREATORS IN LOADED ROOMS (" + otherLiveRooms.size() + ")", 11f, 0xFFFFD54F);
                     sec1.setPadding(0, Ui.dp(a, 4), 0, Ui.dp(a, 6));
                     listCol.addView(sec1);
 
                     if (otherLiveRooms.isEmpty()) {
                         TextView none = Ui.tv(a,
-                                "No other solo hosts live right now — invite any Viewer below to battle side-by-side!",
+                                "No other hosts in loaded rooms — load more or invite a viewer below.",
                                 12f, 0x99FFFFFF);
                         none.setPadding(0, 0, 0, Ui.dp(a, 10));
                         listCol.addView(none);
@@ -1072,37 +1116,11 @@ public final class LivePkAndGiftsUi {
                     listCol.addView(Ui.tv(a, "Use Search by name to invite someone outside this room.", 12f, 0xAAFFFFFF));
                 });
 
-        quickMatchBtn.setOnClickListener(v -> {
-            if (!otherLiveRooms.isEmpty()) {
-                Map<String, Object> rm = otherLiveRooms.get(0);
-                dialog.dismiss();
-                cb.onChallengeLiveHost(
-                        Format.str(rm, "_id"),
-                        Format.str(rm, "hostId"),
-                        Format.strOr(rm, "hostName", "Creator"),
-                        Format.strOr(rm, "hostPhotoUrl", Format.str(rm, "hostPhoto")),
-                        durationsSec[selDurIdx[0]]);
-            } else {
-                for (Map.Entry<String, String> e : roomViewerNames.entrySet()) {
-                    if (!e.getKey().equals(me)) {
-                        dialog.dismiss();
-                        cb.onChallengeViewerOrFriend(
-                                e.getKey(), e.getValue(),
-                                roomViewerPhotos.getOrDefault(e.getKey(), ""),
-                                durationsSec[selDurIdx[0]]);
-                        return;
-                    }
-                }
-                Ui.toast(a, "No other creator or viewer online right now — tap Invite first");
-            }
-        });
-
-        presentBottomDialog(dialog, sheet);
     }
 
     private static com.friendbook.social.d1.documents.Query pkPeoplePrefix(String name) {
         return Fb.db().collection("users").whereGreaterThanOrEqualTo("displayName", name)
-                .whereLessThanOrEqualTo("displayName", name + "\uf8ff").limit(12);
+                .whereLessThanOrEqualTo("displayName", name + "\uf8ff").limit(10);
     }
 
     private static LinearLayout buildOpponentRow(Activity a, String photo, String name,
