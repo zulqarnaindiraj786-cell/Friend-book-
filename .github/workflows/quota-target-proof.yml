@@ -1,5 +1,6 @@
 # Owner-requested current read/write comparison; analytics only, no load or deployment.
 # Owner-requested strict daily verification after notification-index retirement; analytics only.
+# Refresh the account-wide counters; no production load or deployment.
 name: Strict quota target verification (not a guarantee)
 on:
   push:
