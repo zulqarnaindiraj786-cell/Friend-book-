@@ -27,6 +27,15 @@ class LiveScreenDemand(unittest.TestCase):
             self.assertIn(token,start)
         destroy=code.split('protected void onDestroy()',1)[1]
         self.assertIn('Objects.equals(liveActor,Fb.uid()) && liveActor!=null',destroy)
+    def test_live_reaction_writes_share_actor_room_cooldown(self):
+        code=(JAVA/'live/LiveActivity.java').read_text()
+        heart=code.split('private void sendHeartLike()',1)[1].split('private void sendReaction',1)[0]
+        other=code.split('private void sendReaction',1)[1].split('private boolean allowLiveReaction',1)[0]
+        self.assertIn('if (!allowLiveReaction()) return;',heart)
+        self.assertIn('if (!allowLiveReaction()) return;',other)
+        gate=code.split('private boolean allowLiveReaction()',1)[1].split('private void spawnFloatingEmoji',1)[0]
+        for token in ['liveScreenStarted','Objects.equals(liveActor,Fb.uid())','InteractionCooldown.acquire(liveActor,"live-reaction:"+liveId)']:
+            self.assertIn(token,gate)
     def test_start_and_finish_do_not_add_redundant_heartbeat_write(self):
         code=(JAVA/'live/LiveActivity.java').read_text()
         start=code.split('docRef.set(doc).addOnSuccessListener',1)[1].split('private void notifyFollowersGoingLive()',1)[0]

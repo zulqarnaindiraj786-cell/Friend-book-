@@ -2268,7 +2268,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
     private void sendHeartLike() {
         spawnFloatingEmoji("heart");
         spawnFloatingEmoji("heart");
-        if (liveId == null || isEnded) return;
+        if (!allowLiveReaction()) return;
         Map<String, Object> r = new HashMap<>();
         r.put("type", "reaction");
         r.put("uid", Fb.uid());
@@ -2284,7 +2284,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
             return;
         }
         spawnFloatingEmoji(emoji);
-        if (liveId == null || isEnded) return;
+        if (!allowLiveReaction()) return;
         Map<String, Object> r = new HashMap<>();
         r.put("type", "reaction");
         r.put("uid", Fb.uid());
@@ -2292,6 +2292,13 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
         r.put("text", emoji);
         r.put("createdAtMs", System.currentTimeMillis());
         Fb.db().collection("lives").document(liveId).collection("chat").add(r);
+    }
+
+    /** Preserve local feedback but bound reaction writes across all emoji taps. */
+    private boolean allowLiveReaction() {
+        return liveScreenStarted && liveId!=null && !isEnded && liveActor!=null
+                && java.util.Objects.equals(liveActor,Fb.uid())
+                && com.friendbook.social.core.InteractionCooldown.acquire(liveActor,"live-reaction:"+liveId);
     }
 
     private void spawnFloatingEmoji(String emoji) {
