@@ -11,13 +11,19 @@ for version in 15-robolectric-12650502-i7 9-robolectric-4913185-2-i7; do
   [[ "$hash" =~ ^[a-fA-F0-9]{128}$ ]] || { echo "::error::Invalid SHA-512 metadata for $version"; exit 1; }
   if [ ! -f "$jar" ] || ! printf '%s  %s\n' "$hash" "$jar" | sha512sum --check --status; then
     verified=false
-    for attempt in 1 2 3; do
-      if curl -fsSL --connect-timeout 15 --max-time 120 --retry 3 --retry-max-time 180 --retry-delay 3 --retry-all-errors "$url" -o "$jar.tmp" &&
-          printf '%s  %s\n' "$hash" "$jar.tmp" | sha512sum --check --status; then
-        verified=true; break
-      fi
-      echo "::warning::Android jar download/checksum attempt $attempt failed for $version"
-      rm -f "$jar.tmp"
+    # All mirrors serve the same Maven Central artifact. The digest always
+    # comes from the primary repository above; a mirror cannot weaken it.
+    artifact="org/robolectric/android-all-instrumented/$version/android-all-instrumented-$version.jar"
+    for base in https://repo.maven.apache.org/maven2 https://repo1.maven.org/maven2 https://maven-central.storage-download.googleapis.com/maven2; do
+      for attempt in 1 2; do
+        if curl -fsSL --connect-timeout 15 --max-time 120 --retry 2 --retry-max-time 180 --retry-delay 3 --retry-all-errors "$base/$artifact" -o "$jar.tmp" &&
+            printf '%s  %s\n' "$hash" "$jar.tmp" | sha512sum --check --status; then
+          verified=true; break
+        fi
+        echo "::warning::Android jar download/checksum attempt $attempt failed for $version at $base"
+        rm -f "$jar.tmp"
+      done
+      [ "$verified" = true ] && break
     done
     [ "$verified" = true ] || { echo "::error::Could not obtain a verified Robolectric jar for $version"; exit 1; }
     mv "$jar.tmp" "$jar"

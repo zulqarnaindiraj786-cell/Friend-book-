@@ -9,5 +9,7 @@ class AndroidPrWorkflow(unittest.TestCase):
         self.assertIn('bash scripts/ci/fetch_robolectric_jars.sh',code)
         self.assertIn('robolectric.dependency.repo.url=https://repo.maven.apache.org/maven2',code)
         fetch=(ROOT/'scripts/ci/fetch_robolectric_jars.sh').read_text()
-        for token in ['sha512sum --check --status','--retry-all-errors','15-robolectric','9-robolectric']:
+        for token in ['sha512sum --check --status','--retry-all-errors','15-robolectric','9-robolectric',
+                      'repo1.maven.org/maven2','maven-central.storage-download.googleapis.com/maven2']:
             self.assertIn(token,fetch)
+        self.assertIn('"$hash" "$jar.tmp" | sha512sum --check --status', fetch)
