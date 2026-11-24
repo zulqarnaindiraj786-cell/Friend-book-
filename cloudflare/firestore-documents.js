@@ -1271,10 +1271,19 @@ async function feedEngagement(db, env, uid, body, docs, requestUserReads) {
       || body.limit<1 || body.limit>MAX_FEED_ENGAGEMENT_PAGE || env.D1_INTERACTIONS_ENABLED!=='true' || !docs.length) return docs;
   try {
     const resources=docs.map(d=>`posts/${d.id}`);
+    const stateRows=async()=>{
+      const slots=resources.map(()=>'?').join(',');
+      const read=index=>db.prepare(`SELECT resource,state FROM friendbook_cf_interaction_resources ${index} WHERE resource IN (${slots})`).bind(...resources).all();
+      try { return await read('INDEXED BY idx_cf_interaction_resource_state_cover'); }
+      catch(error) {
+        if(/no such index: idx_cf_interaction_resource_state_cover/.test(String(error)))return read('');
+        throw error;
+      }
+    };
     const [viewer,states]=await Promise.all([
       requestUserReads.has(`users/${uid}`)
         ? requestUserReads.get(`users/${uid}`) : readD1DocumentFields(db,`users/${uid}`),
-      db.prepare(`SELECT resource,state FROM friendbook_cf_interaction_resources WHERE resource IN (${resources.map(()=>'?').join(',')})`).bind(...resources).all(),
+      stateRows(),
     ]);
     const stateByResource=new Map((states.results||[]).map(row=>[row.resource,row.state]));
     const blocked=[...(viewer?.blocked?.arrayValue?.values||[]),...(viewer?.blockedUsers?.arrayValue?.values||[])].map(v=>v.stringValue).filter(v=>typeof v==='string');

@@ -1,0 +1,86 @@
+# Targeted engagement fix: add only the reviewed resource-state covering index, then deploy.
+# Never execute the full migration chain or remove existing indexes/data.
+# Explicit rollout tag required; full regressions precede deployment.
+name: Deploy feed engagement state cover
+on:
+  push:
+    branches: [arena/b52bc74d-friend-book]
+    paths:
+      - '.github/workflows/deploy-feed-state-cover.yml'
+      - 'scripts/admin/verify_worker_rollout.py'
+permissions:
+  contents: read
+concurrency:
+  group: friendbook-cloudflare-production
+  cancel-in-progress: false
+jobs:
+  deploy:
+    if: contains(github.event.head_commit.message, '[deploy-feed-state-cover]' )
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - name: Full local regressions before deployment
+        run: |
+          npm test
+          python3 -m unittest discover -s scripts/tests
+          python3 cloudflare/test/schema_test.py
+          python3 cloudflare/test/migration_test.py
+          python3 cloudflare/test/index_plan_test.py
+          QUOTA_EXPERIMENT_FRIEND_INDEXES=1 node scripts/loadtest/d1_quota_replay.mjs 30 > /tmp/quota-preview-replay.json
+      - name: Refuse unless live configuration matches and rollback version is recorded
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: python3 scripts/admin/verify_worker_rollout.py --snapshot /tmp/quota-rollout-before.json
+      - name: Compile exact production config without deployment
+        env:
+          WRANGLER_SEND_METRICS: 'false'
+        run: npx --yes wrangler@4.157.0 deploy --dry-run --outdir /tmp/quota-code-bundle
+      - name: Install and check only the interaction state covering index
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: '92f3d04598822de2e49e14561218d090'
+          WRANGLER_SEND_METRICS: 'false'
+        run: |
+          npx --yes wrangler@4.157.0 d1 execute friendbook-db --remote --file cloudflare/migrations/0100_interaction_state_cover.sql
+          npx --yes wrangler@4.157.0 d1 execute friendbook-db --remote --command "EXPLAIN QUERY PLAN SELECT resource,state FROM friendbook_cf_interaction_resources INDEXED BY idx_cf_interaction_resource_state_cover WHERE resource IN ('__quota_probe_1__','__quota_probe_2__')"
+          npx --yes wrangler@4.157.0 d1 execute friendbook-db --remote --command "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_cf_interaction_resource_state_cover'"
+      - name: Deploy Worker code after the indexes are available
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: '92f3d04598822de2e49e14561218d090'
+          WRANGLER_SEND_METRICS: 'false'
+        run: npx --yes wrangler@4.157.0 deploy --keep-vars
+      - name: Verify resource preservation and smoke health and auth
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          python3 scripts/admin/verify_worker_rollout.py --snapshot /tmp/quota-rollout-before.json --compare
+          python3 - <<'PY'
+          import json, urllib.request, urllib.error
+          base='https://rough-firefly-dd7b.zulqarnaindiraj786.workers.dev'
+          def get(path):
+              req=urllib.request.Request(base+path,headers={'User-Agent':'FriendBook-Code-Rollout/1.0'})
+              try:
+                  with urllib.request.urlopen(req,timeout=30) as r: return r.status,json.load(r)
+              except urllib.error.HTTPError as e: return e.code,{}
+          status,health=get('/health')
+          assert status==200 and health.get('ok') is True and health.get('d1InteractionsEnabled') is True
+          assert health['views']['ae'] is True
+          assert get('/v1/me')[0]==401
+          print('Health 200, D1 enabled, Analytics Engine bound, unauthenticated API 401.')
+          PY
+      - name: Preserve rollback metadata and replay
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: quota-code-rollout-evidence
+          path: |
+            /tmp/quota-rollout-before.json
+            /tmp/quota-preview-replay.json
+          retention-days: 7

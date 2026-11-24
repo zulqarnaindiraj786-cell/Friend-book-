@@ -189,6 +189,8 @@ def safe_shape(sql):
     # Fixed SQL index identifiers only; do not emit query text or bind values.
     for index,label in (
         ('idx_cf_feed_exceptions','feed_exception_probe'),
+        ('idx_cf_feed_high_rank_exceptions','timestamp_head_guard'),
+        ('idx_cf_interaction_resource_state_cover','interaction_state_cover'),
         ('idx_cf_posts_feed_page','posts_feed_seek'),
         ('idx_cf_posts_author_page','author_post_seek'),
         ('idx_cf_group_posts_page','group_post_seek'),
@@ -201,6 +203,7 @@ def safe_shape(sql):
         ('idx_cf_story_expiry_exceptions','story_expiry_exception_probe')):
         if re.search(r'\bindexed\s+by\s+'+index+r'\b',q):features.append(label)
     if re.search(r'\bfriendbook_cf_post_search\s+match\b',q):features.append('post_tag_fts')
+    if re.search(r'\bfrom\s+friendbook_cf_interaction_resources\b',q) and re.search(r'\bwhere\s+resource\s+in\s*\(',q):features.append('feed_interaction_state_batch')
     tables=[label for table,label in (
         ('friendbook_cf_firestore_documents','canonical_documents'),
         ('friendbook_cf_documents','legacy_mirror'),
