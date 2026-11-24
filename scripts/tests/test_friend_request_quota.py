@@ -24,4 +24,4 @@ class FriendRequestQuota(unittest.TestCase):
  def test_request_badge_is_bounded_and_cached(self):
   s=(JAVA/'main/MainActivity.java').read_text().split('private void startBadgeListeners()',1)[1].split('Fb.db().collection("friend_requests")',1)[1]
   self.assertIn('.limit(10)',s)
-  self.assertIn('.getCachedOrFetch(false,300_000L)',s)
+  self.assertIn('.getCachedOrFetchAutomatic(badgeReadScope,300_000L)',s)

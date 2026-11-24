@@ -77,6 +77,8 @@ public class MainActivity extends Activity {
     private int active = -1;
     private long foregroundStartedAt;
     private final com.friendbook.social.core.AppUpdates appUpdates = new com.friendbook.social.core.AppUpdates();
+    private final com.friendbook.social.d1.documents.ForegroundReadScope badgeReadScope =
+            new com.friendbook.social.d1.documents.ForegroundReadScope();
 
     private final java.util.Set<String> currentPendingReqIds = new java.util.HashSet<>();
     private final java.util.Set<String> currentUnreadChatIds = new java.util.HashSet<>();
@@ -209,6 +211,7 @@ public class MainActivity extends Activity {
 
         // ⚡ Defer non-critical SDK/network listeners until AFTER Frame #1 paints!
         Looper.myQueue().addIdleHandler(() -> {
+            if (isFinishing() || isDestroyed()) return false;
             Fb.ensureMeFresh();
 
             startBadgeListeners();
@@ -543,14 +546,14 @@ public class MainActivity extends Activity {
 
     private void startBadgeListeners() {
         String me = Fb.uid();
-        if (me == null) return;
+        if (me == null || isFinishing() || isDestroyed()) return;
         // QUOTA: badges are one-shot bounded reads. A live listener re-read the whole window on
         // every message/notification just to repaint a pill; pushes bump it locally instead.
         Fb.db().collection("notifications")
                 .whereEqualTo("toUserId", me).whereEqualTo("isRead", false)
                 .orderBy("createdAt", com.friendbook.social.d1.documents.Query.Direction.DESCENDING)
                 .limit(10)
-                .getCachedOrFetch(false,60_000L)
+                .getCachedOrFetchAutomatic(badgeReadScope,60_000L)
                 .addOnSuccessListener((snap) -> {
                     if (snap == null || !java.util.Objects.equals(me,Fb.uid()) || isFinishing() || isDestroyed()) return;
                     if (hasWindowFocus() && foregroundStartedAt > 0 && !snap.getMetadata().isFromCache()) {
@@ -598,9 +601,9 @@ public class MainActivity extends Activity {
                 .whereArrayContains("participants", me)
                 .orderBy("inboxActivityAt", com.friendbook.social.d1.documents.Query.Direction.DESCENDING)
                 .limit(com.friendbook.social.core.OnDemandLoads.CHAT_BADGE_LIMIT)
-                .getCachedOrFetch(false)
+                .getCachedOrFetchAutomatic(badgeReadScope,Long.MAX_VALUE)
                 .addOnSuccessListener((snap) -> {
-                    if (snap == null || !java.util.Objects.equals(me,Fb.uid())) return;
+                    if (snap == null || !java.util.Objects.equals(me,Fb.uid()) || isFinishing() || isDestroyed()) return;
                     int total = 0;
                     long chatClearedAt = Prefs.chatBadgeClearedAt(this, me);
                     synchronized (currentUnreadChatIds) {
@@ -640,7 +643,7 @@ public class MainActivity extends Activity {
                 .whereEqualTo("toUid", me).whereEqualTo("status", "pending")
                 .orderBy("createdAt", com.friendbook.social.d1.documents.Query.Direction.DESCENDING)
                 .limit(10)
-                .getCachedOrFetch(false,300_000L)
+                .getCachedOrFetchAutomatic(badgeReadScope,300_000L)
                 .addOnSuccessListener((snap) -> {
                     if (snap == null || !me.equals(Fb.uid()) || isFinishing() || isDestroyed()) return;
                     synchronized (currentPendingReqIds) {
@@ -783,6 +786,7 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        badgeReadScope.close();
         appUpdates.dismiss();
         notificationPermissionHandler.removeCallbacks(notificationPermissionPrompt);
         if (activeInstance == this) activeInstance = null;
