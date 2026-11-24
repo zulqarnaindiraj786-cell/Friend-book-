@@ -59,3 +59,12 @@ Run `python3 scripts/quota_calculator.py docs/quota/scenario-1000-assumed.json`.
 Input is **billed rows per session**, session frequency, invocations, independent daily background work, and explicitly supplied daily limits. It does not equate ten displayed records with ten billed reads. Example is assumption-only: 1,000 users x 1 session x (100 reads, 5 writes, 30 invocations) -> 100,000 reads, 5,000 writes, 30,000 invocations, with **zero headroom** against the owner's read/write target before background work. Two sessions/user doubles those totals. Not proof the current app fits Free.
 
 Cloudflare Free plan entitlement/CPU/storage/KV/R2/AE limits have not been independently refreshed here. Supply actual account limits and measured rates; do not mistake the owner's 100k/5k budget for a quoted provider allowance. A 100% guarantee is not supported until the outstanding gates pass.
+
+## Verification for this pass
+
+- `python3 -m unittest discover -s scripts/tests -q`: **440 PASS** (436 existing + four calculator cases).
+- Android production compile and full JVM suite: **PASS**, run https://github.com/zulqarnaindiraj786-cell/Friend-book-/actions/runs/45321899910 at code `d9346e7`.
+- New actual `FeedAuthorBatchDemandTest`: 10 missing authors -> one bounded document-ID query; 100 repeated page submissions -> no additional query; explicit reset permits recovery; no individual `Fb.getUserFresh` call. This checks the Android demand path, not Worker billed rows.
+- Existing polling foreground/background policy, actor isolation, reaction write-queue and comment ACK tests run in that green suite. No new whole-app background-zero or 50-view D1 batching claim.
+- First intermediate run 45321715425 exposed unnecessary Firebase setup for authorless test pages; production now skips author lookup setup entirely when the submitted page has no eligible missing author. Final full suite passed without deleting the failing dedup/footer test.
+- No release APK, backend deployment, PR merge, production session capture or daily quota acceptance was performed.
