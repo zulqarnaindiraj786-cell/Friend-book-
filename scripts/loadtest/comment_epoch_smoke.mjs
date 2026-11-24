@@ -6,41 +6,34 @@ const builder={prepare(sql){return {bind(...params){return {sql,params};}};}};
 
 export async function checkCommentEpoch(fetchFn,token,nonce){
  if(!token || !/^[a-zA-Z0-9_-]{16,80}$/.test(nonce))throw Error('Invalid smoke configuration');
- const resources=Array.from({length:10},(_,i)=>`posts/__quota_epoch_${nonce}_${i}`);
- async function query(stage,statement){
+ const resources=Array.from({length:20},(_,i)=>`posts/__quota_epoch_${nonce}_${i}`);
+ async function query(statement){
   const response=await fetchFn(endpoint,{method:'POST',headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json'},body:JSON.stringify(statement)});
   if(!response.ok){
-   let diagnosis='unknown',detail='';
-   try {const data=await response.json();const raw=String(data?.errors?.[0]?.message||'');detail=raw.split(token).join('[redacted]').replaceAll(nonce,'[nonce]').replace(/[^A-Za-z0-9 _.:()/-]/g,' ').slice(0,240);const message=raw.toLowerCase();
-    if(/bind|parameter|variable/.test(message))diagnosis='binding';
-    else if(/size|length|too (?:many|large)|limit/.test(message))diagnosis='limit';
-    else if(/syntax|parse|near/.test(message))diagnosis='syntax';
-    else if(/no such|missing/.test(message))diagnosis='missing schema';
-    else if(/authoriz|permission/.test(message))diagnosis='permission';
-   } catch {}
-   if(detail)console.error(`::notice::D1 synthetic ${stage} error: ${detail}`);
-   throw Error(`${stage}: HTTP ${response.status} (${diagnosis})`);
+   let isCompoundLimit=false;
+   try {const data=await response.json();isCompoundLimit=/too many terms in compound select/i.test(String(data?.errors?.[0]?.message||''));} catch {}
+   if(isCompoundLimit)return {compoundLimit:true};
+   throw Error('D1 read-only smoke request failed');
   }
   const payload=await response.json(),result=payload?.result?.[0];
-  if(!payload?.success || payload.result.length!==1 || !result?.success || !Array.isArray(result.results))throw Error(`${stage}: D1 response unsuccessful`);
+  if(!payload?.success || payload.result.length!==1 || !result?.success || !Array.isArray(result.results))throw Error('D1 smoke returned incomplete results');
   return result;
  }
- const epoch=await query('epoch',{sql:'SELECT count(*) AS n FROM friendbook_cf_legacy_comment_epoch WHERE id=1 AND length(generation)=32 AND revision>=0',params:[]});
- const old=await query('original',legacyCommentCountsStatement(builder,resources,[]));
- const candidate=await query('candidate',legacyCommentCountsWithCandidatesStatement(builder,resources,[]));
- if(epoch.results.length!==1 || epoch.results[0].n!==1 || old.results.length!==10 || candidate.results.length!==10)throw Error('Unexpected smoke result count');
- const ordered=rows=>[...rows].sort((a,b)=>a.slot-b.slot);
- const before=ordered(old.results),after=ordered(candidate.results);
- for(let i=0;i<10;i++)if(before[i].slot!==i || after[i].slot!==i || before[i].n!==0 || after[i].n!==0 || after[i].has_candidates!==0)throw Error('Synthetic count parity failed');
- return {resources:10,epoch_rows_read:epoch.meta?.rows_read??null,old_rows_read:old.meta?.rows_read??null,candidate_rows_read:candidate.meta?.rows_read??null};
-}
-
-if(process.argv[1] && import.meta.url===pathToFileURL(process.argv[1]).href){
- try {
-  const nonce=crypto.randomUUID().replaceAll('-','');
-  console.log('::notice:: Synthetic comment-epoch SQL smoke '+JSON.stringify(await checkCommentEpoch(fetch,process.env.CLOUDFLARE_API_TOKEN,nonce)));
- } catch (error) {
-  const allowed=/^(?:epoch|original|candidate): (?:HTTP [0-9]{3} \((?:binding|limit|syntax|missing schema|permission|unknown)\)|D1 response unsuccessful)$|^Unexpected smoke result count$|^Synthetic count parity failed$|^Invalid smoke configuration$/;
-  console.error('::error::Synthetic read-only comment SQL smoke failed: '+(allowed.test(error?.message)?error.message:'network or unexpected error'));process.exitCode=1;
+ const epoch=await query({sql:'SELECT count(*) AS n FROM friendbook_cf_legacy_comment_epoch WHERE id=1 AND length(generation)=32 AND revision>=0',params:[]});
+ if(epoch.results?.length!==1 || epoch.results[0].n!==1)throw Error('Unexpected epoch result');
+ const measurements=[];
+ for(const size of [1,2,3,4,5,10,20])for(const kind of ['original','candidate']){
+  const res=resources.slice(0,size),statement=kind==='original'?legacyCommentCountsStatement(builder,res,[]):legacyCommentCountsWithCandidatesStatement(builder,res,[]);
+  const result=await query(statement);
+  if(result.compoundLimit){measurements.push({size,kind,compound_limit:true});continue;}
+  const rows=[...result.results].sort((a,b)=>a.slot-b.slot);
+  if(rows.length!==size || rows.some((row,i)=>row.slot!==i || row.n!==0 || (kind==='candidate' && row.has_candidates!==0)))throw Error('Synthetic count parity failed');
+  measurements.push({size,kind,rows_read:result.meta?.rows_read??null});
  }
+ if(measurements.some(x=>x.size===1 && x.compound_limit))throw Error('Single resource SQL unsupported');
+ return {epoch_rows_read:epoch.meta?.rows_read??null,measurements};
+}
+if(process.argv[1] && import.meta.url===pathToFileURL(process.argv[1]).href){
+ try {console.log('::notice:: Synthetic comment-epoch SQL smoke '+JSON.stringify(await checkCommentEpoch(fetch,process.env.CLOUDFLARE_API_TOKEN,crypto.randomUUID().replaceAll('-',''))));}
+ catch {console.error('::error::Synthetic read-only comment SQL smoke failed; no production writes were made.');process.exitCode=1;}
 }
