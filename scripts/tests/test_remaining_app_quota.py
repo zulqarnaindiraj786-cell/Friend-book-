@@ -22,6 +22,11 @@ class RemainingAppQuota(unittest.TestCase):
         self.assertNotIn('storyPages.next()',section)
         self.assertIn('Tap More stories',section)
         self.assertIn('stopTimer();status("No active stories on this page',code)
+    def test_admin_content_initial_tab_does_not_start_two_listeners(self):
+        code=(JAVA/'admin/AdminContentActivity.java').read_text()
+        self.assertIn('if(started)listen();',code)
+        self.assertIn('started=true;',code)
+        self.assertIn('started=false;',code)
     def test_story_viewers_load_at_most_ten_and_stop_with_screen(self):
         code=(JAVA/'story/StoryViewerActivity.java').read_text()
         viewers=code.split('private void showViewers()',1)[1].split('private void sendReply()',1)[0]

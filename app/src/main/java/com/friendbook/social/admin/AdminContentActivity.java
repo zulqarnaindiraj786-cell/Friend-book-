@@ -33,6 +33,7 @@ public class AdminContentActivity extends Activity {
     private String tab = "posts";
     private ContentAdapter adapter;
     private ListenerRegistration reg;
+    private boolean started;
     private TextView empty;
 
     static class Item {
@@ -86,18 +87,20 @@ public class AdminContentActivity extends Activity {
             tabViews[i].setBackground(Ui.round(this, on ? Ui.BLUE : Ui.inputBg(this), 16));
             tabViews[i].setTextColor(on ? 0xFFFFFFFF : Ui.sub(this));
         }
-        listen();
+        if(started)listen();
     }
 
     @Override
     protected void onStart() {
         super.onStart();
+        started=true;
         if (adapter != null) listen();
     }
 
     @Override
     protected void onStop() {
         super.onStop();
+        started=false;
         if (reg != null) { reg.remove(); reg = null; }
     }
 
