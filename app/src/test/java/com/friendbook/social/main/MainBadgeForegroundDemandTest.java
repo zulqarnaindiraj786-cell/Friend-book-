@@ -23,7 +23,7 @@ public class MainBadgeForegroundDemandTest {
             when(db.collection("notifications")).thenReturn(notifications);when(notifications.whereEqualTo("toUserId","badge-actor")).thenReturn(n);
             when(n.whereEqualTo("isRead",false)).thenReturn(n);when(n.orderBy(eq("createdAt"),any(Query.Direction.class))).thenReturn(n);when(n.limit(10)).thenReturn(n);
             when(db.collection("chats")).thenReturn(chats);when(chats.whereArrayContains("participants","badge-actor")).thenReturn(c);
-            when(c.orderBy(eq("inboxActivityAt"),any(Query.Direction.class))).thenReturn(c);when(c.limit(anyInt())).thenReturn(c);
+            when(c.orderBy(eq("inboxActivityAt"),any(Query.Direction.class))).thenReturn(c);when(c.limit(anyLong())).thenReturn(c);
             when(db.collection("friend_requests")).thenReturn(requests);when(requests.whereEqualTo("toUid","badge-actor")).thenReturn(r);
             when(r.whereEqualTo("status","pending")).thenReturn(r);when(r.orderBy(eq("createdAt"),any(Query.Direction.class))).thenReturn(r);when(r.limit(10)).thenReturn(r);
             TaskCompletionSource<QuerySnapshot> pending=new TaskCompletionSource<>();

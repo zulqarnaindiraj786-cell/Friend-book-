@@ -24,6 +24,7 @@ import java.util.concurrent.TimeUnit;
 public class D1DocumentStore {
     private static final D1DocumentStore INSTANCE = new D1DocumentStore();
     final DocumentReadFlights<String> documentReadFlights = new DocumentReadFlights<>();
+    final DocumentReadFlights<String> friendshipFactsFlights = new DocumentReadFlights<>();
     final DocumentReadFlights<QuerySnapshot> queryReadFlights = new DocumentReadFlights<>();
     final DocumentReadFlights<String> listenerQueryReadFlights = new DocumentReadFlights<>();
     final DocumentReadFlights<AggregateQuerySnapshot> aggregateReadFlights = new DocumentReadFlights<>();
@@ -233,8 +234,48 @@ public class D1DocumentStore {
 
     /** Server-authoritative membership for at most ten visible people; never scans a friend graph. */
     public Task<java.util.Map<String,Boolean>> friendshipFacts(java.util.List<String> candidates) {
+        return friendshipFacts(candidates,null);
+    }
+
+    /** Automatic visible-content facts wait for foreground; explicit callers are unaffected. */
+    public Task<java.util.Map<String,Boolean>> friendshipFactsAutomatic(
+            java.util.List<String> candidates,ForegroundReadScope scope) {
+        return friendshipFacts(candidates,scope);
+    }
+
+    private Task<java.util.Map<String,Boolean>> friendshipFacts(java.util.List<String> candidates,ForegroundReadScope scope) {
         final java.util.List<String> submitted=new java.util.ArrayList<>(candidates);
-        return runAsync(() -> FriendshipFactsResponse.parse(D1DocumentTransport.friendshipFacts(submitted),submitted));
+        final String actor=authenticatedUid();
+        Task<String> raw=scope==null ? friendshipFactsResponse(actor,submitted,false)
+                : scope.read(() -> friendshipFactsResponse(actor,submitted,true));
+        // Every caller receives its own validated map, not a shared mutable result.
+        return raw.continueWith(Runnable::run,completed->{
+            if (!actor.equals(authenticatedUid())) throw new D1DocumentStoreException(
+                    D1DocumentStoreException.Code.CANCELLED,"Account changed during friendship facts");
+            if (!completed.isSuccessful()) throw completed.getException()!=null ? completed.getException()
+                    : new java.io.IOException("Friendship facts cancelled");
+            return FriendshipFactsResponse.parse(new org.json.JSONObject(completed.getResult()),submitted);
+        });
+    }
+
+    private Task<String> friendshipFactsResponse(String actor,java.util.List<String> submitted,boolean automatic) {
+        if (!actor.equals(authenticatedUid())) return com.google.android.gms.tasks.Tasks.forException(
+                new D1DocumentStoreException(D1DocumentStoreException.Code.CANCELLED,"Account changed before friendship facts"));
+        String key=new org.json.JSONArray(submitted).toString();
+        DocumentReadFlights.Access<String> access=friendshipFactsFlights.readPromotable(actor,key,true,!automatic,
+                allowBackground -> runAsync(() -> {
+                    if (!actor.equals(authenticatedUid())) throw new D1DocumentStoreException(
+                            D1DocumentStoreException.Code.CANCELLED,"Account changed before friendship facts");
+                    if (!allowBackground.get() && !com.friendbook.social.App.isForeground())throw new BackgroundQueryDeferred();
+                    String response=D1DocumentTransport.friendshipFacts(submitted).toString();
+                    if (!actor.equals(authenticatedUid())) throw new D1DocumentStoreException(
+                            D1DocumentStoreException.Code.CANCELLED,"Account changed during friendship facts");
+                    return response;
+                }));
+        if (!automatic && access.promotedAutomatic) return access.task.continueWithTask(Runnable::run,completed ->
+                completed.getException() instanceof BackgroundQueryDeferred
+                        ? friendshipFactsResponse(actor,submitted,false) : completed);
+        return access.task;
     }
 
     /** Explicit verification-screen reconciliation, computed and awarded by the Worker. */
@@ -415,6 +456,7 @@ public class D1DocumentStore {
     void invalidateDoc(String path) {
         if (path != null) {
             String actor=authenticatedUid();
+            if (path.startsWith("friends/") || path.startsWith("friend_requests/")) friendshipFactsFlights.invalidateAll();
             documentReadFlights.invalidate(actor,documentReadKey(path,false));
             documentReadFlights.invalidate(actor,documentReadKey(path,true));
             queryReadFlights.invalidateAll();
@@ -567,6 +609,7 @@ public class D1DocumentStore {
     void notifyCollectionListeners(String parentPath) {
         // A push/commit may change a query's membership even without a known
         // document path. New reads must not join pre-invalidation work.
+        if ("friends".equals(parentPath) || "friend_requests".equals(parentPath)) friendshipFactsFlights.invalidateAll();
         queryReadFlights.invalidateAll();
         listenerQueryReadFlights.invalidateAll();
         aggregateReadFlights.invalidateAll();

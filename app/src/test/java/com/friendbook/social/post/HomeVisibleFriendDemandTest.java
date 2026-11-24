@@ -28,21 +28,21 @@ public class HomeVisibleFriendDemandTest {
  @Test public void repeatedVisibleCandidatesShareOneBoundedReadAndUseConfirmedFacts()throws Exception{
   try(MockedStatic<Fb> fb=mockStatic(Fb.class)){
    fb.when(Fb::uid).thenReturn("actor");D1DocumentStore db=mock(D1DocumentStore.class);fb.when(Fb::db).thenReturn(db);
-   TaskCompletionSource<Map<String,Boolean>> pending=new TaskCompletionSource<>();when(db.friendshipFacts(anyList())).thenReturn(pending.getTask());
+   TaskCompletionSource<Map<String,Boolean>> pending=new TaskCompletionSource<>();when(db.friendshipFactsAutomatic(anyList(),any(ForegroundReadScope.class))).thenReturn(pending.getTask());
    HomeFragment h=home();List<String> ids=Arrays.asList("alice","bob","alice");
    for(int i=0;i<100;i++)invoke(h,"resolveVisibleFriends",new Class<?>[]{Collection.class},ids);
-   verify(db,times(1)).friendshipFacts(argThat(list->list.equals(Arrays.asList("alice","bob"))));
+   verify(db,times(1)).friendshipFactsAutomatic(argThat(list->list.equals(Arrays.asList("alice","bob"))),any(ForegroundReadScope.class));
    pending.setResult(Map.of("alice",true,"bob",false));Shadows.shadowOf(android.os.Looper.getMainLooper()).idle();
    assertTrue(((Set<?>)field("friendIds").get(h)).contains("alice"));assertFalse(((Set<?>)field("friendIds").get(h)).contains("bob"));
    assertEquals(2,((Map<?,?>)field("friendFactsChecked").get(h)).size());
    for(int i=0;i<100;i++)invoke(h,"resolveVisibleFriends",new Class<?>[]{Collection.class},ids);
-   verify(db,times(1)).friendshipFacts(anyList());
+   verify(db,times(1)).friendshipFactsAutomatic(anyList(),any(ForegroundReadScope.class));
   }
  }
  @Test public void stoppedScreenIgnoresLateFriendResults()throws Exception{
   try(MockedStatic<Fb> fb=mockStatic(Fb.class)){
    fb.when(Fb::uid).thenReturn("actor");D1DocumentStore db=mock(D1DocumentStore.class);fb.when(Fb::db).thenReturn(db);
-   TaskCompletionSource<Map<String,Boolean>> pending=new TaskCompletionSource<>();when(db.friendshipFacts(anyList())).thenReturn(pending.getTask());
+   TaskCompletionSource<Map<String,Boolean>> pending=new TaskCompletionSource<>();when(db.friendshipFactsAutomatic(anyList(),any(ForegroundReadScope.class))).thenReturn(pending.getTask());
    HomeFragment h=home();invoke(h,"resolveVisibleFriends",new Class<?>[]{Collection.class},Collections.singletonList("alice"));
    invoke(h,"invalidateHomeReads",new Class<?>[]{});field("homeStarted").setBoolean(h,false);
    pending.setResult(Collections.singletonMap("alice",true));Shadows.shadowOf(android.os.Looper.getMainLooper()).idle();
@@ -52,23 +52,41 @@ public class HomeVisibleFriendDemandTest {
  @Test public void incompleteResponseNeverProvesNonFriend()throws Exception{
   try(MockedStatic<Fb> fb=mockStatic(Fb.class)){
    fb.when(Fb::uid).thenReturn("actor");D1DocumentStore db=mock(D1DocumentStore.class);fb.when(Fb::db).thenReturn(db);
-   TaskCompletionSource<Map<String,Boolean>> pending=new TaskCompletionSource<>();when(db.friendshipFacts(anyList())).thenReturn(pending.getTask());
+   TaskCompletionSource<Map<String,Boolean>> pending=new TaskCompletionSource<>();when(db.friendshipFactsAutomatic(anyList(),any(ForegroundReadScope.class))).thenReturn(pending.getTask());
    HomeFragment h=home();List<String> ids=Arrays.asList("alice","bob");invoke(h,"resolveVisibleFriends",new Class<?>[]{Collection.class},ids);
    pending.setResult(Collections.singletonMap("alice",true));Shadows.shadowOf(android.os.Looper.getMainLooper()).idle();
    assertTrue(((Map<?,?>)field("friendFactsChecked").get(h)).isEmpty());assertTrue(((Set<?>)field("friendFactsFailed").get(h)).containsAll(ids));
-   invoke(h,"resolveVisibleFriends",new Class<?>[]{Collection.class},ids);verify(db,times(1)).friendshipFacts(anyList());
+   invoke(h,"resolveVisibleFriends",new Class<?>[]{Collection.class},ids);verify(db,times(1)).friendshipFactsAutomatic(anyList(),any(ForegroundReadScope.class));
   }
  }
  @Test public void timeoutBlocksRetryAndIgnoresLateResultUntilNewEntry()throws Exception{
-  try(MockedStatic<Fb> fb=mockStatic(Fb.class)){
+  try(MockedStatic<Fb> fb=mockStatic(Fb.class);MockedStatic<com.friendbook.social.App> app=mockStatic(com.friendbook.social.App.class)){
+   app.when(com.friendbook.social.App::isForeground).thenReturn(true);
    fb.when(Fb::uid).thenReturn("actor");D1DocumentStore db=mock(D1DocumentStore.class);fb.when(Fb::db).thenReturn(db);
-   TaskCompletionSource<Map<String,Boolean>> pending=new TaskCompletionSource<>();when(db.friendshipFacts(anyList())).thenReturn(pending.getTask());
+   TaskCompletionSource<Map<String,Boolean>> pending=new TaskCompletionSource<>();when(db.friendshipFactsAutomatic(anyList(),any(ForegroundReadScope.class))).thenReturn(pending.getTask());
    HomeFragment h=home();List<String> ids=Collections.singletonList("alice");invoke(h,"resolveVisibleFriends",new Class<?>[]{Collection.class},ids);
    Shadows.shadowOf(android.os.Looper.getMainLooper()).idleFor(java.time.Duration.ofSeconds(21));
    assertTrue(((Set<?>)field("friendFactsFailed").get(h)).contains("alice"));
-   for(int i=0;i<100;i++)invoke(h,"resolveVisibleFriends",new Class<?>[]{Collection.class},ids);verify(db,times(1)).friendshipFacts(anyList());
+   for(int i=0;i<100;i++)invoke(h,"resolveVisibleFriends",new Class<?>[]{Collection.class},ids);verify(db,times(1)).friendshipFactsAutomatic(anyList(),any(ForegroundReadScope.class));
    pending.setResult(Collections.singletonMap("alice",true));Shadows.shadowOf(android.os.Looper.getMainLooper()).idle();
    assertFalse(((Set<?>)field("friendIds").get(h)).contains("alice"));
+  }
+ }
+
+ @Test public void backgroundWaitDoesNotExpireFriendshipFactsBeforeForeground()throws Exception{
+  try(MockedStatic<Fb> fb=mockStatic(Fb.class);MockedStatic<com.friendbook.social.App> app=mockStatic(com.friendbook.social.App.class)){
+   fb.when(Fb::uid).thenReturn("actor");app.when(com.friendbook.social.App::isForeground).thenReturn(false);
+   D1DocumentStore db=mock(D1DocumentStore.class);fb.when(Fb::db).thenReturn(db);
+   TaskCompletionSource<Map<String,Boolean>> pending=new TaskCompletionSource<>();
+   when(db.friendshipFactsAutomatic(anyList(),any(ForegroundReadScope.class))).thenReturn(pending.getTask());
+   HomeFragment h=home();invoke(h,"resolveVisibleFriends",new Class<?>[]{Collection.class},Collections.singletonList("alice"));
+   Shadows.shadowOf(android.os.Looper.getMainLooper()).idleFor(java.time.Duration.ofSeconds(21));
+   assertTrue(((Set<?>)field("friendFactsPending").get(h)).contains("alice"));
+   assertFalse(((Set<?>)field("friendFactsFailed").get(h)).contains("alice"));
+   app.when(com.friendbook.social.App::isForeground).thenReturn(true);ForegroundReadScope.resume();
+   pending.setResult(Collections.singletonMap("alice",true));Shadows.shadowOf(android.os.Looper.getMainLooper()).idle();
+   assertTrue(((Set<?>)field("friendIds").get(h)).contains("alice"));
+   invoke(h,"invalidateHomeReads",new Class<?>[]{});
   }
  }
 
@@ -89,7 +107,7 @@ public class HomeVisibleFriendDemandTest {
  @Test public void publicPostsDoNotStartMembershipReadsButFriendsPostsDo()throws Exception{
   try(MockedStatic<Fb> fb=mockStatic(Fb.class)){
    fb.when(Fb::uid).thenReturn("actor");D1DocumentStore db=mock(D1DocumentStore.class);fb.when(Fb::db).thenReturn(db);
-   when(db.friendshipFacts(anyList())).thenReturn(new TaskCompletionSource<Map<String,Boolean>>().getTask());
+   when(db.friendshipFactsAutomatic(anyList(),any(ForegroundReadScope.class))).thenReturn(new TaskCompletionSource<Map<String,Boolean>>().getTask());
    HomeFragment h=home();List<String> candidates=new ArrayList<>();
    for(String privacy:new String[]{"Public","Only me",null}){
     com.friendbook.social.models.Models.Post post=new com.friendbook.social.models.Models.Post();post.authorId="public";post.privacy=privacy;
@@ -99,7 +117,7 @@ public class HomeVisibleFriendDemandTest {
    DocumentSnapshot doc=mock(DocumentSnapshot.class);when(doc.getData()).thenReturn(new HashMap<String,Object>(){{put("authorId","alice");put("privacy","friends");}});
    invoke(h,"addPostFriendDemand",new Class<?>[]{List.class,DocumentSnapshot.class},candidates,doc);
    invoke(h,"resolveVisibleFriends",new Class<?>[]{Collection.class},candidates);
-   assertEquals(Collections.singletonList("alice"),candidates);verify(db,times(1)).friendshipFacts(anyList());
+   assertEquals(Collections.singletonList("alice"),candidates);verify(db,times(1)).friendshipFactsAutomatic(anyList(),any(ForegroundReadScope.class));
   }
  }
 

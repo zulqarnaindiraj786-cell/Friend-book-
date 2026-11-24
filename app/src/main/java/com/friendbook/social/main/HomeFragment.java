@@ -93,6 +93,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
     }
     private void invalidateHomeReads(){
         homeReadGeneration++;friendFactsGeneration++;friendFactsPending.clear();friendFactsFailed.clear();
+        cancelFriendFactScopes();
         cancelHomeSecondary();engagementHandler.removeCallbacksAndMessages(null);
         feedGeneration++;loadingPosts=false;
         if(feedReadScope!=null){feedReadScope.close();feedReadScope=null;}
@@ -151,6 +152,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
     private final Set<String> friendIds = new HashSet<>();
     private final Map<String,Long> friendFactsChecked=new HashMap<>();
     private final Set<String> friendFactsPending=new HashSet<>(),friendFactsFailed=new HashSet<>();
+    private final Set<com.friendbook.social.d1.documents.ForegroundReadScope> friendFactScopes=new HashSet<>();
     private int friendFactsGeneration;
     private static final long FRIEND_FACT_TTL_MS=300_000L;
     private final Map<String, StoriesAdapter.Group> storyGroups = new HashMap<>();
@@ -282,6 +284,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         if (explicitUserRefresh && adapter!=null) adapter.resetAuthorLookupAttempts();
         if(explicitUserRefresh){
             friendFactsGeneration++;friendFactsChecked.clear();friendFactsPending.clear();friendFactsFailed.clear();
+            cancelFriendFactScopes();
             friendIds.clear();if(Fb.uid()!=null)friendIds.add(Fb.uid());
         }
         FeedAlgorithm.nextRefreshGeneration(a);
@@ -857,6 +860,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         if(!java.util.Objects.equals(friendGraphActor,me)){
             friendGraphActor=me;friendIds.clear();friendIds.add(me);
             friendFactsChecked.clear();friendFactsPending.clear();friendFactsFailed.clear();
+            cancelFriendFactScopes();
         }
         List<String> ids=new ArrayList<>();
         List<Models.Post> cached=FastCache.getFeed();
@@ -885,6 +889,16 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         if(com.friendbook.social.core.StoryAudience.needsFriendship(Fb.uid(),author,story.privacy,following,blocked,muted))ids.add(author);
     }
 
+    private void cancelFriendFactScopes() {
+        List<com.friendbook.social.d1.documents.ForegroundReadScope> pending=new ArrayList<>(friendFactScopes);
+        friendFactScopes.clear();
+        for(com.friendbook.social.d1.documents.ForegroundReadScope scope:pending)scope.close();
+    }
+
+    private void finishFriendFactScope(com.friendbook.social.d1.documents.ForegroundReadScope scope) {
+        friendFactScopes.remove(scope);scope.close();
+    }
+
     private void resolveVisibleFriends(java.util.Collection<String> candidates) {
         if(candidates==null || candidates.isEmpty())return;
         final String me=Fb.uid();final int homeToken=homeReadGeneration, factsToken=friendFactsGeneration;
@@ -892,6 +906,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         if(!java.util.Objects.equals(friendGraphActor,me)){
             friendGraphActor=me;friendIds.clear();friendIds.add(me);
             friendFactsChecked.clear();friendFactsPending.clear();friendFactsFailed.clear();
+            cancelFriendFactScopes();
         }
         long now=android.os.SystemClock.elapsedRealtime();
         java.util.LinkedHashSet<String> needed=new java.util.LinkedHashSet<>();
@@ -905,11 +920,24 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         }
         for(List<String> ids:Ui.chunks(new ArrayList<>(needed),10)){
             friendFactsPending.addAll(ids);
-            engagementHandler.postDelayed(()->{
+            com.friendbook.social.d1.documents.ForegroundReadScope scope=new com.friendbook.social.d1.documents.ForegroundReadScope();
+            friendFactScopes.add(scope);
+            Runnable deadline=new Runnable(){ @Override public void run(){
                 if(factsToken!=friendFactsGeneration || !activeHomeRead(me,homeToken) || !friendFactsPending.containsAll(ids))return;
-                friendFactsPending.removeAll(ids);friendFactsFailed.addAll(ids);
-            },20_000L);
-            Fb.db().friendshipFacts(ids).addOnSuccessListener(facts->{
+                if(!com.friendbook.social.App.isForeground()) {
+                    // Waiting for foreground is not an HTTP timeout. Rearm only
+                    // after resume, and cancel with this visible-content demand.
+                    scope.whenForeground().addOnSuccessListener(ignored->{
+                        if(factsToken==friendFactsGeneration && activeHomeRead(me,homeToken) && friendFactsPending.containsAll(ids))
+                            engagementHandler.postDelayed(this,20_000L);
+                    });
+                    return;
+                }
+                friendFactsPending.removeAll(ids);friendFactsFailed.addAll(ids);finishFriendFactScope(scope);
+            }};
+            engagementHandler.postDelayed(deadline,20_000L);
+            Fb.db().friendshipFactsAutomatic(ids,scope).addOnSuccessListener(facts->{
+                engagementHandler.removeCallbacks(deadline);finishFriendFactScope(scope);
                 if(factsToken!=friendFactsGeneration || !activeHomeRead(me,homeToken) || !friendFactsPending.containsAll(ids))return;
                 friendFactsPending.removeAll(ids);
                 if(facts==null || facts.size()!=ids.size() || !facts.keySet().containsAll(ids)){
@@ -926,6 +954,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
                 if(!lastPostDocs.isEmpty())consumePostsSnapshot(lastPostDocs,loadedPosts);
                 else if(adapter!=null)applyFilterOnCachedFeed();
             }).addOnFailureListener(error->{
+                engagementHandler.removeCallbacks(deadline);finishFriendFactScope(scope);
                 if(factsToken!=friendFactsGeneration || !activeHomeRead(me,homeToken) || !friendFactsPending.containsAll(ids))return;
                 friendFactsPending.removeAll(ids);friendFactsFailed.addAll(ids);
             });
