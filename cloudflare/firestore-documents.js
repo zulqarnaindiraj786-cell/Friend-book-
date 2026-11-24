@@ -1495,6 +1495,85 @@ async function boundedRecentPeoplePage(db,env,uid,spec) {
   }
 }
 
+// Home story rail: seek the existing expiry index instead of materializing all
+// stories newer than the anchor. Rare encodings are merged before fresh ACLs.
+async function boundedStoryPage(db,uid,spec,requestUserReads) {
+  const filters=Array.isArray(spec?.filters)?spec.filters:[];
+  const f=filters[0], anchor=f?.value;
+  if(spec.parent!=='stories' || filters.length!==1 || f.field!=='expiresAt' || f.op!=='>'
+      || anchor?.__type!=='timestamp' || !Number.isSafeInteger(anchor.millis)
+      || spec.orderBy?.length!==1 || spec.orderBy[0]?.field!=='expiresAt' || spec.orderBy[0]?.direction!=='ASCENDING'
+      || spec.limitToLast || spec.startAt || spec.endAt || spec.endBefore
+      || !Number.isInteger(spec.limit) || spec.limit<1 || spec.limit>10) return null;
+  let cursor=null;
+  if(spec.startAfter) {
+    const c=spec.startAfter;
+    if(!Array.isArray(c) || c.length!==2 || c[0]?.__type!=='timestamp' || !Number.isSafeInteger(c[0].millis)
+        || typeof c[1]!=='string' || !/^[-_a-zA-Z0-9]{1,512}$/.test(c[1])) return null;
+    cursor=[c[0].millis,c[1]];
+  }
+  const time=`CASE WHEN json_type(document_json,'$.expiresAt') IN ('object','array') THEN
+      CASE WHEN json_extract(document_json,'$.expiresAt.__type')='timestamp'
+        AND json_type(document_json,'$.expiresAt.millis') IN ('integer','real')
+        THEN json_extract(document_json,'$.expiresAt.millis') ELSE 'compat' END END`;
+  const standard=`json_type(document_json,'$.expiresAt')='object'
+    AND json_extract(document_json,'$.expiresAt.__type')='timestamp'
+    AND json_type(document_json,'$.expiresAt.millis')='integer'
+    AND json_extract(document_json,'$.expiresAt.millis') BETWEEN -9007199254740991 AND 9007199254740991
+    AND doc_id<>'' AND length(doc_id)<=512 AND doc_id NOT GLOB '*[^a-zA-Z0-9_-]*' AND path='stories/'||doc_id`;
+  const exception=`json_type(document_json,'$.expiresAt') IN ('object','array') AND COALESCE((${standard}),0)=0`;
+  try {
+    const unusual=await db.prepare(`SELECT * FROM friendbook_cf_firestore_documents INDEXED BY idx_cf_story_expiry_exceptions
+      WHERE parent_path='stories' AND ${exception} LIMIT 65`).all();
+    if((unusual.results||[]).length>64 || (unusual.results||[]).some(row=>row.path!==`stories/${row.doc_id}` || !isRootDocument(row.path))
+        || new Set((unusual.results||[]).map(row=>row.doc_id)).size!==(unusual.results||[]).length)return null;
+    let odd=(unusual.results||[]).map(canonicalContentDocument).filter(Boolean)
+      .map(doc=>({...doc,data:profileReadView(doc.path,uid,doc.data)}));
+    odd=applyQuery(odd,{...spec,limit:null});
+    const visible=[];
+    for(let pass=0;;pass++) {
+      const chunk=pass===0?spec.limit:Math.min(100,Math.max(20,spec.limit*2));
+      // SQLite does not seek the second component of a row comparison when
+      // the first is an expression index. Use an equality seek within the tie,
+      // then a separate strict time range, preserving the anchor's strict >.
+      const rows=[];
+      if(cursor && cursor[0]>anchor.millis) {
+        const equal=await db.prepare(`SELECT * FROM friendbook_cf_firestore_documents INDEXED BY idx_cf_story_expiry_page
+          WHERE parent_path='stories' AND (${time})=? AND doc_id>? AND ${standard}
+          ORDER BY doc_id ASC LIMIT ?`).bind(cursor[0],cursor[1],chunk+1).all();
+        rows.push(...(equal.results||[]));
+      }
+      if(rows.length<chunk+1) {
+        const later=await db.prepare(`SELECT * FROM friendbook_cf_firestore_documents INDEXED BY idx_cf_story_expiry_page
+          WHERE parent_path='stories' AND (${time})>? AND ${standard}
+          ORDER BY (${time}) ASC,doc_id ASC LIMIT ?`).bind(Math.max(anchor.millis,cursor?.[0]??anchor.millis),chunk+1-rows.length).all();
+        rows.push(...(later.results||[]));
+      }
+      const docs=rows.slice(0,chunk).map(canonicalContentDocument).filter(Boolean)
+        .map(doc=>({...doc,data:profileReadView(doc.path,uid,doc.data)}));
+      if(docs.length!==Math.min(rows.length,chunk) || new Set(docs.map(d=>d.id)).size!==docs.length)return null;
+      const last=docs.at(-1);
+      const nextCursor=last?[last.data.expiresAt.millis,last.id]:null;
+      const split=rows.length<=chunk ? odd.length : odd.findIndex(doc=>
+        compareDocumentToCursor(doc,[last.data.expiresAt,last.id],spec.orderBy)>0);
+      const merged=sortDocuments([...docs,...odd.splice(0,split<0?odd.length:split)],spec.orderBy);
+      // Authorize before applying the limit. Refill only as needed.
+      for(let i=0;i<merged.length && visible.length<spec.limit;) {
+        const count=Math.min(merged.length-i,spec.limit-visible.length);
+        visible.push(...await visibleDocuments(db,uid,'stories',merged.slice(i,i+count),requestUserReads));
+        i+=count;
+      }
+      if(visible.length>=spec.limit)return visible.slice(0,spec.limit);
+      cursor=nextCursor;
+      if(rows.length<=chunk)break;
+    }
+    return visible;
+  } catch(error) {
+    if(/no such index: idx_cf_story_(?:expiry_exceptions|expiry_page)/.test(String(error)))return null;
+    throw error;
+  }
+}
+
 // Reel discovery's video-post query has no explicit order: Firestore's default
 // is ascending document ID. Seek only video rows and authorize before LIMIT.
 // Non-ASCII/malformed IDs use the existing evaluator because SQLite binary and
@@ -3587,7 +3666,7 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0, ct
         if(inbox!==null)return queryResponse(parent,inbox,body.knownRevisions);
         const people=await boundedNamePage(db,env,uid,body) ?? await boundedPeoplePage(db,env,uid,body) ?? await boundedRecentPeoplePage(db,env,uid,body);
         if (people!==null) return queryResponse(parent,people,body.knownRevisions);
-        const page=parent==='notifications'?await boundedNotificationPage(db,uid,body):await boundedVideoPostPage(db,uid,body,requestUserReads) ?? await boundedFeedPage(db,uid,body,requestUserReads);
+        const page=parent==='notifications'?await boundedNotificationPage(db,uid,body):parent==='stories'?await boundedStoryPage(db,uid,body,requestUserReads):await boundedVideoPostPage(db,uid,body,requestUserReads) ?? await boundedFeedPage(db,uid,body,requestUserReads);
         if (page!==null) return queryResponse(parent,await feedEngagement(db,env,uid,body,page,requestUserReads),body.knownRevisions);
         rows = await readCollectionRows(db, parent, uid, body?.filters, body, env);
       }

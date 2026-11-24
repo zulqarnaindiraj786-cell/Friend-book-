@@ -140,7 +140,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
     private Query feedQuery, storyQuery;
     private DocumentSnapshot storyCursor;
     private boolean loadingStories, moreStories;
-    private long lastStoryFetch;
+    private long lastStoryFetch,storyQueryAnchor;
     private String storiesActor,friendGraphActor;
     private int storyGeneration;
     private final Set<String> storyIds=new HashSet<>();
@@ -1190,16 +1190,21 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
     private void startStoriesListener() {
         String actor=Fb.uid();
         if(actor==null)return;
+        long now=System.currentTimeMillis();
         if(actor.equals(storiesActor) && storyQuery!=null){
             if(loadingStories)return;
-            if(!forceSections){renderLoadedStories();return;}
+            if(!forceSections && com.friendbook.social.core.StoryWindowPolicy.fresh(storyQueryAnchor,now)){
+                renderLoadedStories();return;
+            }
         }
         storiesActor=actor;
         if(storiesReg!=null) { storiesReg.remove(); storiesReg=null; }
         storyGeneration++; loadingStories=false; moreStories=true; storyCursor=null;
         android.content.SharedPreferences prefs=getActivity().getSharedPreferences("fb_prefs",0);
-        long anchor=prefs.getLong("storyAnchor:"+actor,0L);
-        if(anchor==0L){anchor=System.currentTimeMillis();prefs.edit().putLong("storyAnchor:"+actor,anchor).apply();}
+        long previous=prefs.getLong("storyAnchor:"+actor,0L);
+        long anchor=com.friendbook.social.core.StoryWindowPolicy.anchor(previous,now);
+        if(anchor!=previous)prefs.edit().putLong("storyAnchor:"+actor,anchor).apply();
+        storyQueryAnchor=anchor;
         storyQuery=Fb.db().collection("stories").whereGreaterThan("expiresAt",new Timestamp(new java.util.Date(anchor)))
                 .orderBy("expiresAt",Query.Direction.ASCENDING);
         loadMoreStories();
@@ -1209,10 +1214,13 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
     @Override public void loadMoreStories() {
         if(!homeStarted || isHidden())return;
         if(loadingStories || !moreStories || storyQuery==null) return;
+        if(!com.friendbook.social.core.StoryWindowPolicy.fresh(storyQueryAnchor,System.currentTimeMillis())){
+            startStoriesListener();return;
+        }
         loadingStories=true; final int generation=storyGeneration; final String actor=Fb.uid();
         final boolean first=storyCursor==null;
         Query page=first?storyQuery:storyQuery.startAfter(storyCursor);
-        page.limit(3).getCachedOrFetch(forceSections).addOnSuccessListener(snapshot -> {
+        page.limit(3).getCachedOrFetch(forceSections,com.friendbook.social.core.StoryWindowPolicy.REUSE_MS).addOnSuccessListener(snapshot -> {
             if(generation!=storyGeneration || !java.util.Objects.equals(actor,Fb.uid()) || !isAdded() || !homeStarted || isHidden()) return;
             loadingStories=false;lastStoryFetch=android.os.SystemClock.elapsedRealtime(); moreStories=snapshot.size()==3;
             if(first)loadedStoryDocs.clear();
