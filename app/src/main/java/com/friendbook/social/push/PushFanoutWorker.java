@@ -35,6 +35,7 @@ public final class PushFanoutWorker extends Worker {
         String uid = getInputData().getString("uid");
         if (uid == null || !uid.equals(Fb.uid())) return Result.success();
         String id = getInputData().getString("document");
+        if(id==null || id.isEmpty())return Result.failure();
         try {
             if ("chat".equals(getInputData().getString("kind"))) {
                 DocumentSnapshot chat = Tasks.await(Fb.db().collection("chats").document(id)
@@ -85,7 +86,8 @@ public final class PushFanoutWorker extends Worker {
             return Result.success();
         } catch (Exception e) {
             android.util.Log.w("FriendBookPush", "Recipient lookup pending: " + e.getClass().getSimpleName());
-            return getRunAttemptCount() < 8 ? Result.retry() : Result.failure();
+            if(!uid.equals(Fb.uid()))return Result.success();
+            return FanoutRetryPolicy.shouldRetry(e,getRunAttemptCount()) ? Result.retry() : Result.failure();
         }
     }
 }
