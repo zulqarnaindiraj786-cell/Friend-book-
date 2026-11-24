@@ -11,7 +11,7 @@ class ChatQuotaDemand(unittest.TestCase):
  def test_resume_does_not_reset_confirmed_unread_state(self):
   s=(JAVA/'chat/ChatActivity.java').read_text()
   resume=s.split('@Override protected void onResume()',1)[1].split('@Override protected void onPause()',1)[0]
-  self.assertNotIn('unreadResetOnce=false',resume)
+  self.assertIn('if(unreadResetFailed){unreadResetOnce=false;unreadResetFailed=false;}',resume)
   self.assertIn('activeChatRead(chatActor,chatGeneration)',s)
   self.assertIn('older.limit(10)',s)
  def test_group_member_render_and_people_pickers_do_not_scan_profiles(self):

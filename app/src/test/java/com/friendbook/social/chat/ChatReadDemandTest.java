@@ -27,6 +27,22 @@ public class ChatReadDemandTest {
    verify(batch,times(1)).commit();
   }
  }
+ @Test public void failedUnreadResetWaitsForForegroundDemandInsteadOfSnapshotRetryLoop()throws Exception{
+  try(MockedStatic<Fb> fb=mockStatic(Fb.class);MockedStatic<Prefs> prefs=mockStatic(Prefs.class);MockedStatic<SoundEffects> sound=mockStatic(SoundEffects.class)){
+   fb.when(Fb::uid).thenReturn("failed-receipt-actor");prefs.when(()->Prefs.hiddenMsgs(any(),anyString())).thenReturn(Collections.emptySet());
+   ChatActivity a=Robolectric.buildActivity(ChatActivity.class).get();set(a,"chatId","receipt-chat");set(a,"messageActor","failed-receipt-actor");
+   java.lang.reflect.Field snapshots=ChatActivity.class.getDeclaredField("messageSnapshots");snapshots.setAccessible(true);
+   Models.Message m=new Models.Message();m.id="already-read";m.receiverId="failed-receipt-actor";m.isDelivered=true;m.isSeen=true;((Map<String,Models.Message>)snapshots.get(a)).put(m.id,m);
+   D1DocumentStore db=mock(D1DocumentStore.class);fb.when(Fb::db).thenReturn(db);WriteBatch batch=mock(WriteBatch.class);when(db.batch()).thenReturn(batch);
+   CollectionReference rooms=mock(CollectionReference.class);when(db.collection("chats")).thenReturn(rooms);when(rooms.document("receipt-chat")).thenReturn(mock(DocumentReference.class));when(batch.commit()).thenReturn(Tasks.forException(new java.io.IOException("offline")));
+   java.lang.reflect.Method resume=ChatActivity.class.getDeclaredMethod("onResume");resume.setAccessible(true);
+   resume.invoke(a);Shadows.shadowOf(android.os.Looper.getMainLooper()).idle();
+   java.lang.reflect.Method mark=ChatActivity.class.getDeclaredMethod("markVisibleReceipts");mark.setAccessible(true);
+   for(int i=0;i<100;i++)mark.invoke(a);
+   verify(batch,times(1)).commit();
+   resume.invoke(a);verify(batch,times(2)).commit();
+  }
+ }
  @Test public void hundredLiveInviteRebindsDoNotReadLiveDocsOrFrames()throws Exception{
   try(MockedStatic<Fb> fb=mockStatic(Fb.class)){
    fb.when(Fb::uid).thenReturn("invite-actor");Activity a=Robolectric.buildActivity(Activity.class).setup().get();
