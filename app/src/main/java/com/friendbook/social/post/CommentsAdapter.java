@@ -435,6 +435,7 @@ public class CommentsAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
         h.author.setOnClickListener(v -> host.openProfile(c.authorId));
 
         h.like.setOnClickListener(v -> {
+            if(!com.friendbook.social.core.InteractionCooldown.disableBriefly(v))return;
             Ui.haptic(v);
             toggleCommentReaction(c, myReact != null ? null : "like");
         });

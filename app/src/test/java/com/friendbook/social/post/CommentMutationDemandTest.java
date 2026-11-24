@@ -56,4 +56,19 @@ public class CommentMutationDemandTest {
    java.lang.reflect.Field f=CommentsEngine.class.getDeclaredField("D1_HANDLES");f.setAccessible(true);assertTrue(((List<?>)f.get(null)).contains(h));h.remove();assertFalse(((List<?>)f.get(null)).contains(h));
   }
  }
+ @Test public void draftRetryUsesSameIdOneFlightAndAckClearsOldActorDraft()throws Exception{
+  try(MockedStatic<Fb> fb=mockStatic(Fb.class);MockedStatic<D1Client> d=client()){
+   String actor="draft-single-flight";fb.when(Fb::uid).thenReturn(actor);android.content.Context context=RuntimeEnvironment.getApplication();
+   JSONObject body=new JSONObject().put("id","stable-draft-id").put("text","retained text");assertTrue(D1Drafts.keep(context,actor,"posts","draft-post",body));
+   TaskCompletionSource<JSONObject> pending=new TaskCompletionSource<>();d.when(()->D1Client.request("posts","draft-post","comments","POST",body,null)).thenReturn(pending.getTask());
+   AtomicInteger callbacks=new AtomicInteger();
+   D1Drafts.sending(actor,"posts","draft-post","stable-draft-id");D1Drafts.retry(context,actor,"posts","draft-post",body,data->callbacks.incrementAndGet(),error->{});
+   d.verify(()->D1Client.request("posts","draft-post","comments","POST",body,null),never());D1Drafts.settled(actor,"posts","draft-post","stable-draft-id");
+   for(int i=0;i<100;i++)D1Drafts.retry(context,actor,"posts","draft-post",body,data->callbacks.incrementAndGet(),error->{});
+   d.verify(()->D1Client.request("posts","draft-post","comments","POST",body,null),times(1));
+   fb.when(Fb::uid).thenReturn("changed-draft-actor");pending.setResult(new JSONObject());Shadows.shadowOf(Looper.getMainLooper()).idle();
+   assertEquals(0,callbacks.get());assertTrue(D1Drafts.list(context,actor,"posts","draft-post").isEmpty());
+  }
+ }
+
 }
