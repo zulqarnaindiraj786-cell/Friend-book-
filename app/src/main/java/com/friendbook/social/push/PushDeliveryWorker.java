@@ -14,8 +14,10 @@ import java.util.concurrent.TimeUnit;
 public final class PushDeliveryWorker extends Worker {
     public PushDeliveryWorker(@NonNull Context c, @NonNull WorkerParameters p) { super(c, p); }
     public static void enqueue(JSONObject body) { enqueue(body, false); }
-    public static void enqueue(JSONObject body, boolean replaceRegistration) {
-        String uid = Fb.uid(); if (uid == null) return;
+    public static void enqueue(JSONObject body, boolean replaceRegistration) { enqueueAcknowledged(body, replaceRegistration); }
+    /** Returns the WorkManager persistence operation, not proof of FCM delivery. */
+    static Operation enqueueAcknowledged(JSONObject body, boolean replaceRegistration) {
+        String uid = Fb.uid(); if (uid == null) return null;
         String action = body.optString("action");
         String key = PushWorkKey.of(uid, body);
         OneTimeWorkRequest.Builder builder = new OneTimeWorkRequest.Builder(PushDeliveryWorker.class)
@@ -37,6 +39,7 @@ public final class PushDeliveryWorker extends Worker {
                 PushTrace.stage("queue_operation_ok", "work=" + work.getId()); // KEEP may retain an older active request.
             } catch (Exception e) { PushTrace.failure("queue_failed", e); }
         }, androidx.core.content.ContextCompat.getMainExecutor(App.instance));
+        return operation;
     }
     @NonNull @Override public Result doWork() {
         String uid = getInputData().getString("uid");

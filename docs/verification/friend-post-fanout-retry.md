@@ -1,0 +1,7 @@
+# Friend-post fan-out retry checkpoint
+
+A transient error partway through the existing durable friend-post fan-out previously replayed the notification create and push enqueue for every earlier recipient. Stable notification IDs and server per-device push claims prevented many duplicate deliveries, but did not prevent repeated network work and D1 reads.
+
+The worker now checkpoints a recipient locally **only after** notification creation (or an existing stable notification) and successful acknowledgement that WorkManager durably enqueued the delivery job. On transient retry it reloads the current friendship graph and skips those completed recipients. The incomplete recipient is retried. A queue failure or uncertain timeout is never checkpointed: a later attempt can enqueue the existing notification, and server delivery claims remain the final dedupe. Checkpoints are account/post scoped, hashed, batched locally, and bounded by expiry and event count. They are cleared after success or terminal failure; a lost local checkpoint may cause safe duplicate work, not a dropped notification.
+
+This does **not** make the fan-out globally bounded: the current friend graph is still read again per retry and each intended recipient still needs an inbox event and push attempt. It also does not prove delivery to a device or production billing savings. A server-owned resumable fan-out and genuine quota evidence remain separate work. No APK, backend deploy or merge is part of this change.

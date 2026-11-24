@@ -28,6 +28,10 @@ class ClientPushHooksTest(unittest.TestCase):
         worker = (JAVA/'push/PushFanoutWorker.java').read_text()
         for part in ['NetworkType.CONNECTED', 'uid.equals(Fb.uid())', 'ExistingWorkPolicy.KEEP', 'FanoutRetryPolicy.shouldRetry(e,getRunAttemptCount())', '"friend_post_" + id + "_" + to', 'Tasks.await(ref.create(n)' ]:
             self.assertIn(part, worker)
+        self.assertIn('if(checkpoint.completed(to))continue',worker)
+        self.assertLess(worker.index('Tasks.await(ref.create(n)'),worker.index('enqueue.getResult().get(20,TimeUnit.SECONDS)'))
+        self.assertLess(worker.index('enqueue.getResult().get(20,TimeUnit.SECONDS)'),worker.index('checkpoint.markQueued(to)'))
+        self.assertIn('if(retry)checkpoint.flush();else checkpoint.clear()',worker)
         retry = (JAVA/'push/FanoutRetryPolicy.java').read_text()
         self.assertIn('attempt>=8',retry)
         self.assertIn('case PERMISSION_DENIED',retry)
