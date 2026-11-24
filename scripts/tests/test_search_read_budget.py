@@ -24,7 +24,7 @@ class SearchReadBudget(unittest.TestCase):
         self.assertIn('request!=requestGeneration', pager)
         policy = (JAVA / 'core/SearchReadPolicy.java').read_text()
         self.assertIn('500L', policy)
-        self.assertIn('30_000L', policy)
+        self.assertIn('300_000L', policy)
 
     def test_people_prefix_uses_bounded_ordered_server_path(self):
         search = (JAVA / 'friends/SearchActivity.java').read_text()

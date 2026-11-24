@@ -25,5 +25,6 @@ class ProfileFeedScope(unittest.TestCase):
   self.assertIn('if(!offline || !records.containsKey(doc.getId()))records.put',s)
  def test_feed_refreshes_author_even_when_post_has_old_name(self):
   s=(ROOT/'post/FeedAdapter.java').read_text()
-  self.assertIn('Fb.getUserFresh(p.authorId)',s)
+  self.assertIn('hydrateMissingAuthors(list)',s)
+  self.assertNotIn('Fb.getUserFresh(p.authorId)',s)
 if __name__=='__main__':unittest.main()

@@ -41,7 +41,8 @@ class ProfileFeedConsistencyTest(unittest.TestCase):
         source = (JAVA / 'post/FeedAdapter.java').read_text()
         self.assertIn('requestedAuthors.add(String.valueOf(actor) + ":" + p.authorId)', source)
         self.assertIn('java.util.Objects.equals(actor, Fb.uid())', source)
-        self.assertIn('Fb.getUserFresh(p.authorId).addOnSuccessListener', source)
+        self.assertIn('FieldPath.documentId(),chunk)', source)
+        self.assertNotIn('Fb.getUserFresh(p.authorId)', source)
         self.assertIn('String dpUrl = photo;', source)
 
 

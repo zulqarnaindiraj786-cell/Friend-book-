@@ -19,6 +19,8 @@ final class ListenerPollingPolicy {
         if (path == null) return 0;
         if (path.equals("lives") || path.startsWith("lives/")) return 0;
         if (path.startsWith("chats/") && path.indexOf('/', 6) < 0) return 0;
+        if (path.startsWith("users/")) return 300_000L;
+        if (path.startsWith("posts/") || path.startsWith("reels/")) return 120_000L;
         return 60_000;
     }
 

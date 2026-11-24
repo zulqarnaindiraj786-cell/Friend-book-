@@ -37,7 +37,7 @@ import java.util.List;
 /** On-demand notifications: cached pages, unread highlight, explicit mark-all-read, deep links. */
 public class NotificationsFragment extends Fragment {
 
-    private static final int PAGE_SIZE = 20;
+    private static final int PAGE_SIZE = 10;
     private static final int MARK_READ_BATCH_SIZE = 20;
     private final java.util.Set<String> pendingReadIds=new java.util.HashSet<>();
     private boolean markingAll;
@@ -240,7 +240,7 @@ public class NotificationsFragment extends Fragment {
             moreButton.setText(!error.isEmpty()?"Retry notifications":more?"Load 20 more":"All loaded");
             moreButton.setEnabled(!loading && (more || !error.isEmpty()));
         });
-        if(full)pager.refreshOnDemand(); else pager.startOnDemand();
+        if(full)pager.refreshOnDemand(); else pager.startCachedFor(60_000L);
     }
 
     private void setUnreadOnly(boolean on) {

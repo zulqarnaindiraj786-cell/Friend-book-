@@ -40,8 +40,8 @@ public class ListenerPollingPolicyTest {
 
  /** A visible screen paints cached data instead of re-reading the whole document. */
  @Test public void cachedDocumentsAreServedBeforeAnyNetworkRead() {
-  assertEquals(60_000L, ListenerPollingPolicy.cacheFreshMs("users/u1"));
-  assertEquals(60_000L, ListenerPollingPolicy.cacheFreshMs("posts/p1"));
+  assertEquals(300_000L, ListenerPollingPolicy.cacheFreshMs("users/u1"));
+  assertEquals(120_000L, ListenerPollingPolicy.cacheFreshMs("posts/p1"));
   assertEquals(60_000L, ListenerPollingPolicy.cacheFreshMs("settings/global"));
   // Live rooms and an open call room must stay authoritative.
   assertEquals(0L, ListenerPollingPolicy.cacheFreshMs("lives"));

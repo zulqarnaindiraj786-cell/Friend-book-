@@ -6,7 +6,10 @@ class AuthorFailureBudget(unittest.TestCase):
         s=(JAVA/'post/FeedAdapter.java').read_text()
         self.assertIn('requestedAuthors.add(String.valueOf(actor) + ":" + p.authorId)',s)
         self.assertNotIn('requestedAuthors.remove(',s)
-        self.assertIn('if (loaded == null) return;',s)
+        self.assertIn('hydrateMissingAuthors(list)',s)
+        bind=s.split('private void bindPost',1)[1].split('String photo =',1)[0]
+        self.assertNotIn('Fb.getUser',bind)
+        self.assertIn('FieldPath.documentId(),chunk)',s)
     def test_explicit_refresh_allows_recovery(self):
         s=(JAVA/'main/HomeFragment.java').read_text()
         self.assertIn('if (explicitUserRefresh && adapter!=null) adapter.resetAuthorLookupAttempts()',s)

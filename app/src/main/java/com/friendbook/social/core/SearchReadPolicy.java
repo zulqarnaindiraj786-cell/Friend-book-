@@ -4,5 +4,5 @@ package com.friendbook.social.core;
 public final class SearchReadPolicy {
     private SearchReadPolicy() { }
     public static final long DEBOUNCE_MS = 500L;
-    public static final long EXACT_PAGE_REUSE_MS = 30_000L;
+    public static final long EXACT_PAGE_REUSE_MS = 300_000L;
 }

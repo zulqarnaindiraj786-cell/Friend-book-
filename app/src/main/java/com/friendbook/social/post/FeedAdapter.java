@@ -163,7 +163,31 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         return position;
     }
 
+    /** Hydrate only submitted pages, never RecyclerView rendering. Missing names use one query per ten IDs. */
+    private void hydrateMissingAuthors(List<Models.Post> page) {
+        if(page==null)return;
+        final String actor=Fb.uid();
+        if(actor==null)return;
+        List<String> ids=new ArrayList<>();
+        for(Models.Post p:page) {
+            if(p!=null && !p.isPagePost() && p.authorId!=null && !p.authorId.isEmpty()
+                    && (p.authorName==null || p.authorName.isEmpty())
+                    && com.friendbook.social.core.FastCache.getUser(p.authorId)==null
+                    && requestedAuthors.add(String.valueOf(actor) + ":" + p.authorId)) ids.add(p.authorId);
+        }
+        for(List<String> chunk:Ui.chunks(ids,10)) {
+            Fb.db().collection("users").whereIn(com.friendbook.social.d1.documents.FieldPath.documentId(),chunk)
+                    .limit(10).get().addOnSuccessListener(loaded->{
+                if(!java.util.Objects.equals(actor, Fb.uid()) || activity.isFinishing())return;
+                for(com.friendbook.social.d1.documents.DocumentSnapshot doc:loaded)
+                    com.friendbook.social.core.FastCache.putUser(Models.User.fromDoc(doc));
+                if(!loaded.isEmpty())notifyDataSetChanged();
+            });
+        }
+    }
+
     public void setPosts(List<Models.Post> list) {
+        hydrateMissingAuthors(list);
         list = uniquePosts(list, new java.util.HashSet<>());
         // ⚡ Anti-Jump In-Place Diff: if post IDs & order are identical, NEVER call notifyDataSetChanged()!
         if (!posts.isEmpty() && posts.size() == list.size()) {
@@ -301,6 +325,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     }
 
     public void addPosts(List<Models.Post> list) {
+        hydrateMissingAuthors(list);
         if (list == null || list.isEmpty()) return;
         java.util.Set<String> existing=new java.util.HashSet<>();
         for(Models.Post post:posts)existing.add(post.id);
@@ -964,15 +989,6 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         boolean hasFeeling = p.feeling != null && !p.feeling.isEmpty();
         Models.User author = pagePost || p.authorId == null ? null
                 : com.friendbook.social.core.FastCache.getUser(p.authorId);
-        String actor = Fb.uid();
-        if (!pagePost && author == null && (p.authorName == null || p.authorName.isEmpty())
-                && p.authorId != null && !p.authorId.isEmpty()
-                && requestedAuthors.add(String.valueOf(actor) + ":" + p.authorId)) {
-            Fb.getUserFresh(p.authorId).addOnSuccessListener(loaded -> {
-                if (loaded == null) return;
-                if (java.util.Objects.equals(actor, Fb.uid()) && !activity.isFinishing()) notifyDataSetChanged();
-            });
-        }
         String photo = pagePost && p.pagePhoto != null && !p.pagePhoto.isEmpty() ? p.pagePhoto
                 : author != null && author.photoUrl != null && !author.photoUrl.isEmpty() ? author.photoUrl : p.authorPhoto;
         Ui.avatar(c, vh.avatar, photo);

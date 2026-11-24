@@ -1,16 +1,16 @@
 {
   "method": "whole Java/Kotlin tree lexical candidates, not AST/callgraph or observed HTTP/billing counts",
-  "java_files_scanned": 209,
+  "java_files_scanned": 214,
   "kotlin_files_scanned": 1,
   "all_app_fixed": false,
   "category_line_counts": {
-    "document_store_entry": 440,
+    "document_store_entry": 439,
     "engagement_transport": 9,
     "snapshot_listener": 46,
     "explicit_server_read": 8,
     "count_helper": 5,
     "cache_first_list": 12,
-    "delayed_or_periodic_candidate": 51,
+    "delayed_or_periodic_candidate": 52,
     "durable_work": 3,
     "raw_http_candidate": 18
   },
@@ -946,9 +946,19 @@
       "category": "snapshot_listener"
     },
     {
+      "file": "core/FeedHeadReads.java",
+      "line": 12,
+      "category": "explicit_server_read"
+    },
+    {
       "file": "core/FriendPicker.java",
       "line": 20,
       "category": "document_store_entry"
+    },
+    {
+      "file": "core/InteractionCooldown.java",
+      "line": 24,
+      "category": "delayed_or_periodic_candidate"
     },
     {
       "file": "core/MediaDiskCache.java",
@@ -972,47 +982,47 @@
     },
     {
       "file": "core/Notify.java",
-      "line": 29,
-      "category": "document_store_entry"
-    },
-    {
-      "file": "core/Notify.java",
-      "line": 30,
-      "category": "document_store_entry"
-    },
-    {
-      "file": "core/Notify.java",
       "line": 32,
       "category": "document_store_entry"
     },
     {
       "file": "core/Notify.java",
-      "line": 79,
+      "line": 33,
       "category": "document_store_entry"
     },
     {
       "file": "core/Notify.java",
-      "line": 92,
+      "line": 35,
       "category": "document_store_entry"
     },
     {
       "file": "core/Notify.java",
-      "line": 115,
+      "line": 83,
       "category": "document_store_entry"
     },
     {
       "file": "core/Notify.java",
-      "line": 121,
+      "line": 96,
       "category": "document_store_entry"
     },
     {
       "file": "core/Notify.java",
-      "line": 168,
+      "line": 119,
       "category": "document_store_entry"
     },
     {
       "file": "core/Notify.java",
-      "line": 182,
+      "line": 125,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "core/Notify.java",
+      "line": 172,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "core/Notify.java",
+      "line": 186,
       "category": "document_store_entry"
     },
     {
@@ -1077,7 +1087,7 @@
     },
     {
       "file": "d1/documents/D1DocumentStore.java",
-      "line": 522,
+      "line": 524,
       "category": "delayed_or_periodic_candidate"
     },
     {
@@ -1577,42 +1587,42 @@
     },
     {
       "file": "live/LiveActivity.java",
-      "line": 2923,
+      "line": 2924,
       "category": "document_store_entry"
     },
     {
       "file": "live/LiveActivity.java",
-      "line": 2967,
+      "line": 2968,
       "category": "document_store_entry"
     },
     {
       "file": "live/LiveActivity.java",
-      "line": 2993,
+      "line": 2994,
       "category": "document_store_entry"
     },
     {
       "file": "live/LiveActivity.java",
-      "line": 3388,
+      "line": 3389,
       "category": "document_store_entry"
     },
     {
       "file": "live/LiveActivity.java",
-      "line": 3433,
+      "line": 3434,
       "category": "document_store_entry"
     },
     {
       "file": "live/LiveActivity.java",
-      "line": 3506,
+      "line": 3507,
       "category": "document_store_entry"
     },
     {
       "file": "live/LiveActivity.java",
-      "line": 3509,
+      "line": 3510,
       "category": "document_store_entry"
     },
     {
       "file": "live/LiveActivity.java",
-      "line": 3516,
+      "line": 3517,
       "category": "document_store_entry"
     },
     {
@@ -1672,82 +1682,72 @@
     },
     {
       "file": "main/HomeFragment.java",
-      "line": 310,
+      "line": 578,
       "category": "document_store_entry"
     },
     {
       "file": "main/HomeFragment.java",
-      "line": 576,
-      "category": "document_store_entry"
-    },
-    {
-      "file": "main/HomeFragment.java",
-      "line": 576,
+      "line": 578,
       "category": "cache_first_list"
     },
     {
       "file": "main/HomeFragment.java",
-      "line": 713,
+      "line": 715,
       "category": "delayed_or_periodic_candidate"
     },
     {
       "file": "main/HomeFragment.java",
-      "line": 736,
+      "line": 738,
       "category": "document_store_entry"
     },
     {
       "file": "main/HomeFragment.java",
-      "line": 739,
+      "line": 741,
       "category": "cache_first_list"
-    },
-    {
-      "file": "main/HomeFragment.java",
-      "line": 788,
-      "category": "document_store_entry"
     },
     {
       "file": "main/HomeFragment.java",
       "line": 790,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "main/HomeFragment.java",
+      "line": 792,
       "category": "cache_first_list"
     },
     {
       "file": "main/HomeFragment.java",
-      "line": 856,
+      "line": 858,
       "category": "document_store_entry"
     },
     {
       "file": "main/HomeFragment.java",
-      "line": 859,
+      "line": 861,
       "category": "document_store_entry"
     },
     {
       "file": "main/HomeFragment.java",
-      "line": 862,
+      "line": 864,
       "category": "delayed_or_periodic_candidate"
     },
     {
       "file": "main/HomeFragment.java",
-      "line": 915,
-      "category": "explicit_server_read"
-    },
-    {
-      "file": "main/HomeFragment.java",
-      "line": 1100,
+      "line": 1101,
       "category": "document_store_entry"
     },
     {
       "file": "main/HomeFragment.java",
-      "line": 1111,
+      "line": 1112,
       "category": "cache_first_list"
     },
     {
       "file": "main/HomeFragment.java",
-      "line": 1191,
+      "line": 1192,
       "category": "delayed_or_periodic_candidate"
     },
     {
       "file": "main/HomeFragment.java",
-      "line": 1196,
+      "line": 1197,
       "category": "cache_first_list"
     },
     {
@@ -1977,87 +1977,82 @@
     },
     {
       "file": "post/D1Reactions.java",
-      "line": 166,
+      "line": 167,
       "category": "engagement_transport"
     },
     {
       "file": "post/D1Reactions.java",
-      "line": 168,
+      "line": 169,
       "category": "delayed_or_periodic_candidate"
     },
     {
       "file": "post/D1Reactions.java",
-      "line": 172,
+      "line": 173,
       "category": "delayed_or_periodic_candidate"
     },
     {
       "file": "post/D1Reactions.java",
-      "line": 206,
+      "line": 207,
       "category": "engagement_transport"
-    },
-    {
-      "file": "post/D1Reactions.java",
-      "line": 228,
-      "category": "delayed_or_periodic_candidate"
     },
     {
       "file": "post/D1Reactions.java",
       "line": 229,
+      "category": "delayed_or_periodic_candidate"
+    },
+    {
+      "file": "post/D1Reactions.java",
+      "line": 230,
       "category": "engagement_transport"
     },
     {
       "file": "post/D1Reactions.java",
-      "line": 272,
+      "line": 273,
       "category": "engagement_transport"
     },
     {
       "file": "post/FeedAdapter.java",
-      "line": 1608,
+      "line": 1609,
       "category": "document_store_entry"
     },
     {
       "file": "post/FeedAdapter.java",
-      "line": 1671,
+      "line": 1672,
       "category": "document_store_entry"
     },
     {
       "file": "post/FeedAdapter.java",
-      "line": 1754,
+      "line": 1755,
       "category": "document_store_entry"
     },
     {
       "file": "post/FeedAdapter.java",
-      "line": 1761,
+      "line": 1762,
       "category": "document_store_entry"
     },
     {
       "file": "post/FeedAdapter.java",
-      "line": 1769,
+      "line": 1770,
       "category": "document_store_entry"
     },
     {
       "file": "post/FeedAdapter.java",
-      "line": 1781,
+      "line": 1782,
       "category": "document_store_entry"
     },
     {
       "file": "post/FeedAdapter.java",
-      "line": 1790,
+      "line": 1791,
       "category": "document_store_entry"
     },
     {
       "file": "post/FeedAdapter.java",
-      "line": 1842,
+      "line": 1843,
       "category": "document_store_entry"
     },
     {
       "file": "post/FeedAdapter.java",
-      "line": 1855,
-      "category": "document_store_entry"
-    },
-    {
-      "file": "post/FeedAdapter.java",
-      "line": 1863,
+      "line": 1856,
       "category": "document_store_entry"
     },
     {
@@ -2067,17 +2062,17 @@
     },
     {
       "file": "post/FeedAdapter.java",
-      "line": 1895,
+      "line": 1865,
       "category": "document_store_entry"
     },
     {
       "file": "post/FeedAdapter.java",
-      "line": 1918,
+      "line": 1896,
       "category": "document_store_entry"
     },
     {
       "file": "post/FeedAdapter.java",
-      "line": 1973,
+      "line": 1919,
       "category": "document_store_entry"
     },
     {
@@ -2087,12 +2082,17 @@
     },
     {
       "file": "post/FeedAdapter.java",
-      "line": 2023,
+      "line": 1975,
       "category": "document_store_entry"
     },
     {
       "file": "post/FeedAdapter.java",
-      "line": 2033,
+      "line": 2024,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "post/FeedAdapter.java",
+      "line": 2034,
       "category": "document_store_entry"
     },
     {
@@ -2342,17 +2342,12 @@
     },
     {
       "file": "profile/ProfileActivity.java",
-      "line": 1616,
+      "line": 1617,
       "category": "document_store_entry"
     },
     {
       "file": "profile/ProfileActivity.java",
-      "line": 1624,
-      "category": "document_store_entry"
-    },
-    {
-      "file": "profile/ProfileActivity.java",
-      "line": 1626,
+      "line": 1625,
       "category": "document_store_entry"
     },
     {
@@ -2362,32 +2357,37 @@
     },
     {
       "file": "profile/ProfileActivity.java",
-      "line": 1732,
+      "line": 1628,
       "category": "document_store_entry"
     },
     {
       "file": "profile/ProfileActivity.java",
-      "line": 1746,
+      "line": 1733,
       "category": "document_store_entry"
     },
     {
       "file": "profile/ProfileActivity.java",
-      "line": 1761,
+      "line": 1747,
       "category": "document_store_entry"
     },
     {
       "file": "profile/ProfileActivity.java",
-      "line": 1780,
+      "line": 1762,
       "category": "document_store_entry"
     },
     {
       "file": "profile/ProfileActivity.java",
-      "line": 1814,
+      "line": 1781,
       "category": "document_store_entry"
     },
     {
       "file": "profile/ProfileActivity.java",
-      "line": 1849,
+      "line": 1815,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "profile/ProfileActivity.java",
+      "line": 1850,
       "category": "document_store_entry"
     },
     {
@@ -2417,37 +2417,37 @@
     },
     {
       "file": "push/PushFanoutWorker.java",
-      "line": 40,
-      "category": "document_store_entry"
-    },
-    {
-      "file": "push/PushFanoutWorker.java",
       "line": 41,
-      "category": "explicit_server_read"
+      "category": "document_store_entry"
     },
     {
       "file": "push/PushFanoutWorker.java",
-      "line": 52,
-      "category": "document_store_entry"
+      "line": 42,
+      "category": "explicit_server_read"
     },
     {
       "file": "push/PushFanoutWorker.java",
       "line": 53,
-      "category": "explicit_server_read"
-    },
-    {
-      "file": "push/PushFanoutWorker.java",
-      "line": 55,
       "category": "document_store_entry"
     },
     {
       "file": "push/PushFanoutWorker.java",
-      "line": 56,
+      "line": 54,
       "category": "explicit_server_read"
     },
     {
       "file": "push/PushFanoutWorker.java",
-      "line": 66,
+      "line": 56,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "push/PushFanoutWorker.java",
+      "line": 57,
+      "category": "explicit_server_read"
+    },
+    {
+      "file": "push/PushFanoutWorker.java",
+      "line": 67,
       "category": "document_store_entry"
     },
     {
@@ -2527,67 +2527,67 @@
     },
     {
       "file": "reels/ReelsFragment.java",
-      "line": 1650,
+      "line": 1651,
       "category": "delayed_or_periodic_candidate"
     },
     {
       "file": "reels/ReelsFragment.java",
-      "line": 1671,
+      "line": 1672,
       "category": "delayed_or_periodic_candidate"
     },
     {
       "file": "reels/ReelsFragment.java",
-      "line": 2088,
+      "line": 2089,
       "category": "document_store_entry"
     },
     {
       "file": "reels/ReelsFragment.java",
-      "line": 2252,
+      "line": 2253,
       "category": "document_store_entry"
     },
     {
       "file": "reels/ReelsFragment.java",
-      "line": 2298,
+      "line": 2299,
       "category": "document_store_entry"
     },
     {
       "file": "reels/ReelsFragment.java",
-      "line": 2341,
+      "line": 2342,
       "category": "document_store_entry"
     },
     {
       "file": "reels/ReelsFragment.java",
-      "line": 2343,
+      "line": 2344,
       "category": "document_store_entry"
     },
     {
       "file": "reels/ReelsFragment.java",
-      "line": 2448,
+      "line": 2450,
       "category": "document_store_entry"
     },
     {
       "file": "reels/ReelsFragment.java",
-      "line": 2467,
+      "line": 2469,
       "category": "document_store_entry"
     },
     {
       "file": "reels/ReelsFragment.java",
-      "line": 2481,
+      "line": 2483,
       "category": "document_store_entry"
     },
     {
       "file": "reels/ReelsFragment.java",
-      "line": 2529,
+      "line": 2531,
       "category": "document_store_entry"
     },
     {
       "file": "reels/ReelsFragment.java",
-      "line": 2582,
+      "line": 2584,
       "category": "document_store_entry"
     },
     {
       "file": "reels/ReelsFragment.java",
-      "line": 2606,
+      "line": 2608,
       "category": "document_store_entry"
     },
     {
