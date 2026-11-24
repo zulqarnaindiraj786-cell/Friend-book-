@@ -33,4 +33,20 @@ public class ReactionInvalidationLoopTest {
    Shadows.shadowOf(Looper.getMainLooper()).idleFor(60,TimeUnit.SECONDS);assertEquals(3,calls.size());
   }
  }
+ @Test public void stableRetryStillPublishesFreshCounters() throws Exception {
+  try(MockedStatic<Fb> fb=mockStatic(Fb.class);MockedStatic<FastCache> cache=mockStatic(FastCache.class);
+      MockedStatic<D1Client> client=mockStatic(D1Client.class,call->"key".equals(call.getMethod().getName())?call.callRealMethod():RETURNS_DEFAULTS.answer(call))){
+   fb.when(Fb::uid).thenReturn("reaction-recovery-actor");List<TaskCompletionSource<JSONObject>> calls=new ArrayList<>();
+   client.when(()->D1Client.request("posts","recover","reactions","GET",null,null)).thenAnswer(c->{TaskCompletionSource<JSONObject> t=new TaskCompletionSource<>();calls.add(t);return t.getTask();});
+   Models.Post post=new Models.Post();post.id="recover";
+   D1Reactions.loadPost(RuntimeEnvironment.getApplication(),post,()->{});
+   D1Reactions.invalidate("posts","recover");
+   calls.get(0).setResult(new JSONObject().put("types",new JSONArray()).put("comments",999));
+   Shadows.shadowOf(Looper.getMainLooper()).idle();assertNotEquals(999,post.comments);
+   Shadows.shadowOf(Looper.getMainLooper()).idleFor(2,TimeUnit.SECONDS);assertEquals(2,calls.size());
+   calls.get(1).setResult(new JSONObject().put("types",new JSONArray()).put("comments",7));
+   Shadows.shadowOf(Looper.getMainLooper()).idle();assertEquals(7,post.comments);
+   Shadows.shadowOf(Looper.getMainLooper()).idleFor(60,TimeUnit.SECONDS);assertEquals(2,calls.size());
+  }
+ }
 }
