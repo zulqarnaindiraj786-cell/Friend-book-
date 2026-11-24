@@ -146,8 +146,10 @@ public final class FastCache {
         } catch (Throwable ignored) { }
 
         try {
+            String feedOwner=sp.getString("feed_owner", "");
             String feedRaw = sp.getString("feed_json", null);
-            if (feedRaw != null && !feedRaw.isEmpty()) {
+            // Do not restore legacy unscoped data or another account's feed.
+            if (Fb.uid()!=null && Fb.uid().equals(feedOwner) && feedRaw != null && !feedRaw.isEmpty()) {
                 JSONArray arr = new JSONArray(feedRaw);
                 List<Models.Post> loaded = new ArrayList<>(arr.length());
                 for (int i = 0; i < arr.length(); i++) {
@@ -234,9 +236,10 @@ public final class FastCache {
     public static void saveFeed(Context ctx, List<Models.Post> posts) {
         if (posts == null) return;
         List<Models.Post> copy = new ArrayList<>(posts);
+        String uid = ensureUserScope();
+        if(uid==null)return;
         FEED = copy;
         long now = System.currentTimeMillis();
-        String uid = ensureUserScope();
         for (Models.Post p : copy) {
             if (p != null && p.id != null) {
                 String uKey = userPostKey(uid, p.id);
@@ -260,8 +263,9 @@ public final class FastCache {
                 for (int i = 0; i < limit; i++) {
                     arr.put(postToJson(copy.get(i)));
                 }
+                if(!uid.equals(Fb.uid()))return;
                 app.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
-                        .edit().putString("feed_json", arr.toString()).apply();
+                        .edit().putString("feed_owner",uid).putString("feed_json", arr.toString()).apply();
             } catch (Throwable ignored) { }
         });
     }
@@ -589,12 +593,15 @@ public final class FastCache {
 
     public static void preloadFeedForOffline(Activity a, Runnable onDone) {
         if (a == null) return;
+        final String actor=Fb.uid();
+        if(actor==null)return;
         Ui.toast(a, "📥 Caching latest 10 posts & mini thumbnails for offline reading…");
         Fb.db().collection("posts")
                 .orderBy("createdAt", Query.Direction.DESCENDING)
                 .limit(10)
                 .get()
                 .addOnSuccessListener(snap -> {
+                    if(!actor.equals(Fb.uid()) || a.isFinishing() || a.isDestroyed())return;
                     List<Models.Post> list = new ArrayList<>();
                     for (DocumentSnapshot d : snap.getDocuments()) {
                         Models.Post p = Models.Post.fromDoc(d);
@@ -615,7 +622,7 @@ public final class FastCache {
                     Ui.toast(a, "✅ " + list.size() + " posts saved! Ready for 0ms offline & 2G reading.");
                     if (onDone != null) onDone.run();
                 })
-                .addOnFailureListener(e -> Ui.toast(a, "Using " + FEED.size() + " already-cached posts offline."));
+                .addOnFailureListener(e -> {if(actor.equals(Fb.uid()) && !a.isFinishing() && !a.isDestroyed())Ui.toast(a, "Using " + FEED.size() + " already-cached posts offline.");});
     }
 
     // ===================== LITE MODE & 2G SPEED CONTROL SHEET =====================
@@ -687,7 +694,7 @@ public final class FastCache {
                     Ui.toast(a, "📵 Text-Only 2G Mode ON — 0 KB auto photo data!");
                 }));
 
-        TextView preloadBtn = Ui.btn(a, "📥 Preload 30 Posts for Offline / Bus / 2G");
+        TextView preloadBtn = Ui.btn(a, "📥 Preload 10 Posts for Offline / Bus / 2G");
         LinearLayout.LayoutParams pp = new LinearLayout.LayoutParams(-1, -2);
         pp.topMargin = Ui.dp(a, 8);
         preloadBtn.setOnClickListener(v -> {

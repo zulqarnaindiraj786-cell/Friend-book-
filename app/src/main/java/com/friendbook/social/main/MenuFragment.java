@@ -296,7 +296,7 @@ public class MenuFragment extends Fragment {
             Prefs.setQuiet(a, on);
             Ui.toast(a, on ? "Quiet mode ON — badges muted" : "Quiet mode OFF");
         }));
-        body.addView(item(a, Icons.BOOKMARK, "📥 Preload 30 Posts for Offline / 2G",
+        body.addView(item(a, Icons.BOOKMARK, "📥 Preload 10 Posts for Offline / 2G",
                 "Cache latest feed posts & mini thumbnails for instant 0ms offline reading",
                 () -> com.friendbook.social.core.FastCache.preloadFeedForOffline(a, null)));
 

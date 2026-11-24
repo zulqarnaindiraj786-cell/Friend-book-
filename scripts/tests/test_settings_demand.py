@@ -11,3 +11,8 @@ class SettingsDemand(unittest.TestCase):
         stop=code.split('@Override protected void onStop()',1)[1].split('private void storageDialog()',1)[0]
         self.assertIn('insightsDialog.dismiss()',stop)
         self.assertIn('insightsReg.remove()',stop)
+
+    def test_offline_feed_cache_and_callback_are_actor_scoped(self):
+        code=(JAVA/'core/FastCache.java').read_text()
+        for token in ['sp.getString("feed_owner", "")','Fb.uid().equals(feedOwner)','if(uid==null)return;','if(!uid.equals(Fb.uid()))return;','.putString("feed_owner",uid)','if(!actor.equals(Fb.uid()) || a.isFinishing() || a.isDestroyed())return;','Preload 10 Posts']:
+            self.assertIn(token,code)
