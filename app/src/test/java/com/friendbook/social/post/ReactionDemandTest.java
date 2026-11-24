@@ -22,7 +22,11 @@ public class ReactionDemandTest {
             try(MockedStatic<Fb> fb=mockStatic(Fb.class);
                 MockedStatic<FastCache> cache=mockStatic(FastCache.class);
                 MockedStatic<Notify> notify=mockStatic(Notify.class);
-                MockedStatic<D1Client> client=mockStatic(D1Client.class,CALLS_REAL_METHODS)) {
+                MockedStatic<D1Client> client=mockStatic(D1Client.class,call->{
+                    String name=call.getMethod().getName();
+                    return ("key".equals(name)||"object".equals(name)||"maps".equals(name)||"map".equals(name))
+                        ?call.callRealMethod():RETURNS_DEFAULTS.answer(call);
+                })) {
                 fb.when(Fb::uid).thenReturn("demand-actor-"+taps);
                 JSONObject initial=new JSONObject("{\"owner\":\"owner\",\"types\":[],\"comments\":0,\"preview\":[]}");
                 client.when(()->D1Client.request("posts","demand","reactions","GET",null,null))
