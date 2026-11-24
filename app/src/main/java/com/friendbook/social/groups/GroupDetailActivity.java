@@ -66,7 +66,16 @@ public class GroupDetailActivity extends Activity implements FeedAdapter.Host {
 
     private String id;
     private Models.Group group;
-    private ListenerRegistration gReg, pReg;
+    private ListenerRegistration gReg;
+    private com.friendbook.social.core.CursorPager groupPostPager;
+    private final List<AlertDialog> postDialogs=new ArrayList<>();
+    private final List<com.friendbook.social.core.CursorPager> postDialogPagers=new ArrayList<>();
+    private boolean groupPostsLoading,groupPostsMore=true,groupPostsError;
+    private int screenGeneration;
+    private boolean groupScreenStarted;
+    private long groupPostsRequestedAt;
+    private String requestedPinnedId;
+    private Models.Post separatelyLoadedPin;
     private AlertDialog inviteDialog;
     private com.friendbook.social.core.CursorPager invitePager;
 
@@ -228,7 +237,8 @@ public class GroupDetailActivity extends Activity implements FeedAdapter.Host {
         feedRv.setItemAnimator(null);
         adapter = new FeedAdapter(this, this);
         adapter.showHeader = false;
-        adapter.showFooter = false;
+        adapter.showFooter = true;
+        adapter.feedEngagementInPage = true;
         feedRv.setAdapter(adapter);
         contentFrame.addView(feedRv, new FrameLayout.LayoutParams(-1, -1));
 
@@ -267,45 +277,91 @@ public class GroupDetailActivity extends Activity implements FeedAdapter.Host {
 
     @Override
     protected void onStart() {
-        super.onStart();
+        super.onStart();groupScreenStarted=true;
+        final String actor=Fb.uid();final int generation=++screenGeneration;
+        requestedPinnedId=null;
         gReg = Fb.db().collection("groups").document(id)
                 .addSnapshotListener((d, err) -> {
-                    if (d == null || !d.exists()) { finish(); return; }
+                    if(generation!=screenGeneration || !java.util.Objects.equals(actor,Fb.uid()))return;
+                    if(err!=null || d==null)return;
+                    if(!d.exists()){if(!d.getMetadata().isFromCache())finish();return;}
                     group = Models.Group.fromDoc(d);
-                    renderGroupHeader();
-                    refreshActiveTabView();
-                });
-
-        // Single-field whereEqualTo("groupId", id) so ZERO manual composite index is needed!
-        pReg = Fb.db().collection("posts")
-                .whereEqualTo("groupId", id)
-                .limit(120)
-                .addSnapshotListener((snap, err) -> {
-                    approvedPosts.clear();
-                    pendingPosts.clear();
-                    if (snap != null) {
-                        for (DocumentSnapshot d : snap.getDocuments()) {
-                            Models.Post p = Models.Post.fromDoc(d);
-                            if (p.archived || p.trashedAt > 0) continue;
-                            if ("pending".equals(p.groupApprovalStatus)) {
-                                pendingPosts.add(p);
-                            } else if (!"declined".equals(p.groupApprovalStatus)) {
-                                approvedPosts.add(p);
-                            }
-                        }
+                    if(canReadGroupPosts()){
+                        startGroupPostPages();requestPinnedPost();
+                    }else{
+                        if(groupPostPager!=null){groupPostPager.close();groupPostPager=null;}
+                        approvedPosts.clear();pendingPosts.clear();separatelyLoadedPin=null;
+                        adapter.setPosts(Collections.emptyList());
+                        for(AlertDialog dialog:new ArrayList<>(postDialogs))dialog.dismiss();
                     }
-                    Collections.sort(approvedPosts, (a, b2) -> Long.compare(b2.createdAt, a.createdAt));
-                    Collections.sort(pendingPosts, (a, b2) -> Long.compare(b2.createdAt, a.createdAt));
-                    renderGroupHeader();
-                    refreshActiveTabView();
+                    renderGroupHeader();refreshActiveTabView();
                 });
+    }
+
+    private boolean canReadGroupPosts(){
+        String actor=Fb.uid();
+        return group!=null && (!"Private".equalsIgnoreCase(group.privacy)
+                || group.members.contains(actor) || group.canManageGroup(actor));
+    }
+
+    private com.friendbook.social.d1.documents.Query groupPostQuery(){
+        return Fb.db().collection("posts").whereEqualTo("groupId",id)
+                .orderBy("createdAt",com.friendbook.social.d1.documents.Query.Direction.DESCENDING);
+    }
+
+    private void startGroupPostPages(){
+        if(!groupScreenStarted || groupPostPager!=null || !canReadGroupPosts())return;
+        groupPostsRequestedAt=android.os.SystemClock.elapsedRealtime();
+        groupPostPager=new com.friendbook.social.core.CursorPager(groupPostQuery().withFeedEngagement(),
+                10,"group-posts:"+id,(docs,more,loading,error)->{
+            groupPostsLoading=loading;groupPostsMore=more;groupPostsError=!error.isEmpty();
+            if(!loading && error.isEmpty()){
+                approvedPosts.clear();pendingPosts.clear();
+                long requestedAt=groupPostsRequestedAt;
+                for(DocumentSnapshot doc:docs){
+                    com.friendbook.social.post.D1Reactions.seedFeed(this,doc,requestedAt);
+                    Models.Post post=Models.Post.fromDoc(doc);
+                    if(post.archived || post.trashedAt>0)continue;
+                    if("pending".equals(post.groupApprovalStatus))pendingPosts.add(post);
+                    else if(!"declined".equals(post.groupApprovalStatus))approvedPosts.add(post);
+                }
+                renderGroupHeader();refreshActiveTabView();
+            }
+            adapter.pagingChanged();
+        });
+        groupPostPager.startCachedFor(com.friendbook.social.core.FeedReadPolicy.REUSE_MS);
+    }
+
+    private void refreshGroupPostPages(){
+        if(groupPostPager!=null)groupPostPager.close();groupPostPager=null;
+        startGroupPostPages();
+    }
+
+    private void requestPinnedPost(){
+        String pin=group.pinnedPostId;
+        if(pin==null || pin.isEmpty()){requestedPinnedId=null;separatelyLoadedPin=null;return;}
+        if(pin.equals(requestedPinnedId))return;
+        requestedPinnedId=pin;separatelyLoadedPin=null;
+        final String actor=Fb.uid();final int generation=screenGeneration;
+        Fb.db().collection("posts").document(pin).get().addOnSuccessListener(doc->{
+            if(generation!=screenGeneration || !java.util.Objects.equals(actor,Fb.uid())
+                    || !canReadGroupPosts() || !pin.equals(group.pinnedPostId) || !doc.exists())return;
+            Models.Post post=Models.Post.fromDoc(doc);
+            if(!id.equals(post.groupId) || post.archived || post.trashedAt>0
+                    || "pending".equals(post.groupApprovalStatus) || "declined".equals(post.groupApprovalStatus))return;
+            separatelyLoadedPin=post;renderGroupHeader();refreshActiveTabView();
+        });
     }
 
     @Override
     protected void onStop() {
+        screenGeneration++;groupScreenStarted=false;
         super.onStop();
-        if (gReg != null) gReg.remove();
-        if (pReg != null) pReg.remove();
+        if(gReg!=null){gReg.remove();gReg=null;}
+        if(groupPostPager!=null){groupPostPager.close();groupPostPager=null;}
+        for(AlertDialog dialog:new ArrayList<>(postDialogs))dialog.dismiss();
+        for(com.friendbook.social.core.CursorPager pager:new ArrayList<>(postDialogPagers))pager.close();
+        postDialogs.clear();postDialogPagers.clear();
         if (inviteDialog != null) inviteDialog.dismiss();
         if (invitePager != null) { invitePager.close(); invitePager=null; }
     }
@@ -401,7 +457,7 @@ public class GroupDetailActivity extends Activity implements FeedAdapter.Host {
         for (Models.Post p : approvedPosts) {
             if (group.pinnedPostId.equals(p.id)) return p;
         }
-        return null;
+        return separatelyLoadedPin!=null && group.pinnedPostId.equals(separatelyLoadedPin.id)?separatelyLoadedPin:null;
     }
 
     private void refreshActiveTabView() {
@@ -636,9 +692,9 @@ public class GroupDetailActivity extends Activity implements FeedAdapter.Host {
         boolean isAdmin = group.isGroupAdmin(me);
 
         List<String> items = new ArrayList<>();
-        items.add("📝 Pending Posts Approval (" + pendingPosts.size() + ")");
+        items.add("📝 Pending Posts Approval · Browse");
         items.add("🙋 Member Join Requests (" + group.pendingMemberIds.size() + ")");
-        items.add("📌 Moderate / Pin Group Posts (" + approvedPosts.size() + ")");
+        items.add("📌 Moderate / Pin Group Posts · Browse");
         items.add("👥 Manage Members, Admins & Moderators (" + group.members.size() + ")");
         items.add("🚫 Banned Users (" + group.bannedMemberIds.size() + ")");
         if (isAdmin) {
@@ -674,22 +730,35 @@ public class GroupDetailActivity extends Activity implements FeedAdapter.Host {
     }
 
     private void showPendingPostsDialog() {
-        if (pendingPosts.isEmpty()) {
-            Ui.info(this, "📝 Pending Posts", "No pending posts waiting for approval ✓");
-            return;
-        }
+        if(group==null || !group.canManageGroup(Fb.uid()))return;
         LinearLayout list = Ui.col(this);
         Ui.pad(list, 14, 10, 14, 10);
         ScrollView sv = new ScrollView(this);
         sv.addView(list);
 
         AlertDialog dlg = new AlertDialog.Builder(this)
-                .setTitle("📝 Pending Posts (" + pendingPosts.size() + ")")
+                .setTitle("📝 Pending Posts · 10 per page")
                 .setView(sv)
                 .setNegativeButton("Close", null)
                 .show();
 
-        for (final Models.Post p : pendingPosts) {
+        TextView morePosts=Ui.btnOutline(this,"Load 10 more",Ui.BLUE);
+        list.addView(morePosts);
+        LinearLayout cards=Ui.col(this);list.addView(cards);
+        com.friendbook.social.d1.documents.Query query=groupPostQuery().whereEqualTo("groupApprovalStatus","pending");
+        final Set<String> resolvedPosts=new LinkedHashSet<>();
+        com.friendbook.social.core.CursorPager pager=new com.friendbook.social.core.CursorPager(query,
+                10,"group-pending:"+id,(docs,more,loading,error)->{
+            if(!dlg.isShowing())return;
+            morePosts.setText(loading?"Loading…":!error.isEmpty()?"Retry posts":more?"Load 10 more":"All records loaded");
+            morePosts.setEnabled(!loading && more);
+            if(loading || !error.isEmpty())return;
+            cards.removeAllViews();
+            for(DocumentSnapshot doc:docs){
+                final Models.Post p=Models.Post.fromDoc(doc);
+                if(resolvedPosts.contains(p.id))continue;
+                if(p.archived || p.trashedAt>0)continue;
+
             LinearLayout card = Ui.col(this);
             card.setBackground(Ui.roundStroke(this, Ui.card(this), 12, Ui.div(this), 1));
             Ui.pad(card, 12, 10, 12, 10);
@@ -712,7 +781,7 @@ public class GroupDetailActivity extends Activity implements FeedAdapter.Host {
                     .addOnSuccessListener(ignored -> {
                         if (isFinishing() || !java.util.Objects.equals(actor,Fb.uid())) return;
                         Notify.send(p.authorId, "group", "approved your post in \"" + group.name + "\" ✓", p.id);
-                        card.setVisibility(View.GONE); Ui.toast(this, "Post approved ✓");
+                        resolvedPosts.add(p.id); card.setVisibility(View.GONE); refreshGroupPostPages(); Ui.toast(this, "Post approved ✓");
                     }).addOnFailureListener(error -> { if (!isFinishing()) Ui.toast(this,"Couldn't approve post. Please try again."); });
             });
             TextView decl = Ui.btnOutline(this, "✕ Decline", Ui.RED);
@@ -721,14 +790,19 @@ public class GroupDetailActivity extends Activity implements FeedAdapter.Host {
             dlp.leftMargin = Ui.dp(this, 8);
             decl.setOnClickListener(v -> {
                 Fb.db().collection("posts").document(p.id).delete().addOnSuccessListener(ignored -> {
-                    if (!isFinishing()) { card.setVisibility(View.GONE); Ui.toast(this, "Post declined & removed"); }
+                    if (!isFinishing()) { resolvedPosts.add(p.id); card.setVisibility(View.GONE); refreshGroupPostPages(); Ui.toast(this, "Post declined & removed"); }
                 }).addOnFailureListener(error -> { if (!isFinishing()) Ui.toast(this,"Couldn't decline post. Please try again."); });
             });
             btns.addView(appr);
             btns.addView(decl, dlp);
             card.addView(btns);
-            list.addView(card);
-        }
+            cards.addView(card);
+            }
+        });
+        postDialogs.add(dlg);postDialogPagers.add(pager);
+        dlg.setOnDismissListener(d->{pager.close();postDialogs.remove(dlg);postDialogPagers.remove(pager);});
+        morePosts.setOnClickListener(v->pager.next());
+        pager.startCachedFor(120_000L);
     }
 
     private void showJoinRequestsDialog() {
@@ -796,10 +870,7 @@ public class GroupDetailActivity extends Activity implements FeedAdapter.Host {
     }
 
     private void showModerateGroupPostsDialog() {
-        if (approvedPosts.isEmpty()) {
-            Ui.info(this, "📌 Group Posts", "No published posts in this group yet.");
-            return;
-        }
+        if(group==null || !group.canManageGroup(Fb.uid()))return;
         LinearLayout list = Ui.col(this);
         Ui.pad(list, 14, 10, 14, 10);
         ScrollView sv = new ScrollView(this);
@@ -811,7 +882,23 @@ public class GroupDetailActivity extends Activity implements FeedAdapter.Host {
                 .setNegativeButton("Close", null)
                 .show();
 
-        for (final Models.Post p : approvedPosts) {
+        TextView morePosts=Ui.btnOutline(this,"Load 10 more",Ui.BLUE);
+        list.addView(morePosts);
+        LinearLayout cards=Ui.col(this);list.addView(cards);
+        com.friendbook.social.d1.documents.Query query=groupPostQuery();
+        final Set<String> resolvedPosts=new LinkedHashSet<>();
+        com.friendbook.social.core.CursorPager pager=new com.friendbook.social.core.CursorPager(query,
+                10,"group-manage:"+id,(docs,more,loading,error)->{
+            if(!dlg.isShowing())return;
+            morePosts.setText(loading?"Loading…":!error.isEmpty()?"Retry posts":more?"Load 10 more":"All records loaded");
+            morePosts.setEnabled(!loading && more);
+            if(loading || !error.isEmpty())return;
+            cards.removeAllViews();
+            for(DocumentSnapshot doc:docs){
+                final Models.Post p=Models.Post.fromDoc(doc);
+                if(resolvedPosts.contains(p.id))continue;
+                if(p.archived || p.trashedAt>0 || "pending".equals(p.groupApprovalStatus) || "declined".equals(p.groupApprovalStatus))continue;
+
             LinearLayout card = Ui.col(this);
             card.setBackground(Ui.roundStroke(this, Ui.card(this), 10, Ui.div(this), 1));
             Ui.pad(card, 10, 8, 10, 8);
@@ -842,14 +929,19 @@ public class GroupDetailActivity extends Activity implements FeedAdapter.Host {
             dlp.leftMargin = Ui.dp(this, 8);
             delB.setOnClickListener(v -> {
                 Fb.db().collection("posts").document(p.id).delete().addOnSuccessListener(ignored -> {
-                    if (!isFinishing()) { card.setVisibility(View.GONE); Ui.toast(this,"Removed from group 🗑"); }
+                    if (!isFinishing()) { resolvedPosts.add(p.id); card.setVisibility(View.GONE); refreshGroupPostPages(); Ui.toast(this,"Removed from group 🗑"); }
                 }).addOnFailureListener(error -> { if (!isFinishing()) Ui.toast(this,"Couldn't remove post. Please try again."); });
             });
             btns.addView(pinB);
             btns.addView(delB, dlp);
             card.addView(btns);
-            list.addView(card);
-        }
+            cards.addView(card);
+            }
+        });
+        postDialogs.add(dlg);postDialogPagers.add(pager);
+        dlg.setOnDismissListener(d->{pager.close();postDialogs.remove(dlg);postDialogPagers.remove(pager);});
+        morePosts.setOnClickListener(v->pager.next());
+        pager.startCachedFor(120_000L);
     }
 
     private void showBannedMembersDialog() {
@@ -1181,6 +1273,12 @@ public class GroupDetailActivity extends Activity implements FeedAdapter.Host {
     }
     @Override public void createStory() {}
     @Override public void openStoryGroup(StoriesAdapter.Group g) {}
-    @Override public void loadMore() {}
-    @Override public boolean hasMore() { return false; }
+    @Override public void loadMore() {
+        if(groupScreenStarted && groupPostPager!=null && activeTab==0 && !groupPostPager.isLoading() && groupPostPager.hasMore()){
+            groupPostsRequestedAt=android.os.SystemClock.elapsedRealtime();groupPostPager.next();
+        }
+    }
+    @Override public boolean hasMore() { return activeTab==0 && groupPostsMore; }
+    @Override public boolean isLoadingMore() { return activeTab==0 && groupPostsLoading; }
+    @Override public boolean hasPageError() { return activeTab==0 && groupPostsError; }
 }

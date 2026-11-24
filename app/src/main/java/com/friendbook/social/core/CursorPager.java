@@ -164,5 +164,6 @@ public final class CursorPager {
     }
     public void forget(String id){records.remove(id);CACHE.remove(key);}
     public boolean hasMore(){return more;}
+    public boolean isLoading(){return loading;}
     public void close(){closed=true;requestGeneration++;if(timeout!=null)timeoutHandler.removeCallbacks(timeout);}
 }
