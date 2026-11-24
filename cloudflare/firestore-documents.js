@@ -2339,6 +2339,34 @@ function broadcastWrites(db,path,data,owner,row,now) {
     .bind(path,collection,id,owner,JSON.stringify({...data,id}),now));
   return writes;
 }
+// A page needs only yes/no membership, never the actor's full friend graph or
+// every duplicate historical friendship document. All candidates include the
+// authenticated actor, and the partial pair index excludes malformed arrays.
+async function friendshipFacts(request,db,uid) {
+  if(request.method!=='POST')return json({error:'Method not allowed'},405);
+  let input;try{input=await request.json();}catch{return json({error:'Invalid JSON'},400);}
+  const validUid=value=>typeof value==='string' && value.length>0 && value.length<=128 && !/[\/\x00-\x1f]/.test(value);
+  if(!validUid(uid) || !input || Object.keys(input).some(k=>k!=='candidates')
+      || !Array.isArray(input.candidates) || input.candidates.length<1 || input.candidates.length>10
+      || input.candidates.some(candidate=>!validUid(candidate) || candidate===uid)
+      || new Set(input.candidates).size!==input.candidates.length) return json({error:'Invalid candidates'},400);
+  try {
+    const rows=await db.prepare(`SELECT candidate.value AS uid,
+      (EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents f INDEXED BY idx_cf_friend_valid_pair
+        WHERE f.parent_path='friends' AND json_type(f.document_json,'$.participants')='array'
+          AND json_array_length(f.document_json,'$.participants')=2
+          AND json_extract(f.document_json,'$.participants[0]')=?1
+          AND json_extract(f.document_json,'$.participants[1]')=candidate.value)
+      OR EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents f INDEXED BY idx_cf_friend_valid_pair
+        WHERE f.parent_path='friends' AND json_type(f.document_json,'$.participants')='array'
+          AND json_array_length(f.document_json,'$.participants')=2
+          AND json_extract(f.document_json,'$.participants[0]')=candidate.value
+          AND json_extract(f.document_json,'$.participants[1]')=?1)) AS friend
+      FROM json_each(?2) candidate`).bind(uid,JSON.stringify(input.candidates)).all();
+    return json({facts:(rows.results||[]).map(row=>({uid:row.uid,friend:!!row.friend}))});
+  } catch {return json({error:'Friendship facts unavailable'},503);}
+}
+
 async function claimReferral(request,db,uid,now) {
   if (request.method!=='POST') return json({error:'Method not allowed'},405);
   let body; try { body=await request.json(); } catch { return json({error:'Invalid JSON'},400); }
@@ -3026,6 +3054,7 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0, ct
       && writingContent(url.searchParams.get('path') || url.searchParams.get('parent'))))) return json({error:'Account suspended'},403);
 
 
+  if (path === '/v1/firestore/friendship-facts') return friendshipFacts(request,db,uid);
   if (path === '/v1/firestore/claim-referral') return claimReferral(request,db,uid,now);
   if (path === '/v1/chat/call') return signalChatCall(request,db,uid,now,identity);
   if (path === '/v1/live/pk') return livePk(request,db,uid,now,identity);

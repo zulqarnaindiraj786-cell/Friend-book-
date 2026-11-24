@@ -267,7 +267,12 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
     /** Resolve only NEW visible candidates, in <=10-user batches, not a scan of all friendships. */
     private void checkCandidates(String me,int token){
         if(!current(token,me))return;
-        List<String> unchecked=new ArrayList<>();for(Models.User u:suggestions)if(!checkedCandidates.contains(u.uid) && !checkingUsers.contains(u.uid) && !failedCandidates.contains(u.uid))unchecked.add(u.uid);
+        java.util.LinkedHashSet<String> uncheckedSet=new java.util.LinkedHashSet<>();
+        for(Models.User u:suggestions)if(u.uid!=null && !checkedCandidates.contains(u.uid) && !checkingUsers.contains(u.uid) && !failedCandidates.contains(u.uid)){
+            if(!com.friendbook.social.core.FriendCandidatePages.validUid(u.uid) || me.equals(u.uid))failedCandidates.add(u.uid);
+            else uncheckedSet.add(u.uid);
+        }
+        List<String> unchecked=new ArrayList<>(uncheckedSet);
         for(int offset=0;offset<unchecked.size();offset+=10){
             final List<String> ids=new ArrayList<>(unchecked.subList(offset,Math.min(offset+10,unchecked.size())));checkingUsers.addAll(ids);
             frameHandler.postDelayed(()->{
@@ -275,16 +280,17 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
                     checkingUsers.removeAll(ids);failedCandidates.addAll(ids);requestRender();
                 }
             },20000L);
-            List<List<String>> pairs=com.friendbook.social.core.FriendCandidatePages.pairs(me,ids);
-            com.google.android.gms.tasks.Task<com.friendbook.social.d1.documents.QuerySnapshot> friends=Fb.db().collection("friends").whereIn("participants",pairs).limit(10).get();
+            com.google.android.gms.tasks.Task<java.util.Map<String,Boolean>> friends=Fb.db().friendshipFacts(ids);
             com.google.android.gms.tasks.Task<com.friendbook.social.d1.documents.QuerySnapshot> received=Fb.db().collection("friend_requests").whereEqualTo("toUid",me).whereIn("fromUid",ids).whereEqualTo("status","pending").limit(10).get();
             com.google.android.gms.tasks.Task<com.friendbook.social.d1.documents.QuerySnapshot> sent=Fb.db().collection("friend_requests").whereEqualTo("fromUid",me).whereIn("toUid",ids).whereEqualTo("status","pending").limit(10).get();
             com.google.android.gms.tasks.Tasks.whenAllSuccess(friends,received,sent).addOnSuccessListener(results->{
                 if(!current(token,me) || !checkingUsers.containsAll(ids))return;checkingUsers.removeAll(ids);
-                com.friendbook.social.d1.documents.QuerySnapshot a=(com.friendbook.social.d1.documents.QuerySnapshot)results.get(0),b=(com.friendbook.social.d1.documents.QuerySnapshot)results.get(1),c=(com.friendbook.social.d1.documents.QuerySnapshot)results.get(2);
-                // Saturated legacy duplicate data is not evidence that other candidates have no relationship.
-                if(a.getMetadata().isFromCache() || b.getMetadata().isFromCache() || c.getMetadata().isFromCache() || a.size()==10 || b.size()==10 || c.size()==10){failedCandidates.addAll(ids);requestRender();return;}
-                for(DocumentSnapshot doc:a)for(String other:Models.ChatRoom.fromDoc(doc).participants)if(!other.equals(me))candidateFriends.add(other);
+                @SuppressWarnings("unchecked") java.util.Map<String,Boolean> a=(java.util.Map<String,Boolean>)results.get(0);
+                com.friendbook.social.d1.documents.QuerySnapshot b=(com.friendbook.social.d1.documents.QuerySnapshot)results.get(1),c=(com.friendbook.social.d1.documents.QuerySnapshot)results.get(2);
+                // A saturated request page cannot prove a missing request is absent.
+                if(a==null || a.size()!=ids.size() || !a.keySet().containsAll(ids) || a.containsValue(null)
+                        || b.getMetadata().isFromCache() || c.getMetadata().isFromCache() || b.size()==10 || c.size()==10){failedCandidates.addAll(ids);requestRender();return;}
+                for(String id:ids)if(Boolean.TRUE.equals(a.get(id)))candidateFriends.add(id);
                 for(DocumentSnapshot doc:b)candidateIncoming.add(doc.getString("fromUid"));for(DocumentSnapshot doc:c)candidateOutgoing.add(doc.getString("toUid"));
                 checkedCandidates.addAll(ids);candidatesCheckedAt=android.os.SystemClock.elapsedRealtime();requestRender();
             }).addOnFailureListener(error->{if(current(token,me) && checkingUsers.containsAll(ids)){checkingUsers.removeAll(ids);failedCandidates.addAll(ids);requestRender();}});

@@ -220,6 +220,12 @@ public class D1DocumentStore {
         }
     }
 
+    /** Server-authoritative membership for at most ten visible people; never scans a friend graph. */
+    public Task<java.util.Map<String,Boolean>> friendshipFacts(java.util.List<String> candidates) {
+        final java.util.List<String> submitted=new java.util.ArrayList<>(candidates);
+        return runAsync(() -> FriendshipFactsResponse.parse(D1DocumentTransport.friendshipFacts(submitted),submitted));
+    }
+
     public Task<Void> claimReferral(String inviter) {
         return runAsync(() -> {
             D1DocumentTransport.request("POST", "/v1/firestore/claim-referral",

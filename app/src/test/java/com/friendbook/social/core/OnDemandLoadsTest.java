@@ -46,7 +46,7 @@ public class OnDemandLoadsTest {
         assertTrue("Chat badge listener must bound the read",
                 main.contains(".limit(com.friendbook.social.core.OnDemandLoads.CHAT_BADGE_LIMIT)"));
         assertTrue("Visible friendship facts must be bounded to submitted candidates",
-                home.contains("FriendCandidatePages.pairs(me,ids)") && home.contains(".whereIn(\"participants\",pairs).limit(10)"));
+                home.contains("Fb.db().friendshipFacts(ids)") && home.contains("Ui.chunks(new ArrayList<>(needed),10)"));
         assertTrue("Suggestions must be served from cache",
                 home.contains("restorePymkFromCache") && home.contains("pymkCacheFresh"));
         assertTrue("Suggestions fetch only through the guarded path",

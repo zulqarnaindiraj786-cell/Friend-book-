@@ -871,6 +871,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         java.util.LinkedHashSet<String> needed=new java.util.LinkedHashSet<>();
         for(String id:candidates){
             if(id==null || id.isEmpty() || id.equals(me))continue;
+            if(!com.friendbook.social.core.FriendCandidatePages.validUid(id)){friendFactsFailed.add(id);continue;}
             Long checked=friendFactsChecked.get(id);
             if(checked!=null && now>=checked && now-checked<FRIEND_FACT_TTL_MS)continue;
             if(checked!=null){friendFactsChecked.remove(id);friendIds.remove(id);}
@@ -882,22 +883,18 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
                 if(factsToken!=friendFactsGeneration || !activeHomeRead(me,homeToken) || !friendFactsPending.containsAll(ids))return;
                 friendFactsPending.removeAll(ids);friendFactsFailed.addAll(ids);
             },20_000L);
-            List<List<String>> pairs=com.friendbook.social.core.FriendCandidatePages.pairs(me,ids);
-            Fb.db().collection("friends").whereIn("participants",pairs).limit(10).get().addOnSuccessListener(snap->{
+            Fb.db().friendshipFacts(ids).addOnSuccessListener(facts->{
                 if(factsToken!=friendFactsGeneration || !activeHomeRead(me,homeToken) || !friendFactsPending.containsAll(ids))return;
                 friendFactsPending.removeAll(ids);
-                if(snap==null || snap.getMetadata().isFromCache()){friendFactsFailed.addAll(ids);return;}
-                Set<String> found=new HashSet<>();
-                for(DocumentSnapshot doc:snap){
-                    List<String> parts=Models.ChatRoom.fromDoc(doc).participants;
-                    if(parts.size()!=2 || !parts.contains(me))continue;
-                    for(String other:parts)if(!me.equals(other) && ids.contains(other))found.add(other);
+                if(facts==null || facts.size()!=ids.size() || !facts.keySet().containsAll(ids)){
+                    friendFactsFailed.addAll(ids);return;
                 }
                 long checkedAt=android.os.SystemClock.elapsedRealtime();
                 for(String id:ids){
-                    if(found.contains(id)){friendIds.add(id);friendFactsChecked.put(id,checkedAt);}
-                    else if(snap.size()<10){friendIds.remove(id);friendFactsChecked.put(id,checkedAt);}
-                    else friendFactsFailed.add(id); // saturated legacy duplicates cannot prove absence
+                    Boolean isFriend=facts.get(id);
+                    if(isFriend==null){friendFactsFailed.add(id);continue;}
+                    if(isFriend)friendIds.add(id);else friendIds.remove(id);
+                    friendFactsChecked.put(id,checkedAt);
                 }
                 renderPymk();renderLoadedStories();
                 if(!lastPostDocs.isEmpty())consumePostsSnapshot(lastPostDocs,loadedPosts);
