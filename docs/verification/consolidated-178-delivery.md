@@ -1,5 +1,7 @@
 # Owner-authorized consolidated Android 178
 
+Update: the subsequently owner-authorized Worker rollout **45294591978 succeeded** at source fcfd38629788f946759f4648471bf8f4b89b60bb. The undeployed-server statements below describe the APK delivery time, not the current deployment state. See `worker-quota-rollout-fcfd386.md`.
+
 The owner explicitly requested the APK after checking remaining large consumers. No speculative additional source patch was added during packaging.
 
 - Version **2.10.36 (178)**, source **3867a0aa431890ccc9d6e67ae63d6d24fa2e8752**.
