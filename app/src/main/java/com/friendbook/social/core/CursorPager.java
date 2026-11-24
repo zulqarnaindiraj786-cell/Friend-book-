@@ -43,12 +43,14 @@ public final class CursorPager {
         if(!active() || loading)return;
         loading=true;
         final int request=++requestGeneration;
+        timeout=()->{if(active() && loading && request==requestGeneration){requestGeneration++;loading=false;emit("Loading is taking too long. Tap to retry.");}};
+        timeoutHandler.postDelayed(timeout,20000L);
         Query head=query.limit(size);
         head.get(Source.CACHE).addOnCompleteListener(cache -> {
             if(!active() || request!=requestGeneration)return;
             QuerySnapshot cached=cache.isSuccessful()?cache.getResult():null;
             if(cached!=null && maxAgeMs>0 && head.hasFreshLocalPage(maxAgeMs)) {
-                loading=false;
+                timeoutHandler.removeCallbacks(timeout);loading=false;
                 for(DocumentSnapshot doc:cached)records.put(doc.getId(),doc);
                 if(!cached.isEmpty())cursor=cached.getDocuments().get(cached.size()-1);
                 more=cached.size()==size;
@@ -69,11 +71,11 @@ public final class CursorPager {
             // explicit refresh (zero max age) forces an independent read.
             (full ? head.get(maxAgeMs>0 ? Source.DEFAULT : Source.SERVER) : head.refreshCachedHead(cached)).addOnSuccessListener(page -> {
                 if(!active() || request!=requestGeneration)return;
-                loading=false;
+                timeoutHandler.removeCallbacks(timeout);loading=false;
                 acceptObservedFirstPage(page);
             }).addOnFailureListener(error -> {
                 if(!active() || request!=requestGeneration)return;
-                loading=false;emit("Couldn't refresh. Pull down to retry.");
+                timeoutHandler.removeCallbacks(timeout);loading=false;emit("Couldn't refresh. Pull down to retry.");
             });
         });
     }
