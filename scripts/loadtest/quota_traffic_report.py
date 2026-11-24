@@ -249,6 +249,11 @@ def safe_shape(sql):
         result['redacted_inventory_structure']=redacted_inventory_structure(sql)
     if result['operation']=='SELECT' and not (set(tables)&{'canonical_documents','legacy_mirror','comments','reactions'}):
         result['redacted_unmapped_select_structure']=redacted_inventory_structure(sql)
+    # Help attribute a high-volume otherwise unrecognized canonical SELECT.
+    # The allowlisted grammar never emits literals or arbitrary identifiers;
+    # this describes query structure, not an actor or source attribution.
+    if result['operation']=='SELECT' and tables==['canonical_documents'] and not features and not roots:
+        result['redacted_unmapped_canonical_structure']=redacted_inventory_structure(sql)
     return result
 
 
@@ -317,8 +322,8 @@ def priority_shape_notices(windows):
             for offset in range(0,len(selected),2):
                 shapes=[dict(shape) for shape in selected[offset:offset+2]]
                 for shape in shapes:
-                    if 'redacted_inventory_structure' in shape:
-                        shape['redacted_inventory_structure']=shape['redacted_inventory_structure'][:700]
+                    for key in ('redacted_inventory_structure','redacted_unmapped_canonical_structure','redacted_unmapped_select_structure'):
+                        if key in shape:shape[key]=shape[key][:700]
                 lines.append('Sanitized priority shapes '+json.dumps({
                     'minutes':window['minutes'],'end':window['end'],'ranked_by':metric,
                     'rank_start':offset+1,'may_be_truncated':window[metric]['may_be_truncated'],

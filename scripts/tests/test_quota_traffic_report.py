@@ -80,6 +80,15 @@ class TrafficReport(unittest.TestCase):
         self.assertFalse(p.summarize_shapes([row],'rowsRead')['may_be_truncated'])
         with self.assertRaises(ValueError): p.summarize_shapes([],'invalid')
 
+    def test_unmapped_canonical_structure_is_allowlisted_and_private(self):
+        sql="SELECT SECRET_COLUMN, path FROM friendbook_cf_firestore_documents WHERE parent_path='SECRET_PATH' AND mystery='PRIVATE_VALUE'"
+        shape=p.safe_shape(sql)
+        grammar=shape['redacted_unmapped_canonical_structure']
+        self.assertIn('friendbook_cf_firestore_documents',grammar)
+        for secret in ('SECRET_COLUMN','SECRET_PATH','PRIVATE_VALUE','mystery'):
+            self.assertNotIn(secret.lower(),json.dumps(shape).lower())
+        self.assertNotIn('redacted_unmapped_canonical_structure',p.safe_shape("SELECT * FROM friendbook_cf_firestore_documents WHERE path='secret'"))
+
     def test_hot_comment_shapes_have_private_data_free_labels(self):
         shape=p.safe_shape("SELECT 1 AS types_json, 2 AS total_comments, 3 AS preview_json WHERE path='private'")
         self.assertIn('engagement_preview',shape['features'])
