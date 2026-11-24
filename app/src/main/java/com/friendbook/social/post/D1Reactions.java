@@ -96,8 +96,13 @@ public final class D1Reactions {
   }catch(JSONException malformed){invalidate(collection,id);}
  }
  private static void remember(Context context,String collection,String id,JSONObject data){
+  remember(context,collection,id,data,true);
+ }
+ private static void remember(Context context,String collection,String id,JSONObject data,boolean fullSummary){
   String key=D1Client.key(collection,id);JSONObject previous=CACHE.put(key,data);
-  FETCHED_AT.put(key,android.os.SystemClock.elapsedRealtime());
+  // A reactions-only response says nothing about the age (or existence) of
+  // the comment count and preview in this shared summary.
+  if(fullSummary)FETCHED_AT.put(key,android.os.SystemClock.elapsedRealtime());
   if(previous!=null && previous.toString().equals(data.toString()))return;
   List<String> types=new ArrayList<>();JSONArray a=data.optJSONArray("types");
   if(a!=null)for(int i=0;i<a.length();i++){JSONObject r=a.optJSONObject(i);if(r!=null&&r.optInt("count")>0)types.add(r.optString("type"));}
@@ -156,9 +161,15 @@ public final class D1Reactions {
   if(types==null || WRITING.contains(key) || UNCONFIRMED.contains(key) || (last!=null && last>requestedAt))return;
   try{
    JSONObject old=CACHE.get(key);
+   // CACHE and FETCHED_AT have independent LRU eviction order. A timestamp
+   // left after the full summary was evicted cannot validate a partial one.
+   if(old==null)FETCHED_AT.remove(key);
    JSONObject next=old==null?new JSONObject():new JSONObject(old.toString());
    next.remove("reactionStateUnknown");next.put("types",types);
-   remember(null,"posts",id,next);
+   // In-flight full reads started before this partial response must not
+   // overwrite its reaction state; they will retry under the existing limit.
+   GENERATION.put(key,GENERATION.getOrDefault(key,0)+1);
+   remember(null,"posts",id,next,false);
   }catch(JSONException ignored){}
  }
  public static void loadPost(Context context,Models.Post post,Runnable render){
