@@ -447,7 +447,7 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         chatRefreshInFlight=true;final int attempt=++chatRefreshAttempt,generation=historyGeneration;
         final String actor=messageActor;
         Fb.db().refreshChatMessages(chatId);
-        messageRefresh.postDelayed(()->{
+        new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(()->{
             if(activeChatRead(actor,generation) && attempt==chatRefreshAttempt){
                 chatRefreshInFlight=false;messageRefresh.setRefreshing(false);
             }
