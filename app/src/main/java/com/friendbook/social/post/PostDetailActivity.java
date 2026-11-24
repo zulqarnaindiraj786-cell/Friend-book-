@@ -17,6 +17,7 @@ import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
 import com.friendbook.social.core.Cloudinary;
+import com.friendbook.social.core.D1Client;
 import com.friendbook.social.core.FastCache;
 import com.friendbook.social.core.Fb;
 import com.friendbook.social.core.Icons;
