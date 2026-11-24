@@ -1,6 +1,6 @@
 # Targeted engagement fix: add only the reviewed resource-state covering index, then deploy.
 # Never execute the full migration chain or remove existing indexes/data.
-# Explicit rollout tag required; full regressions precede deployment.
+# Explicit rollout tag required; source be02107 passed Worker and Android CI.
 name: Deploy feed engagement state cover
 on:
   push:
