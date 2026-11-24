@@ -13,6 +13,9 @@ import java.util.Map;
 
 /** Writes realtime notifications and official friendbook Team messages (with Crown-F emblem). */
 public class Notify {
+    // Pending operations only: failures and completed events are never retained.
+    private static final java.util.Set<java.util.List<String>> PENDING_EVENTS =
+            java.util.Collections.synchronizedSet(new java.util.HashSet<>());
 
     public static void send(String toUid, String type, String text) {
         send(toUid, type, text, null);
@@ -70,6 +73,9 @@ public class Notify {
         n.put("createdAt", FieldValue.serverTimestamp());
         String eventKey=savedEventKey!=null?savedEventKey:NotificationEventKey.forAction(me,toUid,type,postId);
         if (eventKey != null) {
+            java.util.List<String> pendingKey=java.util.Arrays.asList(me,eventKey);
+            if(!PENDING_EVENTS.add(pendingKey))return;
+            try {
             DocumentReference ref=Fb.db().collection("notifications").document(eventKey);
             ref.create(n).addOnSuccessListener(v -> {
                 if (me.equals(Fb.uid())) com.friendbook.social.push.FCMPush.notification(ref.getId(), n);
@@ -78,7 +84,11 @@ public class Notify {
                         || ((com.friendbook.social.d1.documents.D1DocumentStoreException)e).getCode()
                         != com.friendbook.social.d1.documents.D1DocumentStoreException.Code.ALREADY_EXISTS)
                     com.friendbook.social.push.PushTrace.failure("notification_write_failed", e);
-            });
+            }).addOnCompleteListener(task -> PENDING_EVENTS.remove(pendingKey));
+            } catch(RuntimeException error) {
+                PENDING_EVENTS.remove(pendingKey);
+                throw error;
+            }
         } else Fb.db().collection("notifications").add(n).addOnSuccessListener(ref -> {
             com.friendbook.social.push.PushTrace.stage("notification_write_ok", "event="
                     + com.friendbook.social.push.PushTrace.id(ref.getId()));
