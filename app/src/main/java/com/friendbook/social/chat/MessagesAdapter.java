@@ -692,8 +692,6 @@ public class MessagesAdapter extends RecyclerView.Adapter<MessagesAdapter.VH> {
         return gd;
     }
 
-    private static final Map<String, android.graphics.Bitmap> LIVE_PREVIEW_FRAMES = new HashMap<>();
-
     private void bindLiveInviteVideoCard(final Activity c, final VH h, final Models.Message m) {
         final String hostUid = (m.liveHostId != null && !m.liveHostId.isEmpty())
                 ? m.liveHostId : (m.senderId == null ? "" : m.senderId);
@@ -712,37 +710,16 @@ public class MessagesAdapter extends RecyclerView.Adapter<MessagesAdapter.VH> {
         Ui.avatar(c, h.liveHostAv, hostPhoto);
 
         final String lid = m.liveId == null ? "" : m.liveId;
-        android.graphics.Bitmap cachedBmp = !lid.isEmpty() ? LIVE_PREVIEW_FRAMES.get(lid) : null;
-        if (cachedBmp != null && !cachedBmp.isRecycled()) {
-            h.livePreviewIv.setImageBitmap(cachedBmp);
-        } else if (Ui.hasRealPhoto(hostPhoto)) {
-            Ui.img(c, h.livePreviewIv, hostPhoto);
-        } else {
-            h.livePreviewIv.setImageResource(com.friendbook.social.R.drawable.ic_default_avatar);
-        }
-
-        if (!lid.isEmpty()) {
-            Fb.db().collection("lives").document(lid).get().addOnSuccessListener(doc -> {
-                if (c.isFinishing() || doc == null || !doc.exists()) return;
-                String status = Format.str(doc.getData(), "status");
-                boolean isStillLive = !"ended".equalsIgnoreCase(status);
-                h.liveBadgeTv.setText(isStillLive ? "🔴 LIVE NOW" : "⏹ LIVE ENDED");
-                h.liveBadgeTv.setBackground(Ui.round(c, isStillLive ? 0xFFFE2C55 : 0xAA37474F, 12));
-                String frameB64 = Format.str(doc.getData(), "liveFrameB64");
-                if (!frameB64.isEmpty()) {
-                    try {
-                        byte[] raw = android.util.Base64.decode(frameB64, android.util.Base64.DEFAULT);
-                        android.graphics.Bitmap bmp = android.graphics.BitmapFactory.decodeByteArray(raw, 0, raw.length);
-                        if (bmp != null) {
-                            LIVE_PREVIEW_FRAMES.put(lid, bmp);
-                            h.livePreviewIv.setImageBitmap(bmp);
-                        }
-                    } catch (Throwable ignored) { }
-                }
-            });
-        }
+        // Rendering an invite must not fetch the live document/blob on every bind.
+        // The destination validates current live status only after the user opens it.
+        h.liveBadgeTv.setText("🔴 LIVE INVITE");
+        if(Ui.hasRealPhoto(hostPhoto))Ui.img(c,h.livePreviewIv,hostPhoto);
+        else h.livePreviewIv.setImageResource(com.friendbook.social.R.drawable.ic_default_avatar);
+        final String actor=Fb.uid();
 
         View.OnClickListener openLiveClick = v -> {
+            if(!java.util.Objects.equals(actor,Fb.uid()) || c.isFinishing() || c.isDestroyed()
+                    || !com.friendbook.social.core.InteractionCooldown.acquire(actor,"chat-live-invite:"+m.id))return;
             if (!lid.isEmpty()) {
                 Intent li = new Intent(c, com.friendbook.social.live.LiveActivity.class);
                 li.putExtra("live_id", lid);
@@ -755,7 +732,7 @@ public class MessagesAdapter extends RecyclerView.Adapter<MessagesAdapter.VH> {
                         .limit(1)
                         .get()
                         .addOnSuccessListener(snap -> {
-                            if (c.isFinishing()) return;
+                            if (!java.util.Objects.equals(actor,Fb.uid()) || c.isFinishing() || c.isDestroyed()) return;
                             if (snap != null && !snap.isEmpty()) {
                                 String foundId = snap.getDocuments().get(0).getId();
                                 Intent li = new Intent(c, com.friendbook.social.live.LiveActivity.class);
@@ -766,7 +743,10 @@ public class MessagesAdapter extends RecyclerView.Adapter<MessagesAdapter.VH> {
                                 c.startActivity(new Intent(c, com.friendbook.social.live.LiveHubActivity.class));
                             }
                         })
-                        .addOnFailureListener(e -> c.startActivity(new Intent(c, com.friendbook.social.live.LiveHubActivity.class)));
+                        .addOnFailureListener(e -> {
+                            if(java.util.Objects.equals(actor,Fb.uid()) && !c.isFinishing() && !c.isDestroyed())
+                                c.startActivity(new Intent(c, com.friendbook.social.live.LiveHubActivity.class));
+                        });
             } else {
                 c.startActivity(new Intent(c, com.friendbook.social.live.LiveHubActivity.class));
             }

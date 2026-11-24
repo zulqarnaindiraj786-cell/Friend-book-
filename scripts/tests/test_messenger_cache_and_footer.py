@@ -9,8 +9,8 @@ class MessengerCacheAndFooter(unittest.TestCase):
         inbox = (JAVA / 'chat/ConversationsActivity.java').read_text()
         self.assertNotIn('inboxSpinner', inbox)
         self.assertIn('reachedInboxBottom=dy>0 && !list.canScrollVertically(1)', inbox)
-        self.assertIn('query.limit(INBOX_PAGE_SIZE+1)', inbox)
-        self.assertIn('inboxMore=snap.size()>INBOX_PAGE_SIZE', inbox)
+        self.assertIn('query.limit(INBOX_PAGE_SIZE)', inbox)
+        self.assertIn('inboxMore=snap.size()==INBOX_PAGE_SIZE', inbox)
         self.assertIn('inboxMoreButton.setOnClickListener(v -> loadInboxPage(false))', inbox)
 
     def test_cache_is_rendered_without_read_receipts_or_notification_side_effects(self):

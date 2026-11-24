@@ -437,14 +437,24 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         return wrap;
     }
 
+    private boolean chatStarted;
+    private boolean activeChatRead(String actor,int generation){
+        return chatStarted && generation==historyGeneration && java.util.Objects.equals(actor,Fb.uid())
+                && !isFinishing() && !isDestroyed();
+    }
+
     @Override
     protected void onStart() {
         super.onStart();
         if(Fb.uid()==null || (messageActor!=null && !java.util.Objects.equals(messageActor,Fb.uid()))){finish();return;}
 
+        chatStarted=true;
+        historyGeneration++;
+        final int chatGeneration=historyGeneration;final String chatActor=Fb.uid();
         if (isGroupChat) {
             roomReg = Fb.db().collection("chats").document(chatId)
                     .addSnapshotListener((d, err) -> {
+                        if(!activeChatRead(chatActor,chatGeneration))return;
                         if (d == null) {
                             if (err != null && err.getCode()==com.friendbook.social.d1.documents.D1DocumentStoreException.Code.PERMISSION_DENIED) finish();
                             return; // a transient read failure is not a deleted room
@@ -499,6 +509,7 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
             // Listen for incoming Voice/Video Calls on this 1:1 chat doc too!
             roomReg = Fb.db().collection("chats").document(chatId)
                     .addSnapshotListener((d, err) -> {
+                        if(!activeChatRead(chatActor,chatGeneration))return;
                         if (d != null && d.exists()) {
                             CallActivity.maybeHandleIncomingFromRoomDoc(ChatActivity.this, d);
                         }
@@ -507,6 +518,7 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
             // Peer profile (live)
             userReg = Fb.db().collection("users").document(peerId)
                     .addSnapshotListener((d, err) -> {
+                        if(!activeChatRead(chatActor,chatGeneration))return;
                         if (d == null || !d.exists()) return;
                         Models.User u = Models.User.fromDoc(d);
                         com.friendbook.social.core.FastCache.putUser(u);
@@ -525,8 +537,7 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         if(!java.util.Objects.equals(messageActor,Fb.uid())){
             messageSnapshots.clear();historyMessages.clear();pendingMessages.clear();historyRanges.clear();maskedHistoryIds.clear();historyEnd=null;lastServerMessage=null;historyCursor=null;historyMore=true;initialScrollDone=false;adapter.setData(new ArrayList<>());messageActor=Fb.uid();
         }
-        historyLoading=false;historySpinner.setVisibility(View.GONE);historyGeneration++;
-        final int chatGeneration=historyGeneration; final String chatActor=Fb.uid();
+        historyLoading=false;historySpinner.setVisibility(View.GONE);
         final Set<String> knownAtAttach=new HashSet<>(historyMessages.keySet());knownAtAttach.addAll(messageSnapshots.keySet());
         final boolean[] firstServer={true};
         final Set<String> previewIds=new HashSet<>();
@@ -536,7 +547,7 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
                 .orderBy("createdAt", Query.Direction.ASCENDING)
                 .limitToLast(10)
                 .addSnapshotListener(com.friendbook.social.d1.documents.MetadataChanges.INCLUDE, (snap, err) -> {
-                    if (chatGeneration!=historyGeneration || !java.util.Objects.equals(chatActor,Fb.uid()) || isFinishing()) return;
+                    if (!activeChatRead(chatActor,chatGeneration)) return;
                     if (snap == null || !snap.getMetadata().isFromCache()) messageRefresh.setRefreshing(false);
                     if(snap==null) {
                         if(err!=null && (err.getCode()==com.friendbook.social.d1.documents.D1DocumentStoreException.Code.PERMISSION_DENIED
@@ -685,7 +696,7 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
     }
 
     private void loadOlderMessages() {
-        if(historyLoading || !historyMore || historyCursor==null) return;
+        if(!chatStarted || !java.util.Objects.equals(messageActor,Fb.uid()) || historyLoading || !historyMore || historyCursor==null) return;
         historyLoading=true; final int generation=historyGeneration; final String actor=Fb.uid();
         final int attempt=++historyPageAttempt;
         final DocumentSnapshot requestedCursor=historyCursor;
@@ -695,12 +706,12 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         Query older=Fb.db().collection("chats").document(chatId).collection("messages")
                 .orderBy("createdAt",Query.Direction.DESCENDING).startAfter(historyCursor);
         if(historyEnd!=null)older=older.endBefore(historyEnd);
-        older.limit(11).get(com.friendbook.social.d1.documents.Source.SERVER)
+        older.limit(10).get(com.friendbook.social.d1.documents.Source.SERVER)
                 .addOnSuccessListener(page -> {
                     historySpinner.removeCallbacks(deadline);
                     if(!isCurrentHistoryPage(generation,attempt,actor)) return;
                     if(historyCursor!=requestedCursor){failHistoryPage(generation,attempt,actor);return;}
-                    historyLoading=false;historyFailed=false;historySpinner.setVisibility(View.GONE); historyMore=page.size()>10;
+                    historyLoading=false;historyFailed=false;historySpinner.setVisibility(View.GONE); historyMore=page.size()==10;
                     if(!page.isEmpty()) historyCursor=page.getDocuments().get(Math.min(10,page.size())-1);
                     if(historyEnd!=null && !historyMore){HistoryResume saved=historyRanges.pop();historyCursor=saved.cursor;historyEnd=saved.end;historyMore=saved.more;maskedHistoryIds=saved.masked;}
                     LinearLayoutManager manager=(LinearLayoutManager)rv.getLayoutManager();
@@ -724,7 +735,7 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
 
     private boolean isCurrentHistoryPage(int generation,int attempt,String actor) {
         return historyLoading && generation==historyGeneration && attempt==historyPageAttempt
-                && java.util.Objects.equals(actor,Fb.uid()) && !isFinishing();
+                && activeChatRead(actor,generation);
     }
 
     private void failHistoryPage(int generation,int attempt,String actor) {
@@ -761,7 +772,7 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
     }
 
     @Override protected void onResume() {
-        super.onResume();chatVisible=true;receiptFailed.clear();unreadResetOnce=false;markVisibleReceipts(); com.friendbook.social.core.SoundEffects.visibleChat(chatId);
+        super.onResume();chatVisible=true;receiptFailed.clear();markVisibleReceipts(); com.friendbook.social.core.SoundEffects.visibleChat(chatId);
     }
     @Override protected void onPause() {
         chatVisible=false;com.friendbook.social.core.SoundEffects.clearVisibleChat(chatId); super.onPause();
@@ -770,7 +781,7 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
     @Override
     protected void onStop() {
         super.onStop();
-        historyGeneration++; historyLoading=false;
+        chatStarted=false;historyGeneration++; historyLoading=false;
         if (msgReg != null) msgReg.remove();
         if (userReg != null) userReg.remove();
         if (roomReg != null) roomReg.remove();

@@ -7,7 +7,7 @@ class ChatAutoplayUx(unittest.TestCase):
         for token in ['cachedRooms++>=10','inboxSwipe.setOnRefreshListener','page.getCachedOrFetch(forceRefresh)']:
             self.assertIn(token,inbox)
         self.assertNotIn('addSnapshotListener',inbox)
-        self.assertIn('.limitToLast(10)',chat);self.assertIn('startAfter(historyCursor)',chat);self.assertIn('older.limit(11)',chat);self.assertIn('Math.min(10,page.size())',chat)
+        self.assertIn('.limitToLast(10)',chat);self.assertIn('startAfter(historyCursor)',chat);self.assertIn('older.limit(10)',chat);self.assertIn('Math.min(10,page.size())',chat)
     def test_metadata_does_not_render_again_and_read_dispatch_precedes_render(self):
         chat=(JAVA/'chat/ChatActivity.java').read_text();adapter=(JAVA/'chat/MessagesAdapter.java').read_text()
         self.assertIn('MetadataChanges.EXCLUDE).isEmpty()',chat)

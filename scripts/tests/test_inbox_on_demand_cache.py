@@ -8,7 +8,7 @@ class InboxOnDemandCache(unittest.TestCase):
         self.assertIn('pushPending=false;loadInboxPage(true,true)',s)
         self.assertIn('inboxSwipe.setOnRefreshListener(()->loadInboxPage(true,true))',s)
         self.assertIn('page.getCachedOrFetch(forceRefresh)',s)
-        self.assertIn('query.limit(INBOX_PAGE_SIZE+1)',s)
+        self.assertIn('query.limit(INBOX_PAGE_SIZE)',s)
         self.assertNotIn('refreshCachedHead',s)
         self.assertNotIn('addSnapshotListener',s)
     def test_cached_page_restores_cursor_without_clobbering_handoff(self):
