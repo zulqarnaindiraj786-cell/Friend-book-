@@ -100,6 +100,29 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         headerRequested=false;
     }
 
+    private void prepareFeedAccount(){
+        String actor=Fb.uid();
+        if(feedAccount!=null && !java.util.Objects.equals(feedAccount,actor)){
+            invalidateHomeReads();
+            loadedPosts=false;pageError=false;moreAvailable=true;lastDoc=null;feedQuery=null;
+            lastPostDocs.clear();loadedPostIds.clear();sessionOrderIds.clear();cfPosts.clear();
+            storyQuery=null;storyCursor=null;loadedStoryDocs.clear();storyGroups.clear();storyIds.clear();
+            storiesActor=null;moreStories=true;
+            friendGraphActor=null;friendIds.clear();if(actor!=null)friendIds.add(actor);
+            noteUsers.clear();pymkCandidates.clear();notesActor=null;notesLoaded=false;notesInFlight=false;
+            notesReadAt=-com.friendbook.social.core.OnDemandLoads.PYMK_CACHE_MS;
+            featuredReels.clear();featuredReelsActor=null;featuredReelsLoaded=false;featuredReelsLoading=false;
+            headerRequestedActor=null;forceReRank=true;
+            if(adapter!=null){
+                adapter.setPosts(Collections.emptyList());adapter.setStories(Collections.emptyList());
+                adapter.setPymk(Collections.emptyList());adapter.setFeaturedReels(Collections.emptyList());adapter.setLives(Collections.emptyList());
+            }
+            if(notesRow!=null)notesRow.removeAllViews();
+            if(notesScroll!=null)notesScroll.setVisibility(View.GONE);
+        }
+        feedAccount=actor;
+    }
+
     private void cancelHomeSecondary() {
         if (pendingHomeSecondary != null) engagementHandler.removeCallbacks(pendingHomeSecondary);
         pendingHomeSecondary = null;
@@ -138,6 +161,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
     @Override
     public View onCreateView(LayoutInflater inf, ViewGroup container, Bundle b) {
         cancelHomeSecondary();headerRequested=false;headerRequestedActor=null;
+        prepareFeedAccount();
         android.app.Activity a = getActivity();
         LinearLayout root = Ui.col(a);
         root.setBackgroundColor(Ui.bg(a));
@@ -681,7 +705,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
     @Override
     public void onStart() {
         super.onStart();
-        homeStarted=true;
+        homeStarted=true;prepareFeedAccount();
         if (adapter != null) adapter.setFeedBannersVisible(!isHidden());
         FastCache.addReactionObserver(reactionObserver);
         refreshPostsIfNeeded();
