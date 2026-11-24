@@ -53,11 +53,26 @@ jobs:
             URL="https://repo.maven.apache.org/maven2/org/robolectric/android-all-instrumented/$VER/android-all-instrumented-$VER.jar"
             mkdir -p "$DIR"
             curl -fsSL --connect-timeout 15 --max-time 120 --retry 3 --retry-max-time 180 --retry-delay 3 --retry-all-errors "$URL.sha512" -o "$JAR.sha512.tmp"
-            HASH="$(awk '{print $1}' "$JAR.sha512.tmp")"
-            [[ "$HASH" =~ ^[a-fA-F0-9]{128}$ ]]
+            HASH="$(grep -Eo '[a-fA-F0-9]{128}' "$JAR.sha512.tmp" | head -1 || true)"
+            if [[ ! "$HASH" =~ ^[a-fA-F0-9]{128}$ ]]; then
+              echo "::error::Invalid SHA-512 metadata for $VER (bytes=$(wc -c < "$JAR.sha512.tmp"))"
+              exit 1
+            fi
             if [ ! -f "$JAR" ] || ! printf '%s  %s\n' "$HASH" "$JAR" | sha512sum --check --status; then
-              curl -fsSL --connect-timeout 15 --max-time 120 --retry 3 --retry-max-time 180 --retry-delay 3 --retry-all-errors "$URL" -o "$JAR.tmp"
-              printf '%s  %s\n' "$HASH" "$JAR.tmp" | sha512sum --check --status
+              VERIFIED=false
+              for ATTEMPT in 1 2 3; do
+                if curl -fsSL --connect-timeout 15 --max-time 120 --retry 3 --retry-max-time 180 --retry-delay 3 --retry-all-errors "$URL" -o "$JAR.tmp" && \
+                    printf '%s  %s\n' "$HASH" "$JAR.tmp" | sha512sum --check --status; then
+                  VERIFIED=true
+                  break
+                fi
+                echo "::warning::Android jar download/checksum attempt $ATTEMPT failed for $VER"
+                rm -f "$JAR.tmp"
+              done
+              if [ "$VERIFIED" != true ]; then
+                echo "::error::Could not obtain a verified Robolectric jar for $VER"
+                exit 1
+              fi
               mv "$JAR.tmp" "$JAR"
             fi
             rm "$JAR.sha512.tmp"
