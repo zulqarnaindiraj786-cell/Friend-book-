@@ -8,7 +8,7 @@ class CursorContracts(unittest.TestCase):
             self.assertIn(token,code)
         self.assertNotIn('cursor=',code.split('public void next()',1)[1].split('.addOnFailureListener',1)[1])
     def test_requested_list_pages_and_controls(self):
-        for path,token in [('friends/FollowListActivity.java',',10,"follow:'),('main/NotificationsFragment.java',',PAGE_SIZE,"notifications:'),('profile/ProfileActivity.java',',10,"profile-posts:'),('profile/ProfileActivity.java',',10,"profile-reels:'),('post/Reactions.java',',30,"post-reactions:')]:
+        for path,token in [('friends/FollowListActivity.java',',10,"follow:'),('main/NotificationsFragment.java',',PAGE_SIZE,"notifications:'),('profile/ProfileActivity.java',',10,"profile-posts:'),('profile/ProfileActivity.java',',10,"profile-reels:'),('post/Reactions.java',',10,"post-reactions:')]:
             self.assertIn(token,(ROOT/path).read_text())
     def test_profile_lazy_reels_and_privacy_before_photo_hydration(self):
         code=(ROOT/'profile/ProfileActivity.java').read_text()

@@ -67,6 +67,8 @@ public class GroupDetailActivity extends Activity implements FeedAdapter.Host {
     private String id;
     private Models.Group group;
     private ListenerRegistration gReg, pReg;
+    private AlertDialog inviteDialog;
+    private com.friendbook.social.core.CursorPager invitePager;
 
     // Header & Action UI
     private ImageView coverIv, groupIconIv;
@@ -304,6 +306,8 @@ public class GroupDetailActivity extends Activity implements FeedAdapter.Host {
         super.onStop();
         if (gReg != null) gReg.remove();
         if (pReg != null) pReg.remove();
+        if (inviteDialog != null) inviteDialog.dismiss();
+        if (invitePager != null) { invitePager.close(); invitePager=null; }
     }
 
     private void renderGroupHeader() {
@@ -509,7 +513,7 @@ public class GroupDetailActivity extends Activity implements FeedAdapter.Host {
     }
 
     private void showInviteMembersDialog() {
-        if (group == null) return;
+        if (group == null || (inviteDialog!=null && inviteDialog.isShowing())) return;
         LinearLayout box = Ui.col(this);
         Ui.pad(box, 14, 10, 14, 10);
         ScrollView sv = new ScrollView(this);
@@ -533,9 +537,18 @@ public class GroupDetailActivity extends Activity implements FeedAdapter.Host {
         box.addView(peopleCol);
         final Set<String> selected = new LinkedHashSet<>();
 
-        Fb.db().collection("users").limit(200).get().addOnSuccessListener(snap -> {
-            if (snap == null || isFinishing()) return;
-            for (DocumentSnapshot d : snap.getDocuments()) {
+        TextView morePeople=Ui.btnOutline(this,"Load 10 people",Ui.BLUE);
+        box.addView(morePeople);
+        final String inviteActor=Fb.uid();
+        invitePager=new com.friendbook.social.core.CursorPager(
+                Fb.db().collection("users").orderBy(com.friendbook.social.d1.documents.FieldPath.documentId()),
+                10,"group-invite:"+id,(docs,more,loading,error)->{
+            if(isFinishing() || !java.util.Objects.equals(inviteActor,Fb.uid()))return;
+            morePeople.setText(loading?"Loading…":!error.isEmpty()?"Retry people":more?"Load 10 more people":"All people loaded");
+            morePeople.setEnabled(!loading && more);
+            if(loading)return;
+            peopleCol.removeAllViews();
+            for (DocumentSnapshot d : docs) {
                 Models.User u = Models.User.fromDoc(d);
                 if (group.members.contains(u.uid) || group.bannedMemberIds.contains(u.uid) || u.banned) continue;
                 LinearLayout row = Ui.row(this);
@@ -550,6 +563,7 @@ public class GroupDetailActivity extends Activity implements FeedAdapter.Host {
                 nm.setPadding(Ui.dp(this, 10), 0, 0, 0);
                 row.addView(nm, new LinearLayout.LayoutParams(0, -2, 1));
                 CheckBox cb = new CheckBox(this);
+                cb.setChecked(selected.contains(u.uid));
                 cb.setOnCheckedChangeListener((b, ch) -> {
                     if (ch) selected.add(u.uid); else selected.remove(u.uid);
                 });
@@ -559,7 +573,7 @@ public class GroupDetailActivity extends Activity implements FeedAdapter.Host {
             }
         });
 
-        new AlertDialog.Builder(this)
+        inviteDialog = new AlertDialog.Builder(this)
                 .setTitle("➕ Invite Members to " + group.name)
                 .setView(sv)
                 .setPositiveButton("Send Invites", (d, w) -> {
@@ -576,7 +590,17 @@ public class GroupDetailActivity extends Activity implements FeedAdapter.Host {
                             }).addOnFailureListener(error -> { if (!isFinishing()) Ui.toast(this,"Couldn't send invitations. Please try again."); });
                 })
                 .setNegativeButton("Close", null)
-                .show();
+                .create();
+        final com.friendbook.social.core.CursorPager ownedPager=invitePager;
+        final AlertDialog ownedDialog=inviteDialog;
+        ownedDialog.setOnDismissListener(d->{
+            ownedPager.close();
+            if(invitePager==ownedPager)invitePager=null;
+            if(inviteDialog==ownedDialog)inviteDialog=null;
+        });
+        morePeople.setOnClickListener(v->ownedPager.next());
+        ownedDialog.show();
+        ownedPager.startCachedFor(300_000L);
     }
 
     private void showQuickGroupMenu(View anchor) {

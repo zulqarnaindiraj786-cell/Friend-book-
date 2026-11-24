@@ -37,6 +37,8 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Set;
+import java.util.LinkedHashSet;
 import java.util.Map;
 
 /**
@@ -60,6 +62,7 @@ public class Reactions {
         public String tickLevel;
         public String type;
         public long createdAt;
+        private boolean profileAttempted;
     }
 
     public static String emojiFor(String type) {
@@ -467,14 +470,14 @@ public class Reactions {
                     }
                 });
 
-        TextView moreReactions=Ui.tvBold(activity,"Load 30 more reactions",14,Ui.BLUE);root.addView(moreReactions);
+        TextView moreReactions=Ui.tvBold(activity,"Load 10 more reactions",14,Ui.BLUE);root.addView(moreReactions);
         com.friendbook.social.core.CursorPager reactionPages=new com.friendbook.social.core.CursorPager(
-            Fb.db().collection("posts").document(postId).collection("reactions"),30,"post-reactions:"+postId,(docs,more,busy,error)->{
+            Fb.db().collection("posts").document(postId).collection("reactions"),10,"post-reactions:"+postId,(docs,more,busy,error)->{
                 if(!dlg.isShowing())return;
                 for(DocumentSnapshot d:docs){ReactorEntry r=new ReactorEntry();r.uid=Format.str(d.getData(),"userId");if(r.uid.isEmpty())r.uid=d.getId();
                     r.name=Format.str(d.getData(),"userName");r.photo=Format.str(d.getData(),"userPhoto");r.tickLevel=Format.str(d.getData(),"userTickLevel");
                     r.type=Format.strOr(d.getData(),"type","like");r.createdAt=Format.ts(d.get("createdAt"));byUid.put(r.uid,r);}
-                renderMerged.run();moreReactions.setText(busy?"Loading…":!error.isEmpty()?"Retry reactions":more?"Load 30 more reactions":"All records loaded");moreReactions.setEnabled(!busy && more);
+                renderMerged.run();moreReactions.setText(busy?"Loading…":!error.isEmpty()?"Retry reactions":more?"Load 10 more reactions":"All records loaded");moreReactions.setEnabled(!busy && more);
             });
         moreReactions.setOnClickListener(v->reactionPages.next());dlg.setOnDismissListener(d->reactionPages.close());reactionPages.start();
     }
@@ -716,7 +719,7 @@ public class Reactions {
             final List<ReactorEntry> all,
             final Map<String, Integer> counts,
             final String activeFilter) {
-        renderReactorPage(activity,dlg,filterRow,listCol,all,counts,activeFilter,30);
+        renderReactorPage(activity,dlg,filterRow,listCol,all,counts,activeFilter,10);
     }
     private static void renderReactorPage(Activity activity,AlertDialog dlg,LinearLayout filterRow,LinearLayout listCol,
             List<ReactorEntry> all,Map<String,Integer> counts,String activeFilter,int visible) {
@@ -750,6 +753,10 @@ public class Reactions {
             return;
         }
 
+        final Object paintToken=new Object();listCol.setTag(paintToken);
+        hydrateReactorProfiles(activity,dlg,shown.subList(0,Math.min(visible,shown.size())),()->{
+            if(listCol.getTag()==paintToken)renderReactorPage(activity,dlg,filterRow,listCol,all,counts,activeFilter,visible);
+        });
         for (final ReactorEntry r : shown.subList(0,Math.min(visible,shown.size()))) {
             LinearLayout row = Ui.row(activity);
             row.setGravity(Gravity.CENTER_VERTICAL);
@@ -806,28 +813,13 @@ public class Reactions {
                 Ui.avatar(activity, av, null);
             }
 
-            // Hydrate missing user profile details from FastCache or Firestore!
-            if (r.uid != null && (r.name == null || r.name.isEmpty())) {
-                Models.User cached = FastCache.getUser(r.uid);
-                if (cached != null) {
-                    r.name = cached.displayName;
-                    r.photo = cached.photoUrl;
-                    r.tickLevel = cached.tickLevel;
-                    nameTv.setText(r.name != null && !r.name.isEmpty() ? r.name : "friendbook User");
-                    Ui.avatar(activity, av, r.photo);
-                    Icons.setTickBadge(tickIv, r.tickLevel, false);
-                } else {
-                    Fb.getUser(r.uid).addOnSuccessListener(u -> {
-                        if (u == null || activity.isFinishing()) return;
-                        FastCache.putUser(u);
-                        r.name = u.displayName;
-                        r.photo = u.photoUrl;
-                        r.tickLevel = u.tickLevel;
-                        nameTv.setText(u.displayName != null && !u.displayName.isEmpty() ? u.displayName : "friendbook User");
-                        Ui.avatar(activity, av, u.photoUrl);
-                        Icons.setTickBadge(tickIv, u.tickLevel, false);
-                    });
-                }
+            // Rendering never starts individual user requests. Page hydration below
+            // uses one bounded document-ID query for missing visible profiles.
+            Models.User cachedProfile = r.uid==null?null:FastCache.getUser(r.uid);
+            if(cachedProfile!=null && (r.name==null || r.name.isEmpty())) {
+                r.name=cachedProfile.displayName;r.photo=cachedProfile.photoUrl;r.tickLevel=cachedProfile.tickLevel;
+                nameTv.setText(r.name!=null && !r.name.isEmpty()?r.name:"friendbook User");
+                Ui.avatar(activity,av,r.photo);Icons.setTickBadge(tickIv,r.tickLevel,false);
             }
 
             View.OnClickListener openProf = v -> {
@@ -851,8 +843,34 @@ public class Reactions {
             }
             listCol.addView(row);
         }
-        if(shown.size()>visible){TextView more=Ui.tvBold(activity,"Show 30 more",14,Ui.BLUE);
-            more.setOnClickListener(v->renderReactorPage(activity,dlg,filterRow,listCol,all,counts,activeFilter,visible+30));listCol.addView(more);}
+        if(shown.size()>visible){TextView more=Ui.tvBold(activity,"Show 10 more",14,Ui.BLUE);
+            more.setOnClickListener(v->renderReactorPage(activity,dlg,filterRow,listCol,all,counts,activeFilter,visible+10));listCol.addView(more);}
+    }
+
+    /** One attempt per missing visible identity; callback is never a row-level fetch. */
+    private static void hydrateReactorProfiles(Activity activity,AlertDialog dlg,List<ReactorEntry> page,Runnable ready) {
+        final String actor=Fb.uid();
+        if(actor==null || !dlg.isShowing())return;
+        Set<String> missing=new LinkedHashSet<>();
+        for(ReactorEntry entry:page) {
+            if(entry.uid!=null && !entry.uid.isEmpty() && (entry.name==null || entry.name.isEmpty())
+                    && FastCache.getUser(entry.uid)==null && !entry.profileAttempted) {
+                entry.profileAttempted=true;missing.add(entry.uid);
+            }
+        }
+        for(List<String> chunk:Ui.chunks(new ArrayList<>(missing),10)) {
+            Fb.db().collection("users").whereIn(com.friendbook.social.d1.documents.FieldPath.documentId(),chunk)
+                    .limit(10).get().addOnSuccessListener(docs->{
+                if(!java.util.Objects.equals(actor,Fb.uid()) || activity.isFinishing() || !dlg.isShowing())return;
+                for(DocumentSnapshot doc:docs) {
+                    Models.User user=Models.User.fromDoc(doc);FastCache.putUser(user);
+                    for(ReactorEntry entry:page)if(user.uid.equals(entry.uid)) {
+                        entry.name=user.displayName;entry.photo=user.photoUrl;entry.tickLevel=user.tickLevel;
+                    }
+                }
+                if(!docs.isEmpty())ready.run();
+            });
+        }
     }
 
     private static void addFilterChip(Context c, LinearLayout row, String label, boolean active, Runnable click) {
