@@ -122,7 +122,7 @@ public class NewChatActivity extends Activity {
         if (me == null) { finish(); return; }
 
         friendsReg=com.friendbook.social.core.PagedLists.attach(this,pageControls,
-                Fb.db().collection("friends").whereArrayContains("participants",me),20,"friend-list:"+getClass().getSimpleName(),(snap,err)-> {
+                Fb.db().collection("friends").whereArrayContains("participants",me),10,"chat-people:friends",(snap,err)-> {
                     friendIds.clear();
                     if (snap != null) {
                         for (DocumentSnapshot d : snap) {
@@ -134,7 +134,7 @@ public class NewChatActivity extends Activity {
                     render();
                 });
 
-        usersReg=com.friendbook.social.core.PagedLists.attach(this,pageControls,Fb.db().collection("users"),20,"new-chat-people",(snap,err)-> {
+        usersReg=com.friendbook.social.core.PagedLists.attach(this,pageControls,Fb.db().collection("users"),10,"chat-people:new-chat",(snap,err)-> {
                     allUsers.clear();
                     if (snap != null) {
                         for (DocumentSnapshot d : snap) {

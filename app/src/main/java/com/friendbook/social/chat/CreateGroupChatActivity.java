@@ -47,7 +47,9 @@ public class CreateGroupChatActivity extends Activity {
     private ImageView groupPhotoIv;
     private EditText groupNameIn, searchIn;
     private TextView createBtn, selectedCountTv;
-    private LinearLayout usersListCol;
+    private LinearLayout usersListCol,peopleControls;
+    private com.friendbook.social.d1.documents.ListenerRegistration peopleReg;
+    private String peopleActor;
 
     private Uri pickedPhotoUri;
     private final List<Models.User> allUsers = new ArrayList<>();
@@ -122,6 +124,7 @@ public class CreateGroupChatActivity extends Activity {
         sv.addView(usersListCol);
         root.addView(sv, new LinearLayout.LayoutParams(-1, 0, 1));
 
+        peopleControls=Ui.col(this);root.addView(peopleControls);
         LinearLayout bottomBar = Ui.col(this);
         bottomBar.setBackgroundColor(Ui.card(this));
         bottomBar.addView(Ui.divider(this));
@@ -132,12 +135,25 @@ public class CreateGroupChatActivity extends Activity {
         root.addView(bottomBar);
 
         setContentView(root);
-        loadPeople();
+    }
+
+    @Override protected void onStart(){
+        super.onStart();
+        String actor=Fb.uid();if(actor==null){finish();return;}
+        if(peopleActor!=null && !java.util.Objects.equals(peopleActor,actor)){finish();return;}
+        peopleActor=actor;loadPeople();
+    }
+    @Override protected void onStop(){
+        if(peopleReg!=null){peopleReg.remove();peopleReg=null;}
+        super.onStop();
     }
 
     private void loadPeople() {
         String me = Fb.uid();
-        Fb.db().collection("users").limit(250).get().addOnSuccessListener(snap -> {
+        if(peopleReg!=null)peopleReg.remove();
+        peopleReg=com.friendbook.social.core.PagedLists.attach(this,peopleControls,Fb.db().collection("users"),10,
+                "chat-people:create-group",(snap,error)->{
+            if(!java.util.Objects.equals(me,Fb.uid()))return;
             allUsers.clear();
             if (snap != null) {
                 for (DocumentSnapshot d : snap.getDocuments()) {
