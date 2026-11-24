@@ -100,7 +100,7 @@ test('reaction action atomically creates one authorized inbox event with its D1 
   assert.equal(data.notification.fromUserId,identity.uid);
   assert.equal(data.notification.type,'like');
   assert.equal(f.sql.prepare("SELECT COUNT(*) n FROM friendbook_cf_firestore_documents WHERE parent_path='notifications'").get().n,1);
-  assert.equal(f.sql.prepare("SELECT COUNT(*) n FROM friendbook_cf_documents WHERE collection='notifications'").get().n,1);
+  assert.equal(f.sql.prepare("SELECT COUNT(*) n FROM friendbook_cf_documents WHERE collection='notifications'").get().n,0);
   const changes=f.sql.prepare('SELECT total_changes() n').get().n;
   const retry=await call(f.env,'reactions','PUT',{type:'like'},
     {query:'?response=reaction&notify=1',authorize});
@@ -143,7 +143,7 @@ test('comment and recipient/reply inbox events commit in one idempotent D1 batch
   const data=await response.json();assert.equal(data.notifications.length,2);
   assert.deepEqual(data.notifications.map(event=>event.toUserId).sort(),['owner','reply-user']);
   assert.equal(f.sql.prepare("SELECT COUNT(*) n FROM friendbook_cf_firestore_documents WHERE parent_path='notifications'").get().n,2);
-  assert.equal(f.sql.prepare("SELECT COUNT(*) n FROM friendbook_cf_documents WHERE collection='notifications'").get().n,2);
+  assert.equal(f.sql.prepare("SELECT COUNT(*) n FROM friendbook_cf_documents WHERE collection='notifications'").get().n,0);
   const before=f.sql.prepare('SELECT total_changes() n').get().n;
   const duplicate=await call(f.env,'comments','POST',{id:'notify-comment',text:'hello',parentId:'parent',notify:true},{authorize});
   assert.equal(duplicate.status,200);assert.equal(f.sql.prepare('SELECT total_changes() n').get().n,before);

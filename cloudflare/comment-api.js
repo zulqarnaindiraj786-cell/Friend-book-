@@ -334,9 +334,6 @@ export async function commentsAPI(request, db, identity, resource, data, context
           (SELECT 1 FROM friendbook_cf_comments WHERE resource=? AND id=? AND uid=?) AND NOT EXISTS
           (SELECT 1 FROM friendbook_cf_firestore_documents WHERE path=?)`)
         .bind(path,event.id,uid,serialized,now,now,resource,data.id,uid,path));
-      batch.push(db.prepare(`INSERT OR IGNORE INTO friendbook_cf_documents(path,collection,doc_id,owner_uid,document_json,updated_at)
-        VALUES(?,'notifications',?,?,?,?)`)
-        .bind(path,event.id,uid,JSON.stringify({...event,id:event.id}),now));
     }
     const results=await db.batch(batch);
     const insertResult=results[0],acknowledgement=results[2];
@@ -344,7 +341,7 @@ export async function commentsAPI(request, db, identity, resource, data, context
     if(saved?.uid!==uid || saved.removed || saved.text!==content.text || saved.parent_id!==parent || (saved.media_url||'')!==content.media || (saved.mentions||'[]')!==content.mentions)return reply({error:'Comment ID conflict'},409);
     const changes=insertResult?.meta?.changes ?? insertResult?.changes;
     const notifications=notificationEvents.filter((_,index)=>{
-      const result=results[3+index*2];return (result?.meta?.changes??result?.changes)===1;
+      const result=results[3+index];return (result?.meta?.changes??result?.changes)===1;
     });
     return reply({comment:normalized(saved,uid),owner:context.owner||'',replyTo,
       ...(notifications.length?{notifications}:{}),

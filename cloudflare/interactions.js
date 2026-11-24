@@ -264,9 +264,6 @@ export async function interactions(request, env, identity, match, authorize = au
               SELECT ?, 'notifications','notifications',?,?, ?,?,? WHERE NOT EXISTS
                 (SELECT 1 FROM friendbook_cf_firestore_documents WHERE path=?)`)
               .bind(path,notificationId,identity.uid,serialized,notificationTime,notificationTime,path));
-            batch.push(db.prepare(`INSERT OR IGNORE INTO friendbook_cf_documents(path,collection,doc_id,owner_uid,document_json,updated_at)
-              VALUES(?,'notifications',?,?,?,?)`)
-              .bind(path,notificationId,identity.uid,JSON.stringify({...notification,id:notificationId}),notificationTime));
           }
           const results=await db.batch(batch);
           const created=Boolean(notificationId && (results[3]?.meta?.changes??results[3]?.changes)===1);
