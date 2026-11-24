@@ -23,7 +23,7 @@ public class HomeLateReadDemandTest {
    CollectionReference lives=mock(CollectionReference.class);Query query=mock(Query.class);when(db.collection("lives")).thenReturn(lives);
    when(lives.whereEqualTo("status","live")).thenReturn(query);when(query.limit(3)).thenReturn(query);
    TaskCompletionSource<QuerySnapshot> old=new TaskCompletionSource<>(),current=new TaskCompletionSource<>();
-   when(query.getCachedOrFetch(false)).thenReturn(old.getTask(),current.getTask());
+   when(query.getCachedOrFetchAutomatic(any(ForegroundReadScope.class),eq(Long.MAX_VALUE))).thenReturn(old.getTask(),current.getTask());
    HomeFragment home=spy(new HomeFragment());doReturn(true).when(home).isAdded();doReturn(false).when(home).isHidden();
    FeedAdapter adapter=mock(FeedAdapter.class);set(home,"adapter",adapter);set(home,"rv",new RecyclerView(RuntimeEnvironment.getApplication()));set(home,"homeStarted",true);
    call(home,"startLivesListener");call(home,"invalidateHomeReads");call(home,"startLivesListener");

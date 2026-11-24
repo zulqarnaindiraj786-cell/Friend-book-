@@ -1567,7 +1567,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
         if(!activeProfile() || mine || user==null || !user.subscriptionsEnabled || subscriptionGeneration==profileStartGeneration)return;
         final String actor=profileActor;final int generation=profileStartGeneration;subscriptionGeneration=generation;
         Fb.db().collection("subscriptions").whereEqualTo("creatorId",uid).whereEqualTo("subscriberId",actor)
-                .limit(1).getCachedOrFetch(false,300_000L).addOnSuccessListener(snap->{
+                .limit(1).getCachedOrFetchAutomatic(profileReadScope,300_000L).addOnSuccessListener(snap->{
                     if(!activeProfile(actor,generation))return;
                     subscribedActive=false;
                     if(!snap.isEmpty()){

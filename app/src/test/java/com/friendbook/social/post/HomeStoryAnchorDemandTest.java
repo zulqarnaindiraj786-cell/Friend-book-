@@ -26,7 +26,9 @@ public class HomeStoryAnchorDemandTest {
    fb.when(Fb::db).thenReturn(db);when(db.collection("stories")).thenReturn(stories);
    when(stories.whereGreaterThan(eq("expiresAt"),any(Timestamp.class))).thenReturn(q);
    when(q.orderBy("expiresAt",Query.Direction.ASCENDING)).thenReturn(q);when(q.limit(3)).thenReturn(q);
-   TaskCompletionSource<QuerySnapshot> pending=new TaskCompletionSource<>();when(q.getCachedOrFetch(false,StoryWindowPolicy.REUSE_MS)).thenReturn(pending.getTask());
+   TaskCompletionSource<QuerySnapshot> pending=new TaskCompletionSource<>();
+   when(q.getCachedOrFetchAutomatic(any(ForegroundReadScope.class),eq(StoryWindowPolicy.REUSE_MS))).thenReturn(pending.getTask());
+   when(q.getCachedOrFetch(false,StoryWindowPolicy.REUSE_MS)).thenReturn(pending.getTask());
    Activity activity=Robolectric.buildActivity(Activity.class).setup().get();
    long now=System.currentTimeMillis(),old=now-3_600_000L;
    activity.getSharedPreferences("fb_prefs",0).edit().putLong("storyAnchor:"+actor,old).commit();
@@ -37,11 +39,11 @@ public class HomeStoryAnchorDemandTest {
    verify(stories,times(1)).whereGreaterThan(eq("expiresAt"),anchors.capture());
    long selected=anchors.getValue().toDate().getTime();assertTrue(selected>=now && selected<=System.currentTimeMillis());
    assertEquals(selected,activity.getSharedPreferences("fb_prefs",0).getLong("storyAnchor:"+actor,0));
-   verify(q,times(1)).getCachedOrFetch(false,StoryWindowPolicy.REUSE_MS);
+   verify(q,times(1)).getCachedOrFetchAutomatic(any(ForegroundReadScope.class),eq(StoryWindowPolicy.REUSE_MS));
    field("loadingStories").setBoolean(h,false);start(h);verify(stories,times(1)).whereGreaterThan(eq("expiresAt"),any(Timestamp.class));
    field("storyQueryAnchor").setLong(h,old);activity.getSharedPreferences("fb_prefs",0).edit().putLong("storyAnchor:"+actor,old).commit();
    h.loadMoreStories();verify(stories,times(2)).whereGreaterThan(eq("expiresAt"),any(Timestamp.class));
-   verify(q,times(2)).getCachedOrFetch(false,StoryWindowPolicy.REUSE_MS);
+   verify(q,times(1)).getCachedOrFetch(false,StoryWindowPolicy.REUSE_MS);
   }
  }
 }

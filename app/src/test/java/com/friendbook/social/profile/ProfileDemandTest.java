@@ -68,8 +68,8 @@ public class ProfileDemandTest {
    fb.when(Fb::uid).thenReturn("subscription-profile-actor");ProfileActivity a=activity("subscription-profile-actor","subscription-profile-actor");Models.User u=new Models.User();u.subscriptionsEnabled=true;field("user").set(a,u);
    for(int i=0;i<100;i++)call(a,"watchSubscription",new Class<?>[]{});fb.verify(Fb::db,never());
    field("mine").setBoolean(a,false);field("uid").set(a,"subscription-target");u.subscriptionsEnabled=false;for(int i=0;i<100;i++)call(a,"watchSubscription",new Class<?>[]{});fb.verify(Fb::db,never());
-   D1DocumentStore db=mock(D1DocumentStore.class);fb.when(Fb::db).thenReturn(db);CollectionReference subscriptions=mock(CollectionReference.class);Query q=mock(Query.class);when(db.collection("subscriptions")).thenReturn(subscriptions);when(subscriptions.whereEqualTo("creatorId","subscription-target")).thenReturn(q);when(q.whereEqualTo("subscriberId","subscription-profile-actor")).thenReturn(q);when(q.limit(1)).thenReturn(q);when(q.getCachedOrFetch(false,300_000L)).thenReturn(new TaskCompletionSource<QuerySnapshot>().getTask());
-   u.subscriptionsEnabled=true;for(int i=0;i<100;i++)call(a,"watchSubscription",new Class<?>[]{});verify(q,times(1)).getCachedOrFetch(false,300_000L);
+   D1DocumentStore db=mock(D1DocumentStore.class);fb.when(Fb::db).thenReturn(db);CollectionReference subscriptions=mock(CollectionReference.class);Query q=mock(Query.class);when(db.collection("subscriptions")).thenReturn(subscriptions);when(subscriptions.whereEqualTo("creatorId","subscription-target")).thenReturn(q);when(q.whereEqualTo("subscriberId","subscription-profile-actor")).thenReturn(q);when(q.limit(1)).thenReturn(q);when(q.getCachedOrFetchAutomatic(any(ForegroundReadScope.class),eq(300_000L))).thenReturn(new TaskCompletionSource<QuerySnapshot>().getTask());
+   u.subscriptionsEnabled=true;for(int i=0;i<100;i++)call(a,"watchSubscription",new Class<?>[]{});verify(q,times(1)).getCachedOrFetchAutomatic(any(ForegroundReadScope.class),eq(300_000L));
   }
  }
  @Test public void repeatedProfileHeaderRendersDoNotFetchHighlightsUntilExplicitDemand()throws Exception{
