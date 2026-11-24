@@ -4,7 +4,7 @@
   "kotlin_files_scanned": 1,
   "all_app_fixed": false,
   "category_line_counts": {
-    "document_store_entry": 439,
+    "document_store_entry": 440,
     "engagement_transport": 9,
     "snapshot_listener": 46,
     "explicit_server_read": 8,
@@ -2012,87 +2012,92 @@
     },
     {
       "file": "post/FeedAdapter.java",
-      "line": 1609,
+      "line": 179,
       "category": "document_store_entry"
     },
     {
       "file": "post/FeedAdapter.java",
-      "line": 1672,
+      "line": 1625,
       "category": "document_store_entry"
     },
     {
       "file": "post/FeedAdapter.java",
-      "line": 1755,
+      "line": 1688,
       "category": "document_store_entry"
     },
     {
       "file": "post/FeedAdapter.java",
-      "line": 1762,
+      "line": 1771,
       "category": "document_store_entry"
     },
     {
       "file": "post/FeedAdapter.java",
-      "line": 1770,
+      "line": 1778,
       "category": "document_store_entry"
     },
     {
       "file": "post/FeedAdapter.java",
-      "line": 1782,
+      "line": 1786,
       "category": "document_store_entry"
     },
     {
       "file": "post/FeedAdapter.java",
-      "line": 1791,
+      "line": 1798,
       "category": "document_store_entry"
     },
     {
       "file": "post/FeedAdapter.java",
-      "line": 1843,
+      "line": 1807,
       "category": "document_store_entry"
     },
     {
       "file": "post/FeedAdapter.java",
-      "line": 1856,
+      "line": 1859,
       "category": "document_store_entry"
     },
     {
       "file": "post/FeedAdapter.java",
-      "line": 1864,
+      "line": 1872,
       "category": "document_store_entry"
     },
     {
       "file": "post/FeedAdapter.java",
-      "line": 1865,
+      "line": 1880,
       "category": "document_store_entry"
     },
     {
       "file": "post/FeedAdapter.java",
-      "line": 1896,
+      "line": 1881,
       "category": "document_store_entry"
     },
     {
       "file": "post/FeedAdapter.java",
-      "line": 1919,
+      "line": 1912,
       "category": "document_store_entry"
     },
     {
       "file": "post/FeedAdapter.java",
-      "line": 1974,
+      "line": 1935,
       "category": "document_store_entry"
     },
     {
       "file": "post/FeedAdapter.java",
-      "line": 1975,
+      "line": 1990,
       "category": "document_store_entry"
     },
     {
       "file": "post/FeedAdapter.java",
-      "line": 2024,
+      "line": 1991,
       "category": "document_store_entry"
     },
     {
       "file": "post/FeedAdapter.java",
-      "line": 2034,
+      "line": 2040,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "post/FeedAdapter.java",
+      "line": 2050,
       "category": "document_store_entry"
     },
     {
