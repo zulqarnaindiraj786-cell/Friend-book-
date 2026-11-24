@@ -46,6 +46,7 @@ public class ReactionInvalidationLoopTest {
    Shadows.shadowOf(Looper.getMainLooper()).idleFor(2,TimeUnit.SECONDS);assertEquals(2,calls.size());
    calls.get(1).setResult(new JSONObject().put("types",new JSONArray()).put("comments",7));
    Shadows.shadowOf(Looper.getMainLooper()).idle();assertEquals(7,post.comments);
+   assertEquals(7,D1Reactions.cached("posts","recover").getInt("comments"));
    Shadows.shadowOf(Looper.getMainLooper()).idleFor(60,TimeUnit.SECONDS);assertEquals(2,calls.size());
   }
  }
