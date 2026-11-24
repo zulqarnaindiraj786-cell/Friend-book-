@@ -43,7 +43,7 @@ def query(sql,params=()):
         raise RuntimeError('D1 operation failed; no response data logged')
     result=data['result'][0]
     meta=result.get('meta',{})
-    print(json.dumps({'operation':'metadata_or_plan' if sql.startswith(('SELECT','EXPLAIN')) else 'targeted_drop',
+    print('::notice::Notification index operation '+json.dumps({'operation':'metadata_or_plan' if sql.startswith(('SELECT','EXPLAIN')) else 'targeted_drop',
         'rows_read':meta.get('rows_read'),'rows_written':meta.get('rows_written')}))
     return result.get('results',[])
 
@@ -55,11 +55,11 @@ def main():
     details=' '.join(row.get('detail','') for row in plan)
     if not ('SEARCH' in details and PAGE in details and '<expr>=?' in details) or 'SCAN' in details:
         raise ValueError('Recipient seek not proven; refusing retirement')
-    print('Exact replacement DDL and recipient seek verified; no notification records scanned.')
+    print('::notice::Exact replacement DDL and recipient seek verified; no notification records scanned.')
     if args.apply and present:
         query('DROP INDEX IF EXISTS idx_cf_firestore_inbox_recipient')
         if validate(query(metadata,(OLD,PAGE))):raise RuntimeError('Retirement not confirmed')
-        print('Canonical prefix retired; ordered replacement retained; legacy indexes unchanged.')
-    elif not present: print('Canonical prefix already absent; replacement verified; no mutation.')
+        print('::notice::Canonical prefix retired; ordered replacement retained; legacy indexes unchanged.')
+    elif not present: print('::notice::Canonical prefix already absent; replacement verified; no mutation.')
 
 if __name__=='__main__':main()
