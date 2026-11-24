@@ -13,10 +13,18 @@ public class AggregateQuery {
     }
 
     public Task<AggregateQuerySnapshot> get(AggregateSource source) {
-        return query.firestore.runAsync(() -> {
-            JSONArray filters = query.filtersJson();
-            int c = D1DocumentTransport.count(query.parentPath, filters);
-            return new AggregateQuerySnapshot(c);
-        });
+        final String actor=D1DocumentStore.authenticatedUid();
+        // Freeze the exact count input before joining or entering the executor.
+        // Count transport accepts parent + filters only (not page cursors/limit).
+        final String filters=query.filtersJson().toString();
+        final String key=new JSONArray().put(query.parentPath).put(filters).toString();
+        return query.firestore.aggregateReadFlights.read(actor,key,true,()->query.firestore.runAsync(() -> {
+            if(!actor.equals(D1DocumentStore.authenticatedUid()))
+                throw new D1DocumentStoreException(D1DocumentStoreException.Code.CANCELLED,"Account changed before count");
+            int count=D1DocumentTransport.count(query.parentPath,new JSONArray(filters));
+            if(!actor.equals(D1DocumentStore.authenticatedUid()))
+                throw new D1DocumentStoreException(D1DocumentStoreException.Code.CANCELLED,"Account changed during count");
+            return new AggregateQuerySnapshot(count);
+        }));
     }
 }
