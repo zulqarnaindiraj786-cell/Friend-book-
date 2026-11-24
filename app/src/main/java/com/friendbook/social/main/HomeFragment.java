@@ -61,6 +61,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
     private boolean forceSections;
     private boolean discoveryRefresh;
     private boolean headerRequested;
+    private String headerRequestedActor;
     private static final long NOTE_TTL_MS = 24L * 3600_000L;
 
     private FeedAdapter adapter;
@@ -122,6 +123,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
     @Nullable
     @Override
     public View onCreateView(LayoutInflater inf, ViewGroup container, Bundle b) {
+        cancelHomeSecondary();headerRequested=false;headerRequestedActor=null;
         android.app.Activity a = getActivity();
         LinearLayout root = Ui.col(a);
         root.setBackgroundColor(Ui.bg(a));
@@ -692,13 +694,14 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
     private void startVisibleHomeContent() {
         cancelHomeSecondary();
         final String actor = Fb.uid();
-        if (actor == null) return;
+        if (!com.friendbook.social.core.HomeSectionReadPolicy.shouldStart(
+                actor,headerRequestedActor,headerRequested,forceSections)) return;
         pendingHomeSecondary = () -> {
             pendingHomeSecondary = null;
             if (!homeStarted || !isAdded() || isHidden() || !actor.equals(Fb.uid())) return;
             if (!(rv.getLayoutManager() instanceof LinearLayoutManager)
                     || ((LinearLayoutManager)rv.getLayoutManager()).findFirstVisibleItemPosition()>0) return;
-            headerRequested=true;
+            headerRequested=true;headerRequestedActor=actor;
             startHomeWatchers();
             startStoriesListener();
             // Reels metadata comes from posts already loaded; no unseen discovery query.
