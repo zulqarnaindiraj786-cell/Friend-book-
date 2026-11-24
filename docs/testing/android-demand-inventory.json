@@ -1,6 +1,7 @@
 {
-  "method": "whole Java tree lexical candidates, not AST/callgraph or observed HTTP/billing counts",
+  "method": "whole Java/Kotlin tree lexical candidates, not AST/callgraph or observed HTTP/billing counts",
   "java_files_scanned": 209,
+  "kotlin_files_scanned": 1,
   "all_app_fixed": false,
   "category_line_counts": {
     "document_store_entry": 440,

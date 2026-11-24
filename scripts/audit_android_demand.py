@@ -16,14 +16,15 @@ PATTERNS={
  'raw_http_candidate':r'new URL\(|new OkHttpClient|\.openConnection\(',
 }
 def inventory(root):
- files=sorted(root.rglob('*.java'));findings=[]
+ files=sorted([*root.rglob('*.java'),*root.rglob('*.kt')]);findings=[]
  for file in files:
   for line,text in enumerate(file.read_text().splitlines(),1):
    if text.lstrip().startswith(('//','*','/*')):continue
    for category,pattern in PATTERNS.items():
     if re.search(pattern,text):findings.append({'file':str(file.relative_to(root)),'line':line,'category':category})
- return {'method':'whole Java tree lexical candidates, not AST/callgraph or observed HTTP/billing counts',
-   'java_files_scanned':len(files),'all_app_fixed':False,
+ return {'method':'whole Java/Kotlin tree lexical candidates, not AST/callgraph or observed HTTP/billing counts',
+   'java_files_scanned':sum(f.suffix=='.java' for f in files),
+   'kotlin_files_scanned':sum(f.suffix=='.kt' for f in files),'all_app_fixed':False,
    'category_line_counts':{category:sum(f['category']==category for f in findings) for category in PATTERNS},
    'findings':findings}
 if __name__=='__main__':
