@@ -51,7 +51,7 @@ public class SearchActivity extends Activity implements UsersAdapter.Handler, Fe
         if(!java.util.Objects.equals(searchActor,actor)){
             closePages();searchActor=actor;
             if(usersAdapter!=null)usersAdapter.setData(new ArrayList<>());
-            if(postsAdapter!=null){postsAdapter.feedEngagementInPage=true;postsAdapter.setPosts(new ArrayList<>());}
+            if(postsAdapter!=null){postsAdapter.feedEngagementInPage=true;postsAdapter.setAuthorLookupsEnabled(false);postsAdapter.setPosts(new ArrayList<>());}
             if(peopleTitle!=null)peopleTitle.setVisibility(View.GONE);
             if(postsTitle!=null)postsTitle.setVisibility(View.GONE);
         }
@@ -74,7 +74,7 @@ public class SearchActivity extends Activity implements UsersAdapter.Handler, Fe
     }
     @Override protected void onStop(){
         searchStarted=false;if(pending!=null){handler.removeCallbacks(pending);pending=null;}
-        closePages();if(postsAdapter!=null)postsAdapter.feedEngagementInPage=true;
+        closePages();if(postsAdapter!=null){postsAdapter.feedEngagementInPage=true;postsAdapter.setAuthorLookupsEnabled(false);}
         super.onStop();
     }
     @Override protected void onDestroy(){closePages();if(pending!=null)handler.removeCallbacks(pending);super.onDestroy();}
@@ -136,7 +136,7 @@ public class SearchActivity extends Activity implements UsersAdapter.Handler, Fe
         postsAdapter.showHeader = false;
         postsAdapter.showFooter = false;
         // Keystroke previews are local-only; a real result page opts into row demand.
-        postsAdapter.feedEngagementInPage = true;
+        postsAdapter.feedEngagementInPage = true;postsAdapter.setAuthorLookupsEnabled(false);
         postsRv.setAdapter(postsAdapter);
         body.addView(postsRv, new LinearLayout.LayoutParams(-1, -2));
 
@@ -154,7 +154,7 @@ public class SearchActivity extends Activity implements UsersAdapter.Handler, Fe
                 closePages();
                 if (pending != null) {handler.removeCallbacks(pending);pending=null;}
                 if(!searchStarted || !prepareSearchActor())return;
-                postsAdapter.feedEngagementInPage=true;
+                postsAdapter.feedEngagementInPage=true;postsAdapter.setAuthorLookupsEnabled(false);
                 final String q = s.toString().trim();
                 // ⚡ 0.0ms immediate local FastCache search on every keystroke!
                 if (!q.isEmpty()) {
@@ -271,7 +271,7 @@ public class SearchActivity extends Activity implements UsersAdapter.Handler, Fe
                 if(p.archived || p.trashedAt>0 || ("Only me".equalsIgnoreCase(p.privacy) && !p.authorId.equals(Fb.uid())) || (Fb.me!=null && Fb.me.blocked.contains(p.authorId)))continue;
                 String hay=(p.content+" "+p.authorName).toLowerCase(Locale.ROOT);if(tagSearch || hay.contains(needle))list.add(p);
             }
-            postsAdapter.feedEngagementInPage=false;
+            postsAdapter.feedEngagementInPage=false;postsAdapter.setAuthorLookupsEnabled(true);
             postsAdapter.setPosts(list);postsTitle.setVisibility(list.isEmpty()?View.GONE:View.VISIBLE);
             morePosts.setText(loading?"Loading…":!error.isEmpty()?"Retry posts":more?"More post results":"All scanned");morePosts.setEnabled(!loading && more);
         });

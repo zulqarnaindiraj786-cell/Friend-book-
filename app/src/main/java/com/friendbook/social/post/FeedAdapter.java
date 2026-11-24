@@ -76,6 +76,13 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     /** Explicit user retry only: a missing/offline author must not cause a bind/request loop. */
     private int authorReadGeneration;
     public void resetAuthorLookupAttempts() { authorReadGeneration++; requestedAuthors.clear(); }
+    private boolean authorLookupsEnabled=true;
+    /** Local-only previews and stopped owners must not start author queries. */
+    public void setAuthorLookupsEnabled(boolean enabled) {
+        if(authorLookupsEnabled==enabled)return;
+        authorLookupsEnabled=enabled;
+        if(!enabled)resetAuthorLookupAttempts();
+    }
     private List<StoriesAdapter.Group> storyGroups = new ArrayList<>();
     public boolean showHeader = true;
     public boolean showFooter = true;
@@ -167,7 +174,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
 
     /** Hydrate only submitted pages, never RecyclerView rendering. Missing names use one query per ten IDs. */
     private void hydrateMissingAuthors(List<Models.Post> page) {
-        if(page==null || page.stream().noneMatch(p->p!=null && !p.isPagePost()
+        if(!authorLookupsEnabled || page==null || page.stream().noneMatch(p->p!=null && !p.isPagePost()
                 && p.authorId!=null && !p.authorId.isEmpty()
                 && (p.authorName==null || p.authorName.isEmpty())))return;
         final String actor=Fb.uid();

@@ -54,4 +54,23 @@ public class FeedAuthorBatchDemandTest {
   }
  }
 
+ @Test public void localOnlyPreviewSuppressesAuthorReadsAndStoppedOwnerRejectsLateResult()throws Exception {
+  try(MockedStatic<Fb> fb=mockStatic(Fb.class);MockedStatic<FastCache> cache=mockStatic(FastCache.class);
+      MockedStatic<AdsConfig> ads=mockStatic(AdsConfig.class);MockedStatic<ConsentManager> consent=mockStatic(ConsentManager.class)) {
+   Activity activity=Robolectric.buildActivity(Activity.class).setup().get();
+   D1DocumentStore db=mock(D1DocumentStore.class);CollectionReference users=mock(CollectionReference.class);Query bounded=mock(Query.class);
+   fb.when(Fb::uid).thenReturn("local-preview-actor");fb.when(Fb::db).thenReturn(db);
+   when(db.collection("users")).thenReturn(users);when(users.whereIn(any(FieldPath.class),anyList())).thenReturn(bounded);when(bounded.limit(10)).thenReturn(bounded);
+   com.google.android.gms.tasks.TaskCompletionSource<QuerySnapshot> pending=new com.google.android.gms.tasks.TaskCompletionSource<>();when(bounded.get()).thenReturn(pending.getTask());
+   FeedAdapter adapter=new FeedAdapter(activity,null);Models.Post post=new Models.Post();post.id="post";post.authorId="author";post.authorName="";
+   java.lang.reflect.Method hydrate=FeedAdapter.class.getDeclaredMethod("hydrateMissingAuthors",List.class);hydrate.setAccessible(true);
+   adapter.setAuthorLookupsEnabled(false);for(int i=0;i<100;i++)hydrate.invoke(adapter,Collections.singletonList(post));
+   fb.verify(Fb::db,never());
+   adapter.setAuthorLookupsEnabled(true);hydrate.invoke(adapter,Collections.singletonList(post));verify(bounded,times(1)).get();
+   adapter.setAuthorLookupsEnabled(false);DocumentSnapshot row=mock(DocumentSnapshot.class);
+   pending.setResult(new QuerySnapshot(Collections.singletonList(row),null,new SnapshotMetadata(false,false)));Shadows.shadowOf(Looper.getMainLooper()).idle();
+   cache.verify(()->FastCache.putUser(any()),never());verifyNoInteractions(row);
+  }
+ }
+
 }

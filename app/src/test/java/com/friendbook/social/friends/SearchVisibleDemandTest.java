@@ -40,7 +40,7 @@ public class SearchVisibleDemandTest {
    when(userHead.get(Source.CACHE)).thenReturn(Tasks.forResult(cached));when(postHead.get(Source.CACHE)).thenReturn(Tasks.forResult(cached));
    TaskCompletionSource<QuerySnapshot> peopleResult=new TaskCompletionSource<>(),postResult=new TaskCompletionSource<>();
    when(userHead.get(Source.DEFAULT)).thenReturn(peopleResult.getTask());when(postHead.get(Source.DEFAULT)).thenReturn(postResult.getTask());
-   Models.Post local=new Models.Post();local.id="local-post";local.authorId="author";local.authorName="Alice";local.content="Alice";
+   Models.Post local=new Models.Post();local.id="local-post";local.authorId="author";local.authorName="";local.content="Alice";
    fast.when(FastCache::getFeed).thenReturn(Collections.singletonList(local));
    ActivityController<SearchActivity> controller=Robolectric.buildActivity(SearchActivity.class).create().start().resume();
    SearchActivity a=controller.get();((EditText)field(a,"input")).setText("Alice");
