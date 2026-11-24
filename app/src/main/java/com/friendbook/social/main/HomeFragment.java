@@ -1025,11 +1025,20 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         final long writeVersion=Fb.db().postWriteVersion();
         final long requestedAt=android.os.SystemClock.elapsedRealtime();
         // A queued or stalled request must not leave pull-to-refresh spinning forever.
-        engagementHandler.postDelayed(()->{
+        Runnable deadline=new Runnable(){ @Override public void run(){
             if(generation!=feedGeneration || !java.util.Objects.equals(actor,Fb.uid()) || !isAdded() || !homeStarted || isHidden() || !loadingPosts)return;
+            if(automaticScope!=null && !com.friendbook.social.App.isForeground()) {
+                // Foreground-deferred work has not necessarily reached the network yet.
+                automaticScope.whenForeground().addOnSuccessListener(ignored->{
+                    if(generation==feedGeneration && java.util.Objects.equals(actor,Fb.uid()) && isAdded() && homeStarted && !isHidden() && loadingPosts)
+                        engagementHandler.postDelayed(this,20000L);
+                });
+                return;
+            }
             // Unlock Retry while allowing a late result until a newer request starts.
             loadingPosts=false;pageError=true;updatePagingUi();releaseHomeSecondary();
-        },20000L);
+        }};
+        engagementHandler.postDelayed(deadline,20000L);
         java.util.function.Consumer<com.friendbook.social.d1.documents.QuerySnapshot> apply = snapshot -> {
             if(generation!=feedGeneration || !java.util.Objects.equals(actor,Fb.uid()) || !isAdded() || !homeStarted || isHidden()) return;
             if(snapshot.getMetadata().isFromCache() && sameAccount && (!loadedPostIds.isEmpty() || snapshot.isEmpty())) {

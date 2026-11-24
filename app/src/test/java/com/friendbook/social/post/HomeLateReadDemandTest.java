@@ -32,6 +32,29 @@ public class HomeLateReadDemandTest {
    old.setResult(empty);Shadows.shadowOf(Looper.getMainLooper()).idle();verify(adapter,times(1)).setLives(anyList());
   }
  }
+ @Test public void deferredAutomaticFeedTimeoutStartsAfterForegroundButExplicitRefreshStillTimesOut()throws Exception{
+  try(MockedStatic<Fb> fb=mockStatic(Fb.class);MockedStatic<com.friendbook.social.App> app=mockStatic(com.friendbook.social.App.class);
+      MockedStatic<FeedHeadReads> feed=mockStatic(FeedHeadReads.class)){
+   fb.when(Fb::uid).thenReturn("actor");app.when(com.friendbook.social.App::isForeground).thenReturn(true);
+   D1DocumentStore db=mock(D1DocumentStore.class);fb.when(Fb::db).thenReturn(db);
+   CollectionReference posts=mock(CollectionReference.class);Query query=mock(Query.class);
+   when(db.collection("posts")).thenReturn(posts);when(posts.orderBy(eq("createdAt"),any(Query.Direction.class))).thenReturn(query);
+   when(query.withFeedEngagement()).thenReturn(query);when(query.limit(anyLong())).thenReturn(query);
+   HomeFragment home=spy(new HomeFragment());doReturn(true).when(home).isAdded();doReturn(false).when(home).isHidden();
+   set(home,"adapter",mock(FeedAdapter.class));set(home,"rv",mock(RecyclerView.class));set(home,"homeStarted",true);
+   java.lang.reflect.Method start=HomeFragment.class.getDeclaredMethod("startPostsQuery",boolean.class);start.setAccessible(true);
+   start.invoke(home,false);app.when(com.friendbook.social.App::isForeground).thenReturn(false);
+   Shadows.shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofSeconds(21));
+   assertEquals(true,get(home,"loadingPosts"));assertEquals(false,get(home,"pageError"));
+   app.when(com.friendbook.social.App::isForeground).thenReturn(true);ForegroundReadScope.resume();
+   Shadows.shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofSeconds(21));
+   assertEquals(false,get(home,"loadingPosts"));assertEquals(true,get(home,"pageError"));
+   start.invoke(home,true);app.when(com.friendbook.social.App::isForeground).thenReturn(false);
+   Shadows.shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofSeconds(21));
+   assertEquals(false,get(home,"loadingPosts"));assertEquals(true,get(home,"pageError"));
+   call(home,"invalidateHomeReads");
+  }
+ }
  @Test public void pauseMakesInterruptedInitialStoriesAndSuggestionsRetryableAndStopsHiddenPagination()throws Exception{
   HomeFragment home=spy(new HomeFragment());doReturn(true).when(home).isHidden();
   set(home,"storyQuery",mock(Query.class));set(home,"loadingStories",true);set(home,"notesInFlight",true);set(home,"loadingPosts",true);set(home,"headerRequested",true);
