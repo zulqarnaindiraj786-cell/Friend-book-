@@ -240,7 +240,7 @@ public class CreateGroupChatActivity extends Activity {
     private void createGroupNow() {
         if (creating) return;
         String me = Fb.uid();
-        if (me == null) return;
+        if (me == null || !java.util.Objects.equals(peopleActor,me)) return;
         String gName = groupNameIn.getText().toString().trim();
         if (gName.isEmpty()) {
             Ui.toast(this, "Please enter a Group Name");
@@ -264,6 +264,7 @@ public class CreateGroupChatActivity extends Activity {
     }
 
     private void saveGroupDoc(String me, String gName, String photoUrl) {
+        if(!java.util.Objects.equals(me,Fb.uid()) || isFinishing() || isDestroyed())return;
         DocumentReference chatRef = Fb.db().collection("chats").document();
         List<String> parts = new ArrayList<>();
         parts.add(me);
@@ -318,6 +319,7 @@ public class CreateGroupChatActivity extends Activity {
         batch.set(chatRef,doc);
         batch.set(chatRef.collection("messages").document(),m);
         batch.commit().addOnSuccessListener(x -> {
+            if(!java.util.Objects.equals(me,Fb.uid()) || isFinishing() || isDestroyed())return;
             Ui.toast(this, "Group \"" + gName + "\" created! 🎉");
             Intent open = new Intent(this, ChatActivity.class);
             open.putExtra("chat_id", chatRef.getId());

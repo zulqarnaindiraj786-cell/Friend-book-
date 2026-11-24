@@ -55,7 +55,7 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
     private TextView historyButton;
     private android.widget.ProgressBar historySpinner;
     private TextView threadStatus;
-    private boolean chatVisible;
+    private boolean chatVisible,unreadResetFailed;
     private String messageActor;
     // Until the next snapshot reflects the acknowledgement, don't write the same receipt again.
     private final java.util.Map<String,Boolean> confirmedReceipts = new java.util.LinkedHashMap<>();
@@ -781,15 +781,18 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         batch.update(Fb.db().collection("chats").document(chatId),com.friendbook.social.d1.documents.FieldPath.of("unreadCount",me),0);
         batch.commit().addOnCompleteListener(done->{
             receiptInFlight.removeAll(claimed);
-            if(!done.isSuccessful()){receiptFailed.addAll(claimed);return;}
             if(!me.equals(Fb.uid()))return;
+            if(!done.isSuccessful()){receiptFailed.addAll(claimed);unreadResetFailed=true;return;}
+            unreadResetFailed=false;
             for(String id:claimed)confirmedReceipts.put(id,markSeen);
             while(confirmedReceipts.size()>128)confirmedReceipts.remove(confirmedReceipts.keySet().iterator().next());
         });
     }
 
     @Override protected void onResume() {
-        super.onResume();chatVisible=true;receiptFailed.clear();markVisibleReceipts(); com.friendbook.social.core.SoundEffects.visibleChat(chatId);
+        super.onResume();chatVisible=true;receiptFailed.clear();
+        if(unreadResetFailed){unreadResetOnce=false;unreadResetFailed=false;}
+        markVisibleReceipts(); com.friendbook.social.core.SoundEffects.visibleChat(chatId);
     }
     @Override protected void onPause() {
         chatVisible=false;com.friendbook.social.core.SoundEffects.clearVisibleChat(chatId); super.onPause();
