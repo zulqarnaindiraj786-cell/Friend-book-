@@ -27,6 +27,7 @@ import java.util.Map;
 public class SessionsActivity extends Activity {
 
     private LinearLayout list;
+    private LinearLayout records, pageControls;
     private ListenerRegistration reg;
 
     /** Call after every successful login. */
@@ -80,6 +81,8 @@ public class SessionsActivity extends Activity {
                 12, Ui.sub(this));
         Ui.pad(info, 2, 0, 2, 10);
         list.addView(info);
+        records=Ui.col(this);list.addView(records);
+        pageControls=Ui.col(this);list.addView(pageControls);
 
         setContentView(root);
     }
@@ -89,17 +92,17 @@ public class SessionsActivity extends Activity {
         super.onStart();
         String me = Fb.uid();
         if (me == null) { finish(); return; }
-        reg = Fb.db().collection("users").document(me).collection("sessions")
-                .orderBy("at", Query.Direction.DESCENDING).limit(30)
-                .addSnapshotListener((snap, err) -> {
-                    while (list.getChildCount() > 2) list.removeViewAt(2);
+        reg = com.friendbook.social.core.PagedLists.attach(this,pageControls,
+                Fb.db().collection("users").document(me).collection("sessions")
+                .orderBy("at", Query.Direction.DESCENDING),10,"login-history",(snap, err) -> {
+                    records.removeAllViews();
                     if (err != null) {
-                        list.addView(Ui.tv(this, "Couldn't load login history. Please try again.", 13, Ui.sub(this)));
+                        records.addView(Ui.tv(this, "Couldn't load login history. Please try again.", 13, Ui.sub(this)));
                         return;
                     }
                     if (snap == null || snap.isEmpty()) {
                         TextView e = Ui.tv(this, "No login records yet.", 13, Ui.sub(this));
-                        list.addView(e);
+                        records.addView(e);
                         return;
                     }
                     for (DocumentSnapshot d : snap.getDocuments()) {
@@ -115,7 +118,7 @@ public class SessionsActivity extends Activity {
                         t.addView(Ui.tv(this, Format.str(m, "model") + " · "
                                 + Format.ago(Format.ts(m == null ? null : m.get("at"))), 12, Ui.sub(this)));
                         card.addView(t, new LinearLayout.LayoutParams(0, -2, 1));
-                        list.addView(card);
+                        records.addView(card);
                     }
                 });
     }
@@ -123,6 +126,6 @@ public class SessionsActivity extends Activity {
     @Override
     protected void onStop() {
         super.onStop();
-        if (reg != null) reg.remove();
+        if (reg != null) { reg.remove();reg=null; }
     }
 }

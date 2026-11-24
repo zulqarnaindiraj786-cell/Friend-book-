@@ -35,7 +35,7 @@ public final class PagedLists {
                 // An empty in-flight cache isn't an authoritative empty result.
                 if(!busy && (error.isEmpty() || !docs.isEmpty()))listener.changed(new Page(docs),null);
                 if(!error.isEmpty())Ui.toast(activity,error);
-            });if(force)current[0].refreshOnDemand(); else if(key.startsWith("chat-people:"))current[0].startOnDemand(); else if(key.startsWith("groups:"))current[0].startCachedDay(); else current[0].startCachedFor(key.startsWith("friend-list:")?300_000L:120_000L);
+            });if(force)current[0].refreshOnDemand(); else if(key.startsWith("chat-people:"))current[0].startOnDemand(); else if(key.startsWith("groups:"))current[0].startCachedDay(); else if(key.startsWith("live-discovery"))current[0].startCachedFor(0L); else current[0].startCachedFor(key.startsWith("friend-list:")?300_000L:120_000L);
         };
         refresh.setOnClickListener(v->start.accept(true));more.setOnClickListener(v->{if(current[0]!=null)current[0].next();});start.accept(false);
         return ()->{closed[0]=true;if(current[0]!=null)current[0].close();controls.removeView(row);};
