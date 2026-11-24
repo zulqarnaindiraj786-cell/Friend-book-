@@ -708,6 +708,22 @@ async function readCollectionRows(db, parent, uid, filters, spec, env) {
     }
   }
   if (parent === 'friends') {
+    // Exact two-person candidate probes must not materialize the entire graph.
+    // Feed a bounded, deduplicated set into pair-index seeks. The ordinary
+    // projection/filter/ACL pipeline still decides the returned documents.
+    const pairFilter=filters?.find(f=>f.field==='participants' && (f.op==='in' || f.op==='=='));
+    const pairs=pairFilter ? (pairFilter.op==='in'?pairFilter.value:[pairFilter.value]) : null;
+    if(Array.isArray(pairs) && pairs.length>0 && pairs.length<=30
+        && pairs.every(pair=>Array.isArray(pair) && pair.length===2 && pair.every(value=>typeof value==='string'))) {
+      const authorized=[...new Map(pairs.filter(pair=>pair.includes(uid)).map(pair=>[JSON.stringify(pair),pair])).values()];
+      if(!authorized.length)return [];
+      const exact=await db.prepare(`SELECT f.path,f.parent_path,f.collection_id,f.doc_id,f.owner_uid,f.document_json,f.create_time,f.update_time
+        FROM json_each(?1) pair CROSS JOIN friendbook_cf_firestore_documents f
+        WHERE f.parent_path='friends'
+          AND json_extract(f.document_json,'$.participants[0]')=json_extract(pair.value,'$[0]')
+          AND json_extract(f.document_json,'$.participants[1]')=json_extract(pair.value,'$[1]')`).bind(JSON.stringify(authorized)).all();
+      return exact.results||[];
+    }
     // Only a participant can see a friendship. Index the two positions instead
     // of loading every user's relationships and projecting them in JavaScript.
     const canonical=await db.prepare(`SELECT path,parent_path,collection_id,doc_id,owner_uid,document_json,create_time,update_time

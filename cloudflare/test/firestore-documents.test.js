@@ -3371,3 +3371,43 @@ test('canonical content GET authorizes the same fresh root once and retains priv
     seed('users','author',{displayName:'Author',banned:true});await read('viewer',403);
   }
 });
+
+test('exact friendship probes seek pairs instead of repeatedly reading the actor graph',async()=>{
+  const sql=new DatabaseSync(':memory:');
+  for(const ddl of [resourcesSchema,appSchema,schema,
+    readFileSync(new URL('../migrations/0027_friend_participant_indexes.sql',import.meta.url),'utf8'),
+    readFileSync(new URL('../migrations/0092_friend_exact_pair_seek.sql',import.meta.url),'utf8')])sql.exec(ddl);
+  const put=sql.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)');
+  put.run('users/actor','users','users','actor','actor','{}',1,1);
+  for(let i=0;i<5000;i++){
+    const id=`f${String(i).padStart(4,'0')}`,other=`u${String(i).padStart(4,'0')}`;
+    put.run(`friends/${id}`,'friends','friends',id,'actor',JSON.stringify({participants:i%2?['actor',other]:[other,'actor']}),1,1);
+  }
+  put.run('friends/duplicate','friends','friends','duplicate','actor',JSON.stringify({participants:['actor','u0001']}),1,1);
+  put.run('friends/thirdparty','friends','friends','thirdparty','x',JSON.stringify({participants:['x','y']}),1,1);
+  put.run('friends/long','friends','friends','long','actor',JSON.stringify({participants:['actor','u0001','extra']}),1,1);
+  let candidates=0;const plans=[];
+  const db={prepare(q){const stmt=sql.prepare(q);return{bind(...args){return{
+    first:async()=>stmt.get(...args)||null,
+    all:async()=>{const rows=stmt.all(...args);if(q.includes('FROM json_each(?1) pair CROSS JOIN')){
+      candidates+=rows.length;plans.push(...sql.prepare('EXPLAIN QUERY PLAN '+q).all(...args).map(row=>row.detail));
+    }return{results:rows};},
+  };}};}};
+  const app=createWorker(async token=>token),env={DB:db,FIREBASE_PROJECT_ID:'test'};
+  const query=async(filters)=>{
+    const response=await app.fetch(new Request('https://example.test/v1/firestore/query',{
+      method:'POST',headers:{authorization:'Bearer actor','content-type':'application/json'},
+      body:JSON.stringify({parent:'friends',filters,limit:20}),
+    }),env);
+    assert.equal(response.status,200);return(await response.json()).documents.map(doc=>doc.id).sort();
+  };
+  const pairFilter={field:'participants',op:'in',value:[['actor','u0001'],['u0002','actor'],['actor','u0001'],['x','y']]};
+  assert.deepEqual(await query([pairFilter]),['duplicate','f0001','f0002']);
+  assert.equal(candidates,4,'only matching-prefix rows, including one long-array rejection, are loaded');
+  assert.match(plans.join('\n'),/SEARCH f USING INDEX idx_cf_friend_exact_pair \(<expr>=\? AND <expr>=\?\)/);
+  const all=await query([{field:'participants',op:'array-contains',value:'actor'}]);
+  assert.ok(all.length>0,'ordinary friend list remains available');
+  assert.deepEqual(await query([{field:'participants',op:'==',value:['x','y']}]),[]);
+  assert.deepEqual(await query([{field:'participants',op:'==',value:['actor','u0001']}]),['duplicate','f0001']);
+  sql.close();
+});
