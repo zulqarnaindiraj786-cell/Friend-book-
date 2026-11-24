@@ -73,4 +73,19 @@ public class HomeVisibleFriendDemandTest {
    invoke(h,"resolveVisibleFriends",new Class<?>[]{Collection.class},ids);verify(q,times(1)).get();
   }
  }
+ @Test public void timeoutBlocksRetryAndIgnoresLateResultUntilNewEntry()throws Exception{
+  try(MockedStatic<Fb> fb=mockStatic(Fb.class)){
+   fb.when(Fb::uid).thenReturn("actor");D1DocumentStore db=mock(D1DocumentStore.class);fb.when(Fb::db).thenReturn(db);
+   CollectionReference friends=mock(CollectionReference.class);Query q=mock(Query.class);when(db.collection("friends")).thenReturn(friends);
+   when(friends.whereIn(eq("participants"),anyList())).thenReturn(q);when(q.limit(10)).thenReturn(q);
+   TaskCompletionSource<QuerySnapshot> pending=new TaskCompletionSource<>();when(q.get()).thenReturn(pending.getTask());
+   HomeFragment h=home();List<String> ids=Collections.singletonList("alice");invoke(h,"resolveVisibleFriends",new Class<?>[]{Collection.class},ids);
+   Shadows.shadowOf(android.os.Looper.getMainLooper()).idleFor(java.time.Duration.ofSeconds(21));
+   assertTrue(((Set<?>)field("friendFactsFailed").get(h)).contains("alice"));
+   for(int i=0;i<100;i++)invoke(h,"resolveVisibleFriends",new Class<?>[]{Collection.class},ids);verify(q,times(1)).get();
+   pending.setResult(new QuerySnapshot(Collections.singletonList(friend("actor","alice")),null,new SnapshotMetadata(false,false)));
+   Shadows.shadowOf(android.os.Looper.getMainLooper()).idle();assertFalse(((Set<?>)field("friendIds").get(h)).contains("alice"));
+  }
+ }
+
 }

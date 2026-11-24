@@ -860,9 +860,13 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         }
         for(List<String> ids:Ui.chunks(new ArrayList<>(needed),10)){
             friendFactsPending.addAll(ids);
+            engagementHandler.postDelayed(()->{
+                if(factsToken!=friendFactsGeneration || !activeHomeRead(me,homeToken) || !friendFactsPending.containsAll(ids))return;
+                friendFactsPending.removeAll(ids);friendFactsFailed.addAll(ids);
+            },20_000L);
             List<List<String>> pairs=com.friendbook.social.core.FriendCandidatePages.pairs(me,ids);
             Fb.db().collection("friends").whereIn("participants",pairs).limit(10).get().addOnSuccessListener(snap->{
-                if(factsToken!=friendFactsGeneration || !activeHomeRead(me,homeToken))return;
+                if(factsToken!=friendFactsGeneration || !activeHomeRead(me,homeToken) || !friendFactsPending.containsAll(ids))return;
                 friendFactsPending.removeAll(ids);
                 if(snap==null || snap.getMetadata().isFromCache()){friendFactsFailed.addAll(ids);return;}
                 Set<String> found=new HashSet<>();
@@ -878,10 +882,10 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
                     else friendFactsFailed.add(id); // saturated legacy duplicates cannot prove absence
                 }
                 renderPymk();renderLoadedStories();
-                if(!lastPostDocs.isEmpty())consumePostsSnapshot(lastPostDocs,false);
+                if(!lastPostDocs.isEmpty())consumePostsSnapshot(lastPostDocs,loadedPosts);
                 else if(adapter!=null)applyFilterOnCachedFeed();
             }).addOnFailureListener(error->{
-                if(factsToken!=friendFactsGeneration || !activeHomeRead(me,homeToken))return;
+                if(factsToken!=friendFactsGeneration || !activeHomeRead(me,homeToken) || !friendFactsPending.containsAll(ids))return;
                 friendFactsPending.removeAll(ids);friendFactsFailed.addAll(ids);
             });
         }
