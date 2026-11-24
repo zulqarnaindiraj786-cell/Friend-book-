@@ -86,6 +86,7 @@ public class D1DocumentStore {
         final QueryDeliveryState deliveryState = new QueryDeliveryState();
         final PollBudget budget = new PollBudget();
         final AtomicBoolean inFlight = new AtomicBoolean(false);
+        final AtomicBoolean refreshPending = new AtomicBoolean(false);
 
         DocListenerEntry(DocumentReference ref, EventListener<DocumentSnapshot> listener) {
             this.ref = ref;
@@ -163,8 +164,11 @@ public class D1DocumentStore {
     }
 
     /** Resume only listener demands deferred while no Activity was resumed. */
-    public void resumeDeferredQueryListeners() {
+    public void resumeDeferredListeners() {
         if (!com.friendbook.social.App.isForeground()) return;
+        for (CopyOnWriteArrayList<DocListenerEntry> entries : docListeners.values())
+            for (DocListenerEntry entry : entries)
+                if (entry.refreshPending.get()) scheduleDocRead(entry);
         for (QueryListenerEntry entry : queryListeners)
             if (entry.refreshPending.get()) scheduleQueryRead(entry);
     }
@@ -484,6 +488,7 @@ public class D1DocumentStore {
         CopyOnWriteArrayList<DocListenerEntry> list = docListeners.get(path);
         if (list != null) {
             for (DocListenerEntry e : list) {
+                synchronized (e) { e.refreshPending.set(true); }
                 scheduleDocRead(e);
             }
         }
@@ -605,12 +610,19 @@ public class D1DocumentStore {
 
     /** Share the immutable wire response before either listener or get work queues. */
     Task<String> readDocumentResponse(String actor,String path,boolean audience,boolean share,ExecutorService lane) {
-        return documentReadFlights.read(actor,documentReadKey(path,audience),share,()->{
+        return readDocumentResponse(actor,path,audience,share,lane,false);
+    }
+
+    private Task<String> readDocumentResponse(String actor,String path,boolean audience,boolean share,
+            ExecutorService lane,boolean automatic) {
+        DocumentReadFlights.Access<String> access = documentReadFlights.readPromotable(
+                actor,documentReadKey(path,audience),share,!automatic,allowBackground->{
             TaskCompletionSource<String> result=new TaskCompletionSource<>();
             try { lane.execute(()->{
                 try {
                     String raw=D1DocumentTransport.runForActor(actor,()->{
                         if(!actor.equals(authenticatedUid()))throw new D1DocumentStoreException(D1DocumentStoreException.Code.CANCELLED,"Account changed before document read");
+                        if(!allowBackground.get() && !com.friendbook.social.App.isForeground())throw new BackgroundQueryDeferred();
                         return D1DocumentTransport.getDocument(path,audience).toString();
                     });
                     if(!actor.equals(authenticatedUid()))throw new D1DocumentStoreException(D1DocumentStoreException.Code.CANCELLED,"Account changed during document read");
@@ -619,6 +631,15 @@ public class D1DocumentStore {
             }); } catch(java.util.concurrent.RejectedExecutionException error) { result.trySetException(error); }
             return result.getTask();
         });
+        if (!automatic && access.promotedAutomatic) {
+            // The worker may have decided to defer just before the explicit
+            // reader joined. Retry that rare race instead of failing the user.
+            return access.task.continueWithTask(Runnable::run, completed ->
+                    completed.getException() instanceof BackgroundQueryDeferred
+                            ? readDocumentResponse(actor,path,audience,share,lane,false)
+                            : completed);
+        }
+        return access.task;
     }
 
     Task<String> readDocumentResponse(String actor,String path,boolean audience,boolean share) {
@@ -626,10 +647,25 @@ public class D1DocumentStore {
     }
 
     private void scheduleDocRead(DocListenerEntry entry) {
-        if (!entry.active || !entry.actor.equals(authenticatedUid()) || !entry.inFlight.compareAndSet(false, true)) return;
+        if (!entry.active || !entry.actor.equals(authenticatedUid())) return;
+        synchronized (entry) {
+            if (!com.friendbook.social.App.isForeground()) {
+                entry.refreshPending.set(true);
+                if (com.friendbook.social.App.isForeground()) scheduleDocRead(entry);
+                return;
+            }
+            if (!entry.inFlight.compareAndSet(false, true)) return;
+            entry.refreshPending.set(false);
+        }
         entry.lastAttemptMs = android.os.SystemClock.elapsedRealtime();
-        readDocumentResponse(entry.actor,entry.ref.getPath(),entry.ref.includesProfileAudience(),true,listenerExecutor)
-                .addOnCompleteListener(Runnable::run,completed->deliverDoc(entry,completed));
+        readDocumentResponse(entry.actor,entry.ref.getPath(),entry.ref.includesProfileAudience(),true,listenerExecutor,true)
+                .addOnCompleteListener(Runnable::run,completed->{
+                    if (completed.getException() instanceof BackgroundQueryDeferred) {
+                        entry.refreshPending.set(true);
+                        entry.inFlight.set(false);
+                        if (entry.refreshPending.get()) scheduleDocRead(entry);
+                    } else deliverDoc(entry,completed);
+                });
     }
 
     private void scheduleQueryRead(QueryListenerEntry entry) {
@@ -733,6 +769,7 @@ public class D1DocumentStore {
             });
         } finally {
             entry.inFlight.set(false);
+            if (entry.refreshPending.get()) scheduleDocRead(entry);
         }
     }
 

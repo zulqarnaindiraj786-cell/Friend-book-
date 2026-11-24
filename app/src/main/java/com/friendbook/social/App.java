@@ -83,7 +83,7 @@ public class App extends Application implements SensorEventListener {
                 if (resumedCount==1) {
                     // A listener whose initial load or invalidation arrived while
                     // paused must resume even after a brief activity transition.
-                    com.friendbook.social.d1.documents.D1DocumentStore.getInstance().resumeDeferredQueryListeners();
+                    com.friendbook.social.d1.documents.D1DocumentStore.getInstance().resumeDeferredListeners();
                     if (android.os.SystemClock.elapsedRealtime()-backgroundSince>=3000L)
                         com.friendbook.social.d1.documents.D1DocumentStore.getInstance().refreshOnForeground();
                 }

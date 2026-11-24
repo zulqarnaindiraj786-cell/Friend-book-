@@ -23,6 +23,6 @@ class DocumentReadFlightsWiring(unittest.TestCase):
         self.assertIn('documentReadFlights.invalidate(actor,documentReadKey(path,false))', invalidation)
         self.assertIn('documentReadFlights.invalidate(actor,documentReadKey(path,true))', invalidation)
         helper = (BASE / 'DocumentReadFlights.java').read_text()
-        self.assertIn('active.remove(key, shared)', helper)
+        self.assertIn('active.remove(key, flight)', helper)
         self.assertNotIn('postDelayed', helper)
         self.assertNotIn('cacheDoc', helper)

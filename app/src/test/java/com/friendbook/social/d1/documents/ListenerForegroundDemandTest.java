@@ -45,7 +45,7 @@ public class ListenerForegroundDemandTest {
                 store.notifyCollectionListeners("posts");
                 assertEquals(0,queue.tasks.size());
                 foreground.when(App::isForeground).thenReturn(true);
-                store.resumeDeferredQueryListeners();
+                store.resumeDeferredListeners();
                 assertEquals(1,queue.tasks.size());
                 // A queued read must recheck lifecycle immediately before HTTP.
                 foreground.when(App::isForeground).thenReturn(false);
@@ -53,7 +53,7 @@ public class ListenerForegroundDemandTest {
                 transport.verify(()->D1DocumentTransport.listenerQuery(any(JSONObject.class)),never());
                 assertEquals(0,queue.tasks.size());
                 foreground.when(App::isForeground).thenReturn(true);
-                store.resumeDeferredQueryListeners();
+                store.resumeDeferredListeners();
                 assertEquals(1,queue.tasks.size());
                 // An invalidation while this read is in flight schedules a new read,
                 // rather than being lost or joining a pre-invalidation flight.
