@@ -48,3 +48,14 @@ class LiveScreenDemand(unittest.TestCase):
         pk=code.split('private void refreshCloudPk()',1)[1].split('private void applyCloudPk',1)[0]
         self.assertGreaterEqual(pk.count('!liveScreenStarted'),2)
         self.assertGreaterEqual(pk.count('Objects.equals(liveActor,Fb.uid())'),2)
+    def test_friend_invites_use_selected_friend_pages_not_arbitrary_user_scan(self):
+        code=(JAVA/'live/LivePkAndGiftsUi.java').read_text()
+        drawer=code.split('public static void showInviteFriendsDrawer',2)[2].split('public static void sendDirectLiveInviteToUser',1)[0]
+        for token in ['FriendPicker.multi','selected.keySet()','!me.equals(Fb.uid())','InteractionCooldown.acquire','live-invite:','Fb.me.blocked.contains(uid)']:
+            self.assertIn(token,drawer)
+        self.assertNotIn('collection("users").limit(50)',drawer)
+        self.assertNotIn('Send Live Video Invite to All Friends',drawer)
+    def test_friend_picker_cancels_owned_reads_on_close_or_activity_stop(self):
+        code=(JAVA/'core/FriendPicker.java').read_text()
+        for token in ['PagedLists.attach','whereArrayContains("participants",actor)','onActivityStopped','dialog.dismiss()','generation[0]++;reg.remove()','unregisterActivityLifecycleCallbacks','Objects.equals(actor,Fb.uid())']:
+            self.assertIn(token,code)

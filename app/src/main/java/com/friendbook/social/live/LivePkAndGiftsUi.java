@@ -739,104 +739,20 @@ public final class LivePkAndGiftsUi {
         final String resolvedHostUid = hostUid.isEmpty() ? me : hostUid;
         final String resolvedHostPhoto = !hostPhoto.isEmpty() ? hostPhoto : (Fb.myPhoto() == null ? "" : Fb.myPhoto());
 
-        final AlertDialog dialog = new AlertDialog.Builder(a).create();
-        LinearLayout sheet = Ui.col(a);
-        GradientDrawable bg = new GradientDrawable();
-        bg.setColor(0xF214161E);
-        bg.setCornerRadii(new float[]{
-                Ui.dp(a, 22), Ui.dp(a, 22), Ui.dp(a, 22), Ui.dp(a, 22), 0, 0, 0, 0});
-        sheet.setBackground(bg);
-        Ui.pad(sheet, 16, 16, 16, 20);
-
-        LinearLayout head = Ui.row(a);
-        head.setGravity(Gravity.CENTER_VERTICAL);
-        head.addView(com.friendbook.social.core.StudioVectorIcons.iconChip(
-                        a, "users", "Invite Friends to Live", 16f, 0, Color.WHITE, Color.WHITE),
-                new LinearLayout.LayoutParams(0, -2, 1f));
-        ImageView close = com.friendbook.social.core.StudioVectorIcons.iconView(a, "close", 18, 0xAAFFFFFF);
-        close.setOnClickListener(v -> dialog.dismiss());
-        head.addView(close, new LinearLayout.LayoutParams(Ui.dp(a, 30), Ui.dp(a, 30)));
-        sheet.addView(head);
-
-        final TextView inviteAllBtn = com.friendbook.social.core.StudioVectorIcons.iconChip(
-                a, "bell", "Send Live Video Invite to All Friends", 13f, 0, Color.WHITE, Color.WHITE);
-        inviteAllBtn.setGravity(Gravity.CENTER);
-        inviteAllBtn.setBackground(Ui.round(a, 0xFFFE2C55, 20));
-        Ui.pad(inviteAllBtn, 14, 10, 14, 10);
-        LinearLayout.LayoutParams iaLp = new LinearLayout.LayoutParams(-1, -2);
-        iaLp.topMargin = Ui.dp(a, 12);
-        iaLp.bottomMargin = Ui.dp(a, 10);
-        sheet.addView(inviteAllBtn, iaLp);
-
-        ScrollView sv = new ScrollView(a);
-        final LinearLayout listCol = Ui.col(a);
-        TextView loadingTv = Ui.tv(a, "Loading friends...", 13, 0xAAFFFFFF);
-        Ui.pad(loadingTv, 8, 16, 8, 16);
-        listCol.addView(loadingTv);
-        sv.addView(listCol);
-        sheet.addView(sv, new LinearLayout.LayoutParams(-1, Ui.dp(a, 270)));
-
-        final List<Models.User> friendUsers = new ArrayList<>();
-        Fb.db().collection("users").limit(50).get().addOnSuccessListener(snap -> {
-            if (a.isFinishing() || snap == null) return;
-            listCol.removeAllViews();
-            for (DocumentSnapshot d : snap.getDocuments()) {
-                Models.User u = Models.User.fromDoc(d);
-                if (u.uid == null || u.uid.equals(me) || u.deactivated) continue;
-                if (Fb.me != null && Fb.me.blocked != null && Fb.me.blocked.contains(u.uid)) continue;
-                FastCache.putUser(u);
-                friendUsers.add(u);
+        // The old drawer scanned arbitrary users, not friends. Select from the
+        // authenticated friendship list and send only to explicitly checked people.
+        com.friendbook.social.core.FriendPicker.multi(a,"Select friends to invite",new LinkedHashMap<>(),selected->{
+            if(!me.equals(Fb.uid()) || a.isFinishing() || a.isDestroyed())return;
+            int queued=0;
+            for(String uid:selected.keySet()){
+                if(uid==null || uid.isEmpty() || uid.equals(me)
+                        || (Fb.me!=null && Fb.me.blocked!=null && Fb.me.blocked.contains(uid)))continue;
+                if(!com.friendbook.social.core.InteractionCooldown.acquire(me,"live-invite:"+liveId+":"+uid))continue;
+                sendDirectLiveInviteToUser(me,uid,resolvedHostUid,hostName,resolvedHostPhoto,liveTitle,liveId);
+                queued++;
             }
-
-            if (friendUsers.isEmpty()) {
-                listCol.addView(Ui.tv(a, "No users available to invite right now.", 13, 0xAAFFFFFF));
-                return;
-            }
-
-            for (final Models.User u : friendUsers) {
-                LinearLayout row = Ui.row(a);
-                row.setGravity(Gravity.CENTER_VERTICAL);
-                Ui.pad(row, 4, 8, 4, 8);
-
-                FrameLayout avWrap = new FrameLayout(a);
-                ImageView av = new ImageView(a);
-                Ui.avatar(a, av, u.photoUrl);
-                avWrap.addView(av, new FrameLayout.LayoutParams(Ui.dp(a, 40), Ui.dp(a, 40)));
-                row.addView(avWrap);
-
-                LinearLayout info = Ui.col(a);
-                info.setPadding(Ui.dp(a, 10), 0, Ui.dp(a, 8), 0);
-                info.addView(Ui.tvBold(a, u.displayName, 13.5f, Color.WHITE));
-                info.addView(Ui.tv(a, "Tap Invite · Sends Live Video to Inbox", 11f, 0x99FFFFFF));
-                row.addView(info, new LinearLayout.LayoutParams(0, -2, 1f));
-
-                final TextView invBtn = Ui.roundChip(a, "Invite", 0xFFFE2C55, Color.WHITE, 12);
-                Ui.pad(invBtn, 14, 7, 14, 7);
-                invBtn.setOnClickListener(v -> {
-                    invBtn.setText("Sent to Inbox");
-                    invBtn.setEnabled(false);
-                    invBtn.setBackground(Ui.round(a, 0x33FFFFFF, 16));
-                    sendDirectLiveInviteToUser(me, u.uid, resolvedHostUid, hostName, resolvedHostPhoto, liveTitle, liveId);
-                    Ui.toast(a, "Live video invite sent to " + u.displayName + "'s inbox");
-                });
-                row.addView(invBtn);
-                listCol.addView(row);
-            }
+            Ui.toast(a,queued==0?"No eligible friends selected":"Requested "+queued+" live invite(s)");
         });
-
-        inviteAllBtn.setOnClickListener(v -> {
-            int sent = 0;
-            for (Models.User u : friendUsers) {
-                sendDirectLiveInviteToUser(me, u.uid, resolvedHostUid, hostName, resolvedHostPhoto, liveTitle, liveId);
-                if (++sent >= 25) break;
-            }
-            inviteAllBtn.setText("Sent Live Video to " + sent + " Inboxes");
-            inviteAllBtn.setEnabled(false);
-            inviteAllBtn.setBackground(Ui.round(a, 0xFF2E7D32, 20));
-            Ui.toast(a, "Live video invite sent to " + sent + " friends' inboxes");
-        });
-
-        presentBottomDialog(dialog, sheet);
     }
 
     public static void sendDirectLiveInviteToUser(@NonNull String me,
@@ -855,7 +771,7 @@ public final class LivePkAndGiftsUi {
                                                   @NonNull String hostPhoto,
                                                   @NonNull String liveTitle,
                                                   @NonNull String liveId) {
-        if (me.isEmpty() || targetUid.isEmpty() || me.equals(targetUid)) return;
+        if (me.isEmpty() || targetUid.isEmpty() || me.equals(targetUid) || !me.equals(Fb.uid())) return;
         String cleanHostUid = hostUid.isEmpty() ? me : hostUid;
         String cleanHostName = hostName.isEmpty() ? Fb.myName() : hostName;
         String cleanHostPhoto = !hostPhoto.isEmpty() ? hostPhoto : (Fb.myPhoto() == null ? "" : Fb.myPhoto());
