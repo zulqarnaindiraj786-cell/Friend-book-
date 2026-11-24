@@ -65,3 +65,39 @@ test('people picker next pages use the ID index, preserve privacy, and fall back
  result=await compare(['é']);assert.ok(result.scans>1000);
  result=await compare({id:'deleted'});assert.ok(result.scans>1000);
 });
+
+test('short people head returns the complete projected page without duplicate collection reads',async t=>{
+ const f=fixture();t.after(f.close);
+ f.sql.exec(readFileSync(new URL('../migrations/0059_people_default_page_indexes.sql',import.meta.url),'utf8'));
+ const add=canonicalSeed(f.sql);
+ add.run('users/viewer','users','viewer','viewer',JSON.stringify({uid:'viewer'}),1);
+ for(let i=0;i<45;i++){
+  const id=`p${String(i).padStart(3,'0')}`;
+  add.run(`users/${id}`,'users',id,id,JSON.stringify({uid:id,email:'secret',...(i%4===0?{banned:true}:{})}),1);
+ }
+ let force=false,heads=0,refills=0,headRows=0;
+ const db={...f.env.DB,prepare(q){
+  if(force && (q.includes('quota_people_head') || q.includes('WITH candidates AS')))throw Error('no such index: idx_cf_people_default_page');
+  const stmt=f.sql.prepare(q),bind=(...args)=>({first:async()=>stmt.get(...args)||null,all:async()=>{
+   const results=stmt.all(...args);
+   if(q.includes('quota_people_head')){heads++;headRows+=results.length;}
+   if(q.includes('WITH candidates AS'))refills++;
+   return {results};
+  }});
+  return {...bind(),bind};
+ }};
+ const worker=createWorker(async token=>token),env={...f.env,DB:db,FIREBASE_PROJECT_ID:'test'};
+ async function query(limit=50){const r=await worker.fetch(new Request('https://example.test/v1/firestore/query',{method:'POST',headers:{authorization:'Bearer viewer','content-type':'application/json'},body:JSON.stringify({parent:'users',limit})}),env);assert.equal(r.status,200,await r.clone().text());return (await r.json()).documents;}
+ const actual=await query();assert.equal(heads,1);assert.equal(headRows,46);assert.equal(refills,0);
+ assert.ok(actual.length<46);assert.ok(actual.every(row=>row.data.email===undefined));
+ force=true;assert.deepEqual(actual,await query());force=false;
+ heads=0;refills=0;const exact=await query(46);assert.equal(heads,1);assert.equal(refills,0);
+ force=true;assert.deepEqual(exact,await query(46));force=false;
+ // A full raw head with hidden profiles is not a completeness proof.
+ heads=0;refills=0;const insufficient=await query(45);assert.ok(refills>0);
+ force=true;assert.deepEqual(insufficient,await query(45));force=false;
+ // Own account can still see itself when all other accounts are hidden.
+ f.sql.prepare("UPDATE friendbook_cf_firestore_documents SET document_json='{"+'"banned":true'+"}' WHERE doc_id<>'viewer' AND parent_path='users'").run();
+ heads=0;headRows=0;refills=0;const onlySelf=await query();assert.deepEqual(onlySelf.map(row=>row.id),['viewer']);assert.equal(refills,0);
+ force=true;assert.deepEqual(onlySelf,await query());
+});

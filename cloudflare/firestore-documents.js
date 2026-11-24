@@ -1369,6 +1369,10 @@ async function boundedPeopleHead(db,uid,spec,admin,moderator) {
     const docs=rows.map(rowToDocument).filter(Boolean).map(doc=>({...doc,
       data:profileReadView(doc.path,uid,doc.data,admin,moderator)})).filter(doc=>doc.data!==null);
     const page=applyQuery(docs,spec);
+    // A short index head already contains the complete collection. Returning
+    // its projected page avoids immediately reading the same short collection
+    // again in the refill path, including when every profile is hidden.
+    if(rows.length<size)return page;
     if(page.length!==spec.limit)return null;
     const last=page.at(-1).id;
     // The extra boundary row proves every omitted row sorts strictly later.
