@@ -13,7 +13,11 @@ import java.util.Map;
 
 /** Writes realtime notifications and official friendbook Team messages (with Crown-F emblem). */
 public class Notify {
-    // Pending operations only: failures and completed events are never retained.
+    // Stable event ACKs are a bounded process-local optimization. Server create
+    // remains authoritative after eviction/restart; failures allow demanded retry after 2s.
+    private static final android.util.LruCache<java.util.List<String>,Boolean> ACKED_EVENTS=new android.util.LruCache<>(512);
+    private static final android.util.LruCache<java.util.List<String>,Long> FAILED_EVENTS=new android.util.LruCache<>(256);
+    // Pending operations share one write; there is no scheduled retry.
     private static final java.util.Set<java.util.List<String>> PENDING_EVENTS =
             java.util.Collections.synchronizedSet(new java.util.HashSet<>());
 
@@ -78,16 +82,24 @@ public class Notify {
         String eventKey=savedEventKey!=null?savedEventKey:NotificationEventKey.forAction(me,toUid,type,postId);
         if (eventKey != null) {
             java.util.List<String> pendingKey=java.util.Arrays.asList(me,eventKey);
+            if(ACKED_EVENTS.get(pendingKey)!=null)return;
+            Long failedAt=FAILED_EVENTS.get(pendingKey);
+            if(failedAt!=null && android.os.SystemClock.elapsedRealtime()-failedAt<2_000L)return;
             if(!PENDING_EVENTS.add(pendingKey))return;
             try {
             DocumentReference ref=Fb.db().collection("notifications").document(eventKey);
             ref.create(n).addOnSuccessListener(v -> {
+                ACKED_EVENTS.put(pendingKey,true);FAILED_EVENTS.remove(pendingKey);
                 if (me.equals(Fb.uid())) com.friendbook.social.push.FCMPush.notification(ref.getId(), n);
             }).addOnFailureListener(e -> {
-                if (!(e instanceof com.friendbook.social.d1.documents.D1DocumentStoreException)
-                        || ((com.friendbook.social.d1.documents.D1DocumentStoreException)e).getCode()
-                        != com.friendbook.social.d1.documents.D1DocumentStoreException.Code.ALREADY_EXISTS)
+                boolean exists=e instanceof com.friendbook.social.d1.documents.D1DocumentStoreException
+                        && ((com.friendbook.social.d1.documents.D1DocumentStoreException)e).getCode()
+                        == com.friendbook.social.d1.documents.D1DocumentStoreException.Code.ALREADY_EXISTS;
+                if(exists){ACKED_EVENTS.put(pendingKey,true);FAILED_EVENTS.remove(pendingKey);}
+                else {
+                    FAILED_EVENTS.put(pendingKey,android.os.SystemClock.elapsedRealtime());
                     com.friendbook.social.push.PushTrace.failure("notification_write_failed", e);
+                }
             }).addOnCompleteListener(task -> PENDING_EVENTS.remove(pendingKey));
             } catch(RuntimeException error) {
                 PENDING_EVENTS.remove(pendingKey);

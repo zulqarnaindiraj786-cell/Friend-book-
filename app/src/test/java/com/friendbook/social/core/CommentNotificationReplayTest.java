@@ -32,7 +32,11 @@ public class CommentNotificationReplayTest {
                     new D1DocumentStoreException(D1DocumentStoreException.Code.ALREADY_EXISTS,"exists")));
                 return ref;
             });
-            for(int i=0;i<100;i++)Notify.sendForComment("owner","comment","commented","posts","p","c1");
+            for(int i=0;i<100;i++){
+                Notify.sendForComment("owner","comment","commented","posts","p","c1");
+                Shadows.shadowOf(Looper.getMainLooper()).idle();
+            }
+            verify(collection,times(1)).document(anyString());
             Shadows.shadowOf(Looper.getMainLooper()).idle();
             assertEquals(1,committed.size());
             push.verify(()->FCMPush.notification(anyString(),anyMap()),times(1));
@@ -59,6 +63,9 @@ public class CommentNotificationReplayTest {
             verify(ref,times(1)).create(any());
             first.setException(new java.io.IOException("offline"));
             Shadows.shadowOf(Looper.getMainLooper()).idle();
+            for(int i=0;i<100;i++)Notify.sendForComment("owner","comment","text","posts","p","pending");
+            verify(ref,times(1)).create(any());
+            Shadows.shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofSeconds(2));
             Notify.sendForComment("owner","comment","text","posts","p","pending");
             verify(ref,times(2)).create(any());
             fb.when(Fb::uid).thenReturn("other-account");
