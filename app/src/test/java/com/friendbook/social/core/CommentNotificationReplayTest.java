@@ -42,4 +42,34 @@ public class CommentNotificationReplayTest {
             verify(collection,never()).add(any());
         }
     }
+    @Test public void pendingDuplicatesShareOneWriteFailureAllowsRetryAndAccountSwitchBlocksPush() {
+        try(MockedStatic<Fb> fb=mockStatic(Fb.class);
+            MockedStatic<FCMPush> push=mockStatic(FCMPush.class);
+            MockedStatic<PushTrace> trace=mockStatic(PushTrace.class)) {
+            fb.when(Fb::uid).thenReturn("pending-actor");
+            D1DocumentStore store=mock(D1DocumentStore.class);
+            CollectionReference collection=mock(CollectionReference.class);
+            DocumentReference ref=mock(DocumentReference.class);
+            fb.when(Fb::db).thenReturn(store);when(store.collection("notifications")).thenReturn(collection);
+            when(collection.document(anyString())).thenReturn(ref);when(ref.getId()).thenReturn("event");
+            com.google.android.gms.tasks.TaskCompletionSource<Void> first=new com.google.android.gms.tasks.TaskCompletionSource<>();
+            com.google.android.gms.tasks.TaskCompletionSource<Void> retry=new com.google.android.gms.tasks.TaskCompletionSource<>();
+            when(ref.create(any())).thenReturn(first.getTask(),retry.getTask());
+            for(int i=0;i<100;i++)Notify.sendForComment("owner","comment","text","posts","p","pending");
+            verify(ref,times(1)).create(any());
+            first.setException(new java.io.IOException("offline"));
+            Shadows.shadowOf(Looper.getMainLooper()).idle();
+            Notify.sendForComment("owner","comment","text","posts","p","pending");
+            verify(ref,times(2)).create(any());
+            fb.when(Fb::uid).thenReturn("other-account");
+            retry.setResult(null);Shadows.shadowOf(Looper.getMainLooper()).idle();
+            push.verifyNoInteractions();
+            // Another account must never join the previous account's event.
+            when(ref.create(any())).thenReturn(Tasks.<Void>forResult(null));
+            Notify.sendForComment("owner","comment","text","posts","p","pending");
+            Shadows.shadowOf(Looper.getMainLooper()).idle();
+            verify(ref,times(3)).create(any());
+            push.verify(()->FCMPush.notification(anyString(),anyMap()),times(1));
+        }
+    }
 }
