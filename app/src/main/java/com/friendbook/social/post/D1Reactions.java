@@ -103,6 +103,7 @@ public final class D1Reactions {
   // A reactions-only response says nothing about the age (or existence) of
   // the comment count and preview in this shared summary.
   if(fullSummary)FETCHED_AT.put(key,android.os.SystemClock.elapsedRealtime());
+  else if(previous==null)FETCHED_AT.remove(key);
   if(previous!=null && previous.toString().equals(data.toString()))return;
   List<String> types=new ArrayList<>();JSONArray a=data.optJSONArray("types");
   if(a!=null)for(int i=0;i<a.length();i++){JSONObject r=a.optJSONObject(i);if(r!=null&&r.optInt("count")>0)types.add(r.optString("type"));}
@@ -238,11 +239,19 @@ public final class D1Reactions {
    queue.add(type,onlyAdd,toggleAny);
    if(confirmed!=null)publishOptimistic();
   }
+  // Only a complete response, unchanged by another local operation while it
+  // was in flight, can renew the shared comment-summary freshness.
+  void acceptFullSummary(JSONObject data,int generation){
+   if(generation==GENERATION.getOrDefault(key,0) && data.opt("comments") instanceof Number && data.optJSONArray("preview")!=null)
+    remember(context,collection,id,data);
+   else FETCHED_AT.remove(key);
+  }
   void loadInitial(int attempt){
+   final int generation=GENERATION.getOrDefault(key,0);
    D1Client.requestInteractive(collection,id,"reactions","GET",null).addOnSuccessListener(data->{
     if(!current())return;
     if(data.optJSONArray("types")==null){if(attempt==0)MAIN.postDelayed(()->{if(current())loadInitial(1);},700L);else finish("Couldn't load reaction. Try again.");}
-    else start(data);
+    else {acceptFullSummary(data,generation);start(data);}
    }).addOnFailureListener(error->{
     if(!current())return;
     if(attempt==0 && D1Client.isRetryableReactionFailure(error))MAIN.postDelayed(()->{if(current())loadInitial(1);},700L);
@@ -272,13 +281,15 @@ public final class D1Reactions {
     optimistic.put("types",adjusted);publish(optimistic);
    }catch(JSONException ignored){}
   }
-  void publish(JSONObject summary){remember(context,collection,id,summary);if(render!=null)render.run();}
+  // Optimistic and reaction-only updates do not renew comment count/preview.
+  void publish(JSONObject summary){remember(context,collection,id,summary,false);if(render!=null)render.run();}
   void sendNext(){
    ReactionWriteQueue.Target target=queue.begin();
    if(target==null){finish(null);return;}
    sendTarget(target,0);
   }
   void sendTarget(ReactionWriteQueue.Target target,int attempt){
+   final int generation=GENERATION.getOrDefault(key,0);
    D1Client.requestInteractive(collection,id,"reactions","PUT",D1Client.object("type",target.type))
     .addOnSuccessListener(data->{
      if(!current())return;
@@ -287,7 +298,7 @@ public final class D1Reactions {
      if(data.optBoolean("reactionOnly")){
       try{JSONObject merged=new JSONObject(confirmed.toString());merged.put("types",types);confirmed=merged;}
       catch(JSONException invalid){recover(target,attempt);return;}
-     }else confirmed=data;
+     }else {confirmed=data;acceptFullSummary(data,generation);}
      completed(target,data);
     }).addOnFailureListener(e->{if(current()){
      if(D1Client.isRetryableReactionFailure(e))recover(target,attempt);
@@ -302,10 +313,11 @@ public final class D1Reactions {
   void recover(ReactionWriteQueue.Target target,int attempt){
    // Replay the same absolute state, never the tap. Keep later taps serialized.
    if(attempt==0){MAIN.postDelayed(()->{if(current())sendTarget(target,1);},700L);return;}
+   final int generation=GENERATION.getOrDefault(key,0);
    D1Client.requestInteractive(collection,id,"reactions","GET",null).addOnSuccessListener(data->{
     if(!current())return;
     if(data.optJSONArray("types")!=null){
-     confirmed=data;
+     confirmed=data;acceptFullSummary(data,generation);
      if(Objects.equals(target.type,mine(data))){completed(target,data);return;}
     }
     failed(target);
