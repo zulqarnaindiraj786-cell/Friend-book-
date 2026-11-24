@@ -70,6 +70,27 @@ public class CursorPagerLifecycleTest {
         }
     }
 
+    @Test public void timedOutAutomaticFirstPageCanBeStartedAgainWithANewScope() {
+        try(MockedStatic<Fb> fb=mockStatic(Fb.class);
+            MockedStatic<com.friendbook.social.App> app=mockStatic(com.friendbook.social.App.class)) {
+            fb.when(Fb::uid).thenReturn("viewer");app.when(com.friendbook.social.App::isForeground).thenReturn(true);
+            Query query=mock(Query.class),head=mock(Query.class);when(query.limit(10)).thenReturn(head);
+            when(head.get(Source.CACHE)).thenReturn(Tasks.forException(new java.io.IOException("cache miss")));
+            when(head.getAutomatic(any(com.friendbook.social.d1.documents.ForegroundReadScope.class)))
+                    .thenReturn(new com.google.android.gms.tasks.TaskCompletionSource<QuerySnapshot>().getTask());
+            CursorPager pager=new CursorPager(query,10,"foreground-retry",(docs,more,loading,error)->{});
+            pager.startCachedForForeground(120_000L);Shadows.shadowOf(Looper.getMainLooper()).idle();
+            Shadows.shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofSeconds(21));
+            pager.startCachedForForeground(120_000L);Shadows.shadowOf(Looper.getMainLooper()).idle();
+            org.mockito.ArgumentCaptor<com.friendbook.social.d1.documents.ForegroundReadScope> scopes=
+                    org.mockito.ArgumentCaptor.forClass(com.friendbook.social.d1.documents.ForegroundReadScope.class);
+            verify(head,times(2)).getAutomatic(scopes.capture());
+            org.junit.Assert.assertNotSame(scopes.getAllValues().get(0),scopes.getAllValues().get(1));
+            org.junit.Assert.assertFalse(scopes.getAllValues().get(0).whenForeground().isSuccessful());
+            pager.close();
+        }
+    }
+
     @Test public void observedHeadIsReusedWithoutPrefetchAndLateNextIsIgnoredAfterClose() {
         try(MockedStatic<Fb> fb=mockStatic(Fb.class)) {
             fb.when(Fb::uid).thenReturn("viewer");

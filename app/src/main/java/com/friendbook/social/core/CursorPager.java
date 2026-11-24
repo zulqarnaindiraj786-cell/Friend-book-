@@ -42,7 +42,9 @@ public final class CursorPager {
     public void startCachedFor(long maxAgeMs) { startLocal(Math.max(0L,maxAgeMs),true); }
     /** Screen-owned initial page; scrolling and explicit retries remain user reads. */
     public void startCachedForForeground(long maxAgeMs) {
-        if (initialForegroundScope==null) initialForegroundScope=new ForegroundReadScope();
+        if(!active() || loading)return;
+        if(initialForegroundScope!=null)initialForegroundScope.close();
+        initialForegroundScope=new ForegroundReadScope();
         startLocal(Math.max(0L,maxAgeMs),true);
     }
     private void startLocal(long maxAgeMs,boolean full) {
