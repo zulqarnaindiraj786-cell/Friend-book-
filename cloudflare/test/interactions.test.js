@@ -843,3 +843,18 @@ test('new comment ACK omits creation claim if batch result lacks change metadata
   const response=await call(f.env,'comments','POST',{id:'unknown-change',text:'ok'});assert.equal(response.status,200);
   const data=await response.json();assert.equal(data.comment.id,'unknown-change');assert.equal(Object.hasOwn(data,'created'),false);
 });
+
+test('comment ACK reports a concurrent identical insert as not created and accepts D1 meta.changes',async t=>{
+  const f=fixture();t.after(f.close);const batch=f.env.DB.batch;let raced=false;
+  f.env.DB.batch=async statements=>{
+    if(statements.length===3 && !raced){raced=true;f.sql.prepare('INSERT INTO friendbook_cf_comments(resource,id,uid,text,parent_id,created_at) VALUES(?,?,?,?,?,?)').run('posts/p1','raced','user1','same',null,123);}
+    const result=await batch(statements);
+    if(statements.length===3){const changes=Number(result[0].changes);result[0]={meta:{changes}};}
+    return result;
+  };
+  const response=await call(f.env,'comments','POST',{id:'raced',text:'same'});assert.equal(response.status,200);
+  const data=await response.json();assert.equal(data.created,false);assert.equal(data.visibleToActor,true);
+  assert.equal(f.sql.prepare("SELECT count(*) n FROM friendbook_cf_comments WHERE id='raced'").get().n,1);
+  const fresh=await call(f.env,'comments','POST',{id:'fresh-meta',text:'hello'});assert.equal(fresh.status,200);
+  assert.equal((await fresh.json()).created,true);
+});
