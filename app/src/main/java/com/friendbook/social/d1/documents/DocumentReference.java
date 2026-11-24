@@ -72,16 +72,15 @@ public class DocumentReference {
         final String actor = D1DocumentStore.authenticatedUid();
         // Share only overlapping DEFAULT reads of the same account/path. No TTL,
         // no completed results, and explicit SERVER reads always start new work.
-        return firestore.documentReadFlights.read(actor, path, source == Source.DEFAULT, () -> firestore.runAsync(() -> {
-            if (!actor.equals(D1DocumentStore.authenticatedUid()))
-                throw new D1DocumentStoreException(D1DocumentStoreException.Code.CANCELLED, "Account changed before document read");
-            JSONObject res = D1DocumentTransport.getDocument(path);
-            DocumentSnapshot snap = parseSnapshot(res);
+        return firestore.readDocumentResponse(actor,path,profileAudience,source == Source.DEFAULT)
+                .continueWith(Runnable::run,completed -> {
             if (!actor.equals(D1DocumentStore.authenticatedUid()))
                 throw new D1DocumentStoreException(D1DocumentStoreException.Code.CANCELLED, "Account changed during document read");
+            if(!completed.isSuccessful())throw completed.getException()!=null?completed.getException():new java.io.IOException("Document read cancelled");
+            DocumentSnapshot snap = parseSnapshot(new JSONObject(completed.getResult()));
             firestore.cacheDoc(path, snap, actor);
             return snap;
-        }));
+        });
     }
 
     DocumentSnapshot parseSnapshot(JSONObject res) {

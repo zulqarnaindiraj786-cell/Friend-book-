@@ -23,7 +23,7 @@ import java.util.concurrent.TimeUnit;
  */
 public class D1DocumentStore {
     private static final D1DocumentStore INSTANCE = new D1DocumentStore();
-    final DocumentReadFlights<DocumentSnapshot> documentReadFlights = new DocumentReadFlights<>();
+    final DocumentReadFlights<String> documentReadFlights = new DocumentReadFlights<>();
     final DocumentReadFlights<QuerySnapshot> queryReadFlights = new DocumentReadFlights<>();
     // Keep network work bounded: a cached pool can create one thread per slow request on flaky
     // mobile networks, which starves the UI and battery. Each listener has an
@@ -391,7 +391,8 @@ public class D1DocumentStore {
     void invalidateDoc(String path) {
         if (path != null) {
             String actor=authenticatedUid();
-            documentReadFlights.invalidate(actor,path);
+            documentReadFlights.invalidate(actor,documentReadKey(path,false));
+            documentReadFlights.invalidate(actor,documentReadKey(path,true));
             queryReadFlights.invalidateAll();
             docCache.remove(scopedCacheKey(actor,path));
             docFetchedAt.remove(scopedCacheKey(actor,path));
@@ -574,14 +575,37 @@ public class D1DocumentStore {
         }
     }
 
+    static String documentReadKey(String path,boolean audience) {
+        return new org.json.JSONArray().put(path).put(audience).toString();
+    }
+
+    /** Share the immutable wire response before either listener or get work queues. */
+    Task<String> readDocumentResponse(String actor,String path,boolean audience,boolean share,ExecutorService lane) {
+        return documentReadFlights.read(actor,documentReadKey(path,audience),share,()->{
+            TaskCompletionSource<String> result=new TaskCompletionSource<>();
+            try { lane.execute(()->{
+                try {
+                    String raw=D1DocumentTransport.runForActor(actor,()->{
+                        if(!actor.equals(authenticatedUid()))throw new D1DocumentStoreException(D1DocumentStoreException.Code.CANCELLED,"Account changed before document read");
+                        return D1DocumentTransport.getDocument(path,audience).toString();
+                    });
+                    if(!actor.equals(authenticatedUid()))throw new D1DocumentStoreException(D1DocumentStoreException.Code.CANCELLED,"Account changed during document read");
+                    result.trySetResult(raw);
+                } catch(Exception error) { result.trySetException(error); }
+            }); } catch(java.util.concurrent.RejectedExecutionException error) { result.trySetException(error); }
+            return result.getTask();
+        });
+    }
+
+    Task<String> readDocumentResponse(String actor,String path,boolean audience,boolean share) {
+        return readDocumentResponse(actor,path,audience,share,executor);
+    }
+
     private void scheduleDocRead(DocListenerEntry entry) {
         if (!entry.active || !entry.actor.equals(authenticatedUid()) || !entry.inFlight.compareAndSet(false, true)) return;
-        try { listenerExecutor.execute(() -> {
-            entry.lastAttemptMs = android.os.SystemClock.elapsedRealtime();
-            try { D1DocumentTransport.runForActor(entry.actor, () -> { deliverDoc(entry); return null; }); }
-            catch (Exception ignored) { entry.inFlight.set(false); }
-        }); }
-        catch (java.util.concurrent.RejectedExecutionException rejected) { entry.inFlight.set(false); }
+        entry.lastAttemptMs = android.os.SystemClock.elapsedRealtime();
+        readDocumentResponse(entry.actor,entry.ref.getPath(),entry.ref.includesProfileAudience(),true,listenerExecutor)
+                .addOnCompleteListener(Runnable::run,completed->deliverDoc(entry,completed));
     }
 
     private void scheduleQueryRead(QueryListenerEntry entry) {
@@ -607,10 +631,11 @@ public class D1DocumentStore {
         catch (java.util.concurrent.RejectedExecutionException rejected) { entry.inFlight.set(false); }
     }
 
-    private void deliverDoc(DocListenerEntry entry) {
+    private void deliverDoc(DocListenerEntry entry,Task<String> completed) {
         if (!entry.active) { entry.inFlight.set(false); return; }
         try {
-            org.json.JSONObject response = D1DocumentTransport.getDocument(entry.ref.getPath(),entry.ref.includesProfileAudience());
+            if(!completed.isSuccessful())throw completed.getException()!=null?completed.getException():new java.io.IOException("Document read cancelled");
+            org.json.JSONObject response = new org.json.JSONObject(completed.getResult());
             DocumentSnapshot snap = entry.ref.parseSnapshot(response);
             if (!entry.actor.equals(authenticatedUid())) return;
             cacheDoc(entry.ref.getPath(), snap, entry.actor);

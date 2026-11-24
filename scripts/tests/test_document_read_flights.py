@@ -12,15 +12,16 @@ class DocumentReadFlightsWiring(unittest.TestCase):
         cache, network = read.split('final String actor', 1)
         self.assertIn('source == Source.CACHE', cache)
         self.assertNotIn('documentReadFlights', cache)
-        self.assertIn('documentReadFlights.read(actor, path, source == Source.DEFAULT', network)
-        self.assertIn('D1DocumentTransport.getDocument(path)', network)
-        self.assertEqual(network.count('actor.equals(D1DocumentStore.authenticatedUid())'), 2)
+        self.assertIn('readDocumentResponse(actor,path,profileAudience,source == Source.DEFAULT)', network)
+        self.assertIn('new JSONObject(completed.getResult())', network)
+        self.assertEqual(network.count('actor.equals(D1DocumentStore.authenticatedUid())'), 1)
         self.assertIn('firestore.cacheDoc(path, snap, actor)', network)
 
     def test_mutation_invalidation_detaches_flights_without_caching_results(self):
         store = (BASE / 'D1DocumentStore.java').read_text()
         invalidation = store.split('void invalidateDoc(String path)', 1)[1].split('ListenerRegistration registerDocListener', 1)[0]
-        self.assertIn('documentReadFlights.invalidate(actor,path)', invalidation)
+        self.assertIn('documentReadFlights.invalidate(actor,documentReadKey(path,false))', invalidation)
+        self.assertIn('documentReadFlights.invalidate(actor,documentReadKey(path,true))', invalidation)
         helper = (BASE / 'DocumentReadFlights.java').read_text()
         self.assertIn('active.remove(key, shared)', helper)
         self.assertNotIn('postDelayed', helper)
