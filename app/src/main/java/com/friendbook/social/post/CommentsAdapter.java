@@ -559,6 +559,7 @@ public class CommentsAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
                 .setPositiveButton("Save", (d, w) -> {
                     String nv = e.getText().toString().trim();
                     if (nv.isEmpty()) return;
+                    List<Map<String,Object>> previousMentions=c.mentions;
                     c.mentions = com.friendbook.social.core.Mentions.capture(e);
                     if(!com.friendbook.social.core.D1Client.enabled(counterCollection)){
                         c.content = nv;c.edited = true;
@@ -566,6 +567,7 @@ public class CommentsAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
                     notifyDataSetChanged();
                     String cid = counterId != null ? counterId : c.postId;
                     CommentsEngine.editComment(counterCollection, cid, c, nv);
+                    if(com.friendbook.social.core.D1Client.enabled(counterCollection))c.mentions=previousMentions;
                 })
                 .setNegativeButton("Cancel", null)
                 .show();
