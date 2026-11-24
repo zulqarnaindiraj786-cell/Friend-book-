@@ -13,6 +13,7 @@ public final class LoopTrace {
     private static volatile String screen="unknown";
     private static volatile long generation;
     private static boolean hasSession;
+    private static long captureStartedUtcMillis;
     private LoopTrace(){}
     public static void screen(Activity activity){screen=activity.getClass().getSimpleName();}
     private static long now(){return SystemClock.elapsedRealtime();}
@@ -41,10 +42,10 @@ public final class LoopTrace {
         }catch(Exception ignored){return "";}
     }
     static synchronized void end(long session,int status,long duration){if(session==generation)BUFFER.end(now(),status,duration);}
-    private static String report(){return "Version "+BuildConfig.VERSION_NAME+" ("+BuildConfig.VERSION_CODE+")\n"+BUFFER.report(now());}
+    private static String report(){return "Version "+BuildConfig.VERSION_NAME+" ("+BuildConfig.VERSION_CODE+")\nCapture start UTC milliseconds (device clock): "+captureStartedUtcMillis+"\n"+BUFFER.report(now());}
     private static void save(Context context){context.getSharedPreferences("local_loop_trace",0).edit().putString("report",report()).apply();}
     private static synchronized void start(Context context,long duration){
-        long session=++generation;hasSession=true;BUFFER.start(now(),duration);
+        long session=++generation;hasSession=true;captureStartedUtcMillis=System.currentTimeMillis();BUFFER.start(now(),duration);
         // Clear previous report before recording; process death is not a silently resumed session.
         context.getSharedPreferences("local_loop_trace",0).edit().remove("report").apply();
         MAIN.postDelayed(()->{if(session==generation){BUFFER.stop(now());save(context);}},duration);
