@@ -42,6 +42,11 @@ class FeedReadBudgetTest(unittest.TestCase):
             self.assertIn(token,stories)
         self.assertNotIn('addSnapshotListener',stories)
         self.assertIn('More stories ›',(JAVA/'post/FeedAdapter.java').read_text())
+        adapter=(JAVA/'post/FeedAdapter.java').read_text()
+        rail=adapter.split('// 2. Tall Vertical Rounded Story Cards Rail',1)[1].split('View gap = new View(c);',1)[0]
+        self.assertIn('storyLayout.setItemPrefetchEnabled(false)',rail)
+        self.assertNotIn('loadMoreStories()',rail)
+        self.assertIn('moreStories.setOnClickListener(v -> { if(host!=null) host.loadMoreStories(); });',adapter)
     def test_no_reaction_collection_scan_on_feed_bind_or_tap(self):
         adapter=(JAVA/'post/FeedAdapter.java').read_text()
         self.assertNotIn('Reactions.syncPostReactions(c, p)',adapter)

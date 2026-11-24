@@ -2175,13 +2175,6 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             col.addView(rail, new LinearLayout.LayoutParams(-1, Ui.dp(c, 206)));
             moreStories=Ui.tvBold(c,"More stories ›",13,Ui.BLUE);
             Ui.pad(moreStories,12,8,12,8); col.addView(moreStories);
-            rail.addOnScrollListener(new RecyclerView.OnScrollListener() {
-                @Override public void onScrolled(RecyclerView view,int dx,int dy) {
-                    LinearLayoutManager manager=(LinearLayoutManager)view.getLayoutManager();
-                    if(dx>0 && manager!=null && manager.findLastVisibleItemPosition()>=storiesAdapter.getItemCount()-2
-                            && host!=null && host.hasMoreStories()) host.loadMoreStories();
-                }
-            });
 
             View gap = new View(c);
             gap.setBackgroundColor(Ui.bg(c));
