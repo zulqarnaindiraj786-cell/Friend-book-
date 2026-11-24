@@ -87,10 +87,13 @@ public class CommentsEngine {
         private String pinned="", actor=Fb.uid();
         private final Set<String> deleted=new HashSet<>();
         private boolean closed, paused, loading, more=true, cursorReady;
-        public void pause(){paused=true;pageAttempt++;loading=false;cancelConflictRetry();clearPageDeadline();}
+        private long pausedAt;
+        public void pause(){pausedAt=android.os.SystemClock.elapsedRealtime();paused=true;pageAttempt++;loading=false;cancelConflictRetry();clearPageDeadline();}
         public void resume(){
-            if(!active())return;paused=false;
-            if(d1Mode && !firstPageReady)d1Page(true);else emit();
+            if(!active() || !paused)return;
+            boolean expired=android.os.SystemClock.elapsedRealtime()-pausedAt>=120_000L;
+            paused=false;
+            if(d1Mode && (!firstPageReady || expired))d1Page(true,firstPageReady);else emit();
         }
         private int legacyLoaded=10, visible=10;
         private boolean d1Mode,loadedOlderD1,firstPageReady;private String collection,docId,key,nextD1;
