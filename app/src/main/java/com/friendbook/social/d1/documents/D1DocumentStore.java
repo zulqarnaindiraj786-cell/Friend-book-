@@ -25,6 +25,7 @@ public class D1DocumentStore {
     private static final D1DocumentStore INSTANCE = new D1DocumentStore();
     final DocumentReadFlights<String> documentReadFlights = new DocumentReadFlights<>();
     final DocumentReadFlights<QuerySnapshot> queryReadFlights = new DocumentReadFlights<>();
+    final DocumentReadFlights<String> listenerQueryReadFlights = new DocumentReadFlights<>();
     // Keep network work bounded: a cached pool can create one thread per slow request on flaky
     // mobile networks, which starves the UI and battery. Each listener has an
     // in-flight guard so slow polls cannot pile up every five seconds.
@@ -394,6 +395,7 @@ public class D1DocumentStore {
             documentReadFlights.invalidate(actor,documentReadKey(path,false));
             documentReadFlights.invalidate(actor,documentReadKey(path,true));
             queryReadFlights.invalidateAll();
+            listenerQueryReadFlights.invalidateAll();
             docCache.remove(scopedCacheKey(actor,path));
             docFetchedAt.remove(scopedCacheKey(actor,path));
             if(path.equals("users/"+actor))docCachedAt.remove(actor);
@@ -541,6 +543,7 @@ public class D1DocumentStore {
         // A push/commit may change a query's membership even without a known
         // document path. New reads must not join pre-invalidation work.
         queryReadFlights.invalidateAll();
+        listenerQueryReadFlights.invalidateAll();
         if ("posts".equals(parentPath)) postWriteVersion.incrementAndGet();
         // Invalidate locally without fetching hidden lists. Every cache-first collection needs
         // this, not just friends/groups; chat pages live in their own preferences namespace.
@@ -615,20 +618,44 @@ public class D1DocumentStore {
                 || "notifications".equals(path) || "friend_requests".equals(path);
         ExecutorService lane = ListenerPollingPolicy.isChatMessages(path) ? chatReadExecutor
                 : inbox ? inboxExecutor : listenerExecutor;
-        try { lane.execute(() -> {
-            // A push arriving after this point must get one follow-up read, even
-            // when the current HTTP request returns the pre-message snapshot.
-            entry.refreshPending.set(false);
-            boolean forceDelivery = entry.forceDelivery.getAndSet(false);
-            entry.lastAttemptMs = android.os.SystemClock.elapsedRealtime();
-            try { D1DocumentTransport.runForActor(entry.actor, () -> { deliverQuery(entry, forceDelivery); return null; }); }
-            catch (Exception ignored) { }
-            finally {
-                entry.inFlight.set(false);
-                if (entry.refreshPending.get()) scheduleQueryRead(entry);
-            }
-        }); }
-        catch (java.util.concurrent.RejectedExecutionException rejected) { entry.inFlight.set(false); }
+        entry.refreshPending.set(false);
+        boolean forceDelivery=entry.forceDelivery.getAndSet(false);
+        entry.lastAttemptMs=android.os.SystemClock.elapsedRealtime();
+        try {
+            org.json.JSONObject body=toQueryJson(entry.query);
+            if(entry.query.limitValue!=null && entry.query.limitValue<=40)
+                body.put("knownRevisions",entry.revisions);
+            readListenerQueryResponse(entry.actor,body,lane).addOnCompleteListener(Runnable::run,completed->{
+                try { deliverQuery(entry,forceDelivery,completed); }
+                finally {
+                    entry.inFlight.set(false);
+                    if(entry.refreshPending.get())scheduleQueryRead(entry);
+                }
+            });
+        } catch(Exception error) {
+            TaskCompletionSource<String> failed=new TaskCompletionSource<>();failed.setException(error);
+            try { deliverQuery(entry,forceDelivery,failed.getTask()); }
+            finally { entry.inFlight.set(false); }
+        }
+    }
+
+    /** Exact revision-bearing listener requests share the queued operation, not mutable deltas. */
+    Task<String> readListenerQueryResponse(String actor,org.json.JSONObject body,ExecutorService lane) {
+        final String wire=body.toString();
+        return listenerQueryReadFlights.read(actor,wire,true,()->{
+            TaskCompletionSource<String> result=new TaskCompletionSource<>();
+            try { lane.execute(()->{
+                try {
+                    String response=D1DocumentTransport.runForActor(actor,()->{
+                        if(!actor.equals(authenticatedUid()))throw new D1DocumentStoreException(D1DocumentStoreException.Code.CANCELLED,"Account changed before listener query");
+                        return D1DocumentTransport.listenerQuery(new org.json.JSONObject(wire)).toString();
+                    });
+                    if(!actor.equals(authenticatedUid()))throw new D1DocumentStoreException(D1DocumentStoreException.Code.CANCELLED,"Account changed during listener query");
+                    result.trySetResult(response);
+                } catch(Exception error) { result.trySetException(error); }
+            }); } catch(java.util.concurrent.RejectedExecutionException error) { result.trySetException(error); }
+            return result.getTask();
+        });
     }
 
     private void deliverDoc(DocListenerEntry entry,Task<String> completed) {
@@ -687,14 +714,13 @@ public class D1DocumentStore {
         return copy.toString();
     }
 
-    private void deliverQuery(QueryListenerEntry entry, boolean forceDelivery) {
-        if (!entry.active) return;
+    private void deliverQuery(QueryListenerEntry entry, boolean forceDelivery,Task<String> completed) {
+        if (!entry.active || !entry.actor.equals(authenticatedUid())) return;
         try {
-            org.json.JSONObject body=toQueryJson(entry.query);
+            if(!completed.isSuccessful())throw completed.getException()!=null?completed.getException():new java.io.IOException("Listener query cancelled");
+            org.json.JSONObject response=new org.json.JSONObject(completed.getResult());
             org.json.JSONArray arr;
             if(entry.query.limitValue!=null && entry.query.limitValue<=40) {
-                body.put("knownRevisions",entry.revisions);
-                org.json.JSONObject response=D1DocumentTransport.listenerQuery(body);
                 arr=response.getJSONArray("documents");
                 org.json.JSONArray order=response.optJSONArray("order");
                 if(order!=null) {
@@ -716,7 +742,7 @@ public class D1DocumentStore {
                 org.json.JSONObject versions=response.optJSONObject("revisions");
                 entry.revisions=versions==null?new org.json.JSONObject():versions;
                 entry.priorRows=arr;
-            } else arr=D1DocumentTransport.query(body);
+            } else arr=response.getJSONArray("documents");
             if (!entry.actor.equals(authenticatedUid())) return;
             String fp = arr.toString();
             cacheQuery(queryCacheKey(entry.query, entry.actor), ListenerPollingPolicy.isChatMessages(entry.query.parentPath)
