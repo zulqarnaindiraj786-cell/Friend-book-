@@ -529,7 +529,7 @@ public class CommentsAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
         }
         c.reactions = nextMap;
         c.likedBy = nextLikedBy;
-        c.likes = nextMap.size();
+        c.likes = reactionTotalAfter(previousLikes,previousReactions.size(),prev,nextType);
         notifyDataSetChanged(); // Instant 0ms UI update!
 
         String cid = counterId != null ? counterId : c.postId;
@@ -537,6 +537,13 @@ public class CommentsAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
             c.reactions=previousReactions;c.likedBy=previousLikedBy;c.likes=previousLikes;
             if(!activity.isFinishing() && !activity.isDestroyed())notifyDataSetChanged();
         });
+    }
+
+    // D1 returns the viewer's reaction, not every reactor identity. Preserve the server aggregate.
+    static int reactionTotalAfter(int total,int known,String previous,String next){
+        long base=Math.max(total,known);
+        long delta=previous==null && next!=null?1:previous!=null && next==null?-1:0;
+        return (int)Math.min(Integer.MAX_VALUE,Math.max(0L,base+delta));
     }
 
     private void editDialog(Models.Comment c) {

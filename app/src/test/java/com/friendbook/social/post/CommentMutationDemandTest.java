@@ -71,4 +71,12 @@ public class CommentMutationDemandTest {
   }
  }
 
+ @Test public void viewerOnlyReactionMapDoesNotEraseOtherPeoplesAggregate(){
+  assertEquals(121,CommentsAdapter.reactionTotalAfter(120,0,null,"like"));
+  assertEquals(120,CommentsAdapter.reactionTotalAfter(120,1,"like","love"));
+  assertEquals(119,CommentsAdapter.reactionTotalAfter(120,1,"love",null));
+  assertEquals(0,CommentsAdapter.reactionTotalAfter(0,0,null,null));
+  assertEquals(Integer.MAX_VALUE,CommentsAdapter.reactionTotalAfter(Integer.MAX_VALUE,0,null,"like"));
+ }
+
 }
