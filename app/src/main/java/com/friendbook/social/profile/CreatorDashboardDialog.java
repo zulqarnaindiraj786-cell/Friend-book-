@@ -78,7 +78,8 @@ public final class CreatorDashboardDialog {
         perfCard.setBackgroundColor(Ui.card(a));
         Ui.pad(perfCard, 14, 14, 14, 14);
         perfCard.addView(Ui.tvBold(a, "Performance overview", 16, Ui.txt(a)));
-        perfCard.addView(Ui.tv(a, "Live insights calculated from your posts & audience", 12, Ui.sub(a)));
+        perfCard.addView(Ui.tv(a, "Post metrics use loaded pages only; audience comes from your profile.", 12, Ui.sub(a)));
+        final LinearLayout insightsControls=Ui.col(a);perfCard.addView(insightsControls);
 
         LinearLayout row1 = Ui.row(a);
         row1.setPadding(0, Ui.dp(a, 10), 0, 0);
@@ -87,7 +88,7 @@ public final class CreatorDashboardDialog {
         row1.addView(statBox(a, "Post reach", vReach, "Est. impressions"), new LinearLayout.LayoutParams(0, -2, 1));
         LinearLayout.LayoutParams r1Right = new LinearLayout.LayoutParams(0, -2, 1);
         r1Right.leftMargin = Ui.dp(a, 8);
-        row1.addView(statBox(a, "Reactions", vLikes, "Total 👍❤️😂"), r1Right);
+        row1.addView(statBox(a, "Reactions", vLikes, "Loaded posts 👍❤️😂"), r1Right);
         perfCard.addView(row1);
 
         LinearLayout row2 = Ui.row(a);
@@ -110,8 +111,8 @@ public final class CreatorDashboardDialog {
         LinearLayout.LayoutParams lvlLp = new LinearLayout.LayoutParams(-1, -2);
         lvlLp.topMargin = Ui.dp(a, 8);
         Ui.pad(lvlCard, 14, 12, 14, 12);
-        final TextView lvlTitle = Ui.tvBold(a, "🏆 Creator Level 1 · Rising Star", 14, Ui.BLUE);
-        final TextView lvlDesc = Ui.tv(a, "Publish posts & reels to unlock higher reach!", 12, Ui.sub(a));
+        final TextView lvlTitle = Ui.tvBold(a, "🏆 Creator level — loading posts", 14, Ui.BLUE);
+        final TextView lvlDesc = Ui.tv(a, "Level estimate uses loaded posts only.", 12, Ui.sub(a));
         lvlCard.addView(lvlTitle);
         lvlCard.addView(lvlDesc);
 
@@ -126,16 +127,32 @@ public final class CreatorDashboardDialog {
 
         Switch proSw = new Switch(a);
         proSw.setChecked(u == null || u.professionalMode);
+        final boolean[] suppressSwitch={false};
+        final boolean[] dialogVisible={true};
         proSw.setOnCheckedChangeListener((btn, checked) -> {
+            if(suppressSwitch[0])return;
+            if(!me.equals(Fb.uid()) || a.isFinishing() || a.isDestroyed())return;
+            final boolean previous=u!=null?u.professionalMode:!checked;
+            final boolean previousMe=Fb.me!=null?Fb.me.professionalMode:previous;
             if (u != null) u.professionalMode = checked;
             if (Fb.me != null) Fb.me.professionalMode = checked;
-            levelSub.setText(checked
-                    ? "🎬 Digital creator · Professional Mode ON"
-                    : "Personal Profile · Professional Mode OFF");
-            Map<String, Object> up = new HashMap<>();
-            up.put("professionalMode", checked);
-            Fb.db().collection("users").document(me).set(up, SetOptions.merge());
-            if (onUpdated != null) onUpdated.run();
+            levelSub.setText(checked ? "🎬 Digital creator · Professional Mode ON" : "Personal Profile · Professional Mode OFF");
+            btn.setEnabled(false);
+            Map<String, Object> up = new HashMap<>();up.put("professionalMode", checked);
+            Fb.db().collection("users").document(me).set(up, SetOptions.merge()).addOnCompleteListener(task->{
+                if(!me.equals(Fb.uid()))return;
+                if(!task.isSuccessful()){
+                    if(u!=null)u.professionalMode=previous;
+                    if(Fb.me!=null)Fb.me.professionalMode=previousMe;
+                }
+                if(a.isFinishing() || a.isDestroyed())return;
+                if(!task.isSuccessful()){
+                    suppressSwitch[0]=true;proSw.setChecked(previous);suppressSwitch[0]=false;
+                    levelSub.setText(previous?"🎬 Digital creator · Professional Mode ON":"Personal Profile · Professional Mode OFF");
+                    Ui.toast(a,"Couldn't update professional mode. Please retry.");
+                } else if(dialogVisible[0] && onUpdated!=null)onUpdated.run();
+                btn.setEnabled(true);
+            });
         });
         proRow.addView(proSw);
         lvlCard.addView(proRow);
@@ -185,38 +202,40 @@ public final class CreatorDashboardDialog {
                 });
         root.addView(toolsCard, tLp);
 
+        final com.friendbook.social.d1.documents.ListenerRegistration[] insights={null};
+        android.app.Application.ActivityLifecycleCallbacks lifecycle=new android.app.Application.ActivityLifecycleCallbacks(){
+            public void onActivityCreated(Activity activity,android.os.Bundle state){}
+            public void onActivityStarted(Activity activity){}
+            public void onActivityResumed(Activity activity){}
+            public void onActivityPaused(Activity activity){}
+            public void onActivityStopped(Activity activity){if(activity==a && dlg.isShowing())dlg.dismiss();}
+            public void onActivitySaveInstanceState(Activity activity,android.os.Bundle state){}
+            public void onActivityDestroyed(Activity activity){if(activity==a && dlg.isShowing())dlg.dismiss();}
+        };
+        a.getApplication().registerActivityLifecycleCallbacks(lifecycle);
+        dlg.setOnDismissListener(ignored->{
+            dialogVisible[0]=false;
+            if(insights[0]!=null){insights[0].remove();insights[0]=null;}
+            a.getApplication().unregisterActivityLifecycleCallbacks(lifecycle);
+        });
         dlg.show();
-
-        // Live query of all user's posts to compute exact reactions, comments, shares & reach!
-        Fb.db().collection("posts").whereEqualTo("authorId", me).limit(150).get()
-                .addOnSuccessListener(snap -> {
-                    if (a.isFinishing() || snap == null) return;
-                    int posts = snap.size();
-                    int totalLikes = 0;
-                    int totalComments = 0;
-                    int totalShares = 0;
-                    for (DocumentSnapshot d : snap.getDocuments()) {
-                        Models.Post p = Models.Post.fromDoc(d);
-                        totalLikes += FastCache.getReactionTotal(p.id, p.likes);
-                        totalComments += Math.max(0, p.comments);
-                        totalShares += Math.max(0, p.shares);
+        insights[0]=com.friendbook.social.core.PagedLists.attach(a,insightsControls,
+                Fb.db().collection("posts").whereEqualTo("authorId",me),10,"creator-dashboard",(snap,err)->{
+                    if(!dlg.isShowing() || a.isFinishing() || a.isDestroyed() || !me.equals(Fb.uid()) || snap==null)return;
+                    int posts=snap.size(),totalLikes=0,totalComments=0,totalShares=0;
+                    for(DocumentSnapshot d:snap){
+                        Models.Post p=Models.Post.fromDoc(d);
+                        totalLikes+=FastCache.getReactionTotal(p.id,p.likes);
+                        totalComments+=Math.max(0,p.comments);totalShares+=Math.max(0,p.shares);
                     }
-                    int estReach = posts * 18 + totalLikes * 9 + totalComments * 14 + (followerCount + friendCount) * 5;
-                    vReach.setText(Format.count(estReach));
-                    vLikes.setText(Format.count(totalLikes));
-                    vComments.setText(Format.count(totalComments + totalShares));
-
-                    int score = posts + totalLikes + totalComments;
-                    if (score >= 50) {
-                        lvlTitle.setText("💎 Creator Level 3 · Pro Creator (" + posts + " posts)");
-                        lvlDesc.setText("Top engagement tier unlocked! Keep posting daily.");
-                    } else if (score >= 12) {
-                        lvlTitle.setText("🔥 Creator Level 2 · Growing Creator (" + posts + " posts)");
-                        lvlDesc.setText((50 - score) + " more engagements to reach Level 3 Pro!");
-                    } else {
-                        lvlTitle.setText("🏆 Creator Level 1 · Starter (" + posts + " posts)");
-                        lvlDesc.setText((12 - score) + " more engagements to unlock Level 2!");
-                    }
+                    int estReach=posts*18+totalLikes*9+totalComments*14+(followerCount+friendCount)*5;
+                    vReach.setText(Format.count(estReach));vLikes.setText(Format.count(totalLikes));
+                    vComments.setText(Format.count(totalComments+totalShares));
+                    int score=posts+totalLikes+totalComments;
+                    if(score>=50)lvlTitle.setText("💎 Level 3 · based on "+posts+" loaded posts");
+                    else if(score>=12)lvlTitle.setText("🔥 Level 2+ · based on "+posts+" loaded posts");
+                    else lvlTitle.setText("🏆 Level estimate · "+posts+" loaded posts");
+                    lvlDesc.setText("Loaded score: "+score+". More posts may increase this estimate.");
                 });
     }
 
