@@ -1964,6 +1964,8 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     }
 
     private void shareToFeedDialog(Models.Post p) {
+        final String actor=Fb.uid();
+        if(actor==null)return;
         Context c = activity;
         LinearLayout box = Ui.col(c);
         Ui.pad(box, 18, 10, 18, 0);
@@ -1973,6 +1975,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                 .setTitle("Share to your feed")
                 .setView(box)
                 .setPositiveButton("Share now", (d, w) -> {
+                    if(!java.util.Objects.equals(actor,Fb.uid()))return;
                     String baseId = p.sharedFromId != null && !p.sharedFromId.isEmpty() ? p.sharedFromId : p.id;
                     Map<String, Object> m = Fb.map(
                             "authorId", Fb.uid(),
@@ -1993,13 +1996,36 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                             "sharedFromMediaUrl", p.sharedFromId != null && !p.sharedFromId.isEmpty() ? p.sharedFromMediaUrl : (p.mediaUrl == null ? "" : p.mediaUrl),
                             "sharedFromMediaType", p.sharedFromId != null && !p.sharedFromId.isEmpty() ? p.sharedFromMediaType : p.mediaType,
                             "createdAt", FieldValue.serverTimestamp());
-                    Fb.db().collection("posts").add(m);
-                    Fb.db().collection("posts").document(p.id).update("shares", FieldValue.increment(1));
-                    Notify.send(p.authorId, "share", "shared your post", p.id);
-                    Ui.toast(c, "Shared to your feed ✓");
+                    submitFeedShare(actor,p,m);
                 })
                 .setNegativeButton("Cancel", null)
                 .show();
+    }
+
+    private static final Set<String> pendingFeedShares=java.util.Collections.synchronizedSet(new HashSet<>());
+    private void submitFeedShare(String actor,Models.Post post,Map<String,Object> data){
+        if(actor==null || post==null || post.id==null || !java.util.Objects.equals(actor,Fb.uid()))return;
+        final String key=actor+":"+post.id;
+        if(!com.friendbook.social.core.InteractionCooldown.acquire(actor,"feed-share:"+post.id)
+                || !pendingFeedShares.add(key))return;
+        com.friendbook.social.d1.documents.D1DocumentStore db=Fb.db();
+        com.friendbook.social.d1.documents.CollectionReference postsRef=db.collection("posts");
+        com.friendbook.social.d1.documents.WriteBatch batch=db.batch();
+        batch.set(postsRef.document(),data);
+        batch.update(postsRef.document(post.id),"shares",FieldValue.increment(1));
+        batch.commit().addOnCompleteListener(task->{
+            pendingFeedShares.remove(key);
+            if(!java.util.Objects.equals(actor,Fb.uid()))return;
+            if(task.isSuccessful()){
+                post.shares++;
+                Notify.send(post.authorId,"share","shared your post",post.id);
+                if(!activity.isFinishing() && !activity.isDestroyed()){
+                    notifyDataSetChanged();Ui.toast(activity,"Shared to your feed ✓");
+                }
+            }else if(!activity.isFinishing() && !activity.isDestroyed()){
+                Ui.toast(activity,"Couldn't share. Please try again.");
+            }
+        });
     }
 
     private void speakPost(String content) {
