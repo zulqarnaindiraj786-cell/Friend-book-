@@ -1,6 +1,6 @@
 # Targeted Home feed fix: add only the reviewed sparse exception index, then deploy.
 # Never execute the full migration chain or remove existing indexes/data.
-# Explicit rollout tag required; full local regressions precede deployment.
+# Explicit rollout tag required; source 4aa68a1 passed Worker validation.
 name: Deploy bounded timestamp feed head
 on:
   push:
