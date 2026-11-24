@@ -38,14 +38,43 @@ public final class LoopTrace {
         activity.startActivity(Intent.createChooser(send,"Share local trace report"));
     }
     public static void show(Activity activity){
-        new AlertDialog.Builder(activity).setTitle("Loop Trace — "+(BUFFER.active(now())?"RUNNING":"stopped"))
-            .setMessage("Local only. No tokens, user IDs, message text, full URLs or query values recorded. Covers shared Cloudflare HTTP, not all raw/media/third-party traffic or billed D1 rows. Stops automatically; keep this process alive. Start, use Feed/Chat/Reels/etc, return and share.\n\nStarting replaces the previous report.")
-            .setItems(new String[]{"Start 1-minute trace","Start 15-minute trace","Stop & Share report","View counts / last report","Delete trace"},(d,which)->{
-                if(which==0)start(activity.getApplicationContext(),60_000L);
-                if(which==1)start(activity.getApplicationContext(),900_000L);
-                if(which==2)share(activity);
-                if(which==3)Ui.info(activity,"Local trace",hasSession?report():activity.getSharedPreferences("local_loop_trace",0).getString("report","No saved report"));
-                if(which==4){generation++;BUFFER.stop(now());hasSession=false;activity.getSharedPreferences("local_loop_trace",0).edit().clear().apply();Ui.toast(activity,"Trace deleted");}
-            }).setNegativeButton("Close",null).show();
+        android.widget.LinearLayout body=new android.widget.LinearLayout(activity);
+        body.setOrientation(android.widget.LinearLayout.VERTICAL);
+        int pad=(int)(16*activity.getResources().getDisplayMetrics().density);
+        body.setPadding(pad,pad,pad,pad);
+        android.widget.TextView info=new android.widget.TextView(activity);
+        info.setText("Local shared-HTTP trace only; not billed D1 rows or every network client. No tokens, IDs, message text or query values recorded. Start, use the app, then return to Stop & Share. Keep the process alive. Starting replaces the previous report.");
+        body.addView(info);
+        android.widget.ScrollView scroll=new android.widget.ScrollView(activity);scroll.addView(body);
+        final AlertDialog dialog=new AlertDialog.Builder(activity)
+                .setTitle("Loop Trace — "+(BUFFER.active(now())?"RUNNING":"stopped"))
+                .setView(scroll).setNegativeButton("Close",null).create();
+        addButton(activity,body,"Start 1-minute trace",()->{
+            start(activity.getApplicationContext(),60_000L);dialog.setTitle("Loop Trace — RUNNING");
+        });
+        addButton(activity,body,"Start 15-minute trace",()->{
+            start(activity.getApplicationContext(),900_000L);dialog.setTitle("Loop Trace — RUNNING");
+        });
+        addButton(activity,body,"Stop trace",()->{
+            if(hasSession){BUFFER.stop(now());save(activity);}
+            dialog.setTitle("Loop Trace — stopped");Ui.toast(activity,"Trace stopped. Tap Share report.");
+        });
+        addButton(activity,body,"Stop & Share report",()->{
+            share(activity);dialog.setTitle("Loop Trace — stopped");
+        });
+        addButton(activity,body,"View counts / last report",()->
+            Ui.info(activity,"Local trace",hasSession?report():activity.getSharedPreferences("local_loop_trace",0).getString("report","No saved report")));
+        addButton(activity,body,"Delete trace",()->{
+            generation++;BUFFER.stop(now());hasSession=false;
+            activity.getSharedPreferences("local_loop_trace",0).edit().clear().apply();
+            dialog.setTitle("Loop Trace — stopped");Ui.toast(activity,"Trace deleted");
+        });
+        dialog.show();
+    }
+    private static void addButton(Activity activity,android.widget.LinearLayout body,String text,Runnable action){
+        android.widget.Button button=new android.widget.Button(activity);
+        button.setText(text);button.setAllCaps(false);
+        body.addView(button,new android.widget.LinearLayout.LayoutParams(-1,-2));
+        button.setOnClickListener(v->action.run());
     }
 }
