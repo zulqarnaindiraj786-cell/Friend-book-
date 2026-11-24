@@ -46,7 +46,16 @@ public class CommentCreateAckDemandTest {
    assertNotNull(local);pending.setResult(ack(local.id,true,true));Shadows.shadowOf(Looper.getMainLooper()).idle();
    assertTrue(saved[0]);assertEquals(2,post.comments);assertEquals(3,post.likes);assertEquals(local.id,post.inlineComments.get(0).id);
    assertEquals(originalAge,ages.get("posts/create-post"));
-   client.verify(()->D1Client.request("posts","create-post","reactions","GET",null,null),never());fb.verify(Fb::db,never());
+   client.verify(()->D1Client.request("posts","create-post","reactions","GET",null,null),never());
+   // A concurrent comment edit changes the snapshot while the POST is pending.
+   // The same actual send path must reject that baseline and refresh once.
+   TaskCompletionSource<JSONObject> next=new TaskCompletionSource<>();
+   client.when(()->D1Client.request(eq("posts"),eq("create-post"),eq("comments"),eq("POST"),any(JSONObject.class),isNull())).thenReturn(next.getTask());
+   client.clearInvocations();
+   Models.Comment second=CommentsEngine.sendComment("posts","create-post","create-post","again","","",(ok,error)->{});
+   D1Reactions.commentChanged("posts","create-post",new JSONObject().put("comment",row("old","other",1000)),"edit");
+   next.setResult(ack(second.id,true,true));Shadows.shadowOf(Looper.getMainLooper()).idle();
+   client.verify(()->D1Client.request("posts","create-post","reactions","GET",null,null),times(1));fb.verify(Fb::db,never());
   }
  }
  @Test public void duplicateInvisibleMalformedOrConcurrentAcksNeverIncrementTheBaseline()throws Exception {
