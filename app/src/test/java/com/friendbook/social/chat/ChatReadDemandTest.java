@@ -49,4 +49,30 @@ public class ChatReadDemandTest {
   }
  }
 
+ @Test public void hundredOpenChatRefreshesUseOneRequestAndDeadlineOnlyUnlocksUi()throws Exception{
+  try(MockedStatic<Fb> fb=mockStatic(Fb.class)){
+   fb.when(Fb::uid).thenReturn("refresh-chat-actor");ChatActivity a=Robolectric.buildActivity(ChatActivity.class).get();
+   set(a,"chatStarted",true);set(a,"messageActor","refresh-chat-actor");set(a,"chatId","refresh-chat");set(a,"msgReg",mock(ListenerRegistration.class));
+   set(a,"messageRefresh",new androidx.swiperefreshlayout.widget.SwipeRefreshLayout(a));
+   D1DocumentStore db=mock(D1DocumentStore.class);fb.when(Fb::db).thenReturn(db);
+   java.lang.reflect.Method refresh=ChatActivity.class.getDeclaredMethod("refreshOpenChat");refresh.setAccessible(true);
+   for(int i=0;i<100;i++)refresh.invoke(a);verify(db,times(1)).refreshChatMessages("refresh-chat");
+   Shadows.shadowOf(android.os.Looper.getMainLooper()).idleFor(java.time.Duration.ofSeconds(21));
+   verify(db,times(1)).refreshChatMessages("refresh-chat");
+   refresh.invoke(a);verify(db,times(2)).refreshChatMessages("refresh-chat");
+  }
+ }
+ @Test public void tenTeamMessagesUseOneBatchAndRepeatedRenderDoesNotRefetch()throws Exception{
+  try(MockedStatic<Fb> fb=mockStatic(Fb.class)){
+   fb.when(Fb::uid).thenReturn("team-chat-actor");ChatActivity a=Robolectric.buildActivity(ChatActivity.class).get();set(a,"isTeamChat",true);set(a,"chatStarted",true);
+   D1DocumentStore db=mock(D1DocumentStore.class);fb.when(Fb::db).thenReturn(db);CollectionReference chats=mock(CollectionReference.class),messages=mock(CollectionReference.class);DocumentReference shared=mock(DocumentReference.class);Query q=mock(Query.class);
+   when(db.collection("chats")).thenReturn(chats);when(chats.document("team_shared_reactions")).thenReturn(shared);when(shared.collection("messages")).thenReturn(messages);
+   when(messages.whereIn(any(FieldPath.class),anyList())).thenReturn(q);when(q.limit(10)).thenReturn(q);when(q.get()).thenReturn(Tasks.forResult(new QuerySnapshot(Collections.emptyList(),null,new SnapshotMetadata(false,false))));
+   List<Models.Message> page=new ArrayList<>();for(int i=0;i<10;i++){Models.Message m=new Models.Message();m.id="team"+i;m.text="announcement "+i;m.createdAt=i+100;page.add(m);}
+   java.lang.reflect.Method hydrate=ChatActivity.class.getDeclaredMethod("hydrateTeamSharedReactions",List.class);hydrate.setAccessible(true);
+   for(int i=0;i<100;i++)hydrate.invoke(a,page);
+   verify(q,times(1)).get();verify(messages).whereIn(any(FieldPath.class),argThat(ids->ids.size()==10));
+  }
+ }
+
 }

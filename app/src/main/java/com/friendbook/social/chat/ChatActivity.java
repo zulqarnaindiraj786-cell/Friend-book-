@@ -265,10 +265,7 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         messageRefresh = new androidx.swiperefreshlayout.widget.SwipeRefreshLayout(this);
         messageRefresh.setColorSchemeColors(Ui.BLUE);
         messageRefresh.addView(rv);
-        messageRefresh.setOnRefreshListener(() -> {
-            if (msgReg == null) { messageRefresh.setRefreshing(false); return; }
-            Fb.db().refreshChatMessages(chatId);
-        });
+        messageRefresh.setOnRefreshListener(this::refreshOpenChat);
         android.widget.FrameLayout messageWrap=new android.widget.FrameLayout(this);messageWrap.addView(messageRefresh,new android.widget.FrameLayout.LayoutParams(-1,-1));
         threadStatus=Ui.tv(this,"Opening conversation…",14,Ui.sub(this));
         threadStatus.setGravity(Gravity.CENTER); Ui.pad(threadStatus,20,8,20,8);
@@ -437,7 +434,25 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         return wrap;
     }
 
-    private boolean chatStarted;
+    private boolean chatStarted,chatRefreshInFlight;
+    private int chatRefreshAttempt;
+    private void refreshOpenChat(){
+        if(!chatStarted || msgReg==null || !java.util.Objects.equals(messageActor,Fb.uid())){
+            messageRefresh.setRefreshing(false);return;
+        }
+        if(chatRefreshInFlight)return;
+        if(!com.friendbook.social.core.InteractionCooldown.acquire(messageActor,"chat-refresh:"+chatId)){
+            messageRefresh.setRefreshing(false);return;
+        }
+        chatRefreshInFlight=true;final int attempt=++chatRefreshAttempt,generation=historyGeneration;
+        final String actor=messageActor;
+        Fb.db().refreshChatMessages(chatId);
+        messageRefresh.postDelayed(()->{
+            if(activeChatRead(actor,generation) && attempt==chatRefreshAttempt){
+                chatRefreshInFlight=false;messageRefresh.setRefreshing(false);
+            }
+        },20_000L);
+    }
     private boolean activeChatRead(String actor,int generation){
         return chatStarted && generation==historyGeneration && java.util.Objects.equals(actor,Fb.uid())
                 && !isFinishing() && !isDestroyed();
@@ -548,7 +563,9 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
                 .limitToLast(10)
                 .addSnapshotListener(com.friendbook.social.d1.documents.MetadataChanges.INCLUDE, (snap, err) -> {
                     if (!activeChatRead(chatActor,chatGeneration)) return;
-                    if (snap == null || !snap.getMetadata().isFromCache()) messageRefresh.setRefreshing(false);
+                    if (snap == null || !snap.getMetadata().isFromCache()) {
+                        chatRefreshInFlight=false;messageRefresh.setRefreshing(false);
+                    }
                     if(snap==null) {
                         if(err!=null && (err.getCode()==com.friendbook.social.d1.documents.D1DocumentStoreException.Code.PERMISSION_DENIED
                                 || err.getCode()==com.friendbook.social.d1.documents.D1DocumentStoreException.Code.UNAUTHENTICATED)) {
@@ -662,7 +679,7 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
                             break;
                         }
                     }
-                    hydrateTeamSharedReactions(list);
+                    hydrateTeamSharedReactions(new ArrayList<>(messageSnapshots.values()));
                     historyButton.setVisibility(View.GONE);
                     if (nearBottom && !list.isEmpty() && (!initialScrollDone || forceScrollBottom || (rv.getScrollState() == RecyclerView.SCROLL_STATE_IDLE && list.size() > prevCount))) {
                         initialScrollDone = true;
@@ -781,7 +798,7 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
     @Override
     protected void onStop() {
         super.onStop();
-        chatStarted=false;historyGeneration++; historyLoading=false;
+        chatStarted=false;chatRefreshInFlight=false;chatRefreshAttempt++;historyGeneration++; historyLoading=false;
         if (msgReg != null) msgReg.remove();
         if (userReg != null) userReg.remove();
         if (roomReg != null) roomReg.remove();
@@ -1248,23 +1265,32 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
 
     private void hydrateTeamSharedReactions(List<Models.Message> messages) {
         if (!isTeamChat || messages == null || messages.isEmpty()) return;
-        for (final Models.Message m : messages) {
-            if (m == null || m.id == null || !hydratedTeamMsgIds.add(m.id)) continue;
-            final String sharedDocId = m.sharedTeamReactionDocId();
-            Fb.db().collection("chats").document("team_shared_reactions")
-                    .collection("messages").document(sharedDocId)
-                    .get()
-                    .addOnSuccessListener(doc -> {
-                        if (isFinishing() || doc == null || !doc.exists()) return;
-                        Models.Message shared = Models.Message.fromDoc(doc);
-                        if (shared.reactions == null || shared.reactions.isEmpty()) return;
-                        if (m.reactions == null) m.reactions = new HashMap<>();
-                        if (m.reactorNames == null) m.reactorNames = new HashMap<>();
-                        if (m.reactorPhotos == null) m.reactorPhotos = new HashMap<>();
-                        m.reactions.putAll(shared.reactions);
-                        if (shared.reactorNames != null) m.reactorNames.putAll(shared.reactorNames);
-                        if (shared.reactorPhotos != null) m.reactorPhotos.putAll(shared.reactorPhotos);
-                        adapter.notifyDataSetChanged();
+        final String actor=Fb.uid();final int generation=historyGeneration;
+        Map<String,List<Models.Message>> bySharedId=new java.util.LinkedHashMap<>();
+        for(Models.Message m:messages){
+            if(m==null || m.id==null || !hydratedTeamMsgIds.add(m.id))continue;
+            bySharedId.computeIfAbsent(m.sharedTeamReactionDocId(),key->new ArrayList<>()).add(m);
+        }
+        for(List<String> ids:Ui.chunks(new ArrayList<>(bySharedId.keySet()),10)){
+            Fb.db().collection("chats").document("team_shared_reactions").collection("messages")
+                    .whereIn(com.friendbook.social.d1.documents.FieldPath.documentId(),ids).limit(10).get()
+                    .addOnSuccessListener(snap->{
+                        if(!activeChatRead(actor,generation))return;
+                        boolean changed=false;
+                        for(DocumentSnapshot doc:snap){
+                            Models.Message shared=Models.Message.fromDoc(doc);
+                            if(shared.reactions==null || shared.reactions.isEmpty())continue;
+                            for(Models.Message m:bySharedId.getOrDefault(doc.getId(),java.util.Collections.emptyList())){
+                                if(m.reactions==null)m.reactions=new HashMap<>();
+                                if(m.reactorNames==null)m.reactorNames=new HashMap<>();
+                                if(m.reactorPhotos==null)m.reactorPhotos=new HashMap<>();
+                                m.reactions.putAll(shared.reactions);
+                                if(shared.reactorNames!=null)m.reactorNames.putAll(shared.reactorNames);
+                                if(shared.reactorPhotos!=null)m.reactorPhotos.putAll(shared.reactorPhotos);
+                                changed=true;
+                            }
+                        }
+                        if(changed)adapter.notifyDataSetChanged();
                     });
         }
     }
