@@ -1550,12 +1550,22 @@ async function boundedFeedPage(db,uid,spec,requestUserReads) {
   if (root!=='posts' && root!=='reels') return null;
   const filters=Array.isArray(spec?.filters)?spec.filters:[];
   const author=filters.length===1 && filters[0]?.field==='authorId' && filters[0]?.op==='==' && typeof filters[0]?.value==='string' ? filters[0].value : null;
-  const authorArgs=author===null?[]:[author];
-  const authorField="json_extract(document_json,'$.authorId')";
-  const byAuthor=author===null?'':` AND ${authorField}=?`;
+  const groupFilter=filters.find(f=>f?.field==='groupId' && f.op==='==' && typeof f.value==='string');
+  // Group feed and its explicit pending tab only. Other query shapes retain the
+  // generic evaluator; client-provided group IDs never grant access.
+  const group=groupFilter && filters.filter(f=>f?.field==='groupId').length===1
+      && filters.every(f=>f===groupFilter || (f?.field==='groupApprovalStatus' && f.op==='==' && f.value==='pending'))
+      && filters.length<=2 ? groupFilter.value : null;
+  const pending=group!==null && filters.some(f=>f?.field==='groupApprovalStatus');
+  const groupIndex=pending?'idx_cf_group_pending_page':'idx_cf_group_posts_page';
+  const scoped=author!==null?author:group;
+  const scopedArgs=scoped===null?[]:[scoped];
+  const byScoped=author!==null ? " AND json_extract(document_json,'$.authorId')=?"
+      : group!==null ? " AND json_type(document_json,'$.groupId')='text' AND json_extract(document_json,'$.groupId')=?"
+          +(pending?" AND json_extract(document_json,'$.groupApprovalStatus')='pending'":'') : '';
   if ((root==='reels' && filters.length) || !Array.isArray(spec.orderBy) || spec.orderBy.length!==1
       || spec.orderBy[0]?.field!=='createdAt' || spec.orderBy[0]?.direction!=='DESCENDING'
-      || (filters.length && author===null) || spec.limitToLast || spec.startAt || spec.endAt || spec.endBefore
+      || (filters.length && author===null && group===null) || spec.limitToLast || spec.startAt || spec.endAt || spec.endBefore
       || !Number.isInteger(spec.limit) || spec.limit<=0 || spec.limit>100) return null;
   let cursor=null;
   if (spec.startAfter) {
@@ -1570,17 +1580,17 @@ async function boundedFeedPage(db,uid,spec,requestUserReads) {
     OR (json_type(document_json,'$.createdAt')='object' AND json_extract(document_json,'$.createdAt.__type')='timestamp'
       AND json_type(document_json,'$.createdAt.millis')='integer' AND json_extract(document_json,'$.createdAt.millis') BETWEEN -9007199254740991 AND 9007199254740991)),0)=0`;
   const canonicalException=`(doc_id GLOB '*[^ -~]*' OR path<>'${root}/'||doc_id OR ${standard})`;
-  const exceptionIndex=root==='posts'?'feed_exceptions':'reels_feed_exceptions';
+  const exceptionIndex=group!==null?'group_posts_exceptions':root==='posts'?'feed_exceptions':'reels_feed_exceptions';
   // A few unusual timestamps (including on author pages) must not force
   // the fallback. Merge only matching exceptions into the normal keyset stream.
   let unusual;
   try {
     unusual=await (
       db.prepare(`SELECT * FROM friendbook_cf_firestore_documents INDEXED BY idx_cf_${exceptionIndex}
-        WHERE parent_path='${root}'${byAuthor} AND ${canonicalException} LIMIT 129`).bind(...authorArgs).all()
+        WHERE parent_path='${root}'${byScoped} AND ${canonicalException} LIMIT 129`).bind(...scopedArgs).all()
     );
   } catch(error) {
-    if (/no such index: idx_cf_(?:legacy_)?(?:reels_)?feed_exceptions/.test(String(error))) return null;
+    if (/no such index: idx_cf_(?:(?:legacy_)?(?:reels_)?feed_exceptions|group_posts_exceptions)/.test(String(error))) return null;
     throw error;
   }
   const odd=unusual.results||[];
@@ -1594,7 +1604,7 @@ async function boundedFeedPage(db,uid,spec,requestUserReads) {
   for (let pass=0;;pass++) {
     const chunk=pass===0 ? spec.limit : Math.min(100,Math.max(20,spec.limit*2));
     const bound=cursor?` AND (${rank},${time},a.doc_id)<(?,?,?)`:'';
-    const args=[...authorArgs,...(cursor||[]),chunk];
+    const args=[...scopedArgs,...(cursor||[]),chunk];
     let batches;
     try {
       // SQLite's tuple comparison on the expression index can scan from the
@@ -1611,7 +1621,12 @@ async function boundedFeedPage(db,uid,spec,requestUserReads) {
           ORDER BY quota_feed_rank DESC,quota_feed_time DESC,doc_id DESC LIMIT ?`)
           .bind(...prefix,4,cursor[1],cursor[1],cursor[2],chunk,...prefix,2,chunk,chunk).all();
       };
-      if (cursor && author===null) {
+      if (cursor && group!==null) {
+        batches=await Promise.all([
+          seekWindow('a.path,a.parent_path,a.collection_id,a.doc_id,a.owner_uid,a.document_json,a.create_time,a.update_time',
+            'friendbook_cf_firestore_documents',groupIndex,`a.parent_path='posts'${byScoped} AND NOT ${canonicalException}`,[group]),
+        ]);
+      } else if (cursor && author===null) {
         batches=await Promise.all([
           seekWindow('a.path,a.parent_path,a.collection_id,a.doc_id,a.owner_uid,a.document_json,a.create_time,a.update_time',
             'friendbook_cf_firestore_documents',`idx_cf_${root}_feed_page`,`a.parent_path='${root}' AND NOT ${canonicalException}`),
@@ -1624,25 +1639,25 @@ async function boundedFeedPage(db,uid,spec,requestUserReads) {
         try {
           batches=await Promise.all([
             seekWindow('a.path,a.parent_path,a.collection_id,a.doc_id,a.owner_uid,a.document_json,a.create_time,a.update_time',
-              'friendbook_cf_firestore_documents','idx_cf_posts_author_page',`a.parent_path='posts'${byAuthor} AND NOT ${canonicalException}`,[author]),
+              'friendbook_cf_firestore_documents','idx_cf_posts_author_page',`a.parent_path='posts'${byScoped} AND NOT ${canonicalException}`,[author]),
           ]);
         } catch (error) {
           if (!/no such index: idx_cf_(?:legacy_)?posts_author_page/.test(String(error))) throw error;
           batches=await Promise.all([
             db.prepare(`SELECT a.path,a.parent_path,a.collection_id,a.doc_id,a.owner_uid,a.document_json,a.create_time,a.update_time
-              FROM friendbook_cf_firestore_documents a WHERE a.parent_path='posts'${byAuthor}${bound} AND NOT ${canonicalException}
+              FROM friendbook_cf_firestore_documents a WHERE a.parent_path='posts'${byScoped}${bound} AND NOT ${canonicalException}
               ORDER BY ${rank} DESC,${time} DESC,a.doc_id DESC LIMIT ?`).bind(...args).all(),
           ]);
         }
       } else {
         batches=await Promise.all([
           db.prepare(`SELECT a.path,a.parent_path,a.collection_id,a.doc_id,a.owner_uid,a.document_json,a.create_time,a.update_time
-            FROM friendbook_cf_firestore_documents a ${author===null?`INDEXED BY idx_cf_${root}_feed_page`:''} WHERE a.parent_path='${root}'${byAuthor}${bound} AND NOT ${canonicalException}
+            FROM friendbook_cf_firestore_documents a ${group!==null?`INDEXED BY ${groupIndex}`:author===null?`INDEXED BY idx_cf_${root}_feed_page`:''} WHERE a.parent_path='${root}'${byScoped}${bound} AND NOT ${canonicalException}
             ORDER BY ${rank} DESC,${time} DESC,a.doc_id DESC LIMIT ?`).bind(...args).all(),
         ]);
       }
     } catch(error) {
-      if (/no such index: idx_cf_(?:legacy_)?(?:posts|reels)_feed_page/.test(String(error))) return null;
+      if (/no such index: idx_cf_(?:(?:legacy_)?(?:posts|reels)_feed_page|group_posts_page|group_pending_page)/.test(String(error))) return null;
       throw error;
     }
     const [canonical]=batches;
@@ -1652,7 +1667,8 @@ async function boundedFeedPage(db,uid,spec,requestUserReads) {
     const nextCursor=last?[typeof value==='number'?2:4,typeof value==='number'?value:value.millis,last.id]:null;
     const split=docs.length<chunk ? exceptions.length : exceptions.findIndex(doc=>
       compareDocumentToCursor(doc,[value,last.id],spec.orderBy)>0);
-    const merged=sortDocuments([...docs,...exceptions.splice(0,split<0?exceptions.length:split)],spec.orderBy);
+    const merged=sortDocuments([...docs,...exceptions.splice(0,split<0?exceptions.length:split)],spec.orderBy)
+      .filter(doc=>filters.every(filter=>matchesFilter(doc.data,filter,doc.id)));
     // The same checks used by the normal document query; privacy is never inferred
     // from the client-supplied author, a stale legacy mirror, or the SQL sort key.
     let deniedBurst=1;

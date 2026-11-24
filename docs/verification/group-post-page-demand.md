@@ -1,0 +1,11 @@
+# Group post paging: backend scan eliminated on ordinary pages
+
+Group discussion and moderation request ten posts at a time, ordered by `createdAt` descending, but the old Worker selected every canonical post in the requested group before ordering, visibility checks and the page limit. This is a source-identified amplification; production query analytics do not establish how much of the reported quota drain belongs to this screen.
+
+The Worker now seeks group-specific ordered index heads for the actual discussion/manage query and a separate pending-only index for the moderation queue. It merges bounded unusual timestamps/IDs, and applies the same raw filters and per-request canonical author/group/privacy/friendship authorization before returning a page. Cursor seeks preserve numeric/timestamp ordering and ID ties. Unknown query shapes, exceptional overflow, and older schemas use the existing canonical evaluator; storage errors fail closed. No legacy table read fallback is added.
+
+Migration `0096_group_post_page.sql` adds a group-post page index, a pending-only page index and an unusual-record exception index. These add maintenance writes only for qualifying group posts, pending posts, or exceptional group posts respectively; existing indexes and triggers remain untouched. The compatibility path can still read a full group when exceptions exceed 128 or a required index is missing. Denied candidates must still be checked until an authorized page is found.
+
+Actual Worker/SQLite tests cover 5,000 other-group posts and 800 target-group posts; page and cursor parity with the generic evaluator across two time types, tied timestamps, pending/approved visibility, owner/member/nonmember ACLs, unusual timestamp, group revocation, error fail-closed, and missing-index compatibility. EXPLAIN tests require group-prefixed index seeks including later time cursors. A second test verifies page-bundled viewer-specific reactions and comment preview remain correct. Candidate rows in these tests are not Cloudflare billed-read counters.
+
+Before rollout: `npm test` 305 passed, Python 512 passed, schema/migration/index-plan checks passed, 30-user offline replay ran 48 workloads, diff check passed. Migration 0096 must be applied before deploying the optimized Worker. No APK, merge or completed-day quota proof.
