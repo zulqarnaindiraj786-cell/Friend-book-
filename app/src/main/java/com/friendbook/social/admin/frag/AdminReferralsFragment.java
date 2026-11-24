@@ -49,6 +49,10 @@ public class AdminReferralsFragment extends Fragment {
     private Adapter adapter;
     private ListenerRegistration reg;
     private TextView summary;
+    private LinearLayout pageControls;
+    private boolean started;
+    private String actor;
+    private int loadGeneration;
 
     @Nullable
     @Override
@@ -66,15 +70,20 @@ public class AdminReferralsFragment extends Fragment {
         adapter = new Adapter();
         rv.setAdapter(adapter);
         root.addView(rv, new LinearLayout.LayoutParams(-1, 0, 1));
+        pageControls=Ui.col(a);root.addView(pageControls);
         return root;
     }
 
     @Override
     public void onStart() {
         super.onStart();
-        reg = Fb.db().collection("referrals")
-                .orderBy("date", Query.Direction.DESCENDING).limit(400)
-                .addSnapshotListener((snap, err) -> {
+        android.app.Activity a=getActivity();
+        if(a==null || !Admin.isAdmin() || Fb.uid()==null)return;
+        if(actor!=null && !actor.equals(Fb.uid())){a.finish();return;}
+        actor=Fb.uid();started=true;
+        reg = com.friendbook.social.core.PagedLists.attach(a,pageControls,
+                Fb.db().collection("referrals").orderBy("date", Query.Direction.DESCENDING),
+                10,"admin-referrals",(snap, err) -> {
                     if (snap == null) return;
                     Map<String, Integer> counts = new HashMap<>();
                     Map<String, Long> latest = new HashMap<>();
@@ -96,8 +105,6 @@ public class AdminReferralsFragment extends Fragment {
                 });
     }
 
-    int pendingNames = 0;
-
     private void rebuild(Map<String, Integer> counts, Map<String, Long> latest,
                          Map<String, List<String>> kids, int total) {
         android.app.Activity a = getActivity();
@@ -115,23 +122,26 @@ public class AdminReferralsFragment extends Fragment {
         }
         inviters.sort((x, y) -> Integer.compare(y.count, x.count));
         adapter.notifyDataSetChanged();
-        summary.setText(total + " total referral signups · " + inviters.size() + " inviters");
+        summary.setText(total + " loaded referrals · " + inviters.size() + " inviters (loaded pages only)");
 
-        // resolve names (cached-ish lookups)
-        pendingNames = inviters.size();
+        final int generation=++loadGeneration;
+        final String owner=actor;
+        final int[] pendingNames={inviters.size()};
         for (Inviter it : inviters) {
-            Fb.getUser(it.uid).addOnSuccessListener(u -> {
+            Fb.getUser(it.uid).addOnCompleteListener(task -> {
+                if(!started || generation!=loadGeneration || !java.util.Objects.equals(owner,Fb.uid()) || getActivity()==null)return;
+                Models.User u=task.isSuccessful()?task.getResult():null;
                 if (u != null) {
                     it.name = u.displayName;
                     it.email = u.email;
                     it.photo = u.photoUrl;
                     it.verified = u.isVerified;
                 }
-                if (--pendingNames <= 0) {
+                if (--pendingNames[0] == 0) {
                     int done = 0;
                     for (Inviter i2 : inviters) if (i2.count >= Admin.REFERRALS_BLUE) done++;
-                    summary.setText(total + " referral signups · " + inviters.size() + " inviters · "
-                            + done + " reached 5/5 ✓");
+                    summary.setText(total + " loaded referrals · " + inviters.size() + " inviters · "
+                            + done + " with 5+ in loaded pages");
                 }
                 adapter.notifyDataSetChanged();
             });
@@ -141,15 +151,16 @@ public class AdminReferralsFragment extends Fragment {
     @Override
     public void onStop() {
         super.onStop();
-        if (reg != null) reg.remove();
+        started=false;loadGeneration++;
+        if (reg != null) {reg.remove();reg=null;}
     }
 
     private void detail(Inviter it) {
         android.app.Activity a = getActivity();
         if (a == null) return;
         StringBuilder sb = new StringBuilder();
-        sb.append(it.count).append("/").append(Admin.REFERRALS_BLUE).append(" referrals");
-        if (it.count >= Admin.REFERRALS_BLUE) sb.append(" — free tick earned ✓");
+        sb.append(it.count).append(" referrals in loaded pages");
+        if (it.count >= Admin.REFERRALS_BLUE) sb.append(" — 5+ loaded referrals");
         sb.append("\n\nInvitees:\n");
         java.util.Set<String> seen = new java.util.HashSet<>(it.invitees);
         for (String uid : seen) sb.append("• ").append(uid, 0, Math.min(10, uid.length())).append("…\n");
@@ -204,7 +215,7 @@ public class AdminReferralsFragment extends Fragment {
             h.name.setText(it.name);
             h.tick.setVisibility(it.verified ? View.VISIBLE : View.GONE);
             h.sub.setText(it.email + " · last invite " + Format.ago(it.latest));
-            h.prog.setText(it.count + "/" + Admin.REFERRALS_BLUE);
+            h.prog.setText(it.count + " loaded");
             h.prog.setTextColor(it.count >= Admin.REFERRALS_BLUE ? Ui.GREEN : Ui.BLUE);
             h.itemView.setOnClickListener(v -> detail(it));
         }

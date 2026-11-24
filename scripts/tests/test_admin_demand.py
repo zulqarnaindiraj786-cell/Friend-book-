@@ -30,3 +30,16 @@ class AdminDemand(unittest.TestCase):
         self.assertIn('actionCompleted.put(id,success)',report)
         self.assertIn('actionCompleted.containsKey(id)',report)
         self.assertIn('report kept in queue',report)
+
+    def test_referrals_page_and_names_are_lifecycle_scoped(self):
+        code=(JAVA/'admin/frag/AdminReferralsFragment.java').read_text()
+        for token in ['PagedLists.attach','10,"admin-referrals"','loaded referrals','loadGeneration++','generation!=loadGeneration','addOnCompleteListener(task ->','Objects.equals(owner,Fb.uid())']:
+            self.assertIn(token,code)
+        self.assertNotIn('.limit(400)',code)
+        self.assertNotIn('total referral signups',code)
+
+    def test_admin_live_pages_and_confirms_end_once(self):
+        code=(JAVA/'admin/frag/AdminLiveFragment.java').read_text()
+        for token in ['new com.friendbook.social.core.CursorPager(query,10','pages.startObserved()','query.limit(10).addSnapshotListener','pages.next()','pages.close()','pendingEnds.add(id)','if(task.isSuccessful())endedIds.add(id)','Objects.equals(owner,Fb.uid())']:
+            self.assertIn(token,code)
+        self.assertNotIn('.limit(50)',code)
