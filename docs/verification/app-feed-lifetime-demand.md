@@ -16,5 +16,5 @@ Source verified: f0f0b7e. Android compile/full JVM workflow 45331457582 succeede
 - HomeRefreshDemandTest: 100 refresh gestures during a pending page start no work; confirmed empty feed clears cache once.
 - HomeAccountScopeTest: actor transition clears old models and cursor without a database request.
 
-## Still open
-The complete Feed acceptance checklist is not signed off. Remaining consolidated audit includes adapter author hydration, observer feedback, reaction/comment/share-driven reload paths, cache/delta/page boundaries and bounded failure behavior. These tests establish the listed regressions only, not measured production reads/writes or resolution of the reported rapid quota consumption. No intermediate download or owner trace is requested.
+## Follow-up verification
+The remaining source/automated checklist was reviewed and regressions added in follow-up commits through f0b194e; see `app-feed-completion-checklist.md`. Android compile/full JVM workflow 45333217623 succeeded; Python suite 451 passed. That follow-up includes detached author callbacks, reaction observer feedback, comment navigation, atomic/coalesced share commits, cached-tail and offline cursor boundaries, and authoritative stale-head revalidation instead of a new-ID-only delta. This does not measure production reads/writes or certify resolution of the reported rapid quota consumption. No intermediate download or owner trace is requested.
