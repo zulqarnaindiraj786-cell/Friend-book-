@@ -186,6 +186,21 @@ def safe_shape(sql):
         ('limit ','row_limit'),('json_each(','json_array_iteration'),
         ('json_extract(','json_field_predicate')]
         if token in q]
+    # Fixed SQL index identifiers only; do not emit query text or bind values.
+    for index,label in (
+        ('idx_cf_feed_exceptions','feed_exception_probe'),
+        ('idx_cf_posts_feed_page','posts_feed_seek'),
+        ('idx_cf_posts_author_page','author_post_seek'),
+        ('idx_cf_group_posts_page','group_post_seek'),
+        ('idx_cf_group_pending_page','group_pending_seek'),
+        ('idx_cf_group_posts_exceptions','group_exception_probe'),
+        ('idx_cf_video_post_page','video_post_seek'),
+        ('idx_cf_story_author_page','author_story_seek'),
+        ('idx_cf_story_author_exceptions','author_story_exception_probe'),
+        ('idx_cf_story_expiry_page','story_expiry_seek'),
+        ('idx_cf_story_expiry_exceptions','story_expiry_exception_probe')):
+        if re.search(r'\bindexed\s+by\s+'+index+r'\b',q):features.append(label)
+    if re.search(r'\bfriendbook_cf_post_search\s+match\b',q):features.append('post_tag_fts')
     tables=[label for table,label in (
         ('friendbook_cf_firestore_documents','canonical_documents'),
         ('friendbook_cf_documents','legacy_mirror'),

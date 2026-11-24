@@ -105,6 +105,14 @@ class TrafficReport(unittest.TestCase):
             row['sum']['rowsReturned']=bad
             with self.assertRaises(ValueError):p.parse_groups(payload([row]),True)
 
+    def test_bounded_post_and_story_seek_labels_are_allowlisted_and_private(self):
+        shape=p.safe_shape("SELECT * FROM friendbook_cf_firestore_documents INDEXED BY idx_cf_feed_exceptions WHERE parent_path='posts' AND path='SECRET'")
+        self.assertIn('feed_exception_probe',shape['features'])
+        self.assertNotIn('SECRET',json.dumps(shape))
+        self.assertIn('author_story_seek',p.safe_shape('SELECT * FROM friendbook_cf_firestore_documents INDEXED BY idx_cf_story_author_page')['features'])
+        self.assertIn('post_tag_fts',p.safe_shape('SELECT * FROM friendbook_cf_post_search WHERE friendbook_cf_post_search MATCH ?')['features'])
+        self.assertNotIn('feed_exception_probe',p.safe_shape('SELECT idx_cf_feed_exceptions_not_real FROM private')['features'])
+
     def test_multiline_upserts_are_not_mislabeled_as_plain_inserts(self):
         shape=p.safe_shape('INSERT INTO friendbook_cf_documents VALUES (?,?) ON\n   CONFLICT(path) DO UPDATE SET document_json=?')
         self.assertIn('upsert',shape['features'])
