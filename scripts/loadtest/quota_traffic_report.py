@@ -240,6 +240,14 @@ def safe_shape(sql):
         roots.append('notifications')
         callers.append('document:notifications')
     if callers: result['writer_families']=callers
+    # The Worker labels generic collection scans with reviewed, constant
+    # aliases. Do not derive roots from bind values or arbitrary identifiers.
+    scan_roots=('users','posts','reels','stories','pages','groups','chats','friend_requests','comments','likes',
+                'followers','following','saves','payments','subscriptions','reports','feedback','gifts','lives','messages','other','nested')
+    for root in scan_roots:
+        suffixes=('_count','_recent','_name','_stars','_membership','_filtered','_page','_list','') if root=='users' else ('',)
+        for suffix in suffixes:
+            if re.search(r'\bas quota_root_'+root+suffix+r'\b',q):result['collection_scan_family']=root+suffix
     # Fixed diagnostic labels only, never arbitrary aliases or SQL text.
     aliases=[name for name in ('canonical','legacy','current','mirror','sampled','legacy_only',
                               'canonical_rows','legacy_rows','canonical_count','legacy_count','remaining','total','n')

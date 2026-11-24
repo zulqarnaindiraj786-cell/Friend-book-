@@ -89,6 +89,17 @@ class TrafficReport(unittest.TestCase):
             self.assertNotIn(secret.lower(),json.dumps(shape).lower())
         self.assertNotIn('redacted_unmapped_canonical_structure',p.safe_shape("SELECT * FROM friendbook_cf_firestore_documents WHERE path='secret'"))
 
+    def test_scan_family_only_accepts_exact_fixed_worker_aliases(self):
+        for suffix in ('','_count','_recent','_name','_stars','_membership','_filtered','_page','_list'):
+            q="SELECT path FROM friendbook_cf_firestore_documents AS quota_root_users"+suffix+" WHERE parent_path=?"
+            self.assertEqual(p.safe_shape(q)['collection_scan_family'],'users'+suffix)
+        q="SELECT path FROM friendbook_cf_firestore_documents AS quota_root_nested WHERE parent_path=?"
+        self.assertEqual(p.safe_shape(q)['collection_scan_family'],'nested')
+        for alias in ('quota_root_private','quota_root_users_private','quota_root_nested_private'):
+            q='SELECT path FROM friendbook_cf_firestore_documents AS '+alias+' WHERE parent_path=?'
+            self.assertNotIn('collection_scan_family',p.safe_shape(q))
+            self.assertNotIn(alias,json.dumps(p.safe_shape(q)))
+
     def test_hot_comment_shapes_have_private_data_free_labels(self):
         shape=p.safe_shape("SELECT 1 AS types_json, 2 AS total_comments, 3 AS preview_json WHERE path='private'")
         self.assertIn('engagement_preview',shape['features'])
