@@ -65,7 +65,7 @@ public class HomeLateReadDemandTest {
    set(home,"lastDoc",cursor);set(home,"feedQuery",query);when(query.startAfter(cursor)).thenReturn(page);when(page.limit(anyLong())).thenReturn(page);
    TaskCompletionSource<QuerySnapshot> pending=new TaskCompletionSource<>();
    when(page.getCachedOrFetchAutomatic(any(ForegroundReadScope.class),eq(Long.MAX_VALUE))).thenReturn(pending.getTask());
-   when(page.getCachedOrFetch(false)).thenReturn(new TaskCompletionSource<QuerySnapshot>().getTask());
+   when(page.get(Source.SERVER)).thenReturn(new TaskCompletionSource<QuerySnapshot>().getTask());
    java.lang.reflect.Method scroll=HomeFragment.class.getDeclaredMethod("loadMore",boolean.class);scroll.setAccessible(true);scroll.invoke(home,true);
    ForegroundReadScope scope=(ForegroundReadScope)get(home,"pageReadScope");verify(page).getCachedOrFetchAutomatic(scope,Long.MAX_VALUE);
    Shadows.shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofSeconds(21));
@@ -73,7 +73,7 @@ public class HomeLateReadDemandTest {
    app.when(com.friendbook.social.App::isForeground).thenReturn(true);ForegroundReadScope.resume();
    Shadows.shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofSeconds(21));
    assertEquals(false,get(home,"loadingPosts"));assertEquals(true,get(home,"pageError"));assertFalse(scope.whenForeground().isSuccessful());
-   home.loadMore();verify(page).getCachedOrFetch(false);
+   home.loadMore();verify(page).get(Source.SERVER);
    call(home,"invalidateHomeReads");
   }
  }

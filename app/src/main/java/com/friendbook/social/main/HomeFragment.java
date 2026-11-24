@@ -1383,6 +1383,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         if(!moreAvailable || feedQuery==null){
             return;
         }
+        final boolean explicitRetry=!automatic && pageError;
         pageError=false;loadingPosts=true;updatePagingUi();
         final int generation=++feedGeneration; final String actor=feedAccount;
         closePageReadScope();
@@ -1402,7 +1403,10 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         engagementHandler.postDelayed(deadline,20000L);
         final long requestedAt=android.os.SystemClock.elapsedRealtime();
         Query pageQuery=feedQuery.startAfter(lastDoc).limit(PAGE);
-        (automatic ? pageQuery.getCachedOrFetchAutomatic(scope,Long.MAX_VALUE) : pageQuery.getCachedOrFetch(false)).addOnSuccessListener(snapshot -> {
+        // A cached/offline page cannot advance the authoritative cursor. A
+        // retry must bypass that same cached page or it would fail forever.
+        (automatic ? pageQuery.getCachedOrFetchAutomatic(scope,Long.MAX_VALUE)
+                : explicitRetry ? pageQuery.get(Source.SERVER) : pageQuery.getCachedOrFetch(false)).addOnSuccessListener(snapshot -> {
             if(generation!=feedGeneration || !java.util.Objects.equals(actor,Fb.uid()) || !isAdded() || !homeStarted || isHidden()) return;
             engagementHandler.removeCallbacks(deadline);closePageReadScope();loadingPosts=false;
             if(snapshot.getMetadata().isFromCache()){
