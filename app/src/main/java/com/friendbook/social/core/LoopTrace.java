@@ -18,6 +18,7 @@ public final class LoopTrace {
     private static long now(){return SystemClock.elapsedRealtime();}
     static synchronized long begin(okhttp3.Request request){
         long at=now(),session=generation;
+        if(!BUFFER.active(at))return -1L;
         return BUFFER.begin(at,screen,request.method(),request.url().encodedPath(),App.isForeground(),context(request))?session:-1L;
     }
     /** Structural metadata only. Never retains IDs, filter values, cursors or raw JSON. */
