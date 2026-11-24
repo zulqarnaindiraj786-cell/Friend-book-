@@ -412,6 +412,16 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
         }
     }
 
+    @Override
+    protected void onDestroy() {
+        // Rotation/process UI recreation is destruction too: isFinishing() is
+        // false there, but the old Activity must own no live registrations.
+        FastCache.removeReactionObserver(reactionObserver);
+        if (postReg != null) { postReg.remove(); postReg = null; }
+        if (commentsHandle != null) { commentsHandle.remove(); commentsHandle = null; }
+        super.onDestroy();
+    }
+
     private void send() {
         if (busy) return;
         if (!com.friendbook.social.core.Admin.checkNotSuspended(this)) return;
