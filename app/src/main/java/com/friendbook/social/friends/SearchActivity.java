@@ -45,18 +45,31 @@ public class SearchActivity extends Activity implements UsersAdapter.Handler, Fe
     private com.friendbook.social.core.CursorPager peopleA,peopleB,postPages;
     private TextView morePeople,morePosts;
     private boolean searchStarted;
+    private String searchActor;
+    private boolean prepareSearchActor(){
+        String actor=Fb.uid();
+        if(!java.util.Objects.equals(searchActor,actor)){
+            closePages();searchActor=actor;
+            if(usersAdapter!=null)usersAdapter.setData(new ArrayList<>());
+            if(postsAdapter!=null){postsAdapter.feedEngagementInPage=true;postsAdapter.setPosts(new ArrayList<>());}
+            if(peopleTitle!=null)peopleTitle.setVisibility(View.GONE);
+            if(postsTitle!=null)postsTitle.setVisibility(View.GONE);
+        }
+        return actor!=null;
+    }
     private void closePages(){
         if(peopleA!=null)peopleA.close();if(peopleB!=null)peopleB.close();if(postPages!=null)postPages.close();
         peopleA=null;peopleB=null;postPages=null;
     }
     private void queueSearch(String q){
         if(pending!=null)handler.removeCallbacks(pending);
-        if(!searchStarted)return;
-        pending=()->{pending=null;if(searchStarted && !isFinishing() && !isDestroyed())search(q);};
+        if(!searchStarted || !prepareSearchActor())return;
+        final String expectedActor=searchActor;
+        pending=()->{pending=null;if(searchStarted && java.util.Objects.equals(expectedActor,Fb.uid()) && !isFinishing() && !isDestroyed())search(q);};
         handler.postDelayed(pending, com.friendbook.social.core.SearchReadPolicy.DEBOUNCE_MS);
     }
     @Override protected void onStart(){
-        super.onStart();searchStarted=true;
+        super.onStart();searchStarted=true;prepareSearchActor();
         if(input!=null && input.length()>0)queueSearch(input.getText().toString().trim());
     }
     @Override protected void onStop(){
@@ -140,7 +153,7 @@ public class SearchActivity extends Activity implements UsersAdapter.Handler, Fe
             @Override public void onTextChanged(CharSequence s, int a, int b2, int c) {
                 closePages();
                 if (pending != null) {handler.removeCallbacks(pending);pending=null;}
-                if(!searchStarted)return;
+                if(!searchStarted || !prepareSearchActor())return;
                 postsAdapter.feedEngagementInPage=true;
                 final String q = s.toString().trim();
                 // ⚡ 0.0ms immediate local FastCache search on every keystroke!
@@ -201,7 +214,7 @@ public class SearchActivity extends Activity implements UsersAdapter.Handler, Fe
     }
 
     private void search(String q) {
-        if(!searchStarted || isFinishing() || isDestroyed())return;
+        if(!searchStarted || !prepareSearchActor() || isFinishing() || isDestroyed())return;
         if (q.isEmpty()) {
             morePeople.setVisibility(View.GONE);morePosts.setVisibility(View.GONE);
             peopleTitle.setVisibility(View.GONE);
