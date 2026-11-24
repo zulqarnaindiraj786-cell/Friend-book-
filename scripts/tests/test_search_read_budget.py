@@ -16,6 +16,20 @@ class SearchReadBudget(unittest.TestCase):
         self.assertIn('postPages.next()', search)
         self.assertNotIn('startCachedDay()', search)
 
+    def test_search_stops_hidden_work_and_only_explicit_buttons_page(self):
+        search = (JAVA / 'friends/SearchActivity.java').read_text()
+        stop = search.split('@Override protected void onStop()', 1)[1].split('@Override protected void onDestroy()', 1)[0]
+        for token in ['searchStarted=false', 'handler.removeCallbacks(pending)', 'closePages()', 'feedEngagementInPage=true']:
+            self.assertIn(token, stop)
+        self.assertNotIn('setOnScrollChangeListener', search)
+        self.assertIn('morePosts.setOnClickListener(v->{if(postPages!=null)postPages.next();})', search)
+        self.assertIn('morePeople.setOnClickListener(v->{if(peopleA!=null)peopleA.next();if(peopleB!=null)peopleB.next();})', search)
+        self.assertIn('postQuery,10,"search-posts:"+q', search)
+        self.assertIn('endAt(q+"\\uf8ff"),10,"search-people:"+q', search)
+        self.assertEqual(search.count('setItemPrefetchEnabled(false)'), 2)
+        self.assertIn('postsAdapter.feedEngagementInPage=true;', search)
+        self.assertIn('postsAdapter.feedEngagementInPage=false;', search)
+
     def test_reuse_keeps_existing_account_invalidation_and_freshness_checks(self):
         pager = (JAVA / 'core/CursorPager.java').read_text()
         self.assertIn('startLocal(Math.max(0L,maxAgeMs),true)', pager)
