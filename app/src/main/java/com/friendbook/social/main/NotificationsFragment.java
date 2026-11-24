@@ -211,6 +211,7 @@ public class NotificationsFragment extends Fragment {
         // Repaint acknowledged rows locally. A refresh here would immediately
         // re-read the collection that this explicit operation just scanned.
         if(unreadOnly && pager!=null){pager.close();pager=null;initialLoaded=false;}
+        if(unreadOnly && moreButton!=null){moreButton.setText("All loaded");moreButton.setEnabled(false);}
     }
 
     private void markAllFailed(int generation) {
@@ -355,8 +356,12 @@ public class NotificationsFragment extends Fragment {
                         if (!java.util.Objects.equals(actor,Fb.uid()) || !java.util.Objects.equals(loadedActor,actor)) return;
                         confirmedReadIds.add(n.id);
                         n.isRead=true;
+                        for(Models.Notif current:data)if(n.id.equals(current.id))current.isRead=true;
+                        List<Models.Notif> cached=com.friendbook.social.core.FastCache.getNotifications();
+                        for(Models.Notif current:cached)if(n.id.equals(current.id))current.isRead=true;
+                        com.friendbook.social.core.FastCache.saveNotifications(cached);
                         if(!activeNotifications(actor,generation))return;
-                        if (unreadOnly) { data.remove(n);if(pager!=null)pager.forget(n.id); }
+                        if (unreadOnly) { data.removeIf(current->n.id.equals(current.id));if(pager!=null)pager.forget(n.id); }
                         else com.friendbook.social.core.FastCache.saveNotifications(data);
                         if(adapter!=null)adapter.notifyDataSetChanged();
                         if(empty!=null)empty.setVisibility(data.isEmpty()?View.VISIBLE:View.GONE);

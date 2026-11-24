@@ -79,4 +79,17 @@ public class CommentNotificationReplayTest {
             push.verify(()->FCMPush.notification(anyString(),anyMap()),times(1));
         }
     }
+    @Test public void alreadyExistingEventIsMemoizedWithoutPushOrRepeatedCreate() {
+        try(MockedStatic<Fb> fb=mockStatic(Fb.class);MockedStatic<FCMPush> push=mockStatic(FCMPush.class);MockedStatic<PushTrace> trace=mockStatic(PushTrace.class)) {
+            fb.when(Fb::uid).thenReturn("already-exists-actor");D1DocumentStore store=mock(D1DocumentStore.class);CollectionReference collection=mock(CollectionReference.class);DocumentReference ref=mock(DocumentReference.class);
+            fb.when(Fb::db).thenReturn(store);when(store.collection("notifications")).thenReturn(collection);when(collection.document(anyString())).thenReturn(ref);
+            when(ref.create(any())).thenReturn(Tasks.forException(new D1DocumentStoreException(D1DocumentStoreException.Code.ALREADY_EXISTS,"exists")));
+            for(int i=0;i<100;i++){
+                Notify.sendForComment("owner","comment","text","posts","p","existing-comment");
+                Shadows.shadowOf(Looper.getMainLooper()).idle();
+            }
+            verify(ref,times(1)).create(any());push.verifyNoInteractions();
+        }
+    }
+
 }
