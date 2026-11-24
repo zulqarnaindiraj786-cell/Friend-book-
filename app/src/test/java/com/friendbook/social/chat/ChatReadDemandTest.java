@@ -37,4 +37,16 @@ public class ChatReadDemandTest {
    fb.verify(Fb::db,never());assertEquals("🔴 LIVE INVITE",holder.liveBadgeTv.getText().toString());
   }
  }
+ @Test public void duplicateSendIntentIsBoundedButDifferentTextIsNotBlocked()throws Exception{
+  try(MockedStatic<Fb> fb=mockStatic(Fb.class)){
+   fb.when(Fb::uid).thenReturn("send-demand-actor");ChatActivity a=Robolectric.buildActivity(ChatActivity.class).get();
+   set(a,"chatStarted",true);set(a,"messageActor","send-demand-actor");set(a,"chatId","send-chat");
+   java.lang.reflect.Method admit=ChatActivity.class.getDeclaredMethod("admitSend",String.class,String.class);admit.setAccessible(true);
+   int accepted=0;for(int i=0;i<100;i++)if((Boolean)admit.invoke(a,"text","same-message"))accepted++;
+   assertEquals(1,accepted);assertEquals(true,admit.invoke(a,"text","different-message"));
+   fb.when(Fb::uid).thenReturn("replacement-actor");assertEquals(false,admit.invoke(a,"text","new-message"));
+   fb.when(Fb::uid).thenReturn("send-demand-actor");set(a,"chatStarted",false);assertEquals(false,admit.invoke(a,"text","stopped-message"));fb.verify(Fb::db,never());
+  }
+ }
+
 }

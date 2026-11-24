@@ -842,8 +842,9 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         Ui.toast(this, "Uploading voice note…");
         Uri uri = Uri.fromFile(new java.io.File(voicePath));
         String path = "chat/" + chatId + "/voice_" + System.currentTimeMillis() + ".m4a";
+        final String uploadActor=Fb.uid();
         com.friendbook.social.core.Cloudinary.uploadOrFirebase(this, path, uri)
-                .addOnSuccessListener(url -> sendVoice(url.toString(), durSec))
+                .addOnSuccessListener(url -> {if(java.util.Objects.equals(uploadActor,Fb.uid()))sendVoice(url.toString(), durSec);})
                 .addOnFailureListener(e -> Ui.toast(this, "Voice upload failed"));
     }
 
@@ -886,7 +887,16 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
                 "unreadCount", unread);
     }
 
+    private boolean admitSend(String kind,String payload){
+        String actor=Fb.uid();
+        return chatStarted && actor!=null && java.util.Objects.equals(messageActor,actor)
+                && !isFinishing() && !isDestroyed()
+                && com.friendbook.social.core.InteractionCooldown.acquire(actor,
+                        "chat-send:"+chatId+":"+kind+":"+String.valueOf(payload));
+    }
+
     private void sendVoice(String url, int durSec) {
+        if(!admitSend("voice",url))return;
         String me = Fb.uid();
         if (me == null) return;
         long now = System.currentTimeMillis();
@@ -982,6 +992,7 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
     }
 
     private void sendSticker(String emoji) {
+        if(!admitSend("sticker",emoji))return;
         String me = Fb.uid();
         if (me == null) return;
         long now = System.currentTimeMillis();
@@ -1041,6 +1052,7 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
             }
         }
         String type = imageUrl != null ? "image" : "text";
+        if(!admitSend(type,imageUrl!=null?imageUrl:finalText))return;
         long now = System.currentTimeMillis();
 
         // ⚡ 0.0ms Optimistic UI: clear input & render bubble immediately!
@@ -1141,10 +1153,11 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         super.onActivityResult(req, res, data);
         if (req == PICK_IMG && res == RESULT_OK && data != null && data.getData() != null) {
             Uri uri = data.getData();
+            final String uploadActor=Fb.uid();
             java.util.List<Uri> single = new ArrayList<>();
             single.add(uri);
             com.friendbook.social.core.ContentSafetyEngine.scanMediaAsync(this, single, false, "", v -> {
-                if (isFinishing()) return;
+                if (isFinishing() || isDestroyed() || !java.util.Objects.equals(uploadActor,Fb.uid())) return;
                 if (v.unsafe) {
                     Ui.info(this, "🛡 Unsafe Photo Blocked", v.message);
                     return;
@@ -1152,7 +1165,7 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
                 Ui.toast(this, "Uploading photo…");
                 String path = "chat/" + chatId + "/" + System.currentTimeMillis() + ".jpg";
                 com.friendbook.social.core.Cloudinary.uploadOrFirebase(this, path, uri)
-                        .addOnSuccessListener(url -> send(null, url.toString(), null))
+                        .addOnSuccessListener(url -> {if(java.util.Objects.equals(uploadActor,Fb.uid()))send(null, url.toString(), null);})
                         .addOnFailureListener(e -> Ui.toast(this, "Upload failed"));
             });
         }
