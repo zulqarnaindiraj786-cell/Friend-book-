@@ -55,7 +55,8 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
     private String pageError="",suggestionError="";
     private int generation, inlineToken;
     private int loadedSection=-1;
-    private long candidatesCheckedAt=-300_000L;
+    private long candidatesCheckedAt=-300_000L,profilesFetchedAt=-300_000L;
+    private boolean refreshProfiles;
     private final Set<String> pendingActions=new HashSet<>(),attemptedProfiles=new HashSet<>();
     private boolean visibleActor(String actor){return started && adapter!=null && isAdded() && !isHidden()
             && getActivity()!=null && java.util.Objects.equals(actor,Fb.uid()) && java.util.Objects.equals(actor,pageActor);}
@@ -178,6 +179,8 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
             if(swipe!=null)swipe.setRefreshing(false);forceSectionRefresh=false;return;
         }
         if(!sameActor){attemptedProfiles.clear();incoming.clear();outgoing.clear();friendIds.clear();suggestions.clear();userCache.clear();dismissedReqIds.clear();sentIds.clear();cancelledRequestIds.clear();removedFriendIds.clear();requestWrites.clear();loadedSections.clear();}
+        refreshProfiles=!sameActor || forceSectionRefresh || android.os.SystemClock.elapsedRealtime()-profilesFetchedAt>=300_000L;
+        if(refreshProfiles){userCache.clear();attemptedProfiles.clear();}
         // Actor-scoped relationship checks reuse at most five minutes; explicit
         // pull-to-refresh invalidates them without turning tab returns into probes.
         boolean keepInline = section == SEC_REQUESTS && suggestionPager != null && me.equals(pageActor)
@@ -291,7 +294,7 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
     private void ensureUser(String uid){
         if(uid==null || userCache.containsKey(uid))return;
         Models.User cached=com.friendbook.social.core.FastCache.getUser(uid);
-        if(cached!=null){userCache.put(uid,cached);return;}
+        if(cached!=null){userCache.put(uid,cached);if(!refreshProfiles)return;}
         // Queue one submitted-page batch; never force a profile GET per row/bind.
         loadingProfiles.add(uid);
     }
@@ -304,7 +307,7 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
                     .addOnSuccessListener(snap->{
                         if(!current(token,actor))return;
                         for(DocumentSnapshot doc:snap){Models.User u=Models.User.fromDoc(doc);userCache.put(u.uid,u);com.friendbook.social.core.FastCache.putUser(u);}
-                        requestRender();
+                        profilesFetchedAt=android.os.SystemClock.elapsedRealtime();requestRender();
                     });
         }
     }
