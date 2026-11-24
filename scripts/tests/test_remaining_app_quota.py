@@ -22,6 +22,17 @@ class RemainingAppQuota(unittest.TestCase):
         self.assertNotIn('storyPages.next()',section)
         self.assertIn('Tap More stories',section)
         self.assertIn('stopTimer();status("No active stories on this page',code)
+    def test_story_viewers_load_at_most_ten_and_stop_with_screen(self):
+        code=(JAVA/'story/StoryViewerActivity.java').read_text()
+        viewers=code.split('private void showViewers()',1)[1].split('private void sendReply()',1)[0]
+        for token in ['Math.min(start+10,viewers.size())', 'setOnClickListener(v->next.run())', 'dialog.isShowing()', 'request!=storyRequest', 'Objects.equals(actor,Fb.uid())']:
+            self.assertIn(token,viewers)
+        self.assertIn('viewersDialog.dismiss()',code.split('protected void onStop()',1)[1])
+    def test_creator_eligibility_reads_only_threshold_and_guards_screen(self):
+        code=(JAVA/'bluetick/MonetizationActivity.java').read_text()
+        for token in ['.limit(REELS_FOR_CREATOR)', 'getCachedOrFetch(false,120_000L)', 'generation!=screenGeneration', 'checkEligibility(followersCount, reelsCount)', 'screenGeneration++']:
+            self.assertIn(token,code)
+        self.assertNotIn('.limit(50)',code)
     def test_birthdays_ignore_old_generations_and_finish_failures(self):
         code=(JAVA/'friends/BirthdaysActivity.java').read_text()
         for token in ['loadGeneration++','generation!=loadGeneration','addOnCompleteListener','!java.util.Objects.equals(actor,Fb.uid())','new java.util.LinkedHashSet<>(friendIds)']:

@@ -61,6 +61,7 @@ public class StoryViewerActivity extends Activity {
     private TextView moreStories;
     private boolean storyMore=true,storyBusy,advanceAfterPage;
     private int storyRequest;
+    private android.app.AlertDialog viewersDialog;
 
     private ImageView img, headerAvatar;
     private VideoView video;
@@ -306,6 +307,7 @@ public class StoryViewerActivity extends Activity {
     @Override
     protected void onStop() {
         super.onStop();
+        if(viewersDialog!=null){viewersDialog.dismiss();viewersDialog=null;}
         if (reg != null) reg.remove();
         storyRequest++;if(storyPages!=null){storyPages.close();storyPages=null;}
         if(video!=null)clearMedia();
@@ -354,7 +356,7 @@ public class StoryViewerActivity extends Activity {
         String actor=Fb.uid();
         String viewKey=actor+":"+story.id;
         if(actor!=null && !actor.equals(story.authorId) && !story.viewedBy.contains(actor) && recordingViews.add(viewKey)){
-            Fb.db().storyEngagement(story.id,"view",null).addOnCompleteListener(task->{
+            Fb.db().storyEngagement(story.id,"view",null).addOnCompleteListener(task -> {
                 recordingViews.remove(viewKey);
                 if(task.isSuccessful() && actor.equals(Fb.uid()) && !story.viewedBy.contains(actor)) story.viewedBy.add(actor);
             });
@@ -615,22 +617,53 @@ public class StoryViewerActivity extends Activity {
 
     private void showViewers() {
         if (stories.isEmpty()) return;
-        Models.Story s = stories.get(index);
-        List<String> viewers = new ArrayList<>(s.viewedBy);
-        if (viewers.isEmpty()) { Ui.toast(this, "No views yet"); return; }
-        String actor=Fb.uid();
-        List<String> lines = new ArrayList<>(java.util.Collections.nCopies(viewers.size(), "User"));
-        final int[] remaining={viewers.size()};
-        for (int i=0;i<viewers.size();i++) {
-            final int position=i;String uid=viewers.get(i);
-            Fb.getUser(uid).addOnCompleteListener(task -> {
-                if (isFinishing() || !java.util.Objects.equals(actor,Fb.uid())) return;
-                Models.User u=task.isSuccessful()?task.getResult():null;
-                String r=s.reactions.get(uid);
-                lines.set(position,(u!=null && u.displayName!=null && !u.displayName.isEmpty()?u.displayName:"User")+(r!=null?"  "+r:""));
-                if (--remaining[0]==0) Ui.info(this, "👁 Story viewers ("+viewers.size()+")", TextUtils.join("\n",lines));
-            });
-        }
+        Models.Story story=stories.get(index);
+        List<String> viewers=new ArrayList<>(new java.util.LinkedHashSet<>(story.viewedBy));
+        if(viewers.isEmpty()){Ui.toast(this,"No views yet");return;}
+        if(viewersDialog!=null)viewersDialog.dismiss();
+        final String actor=Fb.uid();
+        final int request=storyRequest;
+        LinearLayout content=Ui.col(this);Ui.pad(content,16,8,16,8);
+        TextView linesView=Ui.tv(this,"Loading…",14,Ui.txt(this));
+        android.widget.ScrollView scroll=new android.widget.ScrollView(this);
+        scroll.addView(linesView);content.addView(scroll);
+        android.app.AlertDialog dialog=new android.app.AlertDialog.Builder(this)
+                .setTitle("👁 Story viewers ("+viewers.size()+")")
+                .setView(content).setPositiveButton("Load 10 more",null)
+                .setNegativeButton("Close",(d,w)->d.dismiss()).create();
+        viewersDialog=dialog;
+        dialog.setOnDismissListener(d->{if(viewersDialog==dialog)viewersDialog=null;});
+        dialog.show();
+        final List<String> lines=new ArrayList<>();
+        final int[] offset={0};
+        final boolean[] busy={false};
+        Runnable next=()->{
+            if(busy[0] || !dialog.isShowing() || request!=storyRequest || !java.util.Objects.equals(actor,Fb.uid()))return;
+            int start=offset[0],end=Math.min(start+10,viewers.size());
+            if(start>=end)return;
+            busy[0]=true;offset[0]=end;
+            android.widget.Button more=dialog.getButton(android.app.AlertDialog.BUTTON_POSITIVE);
+            more.setEnabled(false);more.setText("Loading…");
+            for(int i=start;i<end;i++)lines.add("User");
+            final int[] remaining={end-start};
+            for(int i=start;i<end;i++){
+                final int position=i;String uid=viewers.get(i);
+                Fb.getUser(uid).addOnCompleteListener(task -> {
+                    if(!dialog.isShowing() || request!=storyRequest || !java.util.Objects.equals(actor,Fb.uid()))return;
+                    Models.User user=task.isSuccessful()?task.getResult():null;
+                    String reaction=story.reactions.get(uid);
+                    lines.set(position,(user!=null && user.displayName!=null && !user.displayName.isEmpty()?user.displayName:"User")+(reaction!=null?"  "+reaction:""));
+                    linesView.setText(TextUtils.join("\n",lines));
+                    if(--remaining[0]==0){
+                        busy[0]=false;
+                        more.setText(end<viewers.size()?"Load 10 more":"All loaded");
+                        more.setEnabled(end<viewers.size());
+                    }
+                });
+            }
+        };
+        dialog.getButton(android.app.AlertDialog.BUTTON_POSITIVE).setOnClickListener(v->next.run());
+        next.run();
     }
 
     private void sendReply() {
