@@ -33,18 +33,21 @@ public class CommentsEngine {
         catch(org.json.JSONException e){throw new IllegalArgumentException("Invalid D1 comment",e);}
     }
     private static void d1Changed(String collection,String id,org.json.JSONObject data){
+        d1Changed(collection,id,data,null);
+    }
+    private static void d1Changed(String collection,String id,org.json.JSONObject data,String operation){
         for(Handle h:new ArrayList<>(D1_HANDLES))if(h.active() && collection.equals(h.collection) && id.equals(h.docId)){
             h.revision++;h.error="";if(data.has("pinned"))h.pinned=data.optString("pinned");
             if(data.has("removed")){String removed=data.optString("removed");h.pendingD1.remove(removed);h.deleted.add(removed);h.latest.remove(removed);h.older.remove(removed);}
             org.json.JSONObject row=data.optJSONObject("comment");if(row!=null){Models.Comment c=fromD1(row,h.key);h.pendingD1.remove(c.id);h.deleted.remove(c.id);if(h.older.containsKey(c.id))h.older.put(c.id,c);else h.latest.put(c.id,c);}
             h.emit();
         }
-        D1Reactions.invalidate(collection,id);
+        D1Reactions.commentChanged(collection,id,data,operation);
         com.friendbook.social.core.D1Client.changed(com.friendbook.social.core.D1Client.key(collection,id));
     }
     private static void d1Mutation(String collection,String id,org.json.JSONObject body){
         final String actor=Fb.uid();com.friendbook.social.core.D1Client.request(collection,id,"comments","PUT",body,null)
-            .addOnSuccessListener(data->{if(java.util.Objects.equals(actor,Fb.uid()))d1Changed(collection,id,data);})
+            .addOnSuccessListener(data->{if(java.util.Objects.equals(actor,Fb.uid()))d1Changed(collection,id,data,body.optString("op"));})
             .addOnFailureListener(error->{if(java.util.Objects.equals(actor,Fb.uid()))for(Handle h:new ArrayList<>(D1_HANDLES))if(h.active() && collection.equals(h.collection)&&id.equals(h.docId)){h.error="D1 change failed. Reopen comments to restore server state; no Firebase write was made.";h.emit();}});
     }
 

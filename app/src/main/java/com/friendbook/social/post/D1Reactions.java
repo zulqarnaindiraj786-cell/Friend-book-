@@ -28,6 +28,30 @@ public final class D1Reactions {
  public static JSONObject cached(String collection,String id){scope();return CACHE.get(D1Client.key(collection,id));}
  public static String mine(String collection,String id){JSONObject data=cached(collection,id);return data==null?null:mine(data);}
  public static void invalidate(String collection,String id){scope();String key=D1Client.key(collection,id);GENERATION.put(key,GENERATION.getOrDefault(key,0)+1);FETCHED_AT.remove(key);FAILED.remove(key);java.lang.ref.WeakReference<Models.Post> reference=POSTS.get(key);Models.Post post=reference==null?null:reference.get();if(post!=null)fetch(null,collection,id,false,()->hydrate(post));}
+ /** Use the authenticated comment ACK for count-neutral edits; do not GET a full post summary. */
+ static void commentChanged(String collection,String id,JSONObject acknowledgement,String operation){
+  scope();
+  if("pin".equals(operation) && acknowledgement.has("pinned"))return;
+  if(!("edit".equals(operation)||"react".equals(operation))){invalidate(collection,id);return;}
+  JSONObject row=acknowledgement.optJSONObject("comment");
+  if(row==null || row.optString("id").isEmpty()){invalidate(collection,id);return;}
+  String key=D1Client.key(collection,id);
+  // Keep the existing uncertain/concurrent post-reaction handling intact.
+  if(WRITING.contains(key)||UNCONFIRMED.contains(key)){invalidate(collection,id);return;}
+  GENERATION.put(key,GENERATION.getOrDefault(key,0)+1);
+  JSONObject current=CACHE.get(key);if(current==null)return;
+  try{
+   JSONObject updated=new JSONObject(current.toString());JSONArray preview=updated.optJSONArray("preview");
+   if(preview!=null)for(int i=0;i<preview.length();i++){
+    JSONObject previous=preview.optJSONObject(i);
+    if(previous!=null && row.optString("id").equals(previous.optString("id")))preview.put(i,new JSONObject(row.toString()));
+   }
+   // A comment ACK does not renew the age of post reaction totals.
+   CACHE.put(key,updated);
+   java.lang.ref.WeakReference<Models.Post> reference=POSTS.get(key);Models.Post post=reference==null?null:reference.get();
+   if(post!=null)hydrate(post);
+  }catch(JSONException malformed){invalidate(collection,id);}
+ }
  private static void remember(Context context,String collection,String id,JSONObject data){
   String key=D1Client.key(collection,id);JSONObject previous=CACHE.put(key,data);
   FETCHED_AT.put(key,android.os.SystemClock.elapsedRealtime());
