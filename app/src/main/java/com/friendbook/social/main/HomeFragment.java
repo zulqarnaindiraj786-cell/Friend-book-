@@ -834,11 +834,29 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         }
         List<String> ids=new ArrayList<>();
         List<Models.Post> cached=FastCache.getFeed();
-        for(Models.Post post:cached.subList(0,Math.min(PAGE,cached.size())))if(post!=null)ids.add(post.authorId);
-        for(DocumentSnapshot doc:lastPostDocs)ids.add(doc.getString("authorId"));
-        for(DocumentSnapshot doc:loadedStoryDocs.values())ids.add(doc.getString("authorId"));
+        for(Models.Post post:cached.subList(0,Math.min(PAGE,cached.size())))addPostFriendDemand(ids,post);
+        for(DocumentSnapshot doc:lastPostDocs)addPostFriendDemand(ids,doc);
+        for(DocumentSnapshot doc:loadedStoryDocs.values())addStoryFriendDemand(ids,doc);
         for(Models.User user:pymkCandidates)ids.add(user.uid);
         resolveVisibleFriends(ids);
+    }
+
+    private void addPostFriendDemand(List<String> ids,Models.Post post){
+        if(post!=null && "Friends".equalsIgnoreCase(post.privacy))ids.add(post.authorId);
+    }
+    private void addPostFriendDemand(List<String> ids,DocumentSnapshot doc){
+        if(doc!=null && "Friends".equalsIgnoreCase(com.friendbook.social.core.Format.strOr(doc.getData(),"privacy","Public")))
+            ids.add(com.friendbook.social.core.Format.str(doc.getData(),"authorId"));
+    }
+    private void addStoryFriendDemand(List<String> ids,DocumentSnapshot doc){
+        if(doc==null)return;
+        Models.Story story=Models.Story.fromDoc(doc);
+        if(story.expired())return;
+        String author=story.authorId;
+        boolean following=Fb.me!=null && Fb.me.following.contains(author);
+        boolean blocked=Fb.me!=null && Fb.me.blocked.contains(author);
+        boolean muted=getActivity()!=null && Prefs.isStoryAuthorMuted(getActivity(),author);
+        if(com.friendbook.social.core.StoryAudience.needsFriendship(Fb.uid(),author,story.privacy,following,blocked,muted))ids.add(author);
     }
 
     private void resolveVisibleFriends(java.util.Collection<String> candidates) {
@@ -1042,8 +1060,8 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         String filter = a2 == null ? "all" : Prefs.feedFilter(a2);
         if (docs != null) lastPostDocs = new ArrayList<>(docs);
         List<String> visibleAuthors=new ArrayList<>();
-        if(docs!=null)for(DocumentSnapshot doc:docs)visibleAuthors.add(doc.getString("authorId"));
-        for(Models.Post post:cfPosts)if(post!=null)visibleAuthors.add(post.authorId);
+        if(docs!=null)for(DocumentSnapshot doc:docs)addPostFriendDemand(visibleAuthors,doc);
+        for(Models.Post post:cfPosts)addPostFriendDemand(visibleAuthors,post);
         resolveVisibleFriends(visibleAuthors);
         List<Models.Post> allVisible = new ArrayList<>();
         List<Models.Post> filtered = new ArrayList<>();
@@ -1218,7 +1236,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
     }
     private void renderLoadedStories(){
         if(getActivity()==null || adapter==null || (loadingStories && loadedStoryDocs.isEmpty()))return;
-        List<String> authors=new ArrayList<>();for(DocumentSnapshot doc:loadedStoryDocs.values())authors.add(doc.getString("authorId"));
+        List<String> authors=new ArrayList<>();for(DocumentSnapshot doc:loadedStoryDocs.values())addStoryFriendDemand(authors,doc);
         resolveVisibleFriends(authors);
         storyGroups.clear();storyIds.clear();
         for(DocumentSnapshot doc:loadedStoryDocs.values()){

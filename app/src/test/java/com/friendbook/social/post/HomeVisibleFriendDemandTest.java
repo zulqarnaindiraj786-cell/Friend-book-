@@ -102,4 +102,36 @@ public class HomeVisibleFriendDemandTest {
   }
  }
 
+ @Test public void publicPostsDoNotStartMembershipReadsButFriendsPostsDo()throws Exception{
+  try(MockedStatic<Fb> fb=mockStatic(Fb.class)){
+   fb.when(Fb::uid).thenReturn("actor");D1DocumentStore db=mock(D1DocumentStore.class);fb.when(Fb::db).thenReturn(db);
+   CollectionReference friends=mock(CollectionReference.class);Query q=mock(Query.class);when(db.collection("friends")).thenReturn(friends);
+   when(friends.whereIn(eq("participants"),anyList())).thenReturn(q);when(q.limit(10)).thenReturn(q);
+   when(q.get()).thenReturn(new TaskCompletionSource<QuerySnapshot>().getTask());
+   HomeFragment h=home();List<String> candidates=new ArrayList<>();
+   for(String privacy:new String[]{"Public","Only me",null}){
+    com.friendbook.social.models.Models.Post post=new com.friendbook.social.models.Models.Post();post.authorId="public";post.privacy=privacy;
+    invoke(h,"addPostFriendDemand",new Class<?>[]{List.class,com.friendbook.social.models.Models.Post.class},candidates,post);
+   }
+   invoke(h,"resolveVisibleFriends",new Class<?>[]{Collection.class},candidates);verifyNoInteractions(db);
+   DocumentSnapshot doc=mock(DocumentSnapshot.class);when(doc.getData()).thenReturn(new HashMap<String,Object>(){{put("authorId","alice");put("privacy","friends");}});
+   invoke(h,"addPostFriendDemand",new Class<?>[]{List.class,DocumentSnapshot.class},candidates,doc);
+   invoke(h,"resolveVisibleFriends",new Class<?>[]{Collection.class},candidates);
+   assertEquals(Collections.singletonList("alice"),candidates);verify(q,times(1)).get();
+  }
+ }
+
+ @Test public void storyDemandSkipsAlreadyVisibleFollowedAndNeverVisibleStories()throws Exception{
+  com.friendbook.social.models.Models.User previous=Fb.me;
+  try(MockedStatic<Fb> fb=mockStatic(Fb.class)){
+   fb.when(Fb::uid).thenReturn("actor");Fb.me=new com.friendbook.social.models.Models.User();
+   Fb.me.following.add("followed");Fb.me.blocked.add("blocked");HomeFragment h=home();List<String> ids=new ArrayList<>();
+   for(String[] item:new String[][]{{"followed","Public"},{"followed","Friends"},{"stranger","Public"},{"blocked","Friends"},{"private","Only me"},{"actor","Friends"}}){
+    DocumentSnapshot doc=mock(DocumentSnapshot.class);Map<String,Object> data=new HashMap<>();data.put("authorId",item[0]);data.put("privacy",item[1]);data.put("expiresAt",System.currentTimeMillis()+60000L);
+    when(doc.getData()).thenReturn(data);invoke(h,"addStoryFriendDemand",new Class<?>[]{List.class,DocumentSnapshot.class},ids,doc);
+   }
+   assertEquals(Arrays.asList("followed","stranger"),ids);
+  }finally{Fb.me=previous;}
+ }
+
 }
