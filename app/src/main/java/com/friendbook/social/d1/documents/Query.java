@@ -288,6 +288,8 @@ public class Query {
             });
         }
         java.util.concurrent.Callable<QuerySnapshot> fetch = () -> {
+            if (!actor.equals(D1DocumentStore.authenticatedUid()))
+                throw new D1DocumentStoreException(D1DocumentStoreException.Code.CANCELLED, "Account changed before queued query");
             JSONArray arr = D1DocumentTransport.query(toQueryBody());
             if (!actor.equals(D1DocumentStore.authenticatedUid()))
                 throw new D1DocumentStoreException(D1DocumentStoreException.Code.CANCELLED, "Account changed during query");
@@ -342,6 +344,8 @@ public class Query {
         // Include the complete cached merge input, not just the first cursor.
         // Mutations/pushes detach this registry along with ordinary queries.
         return firestore.queryReadFlights.read(actor,deltaFlightKey(key,delta,cachedRows),true,()->firestore.runAsync(() -> {
+            if (!actor.equals(D1DocumentStore.authenticatedUid()))
+                throw new D1DocumentStoreException(D1DocumentStoreException.Code.CANCELLED, "Account changed before queued delta read");
             JSONArray updated = D1DocumentTransport.query(delta.toQueryBody());
             if (!actor.equals(D1DocumentStore.authenticatedUid()))
                 throw new D1DocumentStoreException(D1DocumentStoreException.Code.CANCELLED, "Account changed during delta read");
