@@ -1,6 +1,6 @@
 # Targeted comment fix: install only a transactionally maintained invalidation epoch, then deploy.
 # Never execute the full migration chain or remove existing indexes/data.
-# Explicit rollout tag required; full regressions precede deployment.
+# Explicit rollout tag required; source 0ae4602 passed Worker and Android CI.
 name: Deploy legacy comment negative hints
 on:
   push:
