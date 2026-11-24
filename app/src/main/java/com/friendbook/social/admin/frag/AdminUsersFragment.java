@@ -59,7 +59,7 @@ public class AdminUsersFragment extends Fragment {
             @Override public void onTextChanged(CharSequence s, int x, int y, int z) {
                 if (pending != null) h.removeCallbacks(pending);
                 pending = () -> { filter = s.toString().toLowerCase(Locale.ROOT); render(); };
-                h.postDelayed(pending, 250);
+                h.postDelayed(pending,com.friendbook.social.core.SearchReadPolicy.DEBOUNCE_MS);
             }
             @Override public void afterTextChanged(Editable s) { }
         });

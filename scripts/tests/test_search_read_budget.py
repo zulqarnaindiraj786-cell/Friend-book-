@@ -23,7 +23,7 @@ class SearchReadBudget(unittest.TestCase):
         self.assertIn('head.get(maxAgeMs>0 ? Source.DEFAULT : Source.SERVER)', pager)
         self.assertIn('request!=requestGeneration', pager)
         policy = (JAVA / 'core/SearchReadPolicy.java').read_text()
-        self.assertIn('350L', policy)
+        self.assertIn('500L', policy)
         self.assertIn('30_000L', policy)
 
     def test_people_prefix_uses_bounded_ordered_server_path(self):

@@ -38,7 +38,7 @@ class CommentMentionGuards(unittest.TestCase):
         self.assertIn('m.put("mentions", submittingMentions)',create)
     def test_bounded_debounced_identity_selection_and_clicks(self):
         source=(JAVA/'core/Mentions.java').read_text()
-        for token in ['postDelayed(pending,250)','limit(10)','request!=generation','isAttachedToWindow','SPAN_EXCLUSIVE_EXCLUSIVE','getSpanStart','ProfileActivity.class','putExtra("uid",uid)','BLUE=0xFF1A73E8','capture(EditText input)','Mentions']:
+        for token in ['postDelayed(pending,com.friendbook.social.core.SearchReadPolicy.DEBOUNCE_MS)','limit(10)','request!=generation','isAttachedToWindow','SPAN_EXCLUSIVE_EXCLUSIVE','getSpanStart','ProfileActivity.class','putExtra("uid",uid)','BLUE=0xFF1A73E8','capture(EditText input)','Mentions']:
             self.assertIn(token,source)
         self.assertNotIn('addSnapshotListener',source)
 if __name__=='__main__':unittest.main()

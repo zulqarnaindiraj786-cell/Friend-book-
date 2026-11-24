@@ -191,7 +191,7 @@ public final class Mentions {
                         });
                     }
                 };
-                handler.postDelayed(pending,250);
+                handler.postDelayed(pending,com.friendbook.social.core.SearchReadPolicy.DEBOUNCE_MS);
             }
         });
         input.addOnAttachStateChangeListener(new View.OnAttachStateChangeListener() {

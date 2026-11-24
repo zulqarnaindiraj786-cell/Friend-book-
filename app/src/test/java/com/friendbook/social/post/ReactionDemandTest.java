@@ -17,7 +17,7 @@ import static org.mockito.Mockito.*;
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk=28,application=android.app.Application.class)
 public class ReactionDemandTest {
-    @Test public void actualTapPathSendsAtMostTwoPutsForHundredTapBurst() throws Exception {
+    @Test public void actualTapPathIgnoresDoubleTapsForOneSecondThenAllowsNextAction() throws Exception {
         for(int taps:new int[]{100,101}) {
             try(MockedStatic<Fb> fb=mockStatic(Fb.class);
                 MockedStatic<FastCache> cache=mockStatic(FastCache.class);
@@ -46,8 +46,13 @@ public class ReactionDemandTest {
                 assertEquals(Collections.singletonList("like"),targets);
                 first.setResult(new JSONObject("{\"owner\":\"owner\",\"reactionOnly\":true,\"types\":[{\"type\":\"like\",\"count\":1,\"mine\":1}]}"));
                 Shadows.shadowOf(Looper.getMainLooper()).idle();
-                if(taps%2==0){assertEquals(Arrays.asList("like",null),targets);assertNull(D1Reactions.mine("posts","demand"));}
-                else {assertEquals(Collections.singletonList("like"),targets);assertEquals("like",D1Reactions.mine("posts","demand"));}
+                assertEquals(Collections.singletonList("like"),targets);
+                assertEquals("like",D1Reactions.mine("posts","demand"));
+                Shadows.shadowOf(Looper.getMainLooper()).idleFor(1,java.util.concurrent.TimeUnit.SECONDS);
+                D1Reactions.tapLike(context,"posts","demand",()->{});
+                Shadows.shadowOf(Looper.getMainLooper()).idle();
+                assertEquals(Arrays.asList("like",null),targets);
+                assertNull(D1Reactions.mine("posts","demand"));
                 client.verify(()->D1Client.request("posts","demand","reactions","GET",null,null),never());
             }
         }

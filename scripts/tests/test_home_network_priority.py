@@ -17,7 +17,7 @@ class HomeNetworkPriorityTest(unittest.TestCase):
     def test_manual_refresh_also_prioritizes_feed(self):
         source = HOME.read_text()
         refresh = source.split('void refreshWithFriendbookAlgorithm(boolean scrollTop)', 1)[1].split('startVisibleHomeContent();', 1)[0]
-        self.assertIn('startPostsQuery(true)', refresh)
+        self.assertIn('startPostsQuery(explicitUserRefresh)', refresh)
         for request in ('loadPymk()', 'startStoriesListener(true)', 'loadFeaturedReelsForHome()', 'loadNotesUsers()'):
             self.assertNotIn(request, refresh)
         self.assertIn('startStoriesListener();', source)

@@ -2898,6 +2898,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
     private void followHostNow() {
         String me = Fb.uid();
         if (me == null || hostId == null || hostId.equals(me)) return;
+        if(!com.friendbook.social.core.InteractionCooldown.disableBriefly(followHostBtn))return;
         Notify.follow(hostId, true).addOnSuccessListener(v -> {
             if (!me.equals(Fb.uid())) return;
             if (followHostBtn != null) {

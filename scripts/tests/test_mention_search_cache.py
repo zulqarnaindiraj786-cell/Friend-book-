@@ -7,7 +7,7 @@ class MentionSearchCache(unittest.TestCase):
         self.assertIn('SEARCH_CACHE_MS=5*60*1000L',s)
         self.assertIn('limit(10).getCachedOrFetch(false,SEARCH_CACHE_MS)',s)
         self.assertIn('query.toLowerCase(Locale.ROOT),query.toUpperCase(Locale.ROOT)',s)
-        self.assertIn('postDelayed(pending,250)',s)
+        self.assertIn('postDelayed(pending,com.friendbook.social.core.SearchReadPolicy.DEBOUNCE_MS)',s)
         self.assertIn('final String actor=Fb.uid()',s)
         self.assertIn('!actor.equals(Fb.uid())',s)
     def test_queued_search_requires_visible_focused_input(self):

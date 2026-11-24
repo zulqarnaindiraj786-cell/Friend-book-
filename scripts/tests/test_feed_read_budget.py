@@ -10,9 +10,11 @@ class FeedReadBudgetTest(unittest.TestCase):
         first=source.split('private void startPostsQuery(boolean forceReload)',1)[1].split('private void consumePostsSnapshot',1)[0]
         self.assertIn('feedQuery.limit(PAGE)', first)
         self.assertNotIn('loadFeaturedReelsForHome', source)
-        self.assertIn('first.refreshCachedHead(saved)',first)
-        self.assertIn('if(forceReload)first.get(Source.SERVER)',first)
-        self.assertIn('first.get(Source.CACHE)',first)
+        loader=(JAVA/'core/FeedHeadReads.java').read_text()
+        self.assertIn('FeedHeadReads.load(first,forceReload',first)
+        self.assertIn('first.refreshCachedHead(saved)',loader)
+        self.assertIn('if(forced){first.get(Source.SERVER)',loader)
+        self.assertIn('first.get(Source.CACHE)',loader)
         self.assertNotIn('addSnapshotListener',first)
         self.assertIn('generation!=feedGeneration',first)
         self.assertIn('orderBy("createdAt",Query.Direction.DESCENDING)',first)
@@ -23,7 +25,7 @@ class FeedReadBudgetTest(unittest.TestCase):
         self.assertNotIn('refreshVisibleEngagement', source)
         self.assertNotIn('watchLatestPosts', source)
         self.assertNotIn('>= 120_000L', source)
-        self.assertIn('first.hasFreshLocalPage(Long.MAX_VALUE)', source)
+        self.assertIn('first.hasFreshLocalPage(FeedReadPolicy.REUSE_MS)', (JAVA/'core/FeedHeadReads.java').read_text())
         adapter=(JAVA/'post/FeedAdapter.java').read_text()
         self.assertIn('!feedEngagementInPage &&', adapter)
     def test_pages_reuse_query_guard_duplicates_and_unlock_on_error(self):

@@ -134,6 +134,7 @@ public final class D1Reactions {
  private static void apply(Context context,String collection,String id,String requested,boolean onlyAdd,boolean toggleAny,Runnable render){
   scope();String uid=actor;if(uid==null)return;
   String key=D1Client.key(collection,id);
+  if(!InteractionCooldown.acquire(uid,"reaction/"+key))return;
   PendingReaction running=MUTATIONS.get(key);
   if(running!=null){running.add(requested,onlyAdd,toggleAny,render);return;}
   FAILED.remove(key);

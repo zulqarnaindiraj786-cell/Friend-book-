@@ -224,6 +224,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
     private void refreshWithFriendbookAlgorithm(boolean scrollTop, boolean explicitUserRefresh) {
         android.app.Activity a = getActivity();
         if (a == null) return;
+        if(explicitUserRefresh && !com.friendbook.social.core.InteractionCooldown.acquire(Fb.uid(),"feed-refresh"))return;
         if (freshPill != null) freshPill.setVisibility(View.GONE);
         forceReRank = true;
         if (explicitUserRefresh && adapter!=null) adapter.resetAuthorLookupAttempts();
@@ -231,7 +232,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         applyFilterOnCachedFeed();
         if (adapter != null) adapter.refreshSponsoredAds();
         // An explicit pull/Home refresh supersedes an in-flight older page via feedGeneration.
-        loadingPosts=false;startPostsQuery(true);
+        loadingPosts=false;startPostsQuery(explicitUserRefresh);
         // A user-initiated refresh is the only path allowed to re-read suggestions.
         headerRequested=false;
         forceSections = explicitUserRefresh;
@@ -254,6 +255,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         int firstPos = lm != null ? lm.findFirstVisibleItemPosition() : 0;
         if (firstPos <= 1) {
             if (adapter.getPosts().isEmpty()) applyFilterOnCachedFeed();
+            refreshPostsIfNeeded();
         } else if (freshPill != null) {
             freshPill.setVisibility(View.GONE);
         }
@@ -307,9 +309,9 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
             if (loadedPostIds.size()>PAGE || rv.getScrollState()!=RecyclerView.SCROLL_STATE_IDLE
                     || layout.findFirstVisibleItemPosition()>1) return;
         }
-        if (!isHidden() && (!loadedPosts || lastFeedWriteVersion != Fb.db().postWriteVersion()
-                || !java.util.Objects.equals(feedAccount, Fb.uid())
-               )) restartPostsListener();
+        // Re-enter the shared cache-first path on return. Within two minutes
+        // this performs no HTTP; stale data stays visible while the head refreshes.
+        if (!isHidden()) restartPostsListener();
     }
 
     public void onLiteModeChanged() {
@@ -912,28 +914,27 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
             releaseHomeSecondary();
             // Keep cached posts and the inline retry; do not issue a second query on network failure.
         };
-        if(forceReload)first.get(Source.SERVER).addOnSuccessListener(apply::accept).addOnFailureListener(failed::accept);
-        else first.get(Source.CACHE).addOnCompleteListener(cache -> {
-            if(generation!=feedGeneration || !java.util.Objects.equals(actor,Fb.uid()) || !isAdded())return;
-            com.friendbook.social.d1.documents.QuerySnapshot saved=cache.isSuccessful()?cache.getResult():null;
-            if (saved != null && first.hasFreshLocalPage(Long.MAX_VALUE)) {
-                // A cached head (including an empty head) is complete. No background re-read.
+        com.friendbook.social.core.FeedHeadReads.load(first,forceReload,
+                ()->generation==feedGeneration && java.util.Objects.equals(actor,Fb.uid()) && isAdded(),
+                (saved,reusable)->{
+            if(reusable){
                 loadedPostIds.clear();
-                for (DocumentSnapshot doc : saved) loadedPostIds.add(doc.getId());
+                for(DocumentSnapshot doc:saved){
+                    loadedPostIds.add(doc.getId());
+                    com.friendbook.social.post.D1Reactions.seedFeed(getActivity(),doc,requestedAt);
+                }
+                // A return with a loaded tail must never rewind its cursor.
                 lastDoc=saved.isEmpty()?null:saved.getDocuments().get(saved.size()-1);
                 moreAvailable=saved.size()==PAGE;
-                loadingPosts=false;loadedPosts=true;pageError=false;
-                lastFeedWriteVersion=writeVersion;
-                consumePostsSnapshot(saved.getDocuments(),false);
-                updatePagingUi();releaseHomeSecondary();return;
+                loadingPosts=false;loadedPosts=true;pageError=false;lastFeedWriteVersion=writeVersion;
+                consumePostsSnapshot(saved.getDocuments(),false);updatePagingUi();releaseHomeSecondary();return;
             }
-            usedDelta[0]=saved!=null && !saved.isEmpty();
-            if(usedDelta[0] && adapter!=null && adapter.getPosts().isEmpty()) {
+            usedDelta[0]=!saved.isEmpty();
+            if(adapter!=null && adapter.getPosts().isEmpty()){
                 for(DocumentSnapshot doc:saved.getDocuments())com.friendbook.social.post.D1Reactions.seedFeed(getActivity(),doc,requestedAt);
                 consumePostsSnapshot(saved.getDocuments(),false);
             }
-            first.refreshCachedHead(saved).addOnSuccessListener(apply::accept).addOnFailureListener(failed::accept);
-        });
+        },apply,failed);
     }
 
     private void setPostsKeepingScroll(List<Models.Post> posts) {

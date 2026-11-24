@@ -1596,6 +1596,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
         }
         String me = Fb.uid();
         if (me == null) return;
+        if(!com.friendbook.social.core.InteractionCooldown.disableBriefly(secondaryBtn))return;
         boolean following = user.followedByMe;
         Notify.follow(uid, !following).addOnFailureListener(e -> {
             if (me.equals(Fb.uid())) Ui.toast(this, "Couldn't update follow. Please try again.");

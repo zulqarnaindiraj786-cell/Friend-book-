@@ -1030,6 +1030,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         });
         vh.name.setOnClickListener(prof);
         vh.like.setOnClickListener(v -> {
+            if(!com.friendbook.social.core.InteractionCooldown.disableBriefly(v))return;
             Ui.haptic(v);
             Reactions.tapLike(c, p);
             renderReactionBar(c, vh, p,

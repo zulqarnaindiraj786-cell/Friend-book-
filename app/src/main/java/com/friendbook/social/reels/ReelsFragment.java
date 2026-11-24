@@ -1331,6 +1331,7 @@ public class ReelsFragment extends Fragment {
                 // Action Listeners: 1-tap adds/removes ONLY currentUserId's reaction; long-press picks any of 6!
                 likeBtnBox.setOnClickListener(v -> {
                     if (reel == null) return;
+                    if(!com.friendbook.social.core.InteractionCooldown.disableBriefly(v))return;
                     Ui.haptic(v);
                     String cur = resolveMyReelReaction(reel);
                     applyReelReaction(cur != null ? null : "like", false);
@@ -2421,6 +2422,7 @@ public class ReelsFragment extends Fragment {
                 if (reel == null) return;
                 String me = Fb.uid();
                 if (me == null) return;
+                if(!com.friendbook.social.core.InteractionCooldown.disableBriefly(followT))return;
                 final String authorId = reel.authorId, authorName = reel.authorName;
                 Notify.follow(authorId, true).addOnSuccessListener(v -> {
                     if (!me.equals(Fb.uid())) return;
