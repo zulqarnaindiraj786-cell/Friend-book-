@@ -25,4 +25,15 @@ public class FeedReactionFeedbackTest {
    assertEquals(100,payloads[0]);assertEquals(0,full[0]);fb.verify(Fb::db,never());fb.verify(()->Fb.getUserFresh(anyString()),never());
   }
  }
+ @Test public void commentEntryOnlyNavigatesWithoutFeedRead()throws Exception{
+  try(MockedStatic<Fb> fb=mockStatic(Fb.class)){
+   com.friendbook.social.main.HomeFragment home=spy(new com.friendbook.social.main.HomeFragment());
+   doReturn(Robolectric.buildActivity(Activity.class).setup().get()).when(home).getActivity();
+   doNothing().when(home).startActivity(any(android.content.Intent.class));
+   Models.Post post=new Models.Post();post.id="comment-post";home.openComments(post);
+   verify(home).startActivity(argThat(i->"comment-post".equals(i.getStringExtra("post_id"))));
+   fb.verifyNoInteractions();
+  }
+ }
+
 }
