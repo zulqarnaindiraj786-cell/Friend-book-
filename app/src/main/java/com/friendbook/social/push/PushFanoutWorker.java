@@ -83,7 +83,7 @@ public final class PushFanoutWorker extends Worker {
                                 || ((D1DocumentStoreException) cause).getCode()!=D1DocumentStoreException.Code.ALREADY_EXISTS) throw e;
                     }
                     if (!uid.equals(Fb.uid())) {checkpoint.clear();return Result.success();}
-                    Operation enqueue=FCMPush.enqueueNotificationDurable(ref.getId(),n);
+                    Operation enqueue=FCMPush.enqueueNotificationDurable(uid,ref.getId(),n);
                     enqueue.getResult().get(20,TimeUnit.SECONDS);
                     if (!uid.equals(Fb.uid())) {checkpoint.clear();return Result.success();}
                     checkpoint.markQueued(to);

@@ -16,6 +16,14 @@ import static org.mockito.Mockito.*;
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk=28,application=android.app.Application.class)
 public class PushFanoutDemandTest {
+ @Test public void durableEnqueueRejectsChangedOrSignedOutAccount() throws Exception {
+  try(MockedStatic<Fb> fb=mockStatic(Fb.class)){
+   fb.when(Fb::uid).thenReturn("other",null);
+   assertNull(PushDeliveryWorker.enqueueAcknowledged(new org.json.JSONObject(),false,"actor"));
+   assertNull(PushDeliveryWorker.enqueueAcknowledged(new org.json.JSONObject(),false,"actor"));
+  }
+ }
+
  @Test public void actualWorkerStopsDeniedLookupsButRetriesOutages() throws Exception {
   for(D1DocumentStoreException.Code code:new D1DocumentStoreException.Code[]{
     D1DocumentStoreException.Code.PERMISSION_DENIED,D1DocumentStoreException.Code.NOT_FOUND,
@@ -62,15 +70,15 @@ public class PushFanoutDemandTest {
      when(alice.create(anyMap())).thenReturn(Tasks.forResult(null));
      when(bob.create(anyMap())).thenReturn(Tasks.forException(new D1DocumentStoreException(D1DocumentStoreException.Code.UNAVAILABLE,"offline")),Tasks.forResult(null));
      Operation operation=mock(Operation.class);when(operation.getResult()).thenReturn(com.google.common.util.concurrent.Futures.immediateFuture(null));
-     push.when(()->FCMPush.enqueueNotificationDurable(anyString(),anyMap())).thenReturn(operation);
+     push.when(()->FCMPush.enqueueNotificationDurable(anyString(),anyString(),anyMap())).thenReturn(operation);
      WorkerParameters params=mock(WorkerParameters.class);
      when(params.getInputData()).thenReturn(new Data.Builder().putString("uid","actor").putString("kind","friend_post").putString("document","post").build());
      when(params.getRunAttemptCount()).thenReturn(0,1);
      assertEquals(ListenableWorker.Result.retry(),new PushFanoutWorker(RuntimeEnvironment.getApplication(),params).doWork());
      assertEquals(ListenableWorker.Result.success(),new PushFanoutWorker(RuntimeEnvironment.getApplication(),params).doWork());
      verify(alice,times(1)).create(anyMap());verify(bob,times(2)).create(anyMap());verify(query,times(2)).get(Source.SERVER);
-     push.verify(()->FCMPush.enqueueNotificationDurable(eq("friend_post_post_alice"),anyMap()),times(1));
-     push.verify(()->FCMPush.enqueueNotificationDurable(eq("friend_post_post_bob"),anyMap()),times(1));
+     push.verify(()->FCMPush.enqueueNotificationDurable(eq("actor"),eq("friend_post_post_alice"),anyMap()),times(1));
+     push.verify(()->FCMPush.enqueueNotificationDurable(eq("actor"),eq("friend_post_post_bob"),anyMap()),times(1));
     }return null;
    }).get(15,TimeUnit.SECONDS);
   }finally{executor.shutdownNow();}
@@ -95,12 +103,12 @@ public class PushFanoutDemandTest {
     Operation failed=mock(Operation.class),success=mock(Operation.class);
     when(failed.getResult()).thenReturn(com.google.common.util.concurrent.Futures.immediateFailedFuture(new java.io.IOException("queue unavailable")));
     when(success.getResult()).thenReturn(com.google.common.util.concurrent.Futures.immediateFuture(null));
-    push.when(()->FCMPush.enqueueNotificationDurable(anyString(),anyMap())).thenReturn(failed,success);
+    push.when(()->FCMPush.enqueueNotificationDurable(anyString(),anyString(),anyMap())).thenReturn(failed,success);
     WorkerParameters params=mock(WorkerParameters.class);when(params.getInputData()).thenReturn(new Data.Builder().putString("uid","actor").putString("kind","friend_post").putString("document","post").build());
     when(params.getRunAttemptCount()).thenReturn(0);
     assertEquals(ListenableWorker.Result.retry(),new PushFanoutWorker(RuntimeEnvironment.getApplication(),params).doWork());
     assertEquals(ListenableWorker.Result.success(),new PushFanoutWorker(RuntimeEnvironment.getApplication(),params).doWork());
-    verify(target,times(2)).create(anyMap());push.verify(()->FCMPush.enqueueNotificationDurable(eq("friend_post_post_alice"),anyMap()),times(2));
+    verify(target,times(2)).create(anyMap());push.verify(()->FCMPush.enqueueNotificationDurable(eq("actor"),eq("friend_post_post_alice"),anyMap()),times(2));
    }return null;
   }).get(15,TimeUnit.SECONDS);}finally{executor.shutdownNow();}
  }

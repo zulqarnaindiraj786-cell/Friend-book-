@@ -14,10 +14,10 @@ import java.util.concurrent.TimeUnit;
 public final class PushDeliveryWorker extends Worker {
     public PushDeliveryWorker(@NonNull Context c, @NonNull WorkerParameters p) { super(c, p); }
     public static void enqueue(JSONObject body) { enqueue(body, false); }
-    public static void enqueue(JSONObject body, boolean replaceRegistration) { enqueueAcknowledged(body, replaceRegistration); }
+    public static void enqueue(JSONObject body, boolean replaceRegistration) { enqueueAcknowledged(body,replaceRegistration,Fb.uid()); }
     /** Returns the WorkManager persistence operation, not proof of FCM delivery. */
-    static Operation enqueueAcknowledged(JSONObject body, boolean replaceRegistration) {
-        String uid = Fb.uid(); if (uid == null) return null;
+    static Operation enqueueAcknowledged(JSONObject body,boolean replaceRegistration,String expectedActor) {
+        String uid=Fb.uid();if(uid==null || !uid.equals(expectedActor))return null;
         String action = body.optString("action");
         String key = PushWorkKey.of(uid, body);
         OneTimeWorkRequest.Builder builder = new OneTimeWorkRequest.Builder(PushDeliveryWorker.class)
