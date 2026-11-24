@@ -1388,18 +1388,27 @@ async function boundedPeopleHead(db,uid,spec,admin,moderator) {
 // Stop as soon as enough *visible* profiles have been found, not at a raw SQL limit.
 async function boundedPeoplePage(db,env,uid,spec) {
   if (spec.parent!=='users' || spec.filters?.length || spec.orderBy?.length
-      || spec.limitToLast || spec.startAfter || spec.startAt || spec.endBefore || spec.endAt
+      || spec.limitToLast || spec.startAt || spec.endBefore || spec.endAt
       || !Number.isInteger(spec.limit) || spec.limit<1 || spec.limit>50) return null;
+  // Snapshot cursors for an unordered Android query serialize as [document ID].
+  // An ASCII ID has the same relationship to every Unicode ID in SQLite and
+  // JavaScript. Do not use object cursors (whose missing-anchor semantics vary)
+  // or non-ASCII boundaries in this fast path.
+  const cursor=spec.startAfter;
+  if(cursor && (!Array.isArray(cursor) || cursor.length!==1 || typeof cursor[0]!=='string'
+      || !/^[-_a-zA-Z0-9]{1,512}$/.test(cursor[0])))return null;
   const admin=isPaymentAdmin(env,uid), moderator=!admin && await verifiedModerator(db,uid);
-  const head=await boundedPeopleHead(db,uid,spec,admin,moderator);
-  if(head!==null)return head;
+  if(!cursor){
+    const head=await boundedPeopleHead(db,uid,spec,admin,moderator);
+    if(head!==null)return head;
+  }
   const page=[];
   let after=null;
   for (let batch=0;batch<4;batch++) {
     // Only overfetch once hidden rows prove a refill is needed.
     const size=batch===0 ? spec.limit : Math.max(16,spec.limit);
-    const seek=after?' AND (doc_id,path)>(?,?)':'';
-    const bindings=after?[...after,size+1]:[size+1];
+    const seek=after?' AND (doc_id,path)>(?,?)':cursor?' AND doc_id>?':'';
+    const bindings=after?[...after,size+1]:cursor?[cursor[0],size+1]:[size+1];
     let results;
     try { ({results=[]}=await db.prepare(`WITH candidates AS (
       SELECT path,parent_path,collection_id,doc_id,owner_uid,document_json,create_time,update_time
