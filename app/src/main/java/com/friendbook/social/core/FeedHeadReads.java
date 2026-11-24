@@ -17,7 +17,9 @@ public final class FeedHeadReads {
             boolean reusable=saved!=null && first.hasFreshLocalPage(FeedReadPolicy.REUSE_MS);
             if(saved!=null)cached.accept(saved,reusable);
             if(reusable || !active.getAsBoolean())return;
-            first.refreshCachedHead(saved).addOnSuccessListener(s->{if(active.getAsBoolean())fresh.accept(s);})
+            // A delta only discovers newer IDs; it cannot remove deleted posts or
+            // refresh edited/privacy-changed rows. Revalidate the bounded head once.
+            first.get(Source.DEFAULT).addOnSuccessListener(s->{if(active.getAsBoolean())fresh.accept(s);})
                     .addOnFailureListener(e->{if(active.getAsBoolean())failed.accept(e);});
         });
     }

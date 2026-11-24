@@ -918,7 +918,6 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
             // Unlock Retry while allowing a late result until a newer request starts.
             loadingPosts=false;pageError=true;updatePagingUi();releaseHomeSecondary();
         },20000L);
-        final boolean[] usedDelta={false};
         java.util.function.Consumer<com.friendbook.social.d1.documents.QuerySnapshot> apply = snapshot -> {
             if(generation!=feedGeneration || !java.util.Objects.equals(actor,Fb.uid()) || !isAdded() || !homeStarted || isHidden()) return;
             if(snapshot.getMetadata().isFromCache() && sameAccount && (!loadedPostIds.isEmpty() || snapshot.isEmpty())) {
@@ -931,28 +930,14 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
                 lastFeedFetch=android.os.SystemClock.elapsedRealtime();
                 lastFeedWriteVersion=writeVersion;
             }
-            final boolean delta=usedDelta[0];
-            final boolean preserveTail=delta && sameAccount && previousCursor!=null;
             List<DocumentSnapshot> results=new ArrayList<>(snapshot.getDocuments());
-            if(delta){
-                java.util.LinkedHashMap<String,DocumentSnapshot> merged=new java.util.LinkedHashMap<>();
-                for(DocumentSnapshot doc:results)merged.put(doc.getId(),doc);
-                if(preserveTail)for(DocumentSnapshot doc:lastPostDocs)merged.putIfAbsent(doc.getId(),doc);
-                results=new ArrayList<>(merged.values());
-                // New IDs are prepended without re-ranking the visible older pages.
-                List<String> order=new ArrayList<>();
-                for(DocumentSnapshot doc:results)if(!loadedPostIds.contains(doc.getId()) && !sessionOrderIds.contains(doc.getId()))order.add(doc.getId());
-                order.addAll(sessionOrderIds);
-                sessionOrderIds.clear();sessionOrderIds.addAll(order);
-            }
             loadedPostIds.clear();
             for(DocumentSnapshot doc:results) {
                 loadedPostIds.add(doc.getId());
                 com.friendbook.social.post.D1Reactions.seedFeed(getActivity(),doc,requestedAt);
             }
-            moreAvailable=preserveTail ? previousMore : offline || snapshot.size()==PAGE;
-            if(preserveTail)lastDoc=previousCursor;
-            else if(!offline && !snapshot.isEmpty()) lastDoc=snapshot.getDocuments().get(snapshot.size()-1);
+            moreAvailable=offline || snapshot.size()==PAGE;
+            if(!offline && !snapshot.isEmpty()) lastDoc=snapshot.getDocuments().get(snapshot.size()-1);
             // The cached first paint should not lock the first authoritative D1 page
             // into chronological order. Keep the session lock for live refreshes mid-scroll.
             if (sessionOrderIds.isEmpty()) forceReRank=true;
@@ -973,7 +958,6 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
                 applyReusableFeedHead(saved,previousCursor,previousMore,writeVersion,requestedAt);
                 return;
             }
-            usedDelta[0]=!saved.isEmpty();
             if(adapter!=null && adapter.getPosts().isEmpty()){
                 for(DocumentSnapshot doc:saved.getDocuments())com.friendbook.social.post.D1Reactions.seedFeed(getActivity(),doc,requestedAt);
                 consumePostsSnapshot(saved.getDocuments(),false);
