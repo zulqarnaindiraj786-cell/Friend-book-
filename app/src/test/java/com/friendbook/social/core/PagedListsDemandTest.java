@@ -72,4 +72,23 @@ public class PagedListsDemandTest {
             }
         }
     }
+    @Test public void liveDiscoveryRefreshesFreshCacheOnceAndDoesNotAutoPage() {
+        try(MockedStatic<Fb> fb=mockStatic(Fb.class)) {
+            fb.when(Fb::uid).thenReturn("viewer");
+            Activity activity=Robolectric.buildActivity(Activity.class).setup().get();
+            LinearLayout controls=new LinearLayout(activity);
+            Query query=mock(Query.class),head=mock(Query.class);
+            when(query.limit(10)).thenReturn(head);
+            when(head.get(Source.CACHE)).thenReturn(Tasks.forResult(new QuerySnapshot(Collections.emptyList(),null,new SnapshotMetadata(true,false))));
+            when(head.hasFreshLocalPage(anyLong())).thenReturn(true);
+            when(head.get(Source.SERVER)).thenReturn(Tasks.forResult(new QuerySnapshot(Collections.emptyList(),null,new SnapshotMetadata(false,false))));
+            ListenerRegistration reg=PagedLists.attach(activity,controls,query,40,"live-discovery",(p,e)->{});
+            Shadows.shadowOf(Looper.getMainLooper()).idle();
+            verify(head,times(1)).get(Source.SERVER);
+            verify(head,never()).get(Source.DEFAULT);
+            verify(query,never()).startAfter(any(DocumentSnapshot.class));
+            reg.remove();
+        }
+    }
+
 }

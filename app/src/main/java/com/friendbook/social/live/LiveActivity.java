@@ -1410,7 +1410,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
                 engine.startBroadcasting(true);
                 engine.startSpeakerPlayback();
                 uiHandler.post(durationTicker);
-                publishHostHeartbeat();
+                // The initial live document already contains this heartbeat and audience.
                 postSystemChat(hostNameStr + " started a live video & voice broadcast!");
                 notifyFollowersGoingLive();
             });
@@ -3502,7 +3502,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
         if(liveDocReg!=null){liveDocReg.remove();liveDocReg=null;}
         if(chatColReg!=null){chatColReg.remove();chatColReg=null;}
         // Leaving the screen is the last event that must reach the room document.
-        if(java.util.Objects.equals(liveActor,Fb.uid()))publishHostHeartbeat();
+        if(!isFinishing() && java.util.Objects.equals(liveActor,Fb.uid()))publishHostHeartbeat();
         super.onStop();
     }
 

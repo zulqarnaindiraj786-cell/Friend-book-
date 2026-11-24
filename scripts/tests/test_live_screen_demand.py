@@ -27,6 +27,13 @@ class LiveScreenDemand(unittest.TestCase):
             self.assertIn(token,start)
         destroy=code.split('protected void onDestroy()',1)[1]
         self.assertIn('Objects.equals(liveActor,Fb.uid()) && liveActor!=null',destroy)
+    def test_start_and_finish_do_not_add_redundant_heartbeat_write(self):
+        code=(JAVA/'live/LiveActivity.java').read_text()
+        start=code.split('docRef.set(doc).addOnSuccessListener',1)[1].split('private void notifyFollowersGoingLive()',1)[0]
+        self.assertNotIn('publishHostHeartbeat();',start)
+        stop=code.split('protected void onStop()',1)[1].split('protected void onDestroy()',1)[0]
+        self.assertIn('!isFinishing() && java.util.Objects.equals(liveActor,Fb.uid())',stop)
+        self.assertIn('if (!viewersBeforeSnapshot.equals(activeViewerIds)) publishHostHeartbeat();',code)
     def test_hidden_pk_read_callback_does_not_render_or_start_new_demand(self):
         code=(JAVA/'live/LiveActivity.java').read_text()
         pk=code.split('private void refreshCloudPk()',1)[1].split('private void applyCloudPk',1)[0]
