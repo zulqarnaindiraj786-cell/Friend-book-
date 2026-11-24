@@ -79,6 +79,7 @@ public final class D1Reactions {
  }
  private static void startFetch(Context context,String collection,String id,String uid,String key,Object token,int attempt){
   if(!Objects.equals(uid,Fb.uid()) || READ_TOKENS.get(key)!=token)return;
+  if(WRITING.contains(key)){LOADING.remove(key);WAITERS.remove(key);READ_TOKENS.remove(key);return;}
   int generation=GENERATION.getOrDefault(key,0);
   D1Client.request(collection,id,"reactions","GET",null,null).addOnSuccessListener(data->{
    if(!Objects.equals(uid,Fb.uid()) || READ_TOKENS.get(key)!=token)return;
