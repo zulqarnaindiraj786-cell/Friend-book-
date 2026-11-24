@@ -566,10 +566,10 @@ public class MainActivity extends Activity {
         Fb.db().collection("notifications")
                 .whereEqualTo("toUserId", me).whereEqualTo("isRead", false)
                 .orderBy("createdAt", com.friendbook.social.d1.documents.Query.Direction.DESCENDING)
-                .limit(BADGE_WINDOW)
-                .getCachedOrFetch(false)
+                .limit(10)
+                .getCachedOrFetch(false,60_000L)
                 .addOnSuccessListener((snap) -> {
-                    if (snap == null || !java.util.Objects.equals(me,Fb.uid())) return;
+                    if (snap == null || !java.util.Objects.equals(me,Fb.uid()) || isFinishing() || isDestroyed()) return;
                     if (hasWindowFocus() && foregroundStartedAt > 0 && !snap.getMetadata().isFromCache()) {
                         for (com.friendbook.social.d1.documents.DocumentChange change : snap.getDocumentChanges()) {
                             if (change.getType() == com.friendbook.social.d1.documents.DocumentChange.Type.ADDED) {
