@@ -54,7 +54,10 @@ public class SearchVisibleDemandTest {
    peopleResult.setResult(server);postResult.setResult(server);Shadows.shadowOf(Looper.getMainLooper()).idleFor(1,TimeUnit.SECONDS);
    verify(userHead,times(1)).get(Source.DEFAULT);verify(postHead,times(1)).get(Source.DEFAULT);
    assertTrue(((FeedAdapter)field(a,"postsAdapter")).feedEngagementInPage);
-   controller.destroy();
+   // A different account must not see the previous actor's cached preview on resume.
+   fb.when(Fb::uid).thenReturn("search-other-actor");controller.restart().start().resume();
+   assertTrue(((FeedAdapter)field(a,"postsAdapter")).getPosts().isEmpty());
+   controller.pause().stop().destroy();
   }
  }
 }
