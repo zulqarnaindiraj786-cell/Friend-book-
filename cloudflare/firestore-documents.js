@@ -2833,13 +2833,14 @@ export async function resumeOfficialBroadcasts(env,now=Date.now()) {
   }));
 }
 
-const adsFields=new Set(['appId','feed_native_unit_v3','reels_native_unit_v3','ads_enabled_v3','websiteUrl','appAdsTxtUrl','updatedBy','updatedAt']);
+const adsFields=new Set(['appId','feed_native_unit_v3','reels_native_unit_v3','ads_enabled_v3','quota_saver_v1','websiteUrl','appAdsTxtUrl','updatedBy','updatedAt']);
 function adsView(doc) { return Object.fromEntries(Object.entries(doc||{}).filter(([key])=>adsFields.has(key))); }
 async function writeAdsConfig(db,env,uid,path,body,now) {
   if (!isPaymentAdmin(env,uid)) return json({error:'Forbidden'},403);
   const data=body?.data;
   if(!data || typeof data!=='object' || Array.isArray(data) || Object.keys(data).some(key=>!adsFields.has(key))
     || data.updatedBy!==uid || typeof data.ads_enabled_v3!=='boolean'
+    || (data.quota_saver_v1!==undefined && typeof data.quota_saver_v1!=='boolean')
     || ['appId','feed_native_unit_v3','reels_native_unit_v3','websiteUrl','appAdsTxtUrl'].some(k=>typeof data[k]!=='string' || data[k].length>256)) return json({error:'Invalid config'},400);
   try {
     const existing=await readRow(db,path),old=existing?decodeValue(JSON.parse(existing.document_json)):null;

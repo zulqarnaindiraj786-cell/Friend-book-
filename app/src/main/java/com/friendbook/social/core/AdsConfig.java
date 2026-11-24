@@ -77,6 +77,7 @@ public class AdsConfig {
     private static volatile String feedNativeUnitId = FEED_NATIVE_ID;
     private static volatile String reelsNativeUnitId = REELS_NATIVE_ID;
     private static volatile boolean masterSwitchEnabled = true;
+    private static volatile boolean quotaSaverEnabled;
     private static volatile boolean remoteAllowed = true;
     private static ListenerRegistration reg;
 
@@ -276,6 +277,9 @@ public class AdsConfig {
                             feedNativeUnitId = isRealProductionUnit(fId) ? fId.trim() : FEED_NATIVE_ID;
                             reelsNativeUnitId = isRealProductionUnit(rId) ? rId.trim() : REELS_NATIVE_ID;
                             if (en != null) masterSwitchEnabled = en;
+                            Boolean saver=snap.getBoolean("quota_saver_v1");
+                            quotaSaverEnabled=saver!=null && saver;
+                            QuotaSaver.setEnabled(quotaSaverEnabled);
                             notifyChange();
                         }
                     });
@@ -305,6 +309,23 @@ public class AdsConfig {
 
     public static void reset(Context ctx) {
         save(FEED_NATIVE_ID, REELS_NATIVE_ID, true, ctx);
+    }
+
+    public static boolean quotaSaverEnabled(){return quotaSaverEnabled;}
+
+    /** Global soft saver: reuse unchanged automatic list pages longer; never caps manual actions. */
+    public static void saveQuotaSaver(boolean enabled,Context ctx){
+        if(!Admin.isAdmin())return;
+        Map<String,Object> values=new HashMap<>();
+        values.put("appId",APP_ID);values.put("feed_native_unit_v3",feedNativeId());
+        values.put("reels_native_unit_v3",reelsNativeId());values.put("ads_enabled_v3",masterSwitchEnabled);
+        values.put("websiteUrl",OFFICIAL_WEBSITE_URL);values.put("appAdsTxtUrl",APP_ADS_TXT_URL);
+        values.put("quota_saver_v1",enabled);values.put("updatedBy",Fb.uid());
+        values.put("updatedAt",FieldValue.serverTimestamp());
+        Fb.db().collection("config").document("ads").set(values,SetOptions.merge())
+                .addOnSuccessListener(v->{quotaSaverEnabled=enabled;QuotaSaver.setEnabled(enabled);notifyChange();
+                    if(ctx!=null)Ui.toast(ctx,enabled?"Global Quota Saver ON — fewer automatic page refreshes":"Global Quota Saver OFF");})
+                .addOnFailureListener(e->{notifyChange();if(ctx!=null)Ui.toast(ctx,"Quota Saver setting not saved; previous mode remains active.");});
     }
 
     // ------------------------------------------------------------------------

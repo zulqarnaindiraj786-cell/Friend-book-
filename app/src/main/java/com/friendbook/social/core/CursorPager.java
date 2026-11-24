@@ -45,7 +45,7 @@ public final class CursorPager {
         if(!active() || loading)return;
         if(initialForegroundScope!=null)initialForegroundScope.close();
         initialForegroundScope=new ForegroundReadScope();
-        startLocal(Math.max(0L,maxAgeMs),true);
+        startLocal(QuotaSaver.automaticPageMaxAge(Math.max(0L,maxAgeMs)),true);
     }
     private void startLocal(long maxAgeMs,boolean full) {
         if(!active() || loading)return;

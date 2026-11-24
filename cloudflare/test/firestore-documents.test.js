@@ -2244,12 +2244,13 @@ test('ads config permits limited authenticated reads and guarded admin-only writ
  const db={prepare(q){const s=sql.prepare(q);return{bind(...args){return{run:async()=>s.run(...args),all:async()=>({results:s.all(...args)}),first:async()=>s.get(...args)||null};}};},async batch(stmts){sql.exec('BEGIN');try{for(const s of stmts)await s.run();sql.exec('COMMIT');}catch(e){sql.exec('ROLLBACK');throw e;}}};
  const app=createWorker(async t=>t),env={DB:db,FIREBASE_PROJECT_ID:'friendbook-test',PAYMENT_ADMIN_UIDS:'admin'};
  const call=(uid,path,method='GET',body)=>app.fetch(new Request('https://example.test'+path,{method,headers:{authorization:`Bearer ${uid}`,'content-type':'application/json'},...(body?{body:JSON.stringify(body)}:{})}),env);
- const data={appId:'ca-app',feed_native_unit_v3:'feed',reels_native_unit_v3:'reel',ads_enabled_v3:true,websiteUrl:'https://example.test',appAdsTxtUrl:'https://example.test/app-ads.txt',updatedBy:'admin',updatedAt:{__fieldValue:'serverTimestamp'}};
+ const data={appId:'ca-app',feed_native_unit_v3:'feed',reels_native_unit_v3:'reel',ads_enabled_v3:true,quota_saver_v1:true,websiteUrl:'https://example.test',appAdsTxtUrl:'https://example.test/app-ads.txt',updatedBy:'admin',updatedAt:{__fieldValue:'serverTimestamp'}};
  assert.equal((await call('alice','/v1/firestore/document?path=config/ads','PUT',{data})).status,403);
  assert.equal((await call('admin','/v1/firestore/document?path=config/ads','PUT',{data:{...data,secret:'no'}})).status,400);
+ assert.equal((await call('admin','/v1/firestore/document?path=config/ads','PUT',{data:{...data,quota_saver_v1:'true'}})).status,400);
  assert.equal((await call('admin','/v1/firestore/document?path=config/ads','PUT',{data,merge:true})).status,200);
  sql.prepare("UPDATE friendbook_cf_firestore_documents SET document_json=json_set(document_json,'$.privateLegacy','secret') WHERE path='config/ads'").run();
- const read=await call('alice','/v1/firestore/document?path=config/ads');assert.equal(read.status,200);const body=await read.json();assert.equal(body.data.feed_native_unit_v3,'feed');assert.equal(body.data.privateLegacy,undefined);
+ const read=await call('alice','/v1/firestore/document?path=config/ads');assert.equal(read.status,200);const body=await read.json();assert.equal(body.data.feed_native_unit_v3,'feed');assert.equal(body.data.quota_saver_v1,true);assert.equal(body.data.privateLegacy,undefined);
  assert.equal((await call('alice','/v1/firestore/document?path=config/secret')).status,403);
  assert.equal((await call('alice','/v1/firestore/query','POST',{parent:'config'})).status,403);
  assert.equal((await call('admin','/v1/firestore/document?path=config/ads','PATCH',{fields:{ads_enabled_v3:false}})).status,403);
