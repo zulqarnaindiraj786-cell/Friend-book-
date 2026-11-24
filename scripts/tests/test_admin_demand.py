@@ -11,6 +11,11 @@ class AdminDemand(unittest.TestCase):
                 self.assertIn(token,code,name)
             self.assertNotIn('.limit(100)',code)
             self.assertNotIn('.addSnapshotListener(',code)
+    def test_admin_default_tab_uses_one_observed_head_and_on_demand_pages(self):
+        code=(JAVA/'admin/frag/AdminUsersFragment.java').read_text()
+        for token in ['new com.friendbook.social.core.CursorPager(query,10', 'userPages.startObserved()', 'query.limit(10).addSnapshotListener', 'acceptObservedFirstPage(snap)', 'userPages.next()', 'userPages.close()', 'h.removeCallbacks(pending)', 'loaded users']:
+            self.assertIn(token,code)
+        self.assertNotIn('.limit(300)',code)
     def test_content_tab_pages_only_visible_collection_and_guards_delete(self):
         code=(JAVA/'admin/AdminContentActivity.java').read_text()
         for token in ['PagedLists.attach','10,"admin-content:"+collection','if(started)listen()', 'reg.remove()', 'items.clear();adapter.notifyDataSetChanged()', 'ModerationGate.SHARED.begin(actor,collection,it.id)', 'task.isSuccessful()', 'removed.add(java.util.Arrays.asList(collection,it.id))']:
