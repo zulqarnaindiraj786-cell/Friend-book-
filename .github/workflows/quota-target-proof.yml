@@ -1,4 +1,4 @@
-# Owner-requested strict daily verification after people-head rollout; analytics only.
+# Owner-requested strict daily verification after notification-index retirement; analytics only.
 name: Strict quota target verification (not a guarantee)
 on:
   push:
@@ -40,7 +40,7 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: |
           python3 scripts/loadtest/verify_quota_target.py \
-            --fixes-active-since 2026-11-24T10:59:55Z \
+            --fixes-active-since 2026-11-24T11:08:50Z \
             --output /tmp/quota-target-proof/production-daily-verdict.json --enforce
       - name: Preserve proof even when the daily target fails
         if: always()
