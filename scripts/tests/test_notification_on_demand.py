@@ -5,7 +5,7 @@ class NotificationOnDemand(unittest.TestCase):
     def test_first_page_and_refresh_use_explicit_cache_mode(self):
         s=(JAVA/'main/NotificationsFragment.java').read_text()
         self.assertIn('PAGE_SIZE = 10',s)
-        self.assertIn('pager.startCachedFor(60_000L)',s)
+        self.assertIn('pager.startCachedForForeground(60_000L)',s)
         self.assertIn('pager.refreshOnDemand()',s)
         self.assertNotIn('pager.startDelta()',s)
         self.assertNotIn('addSnapshotListener',s)

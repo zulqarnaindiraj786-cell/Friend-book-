@@ -36,6 +36,20 @@ public class NotificationDemandTest {
    assertFalse(((androidx.swiperefreshlayout.widget.SwipeRefreshLayout)field("swipe").get(f)).isRefreshing());
   }
  }
+ @Test public void automaticNotificationPageUsesOneScreenScopeAndStopCancelsIt()throws Exception{
+  try(MockedStatic<Fb> fb=mockStatic(Fb.class)){
+   fb.when(Fb::uid).thenReturn("notif-auto-actor");NotificationsFragment f=fragment("notif-auto-actor");
+   D1DocumentStore db=mock(D1DocumentStore.class);fb.when(Fb::db).thenReturn(db);CollectionReference collection=mock(CollectionReference.class);Query q=mock(Query.class);
+   when(db.collection("notifications")).thenReturn(collection);when(collection.whereEqualTo("toUserId","notif-auto-actor")).thenReturn(q);when(q.orderBy(eq("createdAt"),any(Query.Direction.class))).thenReturn(q);when(q.limit(10)).thenReturn(q);
+   when(q.get(Source.CACHE)).thenReturn(Tasks.forException(new java.io.IOException("no cache")));
+   TaskCompletionSource<QuerySnapshot> pending=new TaskCompletionSource<>();when(q.getAutomatic(any(ForegroundReadScope.class))).thenReturn(pending.getTask());
+   java.lang.reflect.Method start=NotificationsFragment.class.getDeclaredMethod("startPages",boolean.class);start.setAccessible(true);
+   start.invoke(f,false);Shadows.shadowOf(Looper.getMainLooper()).idle();for(int i=0;i<100;i++)start.invoke(f,false);
+   org.mockito.ArgumentCaptor<ForegroundReadScope> captured=org.mockito.ArgumentCaptor.forClass(ForegroundReadScope.class);
+   verify(q,times(1)).getAutomatic(captured.capture());verify(q,never()).get(Source.SERVER);
+   call(f,"stopPages");assertFalse(captured.getValue().whenForeground().isSuccessful());
+  }
+ }
  @Test public void hiddenBulkReadCompletionCannotStartWrites()throws Exception{
   try(MockedStatic<Fb> fb=mockStatic(Fb.class)){
    fb.when(Fb::uid).thenReturn("notif-bulk-actor");NotificationsFragment f=fragment("notif-bulk-actor");

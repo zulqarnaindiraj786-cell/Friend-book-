@@ -286,7 +286,7 @@ public class NotificationsFragment extends Fragment {
             moreButton.setText(!error.isEmpty()?"Retry notifications":more?"Load 10 more":"All loaded");
             moreButton.setEnabled(!loading && (more || !error.isEmpty()));
         });
-        if(full)pager.refreshOnDemand(); else pager.startCachedFor(60_000L);
+        if(full)pager.refreshOnDemand(); else pager.startCachedForForeground(60_000L);
     }
 
     private void setUnreadOnly(boolean on) {
