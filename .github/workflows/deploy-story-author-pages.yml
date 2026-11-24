@@ -1,6 +1,6 @@
 # Targeted StoryViewer fix: add only reviewed author-page indexes, then deploy.
 # Never execute the full migration chain or remove existing indexes/data.
-# Explicit rollout tag required; application and ACL regression tests run first.
+# Explicit rollout tag required; source 12b2171 passed Worker and Android CI.
 name: Deploy bounded story author pages
 on:
   push:
