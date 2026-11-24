@@ -57,4 +57,24 @@ public class ListenerQueryFlightsTest {
             transport.verify(()->D1DocumentTransport.listenerQuery(any(JSONObject.class)),times(3));
         }
     }
+    @Test public void queueRejectionAndTransportFailureNeverPoisonFutureReads() throws Exception {
+        D1DocumentStore store=D1DocumentStore.getInstance();store.listenerQueryReadFlights.invalidateAll();
+        try(MockedStatic<D1DocumentStore> identity=mockStatic(D1DocumentStore.class,CALLS_REAL_METHODS);
+            MockedStatic<D1DocumentTransport> transport=mockStatic(D1DocumentTransport.class,CALLS_REAL_METHODS)) {
+            identity.when(D1DocumentStore::authenticatedUid).thenReturn("actor");
+            java.util.concurrent.ExecutorService rejected=mock(java.util.concurrent.ExecutorService.class);
+            doThrow(new java.util.concurrent.RejectedExecutionException("full")).when(rejected).execute(any(Runnable.class));
+            JSONObject body=new JSONObject().put("parent","users").put("limit",20);
+            Task<String> failed=store.readListenerQueryResponse("actor",body,rejected);
+            assertTrue(failed.isComplete());assertFalse(failed.isSuccessful());
+            ListenerDocumentFlightsTest.Queue queue=new ListenerDocumentFlightsTest.Queue();
+            transport.when(()->D1DocumentTransport.listenerQuery(any(JSONObject.class)))
+                .thenThrow(new java.io.IOException("offline")).thenReturn(new JSONObject("{\"documents\":[]}"));
+            transport.clearInvocations();
+            Task<String> retry=store.readListenerQueryResponse("actor",body,queue);assertNotSame(failed,retry);
+            queue.drain();assertFalse(retry.isSuccessful());
+            Task<String> success=store.readListenerQueryResponse("actor",body,queue);queue.drain();assertTrue(success.isSuccessful());
+            transport.verify(()->D1DocumentTransport.listenerQuery(any(JSONObject.class)),times(2));
+        }
+    }
 }
