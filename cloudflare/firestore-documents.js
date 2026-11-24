@@ -1677,6 +1677,70 @@ async function boundedVideoPostPage(db,uid,spec,requestUserReads) {
   }
 }
 
+// Fast head for the common timestamp-only Home page. Lower-ranked historical
+// strings/numbers/nulls cannot enter a full visible timestamp page. If a
+// competing object/array exception exists, or the page cannot be filled, use
+// the original complete exception merge. The exception probe is inside each
+// SELECT, not a stale process cache or a separate check-then-read race.
+async function boundedTimestampFeedHead(db,uid,spec,requestUserReads) {
+  if(spec?.parent!=='posts' || !Array.isArray(spec.filters) || spec.filters.length
+      || !Array.isArray(spec.orderBy) || spec.orderBy.length!==1
+      || spec.orderBy[0]?.field!=='createdAt' || spec.orderBy[0]?.direction!=='DESCENDING'
+      || spec.limitToLast || spec.startAt || spec.endAt || spec.endBefore
+      || !Number.isInteger(spec.limit) || spec.limit<1 || spec.limit>10) return null;
+  let cursor=null;
+  if(spec.startAfter) {
+    const c=spec.startAfter;
+    if(!Array.isArray(c) || c.length!==2 || c[0]?.__type!=='timestamp' || !Number.isSafeInteger(c[0].millis)
+        || typeof c[1]!=='string' || !/^[-_a-zA-Z0-9]{1,512}$/.test(c[1]))return null;
+    cursor=[c[0].millis,c[1]];
+  }
+  const rank=`CASE WHEN json_type(document_json,'$.createdAt') IN ('integer','real') THEN 2 ELSE 4 END`;
+  const time=`CASE WHEN json_type(document_json,'$.createdAt') IN ('integer','real') THEN json_extract(document_json,'$.createdAt') ELSE json_extract(document_json,'$.createdAt.millis') END`;
+  const high=`json_type(document_json,'$.createdAt') IN ('object','array')
+    AND COALESCE((json_type(document_json,'$.createdAt')='object'
+      AND json_extract(document_json,'$.createdAt.__type')='timestamp'
+      AND json_type(document_json,'$.createdAt.millis')='integer'
+      AND json_extract(document_json,'$.createdAt.millis') BETWEEN -9007199254740991 AND 9007199254740991
+      AND doc_id<>'' AND length(doc_id)<=512 AND instr(doc_id,char(0))=0
+      AND doc_id NOT GLOB '*[^a-zA-Z0-9_-]*' AND path='posts/'||doc_id),0)=0`;
+  const guard=`NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents INDEXED BY idx_cf_feed_high_rank_exceptions
+    WHERE parent_path='posts' AND ${high} LIMIT 1)`;
+  try {
+    const visible=[];
+    let examined=0;
+    while(examined<50) {
+      const chunk=Math.min(50-examined,Math.max(spec.limit-visible.length,examined?10:1));
+      const rows=[];
+      if(cursor) {
+        const equal=await db.prepare(`SELECT * FROM friendbook_cf_firestore_documents INDEXED BY idx_cf_posts_feed_page
+          WHERE parent_path='posts' AND (${rank})=4 AND json_type(document_json,'$.createdAt')='object' AND (${time})=? AND doc_id<? AND ${guard}
+          ORDER BY doc_id DESC LIMIT ?`).bind(cursor[0],cursor[1],chunk).all();
+        rows.push(...(equal.results||[]));
+      }
+      if(rows.length<chunk) {
+        const bound=cursor?` AND (${time})<?`:'';
+        const later=await db.prepare(`SELECT * FROM friendbook_cf_firestore_documents INDEXED BY idx_cf_posts_feed_page
+          WHERE parent_path='posts' AND (${rank})=4 AND json_type(document_json,'$.createdAt')='object' AND (${time})>=-9007199254740991${bound} AND ${guard}
+          ORDER BY (${time}) DESC,doc_id DESC LIMIT ?`).bind(...(cursor?[cursor[0],chunk-rows.length]:[chunk])).all();
+        rows.push(...(later.results||[]));
+      }
+      examined+=rows.length;
+      const docs=rows.map(canonicalContentDocument).filter(Boolean);
+      visible.push(...await visibleDocuments(db,uid,'posts',docs,requestUserReads));
+      if(visible.length>=spec.limit)return visible.slice(0,spec.limit);
+      if(rows.length<chunk)return null;
+      const last=docs.at(-1);
+      if(!last || !Number.isSafeInteger(last.data?.createdAt?.millis))return null;
+      cursor=[last.data.createdAt.millis,last.id];
+    }
+    return null;
+  } catch(error) {
+    if(/no such index: idx_cf_(?:feed_high_rank_exceptions|posts_feed_page)/.test(String(error)))return null;
+    throw error;
+  }
+}
+
 async function boundedFeedPage(db,uid,spec,requestUserReads) {
   const root=spec?.parent;
   if (root!=='posts' && root!=='reels') return null;
@@ -3719,7 +3783,7 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0, ct
         if(inbox!==null)return queryResponse(parent,inbox,body.knownRevisions);
         const people=await boundedNamePage(db,env,uid,body) ?? await boundedPeoplePage(db,env,uid,body) ?? await boundedRecentPeoplePage(db,env,uid,body);
         if (people!==null) return queryResponse(parent,people,body.knownRevisions);
-        const page=parent==='notifications'?await boundedNotificationPage(db,uid,body):parent==='stories'?await boundedStoryPage(db,uid,body,requestUserReads) ?? await boundedStoryAuthorPage(db,uid,body,requestUserReads):await boundedVideoPostPage(db,uid,body,requestUserReads) ?? await boundedFeedPage(db,uid,body,requestUserReads);
+        const page=parent==='notifications'?await boundedNotificationPage(db,uid,body):parent==='stories'?await boundedStoryPage(db,uid,body,requestUserReads) ?? await boundedStoryAuthorPage(db,uid,body,requestUserReads):await boundedVideoPostPage(db,uid,body,requestUserReads) ?? await boundedTimestampFeedHead(db,uid,body,requestUserReads) ?? await boundedFeedPage(db,uid,body,requestUserReads);
         if (page!==null) return queryResponse(parent,await feedEngagement(db,env,uid,body,page,requestUserReads),body.knownRevisions);
         rows = await readCollectionRows(db, parent, uid, body?.filters, body, env);
       }
