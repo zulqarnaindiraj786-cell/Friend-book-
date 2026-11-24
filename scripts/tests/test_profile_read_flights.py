@@ -10,6 +10,6 @@ class ProfileReadFlightsWiring(unittest.TestCase):
         self.assertIn('get(Source.CACHE)',cached)
         self.assertIn('fetchUserNetwork(uid, actor, tcs)',cached)
         self.assertIn('java.util.Objects.equals(actor,Fb.uid())',cached)
-        fresh=source.split('public static Task<Models.User> getUserFresh',1)[1].split('private static String lastCloudflareProfileKey',1)[0]
+        fresh=source.split('public static Task<Models.User> getUserFresh',1)[1].split('private static void fetchUserNetwork',1)[0]
         self.assertNotIn('USER_READS',fresh)
         self.assertIn('fetchUserNetwork(uid,Fb.uid(),tcs)',fresh)

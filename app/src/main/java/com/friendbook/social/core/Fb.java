@@ -115,7 +115,8 @@ public class Fb {
                     Models.User u = Models.User.fromDoc(doc);
                     me = u;
                     FastCache.saveMe(com.friendbook.social.App.instance, u);
-                    syncProfileToCloudflare(u);
+                    // Reading a profile must not write an unused /v1/me projection.
+                    // Canonical profile saves remain explicit mutations.
                     if (u.banned && !Admin.isOwnerEmail(u.email)) {
                         me = null;
                         FastCache.clearAll(com.friendbook.social.App.instance);
@@ -223,34 +224,6 @@ public class Fb {
         TaskCompletionSource<Models.User> tcs=new TaskCompletionSource<>();
         fetchUserNetwork(uid,Fb.uid(),tcs);
         return tcs.getTask();
-    }
-
-    private static String lastCloudflareProfileKey = "";
-    private static final java.util.concurrent.ExecutorService CF_PROFILE_IO =
-            java.util.concurrent.Executors.newSingleThreadExecutor();
-
-    private static void syncProfileToCloudflare(Models.User u) {
-        if (!com.friendbook.social.BuildConfig.D1_INTERACTIONS_ENABLED || u == null || u.uid == null) return;
-        String dn = u.displayName != null ? u.displayName : "";
-        String ph = u.photoUrl != null ? u.photoUrl : "";
-        String key = u.uid + "|" + dn + "|" + ph;
-        if (key.equals(lastCloudflareProfileKey)) return;
-        lastCloudflareProfileKey = key;
-        try {
-            com.google.firebase.auth.FirebaseUser user = auth().getCurrentUser();
-            if (user == null) return;
-            user.getIdToken(false).addOnSuccessListener(res -> {
-                String token = res != null ? res.getToken() : null;
-                if (token == null || token.isEmpty()) return;
-                CF_PROFILE_IO.execute(() -> {
-                    try {
-                        D1HttpTransport.send(
-                                new java.net.URL("https://rough-firefly-dd7b.zulqarnaindiraj786.workers.dev/v1/me"),
-                                "PUT", token, D1Client.object("displayName", dn, "photoUrl", ph));
-                    } catch (Throwable ignored) { }
-                });
-            });
-        } catch (Throwable ignored) { }
     }
 
     private static void fetchUserNetwork(String uid, String actor, TaskCompletionSource<Models.User> tcs) {
