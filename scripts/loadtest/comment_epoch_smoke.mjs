@@ -10,14 +10,15 @@ export async function checkCommentEpoch(fetchFn,token,nonce){
  async function query(stage,statement){
   const response=await fetchFn(endpoint,{method:'POST',headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json'},body:JSON.stringify(statement)});
   if(!response.ok){
-   let diagnosis='unknown';
-   try {const data=await response.json();const message=String(data?.errors?.[0]?.message||'').toLowerCase();
+   let diagnosis='unknown',detail='';
+   try {const data=await response.json();const raw=String(data?.errors?.[0]?.message||'');detail=raw.split(token).join('[redacted]').replaceAll(nonce,'[nonce]').replace(/[^A-Za-z0-9 _.:()/-]/g,' ').slice(0,240);const message=raw.toLowerCase();
     if(/bind|parameter|variable/.test(message))diagnosis='binding';
     else if(/size|length|too (?:many|large)|limit/.test(message))diagnosis='limit';
     else if(/syntax|parse|near/.test(message))diagnosis='syntax';
     else if(/no such|missing/.test(message))diagnosis='missing schema';
     else if(/authoriz|permission/.test(message))diagnosis='permission';
    } catch {}
+   if(detail)console.error(`::notice::D1 synthetic ${stage} error: ${detail}`);
    throw Error(`${stage}: HTTP ${response.status} (${diagnosis})`);
   }
   const payload=await response.json(),result=payload?.result?.[0];
