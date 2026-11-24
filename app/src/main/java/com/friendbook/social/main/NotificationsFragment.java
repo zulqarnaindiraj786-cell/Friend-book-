@@ -216,7 +216,8 @@ public class NotificationsFragment extends Fragment {
     private void markAllFailed(int generation) {
         if (generation!=markReadGeneration) return;
         markingAll=false;
-        if (getActivity()!=null) Ui.toast(getActivity(),"Couldn't mark all read. Tap to retry.");
+        if (notificationsStarted && isAdded() && !isHidden() && getActivity()!=null)
+            Ui.toast(getActivity(),"Couldn't mark all read. Tap to retry.");
     }
 
     @Override
