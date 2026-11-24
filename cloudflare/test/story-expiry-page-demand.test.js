@@ -56,6 +56,12 @@ test('story expiry pages seek current rows, retain canonical ACL and match gener
  sql.prepare("UPDATE friendbook_cf_firestore_documents SET document_json=json_set(document_json,'$.blocked',json('[\"viewer\"]')) WHERE path='users/author'").run();
  assert.deepEqual(await request('viewer',null,3),[],'next request sees changed author blocks');
  sql.prepare("UPDATE friendbook_cf_firestore_documents SET document_json=json_remove(document_json,'$.blocked') WHERE path='users/author'").run();
+ // Embedded NUL IDs can fool SQLite's length and GLOB checks; they must
+ // enter the compatibility path instead of the ASCII fast lane.
+ add('nul\0id',{__type:'timestamp',millis:10});
+ genericScans=0;assert.deepEqual(await request('viewer',null,3),await request('viewer',null,3,true));
+ assert.ok(genericScans>0,'invalid ID triggers generic evaluator');
+ sql.prepare('DELETE FROM friendbook_cf_firestore_documents WHERE path=?').run('stories/nul\0id');
  // More than the bounded exception budget must use the original evaluator.
  for(let i=0;i<70;i++)add(`odd-extra-${i}`,{unknown:i});
  genericScans=0;const overflow=await request('viewer',null,3);assert.ok(genericScans>0);

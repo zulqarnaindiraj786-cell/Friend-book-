@@ -6,7 +6,7 @@ WHERE parent_path='stories' AND json_type(document_json,'$.expiresAt') IN ('obje
     AND json_extract(document_json,'$.expiresAt.__type')='timestamp'
     AND json_type(document_json,'$.expiresAt.millis')='integer'
     AND json_extract(document_json,'$.expiresAt.millis') BETWEEN -9007199254740991 AND 9007199254740991
-    AND doc_id<>'' AND length(doc_id)<=512 AND doc_id NOT GLOB '*[^a-zA-Z0-9_-]*' AND path='stories/'||doc_id),0)=0;
+    AND doc_id<>'' AND length(doc_id)<=512 AND instr(doc_id,char(0))=0 AND doc_id NOT GLOB '*[^a-zA-Z0-9_-]*' AND path='stories/'||doc_id),0)=0;
 
 -- doc_id is the evaluator's tie breaker; the old expiry-only index requires
 -- sorting every story with the same expiry before it can return the first page.
