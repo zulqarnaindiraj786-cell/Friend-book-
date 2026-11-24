@@ -70,4 +70,38 @@ public class CursorPagerLifecycleTest {
         }
     }
 
+    @Test public void observedHeadIsReusedWithoutPrefetchAndLateNextIsIgnoredAfterClose() {
+        try(MockedStatic<Fb> fb=mockStatic(Fb.class)) {
+            fb.when(Fb::uid).thenReturn("viewer");
+            Query query=mock(Query.class),head=mock(Query.class),after=mock(Query.class),next=mock(Query.class);
+            when(query.limit(10)).thenReturn(head);
+            when(head.get(Source.CACHE)).thenReturn(Tasks.forResult(new QuerySnapshot(Collections.emptyList(),null,new com.friendbook.social.d1.documents.SnapshotMetadata(true,false))));
+            java.util.List<DocumentSnapshot> docs=new java.util.ArrayList<>();
+            for(int i=0;i<10;i++) {
+                DocumentSnapshot doc=mock(com.friendbook.social.d1.documents.QueryDocumentSnapshot.class);
+                when(doc.getId()).thenReturn("user"+i);docs.add(doc);
+            }
+            QuerySnapshot observed=mock(QuerySnapshot.class);
+            when(observed.getMetadata()).thenReturn(new com.friendbook.social.d1.documents.SnapshotMetadata(false,false));
+            when(observed.getDocuments()).thenReturn(docs);
+            when(observed.size()).thenReturn(10);
+            when(query.startAfter(docs.get(9))).thenReturn(after);
+            when(after.limit(10)).thenReturn(next);
+            com.google.android.gms.tasks.TaskCompletionSource<QuerySnapshot> pending=new com.google.android.gms.tasks.TaskCompletionSource<>();
+            when(next.get()).thenReturn(pending.getTask());
+            java.util.concurrent.atomic.AtomicInteger delivered=new java.util.concurrent.atomic.AtomicInteger();
+            CursorPager pager=new CursorPager(query,10,"admin-observed-test",(rows,more,loading,error)->delivered.incrementAndGet());
+            pager.startObserved();Shadows.shadowOf(Looper.getMainLooper()).idle();
+            pager.acceptObservedFirstPage(observed);
+            verify(head,never()).get(Source.SERVER);verify(head,never()).get(Source.DEFAULT);
+            verify(query,never()).startAfter(any(DocumentSnapshot.class));
+            pager.next();Shadows.shadowOf(Looper.getMainLooper()).idle();
+            verify(next,times(1)).get();
+            int before=delivered.get();pager.close();
+            pending.setResult(new QuerySnapshot(Collections.emptyList(),null,new com.friendbook.social.d1.documents.SnapshotMetadata(false,false)));
+            Shadows.shadowOf(Looper.getMainLooper()).idle();
+            org.junit.Assert.assertEquals(before,delivered.get());
+        }
+    }
+
 }
