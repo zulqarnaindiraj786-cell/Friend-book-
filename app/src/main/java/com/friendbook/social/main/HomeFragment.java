@@ -527,7 +527,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
     }
 
     private String notesActor;
-    private long notesReadAt = -120_000L;
+    private long notesReadAt = -com.friendbook.social.core.OnDemandLoads.PYMK_CACHE_MS;
     private boolean notesLoaded;
     private boolean notesInFlight;
 
@@ -626,7 +626,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         if (actor == null) return;
         if (!actor.equals(notesActor)) {
             notesActor = actor;
-            notesReadAt = -120_000L;
+            notesReadAt = -com.friendbook.social.core.OnDemandLoads.PYMK_CACHE_MS;
             notesLoaded = false;
             restorePymkFromCache(actor);
         }
