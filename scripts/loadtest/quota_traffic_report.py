@@ -206,6 +206,17 @@ def safe_shape(sql):
             if re.search(r'\bas quota_writer_'+writer+'_'+root+r'\b',q):
                 callers.append(writer+':'+root)
     result={'operation':op.group(1).upper() if op else 'OTHER','tables':tables,'roots':roots,'features':features}
+    # The create-only notification branch predates writer aliases. Recognize
+    # only its complete fixed column/VALUES structure, not arbitrary literals.
+    # This is a source-family fingerprint, never a device/action count.
+    notification_create = re.search(
+        r"^insert into friendbook_cf_firestore_documents\s*\(path,\s*parent_path,\s*collection_id,\s*doc_id,\s*owner_uid,\s*document_json,\s*create_time,\s*update_time\)\s*"
+        r"values\s*\(case when not exists\s*\(select 1 from friendbook_cf_firestore_documents where path=\?1\) then \?1 else null end,\s*"
+        r"'notifications',\s*'notifications',\s*\?2,\s*\?3,\s*\?4,\s*\?5,\s*\?5\)\s*;?$", q)
+    if notification_create:
+        features.append('create_only_notification')
+        roots.append('notifications')
+        callers.append('document:notifications')
     if callers: result['writer_families']=callers
     # Fixed diagnostic labels only, never arbitrary aliases or SQL text.
     aliases=[name for name in ('canonical','legacy','current','mirror','sampled','legacy_only',

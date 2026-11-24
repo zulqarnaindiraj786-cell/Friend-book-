@@ -14,6 +14,22 @@ def payload(rows):
 
 
 class TrafficReport(unittest.TestCase):
+    def test_create_only_notification_source_fingerprint_is_exact_and_private(self):
+        source=(ROOT/'cloudflare/firestore-documents.js').read_text()
+        marker="if (body.createOnly===true && splitPath(docPath)[0]==='notifications')"
+        branch=source[source.index(marker):]
+        start=branch.index('INSERT INTO friendbook_cf_firestore_documents(')
+        sql=branch[start:branch.index('`',start)]
+        shape=p.safe_shape(sql)
+        self.assertIn('create_only_notification',shape['features'])
+        self.assertEqual(shape['writer_families'],['document:notifications'])
+        self.assertEqual(shape['roots'],['notifications'])
+        for changed in (sql.replace("'notifications'","'users'"),
+                        sql+' ON CONFLICT(path) DO NOTHING',
+                        sql.replace('WHERE path=?1','WHERE path=?9')):
+            self.assertNotIn('create_only_notification',p.safe_shape(changed)['features'])
+        self.assertNotIn(sql,json.dumps(shape))
+
     def test_graphql_only_query_without_dimensions_for_total(self):
         q=p.query_text('2026-01-01T00:00:00Z','2026-01-01T00:05:00Z')
         self.assertNotIn('dimensions',q)
