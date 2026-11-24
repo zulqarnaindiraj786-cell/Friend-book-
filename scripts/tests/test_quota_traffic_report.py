@@ -113,6 +113,8 @@ class TrafficReport(unittest.TestCase):
         self.assertIn('post_tag_fts',p.safe_shape('SELECT * FROM friendbook_cf_post_search WHERE friendbook_cf_post_search MATCH ?')['features'])
         shape=p.safe_shape('SELECT resource,state FROM friendbook_cf_interaction_resources INDEXED BY idx_cf_interaction_resource_state_cover WHERE resource IN (?,?)')
         self.assertIn('interaction_state_cover',shape['features']);self.assertIn('feed_interaction_state_batch',shape['features'])
+        self.assertIn('legacy_comment_epoch_read',p.safe_shape('SELECT generation,revision FROM friendbook_cf_legacy_comment_epoch WHERE id=1')['features'])
+        self.assertIn('legacy_comment_candidate_probe',p.safe_shape('WITH quota_comment_candidates_0 AS MATERIALIZED (SELECT 1) SELECT 1')['features'])
         self.assertNotIn('feed_exception_probe',p.safe_shape('SELECT idx_cf_feed_exceptions_not_real FROM private')['features'])
 
     def test_multiline_upserts_are_not_mislabeled_as_plain_inserts(self):

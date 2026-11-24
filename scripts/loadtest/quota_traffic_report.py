@@ -203,6 +203,8 @@ def safe_shape(sql):
         ('idx_cf_story_expiry_exceptions','story_expiry_exception_probe')):
         if re.search(r'\bindexed\s+by\s+'+index+r'\b',q):features.append(label)
     if re.search(r'\bfriendbook_cf_post_search\s+match\b',q):features.append('post_tag_fts')
+    if re.search(r'\bfrom\s+friendbook_cf_legacy_comment_epoch\b',q):features.append('legacy_comment_epoch_read')
+    if re.search(r'\bquota_comment_candidates_[0-9]+\s+as\s+materialized\b',q):features.append('legacy_comment_candidate_probe')
     if re.search(r'\bfrom\s+friendbook_cf_interaction_resources\b',q) and re.search(r'\bwhere\s+resource\s+in\s*\(',q):features.append('feed_interaction_state_batch')
     tables=[label for table,label in (
         ('friendbook_cf_firestore_documents','canonical_documents'),
