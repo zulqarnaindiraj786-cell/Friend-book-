@@ -740,6 +740,7 @@ public class Reactions {
                     renderReactorView(activity, dlg, filterRow, listCol, all, counts, "thanks"));
         }
 
+        final Object paintToken=new Object();listCol.setTag(paintToken);
         listCol.removeAllViews();
         List<ReactorEntry> shown = new ArrayList<>();
         for (ReactorEntry r : all) {
@@ -753,7 +754,6 @@ public class Reactions {
             return;
         }
 
-        final Object paintToken=new Object();listCol.setTag(paintToken);
         hydrateReactorProfiles(activity,dlg,shown.subList(0,Math.min(visible,shown.size())),()->{
             if(listCol.getTag()==paintToken)renderReactorPage(activity,dlg,filterRow,listCol,all,counts,activeFilter,visible);
         });
