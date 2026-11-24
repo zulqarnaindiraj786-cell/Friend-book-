@@ -16,22 +16,22 @@ public final class LoopTrace {
     private LoopTrace(){}
     public static void screen(Activity activity){screen=activity.getClass().getSimpleName();}
     private static long now(){return SystemClock.elapsedRealtime();}
-    static long begin(okhttp3.Request request){
+    static synchronized long begin(okhttp3.Request request){
         long at=now(),session=generation;
         return BUFFER.begin(at,screen,request.method(),request.url().encodedPath(),App.isForeground())?session:-1L;
     }
-    static void end(long session,int status,long duration){if(session==generation)BUFFER.end(now(),status,duration);}
+    static synchronized void end(long session,int status,long duration){if(session==generation)BUFFER.end(now(),status,duration);}
     private static String report(){return "Version "+BuildConfig.VERSION_NAME+" ("+BuildConfig.VERSION_CODE+")\n"+BUFFER.report(now());}
     private static void save(Context context){context.getSharedPreferences("local_loop_trace",0).edit().putString("report",report()).apply();}
-    private static void start(Context context,long duration){
+    private static synchronized void start(Context context,long duration){
         long session=++generation;hasSession=true;BUFFER.start(now(),duration);
         // Clear previous report before recording; process death is not a silently resumed session.
         context.getSharedPreferences("local_loop_trace",0).edit().remove("report").apply();
-        MAIN.postDelayed(()->{if(session==generation){BUFFER.stop();save(context);}},duration);
+        MAIN.postDelayed(()->{if(session==generation){BUFFER.stop(now());save(context);}},duration);
         Ui.toast(context,"Loop Trace started. Use the app, then return here to Stop & Share.");
     }
     private static void share(Activity activity){
-        if(hasSession){BUFFER.stop();save(activity);}
+        if(hasSession){BUFFER.stop(now());save(activity);}
         String text=activity.getSharedPreferences("local_loop_trace",0).getString("report","");
         if(text.isEmpty()){Ui.info(activity,"Loop Trace","No saved report. Start a trace first.");return;}
         Intent send=new Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_SUBJECT,"FriendBook Loop Trace").putExtra(Intent.EXTRA_TEXT,text);
@@ -45,7 +45,7 @@ public final class LoopTrace {
                 if(which==1)start(activity.getApplicationContext(),900_000L);
                 if(which==2)share(activity);
                 if(which==3)Ui.info(activity,"Local trace",hasSession?report():activity.getSharedPreferences("local_loop_trace",0).getString("report","No saved report"));
-                if(which==4){generation++;BUFFER.stop();hasSession=false;activity.getSharedPreferences("local_loop_trace",0).edit().clear().apply();Ui.toast(activity,"Trace deleted");}
+                if(which==4){generation++;BUFFER.stop(now());hasSession=false;activity.getSharedPreferences("local_loop_trace",0).edit().clear().apply();Ui.toast(activity,"Trace deleted");}
             }).setNegativeButton("Close",null).show();
     }
 }

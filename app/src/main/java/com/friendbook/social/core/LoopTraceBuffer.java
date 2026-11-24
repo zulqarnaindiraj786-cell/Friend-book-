@@ -7,8 +7,8 @@ final class LoopTraceBuffer {
     static final int MAX_KEYS=96,MAX_EVENTS=160;
     private final Map<String,Integer> counts=new LinkedHashMap<>();
     private final ArrayDeque<String> events=new ArrayDeque<>();
-    private long start,deadline;private int attempts,completed,failed;private boolean active;
-    synchronized void start(long now,long duration){counts.clear();events.clear();attempts=completed=failed=0;start=now;deadline=now+duration;active=true;}
+    private long start,deadline,stoppedAt;private int attempts,completed,failed;private boolean active;
+    synchronized void start(long now,long duration){counts.clear();events.clear();attempts=completed=failed=0;start=now;deadline=now+duration;stoppedAt=deadline;active=true;}
     synchronized boolean active(long now){if(now>=deadline)active=false;return active;}
     static String route(String path){
         if(path==null)return "other";
@@ -35,11 +35,11 @@ final class LoopTraceBuffer {
         event((now-start)+"ms END status="+status+" durationMs="+Math.max(0,duration));
     }
     private void event(String value){if(events.size()>=MAX_EVENTS)events.removeFirst();events.addLast(value);}
-    synchronized void stop(){active=false;}
+    synchronized void stop(long now){if(active)stoppedAt=Math.min(now,deadline);active=false;}
     synchronized String report(long now){
         active(now);
         StringBuilder out=new StringBuilder("FriendBook local Loop Trace\nScope: shared Cloudflare HTTP attempts ONLY; NOT billed D1 rows; not automatic loop proof.\n");
-        out.append("State: ").append(active?"RUNNING":"STOPPED").append(" elapsedMs=").append(Math.max(0,Math.min(now,deadline)-start))
+        out.append("State: ").append(active?"RUNNING":"STOPPED").append(" elapsedMs=").append(Math.max(0,Math.min(now,active?deadline:stoppedAt)-start))
                 .append("\nAttempts=").append(attempts).append(" completionsInWindow=").append(completed).append(" errorsInWindow=").append(failed)
                 .append("\nScreen means most recently resumed Activity, not guaranteed request owner. FG/BG is process visibility.\nCounts (bounded keys; overflow aggregated):\n");
         counts.forEach((k,v)->out.append(v).append(" x ").append(k).append('\n'));

@@ -14,8 +14,8 @@ public class LoopTraceBufferTest {
   String r=b.report(10000);assertTrue(r.contains("Attempts=10000"));assertTrue(r.contains("overflow"));assertFalse(r.contains("/secret/"));assertTrue(r.length()<40000);
  }
  @Test public void resetStopErrorsAndUntrustedScreenAreSafe(){
-  LoopTraceBuffer b=new LoopTraceBuffer();b.start(0,60000);b.begin(1,"user@example.com","GET","/private?token=secret",false);b.end(2,-1,1);b.stop();
-  assertFalse(b.begin(3,"ChatActivity","GET","/v1/me",true));String r=b.report(3);assertTrue(r.contains("errorsInWindow=1"));assertFalse(r.contains("secret"));assertFalse(r.contains("example"));
+  LoopTraceBuffer b=new LoopTraceBuffer();b.start(0,60000);b.begin(1,"user@example.com","GET","/private?token=secret",false);b.end(2,-1,1);b.stop(2);
+  assertFalse(b.begin(3,"ChatActivity","GET","/v1/me",true));String r=b.report(3);assertTrue(r.contains("errorsInWindow=1"));assertTrue(b.report(50000).contains("elapsedMs=2"));assertFalse(r.contains("secret"));assertFalse(r.contains("example"));
   b.start(4,60000);assertTrue(b.report(5).contains("Attempts=0"));
  }
 }
