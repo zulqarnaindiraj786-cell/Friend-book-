@@ -643,7 +643,10 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         notesInFlight = true;
         notesReadAt = attempt;
         // Fetch only the visible suggestion-card window, and reuse it for Notes.
-        Fb.db().collection("users").limit(3).getCachedOrFetch(forced).addOnSuccessListener(snap -> {
+        // A forced user refresh stays explicit; automatic discovery is owned by Home.
+        Query suggestions=Fb.db().collection("users").limit(3);
+        (forced ? suggestions.getCachedOrFetch(true)
+                : suggestions.getCachedOrFetchAutomatic(homeReadScope(),Long.MAX_VALUE)).addOnSuccessListener(snap -> {
             if (!activeHomeRead(actor,readGeneration) || notesReadAt != attempt) return;
             notesInFlight = false;
             if (snap == null || (snap.getMetadata().isFromCache() && snap.isEmpty())) return;

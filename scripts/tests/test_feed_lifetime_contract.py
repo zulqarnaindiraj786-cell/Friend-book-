@@ -13,3 +13,5 @@ class FeedLifetimeContract(unittest.TestCase):
   success=s.split('addOnSuccessListener',1)[1]
   self.assertLess(success.index('activeHomeRead(actor,readGeneration)'),success.index('notesInFlight = false'))
   self.assertIn('activeHomeRead(actor,readGeneration) && notesReadAt==attempt',success)
+  self.assertIn('forced ? suggestions.getCachedOrFetch(true)',s)
+  self.assertIn('suggestions.getCachedOrFetchAutomatic(homeReadScope(),Long.MAX_VALUE)',s)

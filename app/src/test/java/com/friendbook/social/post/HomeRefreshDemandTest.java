@@ -37,6 +37,24 @@ public class HomeRefreshDemandTest {
    refresh.invoke(home);fb.verifyNoInteractions();
   }
  }
+ @Test public void discoveryAutomaticReadIsScopedWhileForcedRefreshRemainsExplicit()throws Exception{
+  try(MockedStatic<Fb> fb=mockStatic(Fb.class)){
+   fb.when(Fb::uid).thenReturn("actor");
+   com.friendbook.social.d1.documents.D1DocumentStore db=mock(com.friendbook.social.d1.documents.D1DocumentStore.class);
+   com.friendbook.social.d1.documents.CollectionReference users=mock(com.friendbook.social.d1.documents.CollectionReference.class);
+   com.friendbook.social.d1.documents.Query query=mock(com.friendbook.social.d1.documents.Query.class);
+   fb.when(Fb::db).thenReturn(db);when(db.collection("users")).thenReturn(users);when(users.limit(3)).thenReturn(query);
+   com.google.android.gms.tasks.TaskCompletionSource<com.friendbook.social.d1.documents.QuerySnapshot> pending=new com.google.android.gms.tasks.TaskCompletionSource<>();
+   when(query.getCachedOrFetchAutomatic(any(com.friendbook.social.d1.documents.ForegroundReadScope.class),eq(Long.MAX_VALUE))).thenReturn(pending.getTask());
+   when(query.getCachedOrFetch(true)).thenReturn(pending.getTask());
+   HomeFragment home=new HomeFragment();
+   java.lang.reflect.Method load=HomeFragment.class.getDeclaredMethod("loadNotesUsers",boolean.class);load.setAccessible(true);
+   java.lang.reflect.Method invalidate=HomeFragment.class.getDeclaredMethod("invalidateHomeReads");invalidate.setAccessible(true);
+   load.invoke(home,false);verify(query).getCachedOrFetchAutomatic(any(com.friendbook.social.d1.documents.ForegroundReadScope.class),eq(Long.MAX_VALUE));
+   verify(query,never()).getCachedOrFetch(true);invalidate.invoke(home);
+   load.invoke(home,true);verify(query).getCachedOrFetch(true);invalidate.invoke(home);
+  }
+ }
  @Test public void loadedHomeDoesNotRefreshOnRepeatedReturnWithoutInvalidation()throws Exception{
   try(MockedStatic<Fb> fb=mockStatic(Fb.class);MockedStatic<com.friendbook.social.App> app=mockStatic(com.friendbook.social.App.class)){
    fb.when(Fb::uid).thenReturn("actor");app.when(com.friendbook.social.App::isForeground).thenReturn(true);
