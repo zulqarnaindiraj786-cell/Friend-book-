@@ -7,15 +7,17 @@ class ProfileDemandQuota(unittest.TestCase):
   self.assertIn('10,"profile-friends:"',S)
   self.assertIn('10,"profile-posts:"',S)
   self.assertIn('10,"profile-reels:"',S)
-  self.assertIn('friendPager.startCachedFor(300_000L)',S)
+  self.assertIn('friendPager.startCachedForForeground(300_000L)',S)
   self.assertIn('postPager.startCachedForForeground(120_000L)',S)
-  self.assertIn('videoPager.startCachedFor(120_000L)',S)
+  self.assertIn('videoPager.startCachedForForeground(120_000L)',S)
  def test_batching_and_no_bind_time_highlight_reads(self):
   render=S.split('private void renderPersonalDetailsAndHighlights',1)[1].split('private void loadHighlightPage',1)[0]
   self.assertNotIn('.get()',render)
   self.assertIn('v->loadHighlightPage()',render)
   self.assertNotIn('Fb.getUser(',S)
   self.assertIn('Ui.chunks(ids,10)',S)
+  hydration=S.split('private void hydrateFriendProfiles',1)[1].split('/** 3-column media grid',1)[0]
+  self.assertIn('.getAutomatic(profileReadScope)',hydration)
  def test_scroll_only_on_recent_user_gesture(self):
   self.assertIn('elapsedRealtime()-profileScrollIntentAt>1_000L',S)
   self.assertIn('y<=oldY',S)

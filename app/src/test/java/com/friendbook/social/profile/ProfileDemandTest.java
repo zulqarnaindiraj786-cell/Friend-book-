@@ -57,9 +57,9 @@ public class ProfileDemandTest {
  }
  @Test public void friendsProfilesBatchOnceAndStoppedResponseDoesNotPopulateCache()throws Exception{
   try(MockedStatic<Fb> fb=mockStatic(Fb.class);MockedStatic<FastCache> cache=mockStatic(FastCache.class)){
-   fb.when(Fb::uid).thenReturn("friends-profile-actor");ProfileActivity a=activity("friends-profile-actor","friend-owner");D1DocumentStore db=mock(D1DocumentStore.class);fb.when(Fb::db).thenReturn(db);CollectionReference users=mock(CollectionReference.class);Query q=mock(Query.class);when(db.collection("users")).thenReturn(users);when(users.whereIn(any(FieldPath.class),anyList())).thenReturn(q);when(q.limit(10)).thenReturn(q);TaskCompletionSource<QuerySnapshot> pending=new TaskCompletionSource<>();when(q.get()).thenReturn(pending.getTask());
+   fb.when(Fb::uid).thenReturn("friends-profile-actor");ProfileActivity a=activity("friends-profile-actor","friend-owner");D1DocumentStore db=mock(D1DocumentStore.class);fb.when(Fb::db).thenReturn(db);CollectionReference users=mock(CollectionReference.class);Query q=mock(Query.class);when(db.collection("users")).thenReturn(users);when(users.whereIn(any(FieldPath.class),anyList())).thenReturn(q);when(q.limit(10)).thenReturn(q);TaskCompletionSource<QuerySnapshot> pending=new TaskCompletionSource<>();when(q.getAutomatic(any(ForegroundReadScope.class))).thenReturn(pending.getTask());
    for(int i=0;i<100;i++){for(int j=0;j<10;j++)call(a,"ensureUser",new Class<?>[]{String.class},"profile-friend-"+j);call(a,"hydrateFriendProfiles",new Class<?>[]{String.class,int.class},"friends-profile-actor",0);}
-   verify(q,times(1)).get();fb.verify(()->Fb.getUser(anyString()),never());
+   verify(q,times(1)).getAutomatic((ForegroundReadScope)field("profileReadScope").get(a));verify(q,never()).get();fb.verify(()->Fb.getUser(anyString()),never());
    field("profileStarted").setBoolean(a,false);QueryDocumentSnapshot doc=mock(QueryDocumentSnapshot.class);pending.setResult(new QuerySnapshot(Collections.singletonList(doc),null,new SnapshotMetadata(false,false)));Shadows.shadowOf(Looper.getMainLooper()).idle();cache.verify(()->FastCache.putUser(any()),never());
   }
  }

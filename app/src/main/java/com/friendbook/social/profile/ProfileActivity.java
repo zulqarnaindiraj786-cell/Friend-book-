@@ -1041,7 +1041,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
                 if(!other.equals(uid) && !ownerFriendIds.contains(other)){ownerFriendIds.add(other);ensureUser(other);}
             hydrateFriendProfiles(actor,generation);
             renderFriendsTab();moreProfileFriends.setText(busy?"Loading…":!error.isEmpty()?"Retry friends":more?"Load 10 more friends":"All loaded");moreProfileFriends.setEnabled(!busy && more);
-        });moreProfileFriends.setOnClickListener(v->{if(friendPager!=null)friendPager.next();});friendPager.startCachedFor(300_000L);
+        });moreProfileFriends.setOnClickListener(v->{if(friendPager!=null)friendPager.next();});friendPager.startCachedForForeground(300_000L);
     }
 
     private void startPostsWatcher() {
@@ -1174,7 +1174,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
             list.sort((a,b)->Long.compare(b.createdAt,a.createdAt));
             reelsAdapter.reels.clear();reelsAdapter.reels.addAll(list);reelsAdapter.notifyDataSetChanged();
             if(moreProfileVideos!=null){moreProfileVideos.setText(loading?"Loading…":!error.isEmpty()?"Retry videos":more?"Load 10 more videos":"All videos loaded");moreProfileVideos.setEnabled(!loading && more);}
-        });videoPager.startCachedFor(120_000L);
+        });videoPager.startCachedForForeground(120_000L);
     }
 
     @Override
@@ -2166,7 +2166,7 @@ public class ProfileActivity extends Activity implements FeedAdapter.Host {
         List<String> ids=new ArrayList<>();for(String id:profileUserQueue)if(profileUserAttempts.add(id))ids.add(id);
         profileUserQueue.clear();
         for(List<String> chunk:Ui.chunks(ids,10)){
-            Fb.db().collection("users").whereIn(com.friendbook.social.d1.documents.FieldPath.documentId(),chunk).limit(10).get()
+            Fb.db().collection("users").whereIn(com.friendbook.social.d1.documents.FieldPath.documentId(),chunk).limit(10).getAutomatic(profileReadScope)
                     .addOnSuccessListener(snap->{
                         if(!activeProfile(actor,generation))return;
                         for(DocumentSnapshot doc:snap){Models.User u=Models.User.fromDoc(doc);userCache.put(u.uid,u);FastCache.putUser(u);}
