@@ -14,7 +14,8 @@ class HomeVisibleCache(unittest.TestCase):
         self.assertIn('first.hasFreshLocalPage(FeedReadPolicy.REUSE_MS)',(JAVA/'core/FeedHeadReads.java').read_text())
     def test_friend_graph_is_saved_and_video_stories_use_posters(self):
         home=(JAVA/'main/HomeFragment.java').read_text()
-        self.assertIn('putStringSet("friendGraph:" + me',home)
+        self.assertIn('FriendCandidatePages.pairs(me,ids)',home)
+        self.assertNotIn('putStringSet("friendGraph:" + me',home)
         story=(JAVA/'story/StoriesAdapter.java').read_text()
         self.assertIn('else if ("video".equals(latest.mediaType))',story)
         video=story.split('else if ("video".equals(latest.mediaType))')[1].split('} else {')[0]

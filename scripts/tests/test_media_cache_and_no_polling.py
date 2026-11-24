@@ -64,7 +64,8 @@ class NoBackgroundRefresh(unittest.TestCase):
         home = (JAVA / 'main/HomeFragment.java').read_text()
         self.assertNotIn('friendsReg', home)
         self.assertNotIn('livesReg', home)
-        self.assertIn('FRIEND_GRAPH_TTL_MS', home)
+        self.assertIn('FRIEND_FACT_TTL_MS=300_000L', home)
+        self.assertNotIn('OnDemandLoads.FRIEND_GRAPH_LIMIT',home)
 
     def test_badges_are_bounded_and_pushed(self):
         source = (JAVA / 'main/MainActivity.java').read_text()

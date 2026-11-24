@@ -34,5 +34,6 @@ class HomeNetworkPriorityTest(unittest.TestCase):
         source = HOME.read_text()
         for method in ('void onHiddenChanged(boolean hidden)', 'void onStop()'):
             self.assertIn('invalidateHomeReads()', source.split(method, 1)[1][:360])
-        self.assertIn('homeReadGeneration++;cancelHomeSecondary()', source)
+        self.assertIn('homeReadGeneration++;friendFactsGeneration++;friendFactsPending.clear()', source)
+        self.assertIn('cancelHomeSecondary();engagementHandler.removeCallbacksAndMessages(null)',source)
         self.assertIn('consumePostsSnapshot(results,!offline);\n            releaseHomeSecondary();', source)

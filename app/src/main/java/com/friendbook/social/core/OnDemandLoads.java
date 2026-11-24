@@ -16,12 +16,6 @@ public final class OnDemandLoads {
     /** Notification and friend-request badges already use a small window. */
     public static final int BADGE_WINDOW = 32;
 
-    /**
-     * Friend graph used for feed privacy. Bounded so a huge account cannot force
-     * an unbounded read on every cold start.
-     */
-    public static final int FRIEND_GRAPH_LIMIT = 500;
-
     /** "People you may know" is served from cache for this long before any refetch. */
     public static final long PYMK_CACHE_MS = 30 * 60 * 1000L;
 

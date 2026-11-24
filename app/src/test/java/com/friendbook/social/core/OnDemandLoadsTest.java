@@ -16,8 +16,6 @@ public class OnDemandLoadsTest {
     @Test public void chatBadgeReadIsCappedAtTwentyRooms() {
         // QUOTA: the badge is a one-shot read for a pill that shows "99+"; 20 recent rooms is plenty.
         assertEquals(20, OnDemandLoads.CHAT_BADGE_LIMIT);
-        assertTrue(OnDemandLoads.FRIEND_GRAPH_LIMIT > 0);
-        assertTrue(OnDemandLoads.FRIEND_GRAPH_LIMIT <= 500);
         assertTrue(OnDemandLoads.BADGE_WINDOW <= 32);
     }
 
@@ -47,8 +45,8 @@ public class OnDemandLoadsTest {
                 main.contains("OnDemandLoads.CHAT_BADGE_LIMIT"));
         assertTrue("Chat badge listener must bound the read",
                 main.contains(".limit(com.friendbook.social.core.OnDemandLoads.CHAT_BADGE_LIMIT)"));
-        assertTrue("Friend graph listener must be limited",
-                home.contains("OnDemandLoads.FRIEND_GRAPH_LIMIT"));
+        assertTrue("Visible friendship facts must be bounded to submitted candidates",
+                home.contains("FriendCandidatePages.pairs(me,ids)") && home.contains(".whereIn(\"participants\",pairs).limit(10)"));
         assertTrue("Suggestions must be served from cache",
                 home.contains("restorePymkFromCache") && home.contains("pymkCacheFresh"));
         assertTrue("Suggestions fetch only through the guarded path",
