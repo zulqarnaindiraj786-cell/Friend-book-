@@ -68,3 +68,10 @@ class AdminDemand(unittest.TestCase):
         for token in ['PagedLists.attach','10,"admin-moderators"','Moderators and search results cover loaded users only','Moderators in loaded users','pending.add(id)','if(task.isSuccessful())','Objects.equals(owner,Fb.uid())','reg.remove()']:
             self.assertIn(token,code)
         self.assertNotIn('.limit(400)',code)
+
+    def test_moderator_desk_loads_only_selected_tab_and_keeps_server_authority(self):
+        code=(JAVA/'admin/ModeratorDeskActivity.java').read_text()
+        for token in ['selected==0 ? "moderator-posts" : "moderator-users"','selectedQuery,10','selected!=activeTab','Search covers loaded pages only','uid==null || uid.isEmpty() || Admin.OWNER_UID.equals(uid)','ModerationGate.SHARED.begin(owner,"posts",p.id)','ModerationGate.SHARED.begin(owner,"users",u.uid)','if(task.isSuccessful())','reg.remove()']:
+            self.assertIn(token,code)
+        self.assertNotIn('.limit(100)',code)
+        self.assertNotIn('.limit(250)',code)
