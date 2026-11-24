@@ -189,6 +189,7 @@ def safe_shape(sql):
     # Fixed SQL index identifiers only; do not emit query text or bind values.
     for index,label in (
         ('idx_cf_feed_exceptions','feed_exception_probe'),
+        ('idx_cf_recent_people','recent_people_index'),
         ('idx_cf_feed_high_rank_exceptions','timestamp_head_guard'),
         ('idx_cf_interaction_resource_state_cover','interaction_state_cover'),
         ('idx_cf_posts_feed_page','posts_feed_seek'),

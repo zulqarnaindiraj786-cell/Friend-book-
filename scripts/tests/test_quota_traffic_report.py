@@ -110,6 +110,7 @@ class TrafficReport(unittest.TestCase):
         self.assertIn('feed_exception_probe',shape['features'])
         self.assertNotIn('SECRET',json.dumps(shape))
         self.assertIn('author_story_seek',p.safe_shape('SELECT * FROM friendbook_cf_firestore_documents INDEXED BY idx_cf_story_author_page')['features'])
+        self.assertIn('recent_people_index',p.safe_shape('SELECT * FROM friendbook_cf_firestore_documents INDEXED BY idx_cf_recent_people')['features'])
         self.assertIn('post_tag_fts',p.safe_shape('SELECT * FROM friendbook_cf_post_search WHERE friendbook_cf_post_search MATCH ?')['features'])
         shape=p.safe_shape('SELECT resource,state FROM friendbook_cf_interaction_resources INDEXED BY idx_cf_interaction_resource_state_cover WHERE resource IN (?,?)')
         self.assertIn('interaction_state_cover',shape['features']);self.assertIn('feed_interaction_state_batch',shape['features'])
