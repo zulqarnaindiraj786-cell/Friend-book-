@@ -34,6 +34,23 @@ public class FriendRequestDemandTest {
    notify.verify(()->Notify.send("sender","friend_accept","accepted your friend request"),times(1));
   }
  }
+ @Test public void failedConfirmRestoresRequestAndRelationshipLocally()throws Exception{
+  try(MockedStatic<Fb> fb=mockStatic(Fb.class);MockedStatic<Notify> notify=mockStatic(Notify.class);MockedStatic<com.friendbook.social.main.MainActivity> main=mockStatic(com.friendbook.social.main.MainActivity.class)){
+   fb.when(Fb::uid).thenReturn("accept-failure-actor");FriendsFragment f=fragment("accept-failure-actor");UsersAdapter.Row row=request();
+   D1DocumentStore db=mock(D1DocumentStore.class);fb.when(Fb::db).thenReturn(db);CollectionReference requests=mock(CollectionReference.class),friends=mock(CollectionReference.class),users=mock(CollectionReference.class);
+   when(db.collection("friend_requests")).thenReturn(requests);when(db.collection("friends")).thenReturn(friends);when(db.collection("users")).thenReturn(users);when(requests.document("request")).thenReturn(mock(DocumentReference.class));when(friends.document()).thenReturn(mock(DocumentReference.class));when(users.document(anyString())).thenReturn(mock(DocumentReference.class));
+   WriteBatch batch=mock(WriteBatch.class);when(db.batch()).thenReturn(batch);TaskCompletionSource<Void> pending=new TaskCompletionSource<>();when(batch.commit()).thenReturn(pending.getTask());
+   Models.FriendRequest original=new Models.FriendRequest();original.id="request";original.fromUid="sender";original.fromName="Sender";original.fromPhoto="";original.status="pending";
+   ((List<Models.FriendRequest>)field("incoming").get(f)).add(original);
+   f.primary(row);verify(batch,times(1)).commit();
+   pending.setException(new java.io.IOException("offline"));Shadows.shadowOf(Looper.getMainLooper()).idle();
+   for(int i=0;i<100;i++)f.primary(row);verify(batch,times(1)).commit();verify(requests,never()).whereEqualTo(anyString(),any());
+   notify.verifyNoInteractions();
+   assertFalse(((Set<?>)field("dismissedReqIds").get(f)).contains("request"));
+   assertFalse(((List<?>)field("friendIds").get(f)).contains("sender"));
+   assertTrue(((List<?>)field("incoming").get(f)).contains(original));
+  }
+ }
  @Test public void failedDeleteRestoresRowLocallyWithoutReload()throws Exception{
   try(MockedStatic<Fb> fb=mockStatic(Fb.class);MockedStatic<com.friendbook.social.main.MainActivity> main=mockStatic(com.friendbook.social.main.MainActivity.class)){
    fb.when(Fb::uid).thenReturn("delete-demand-actor");FriendsFragment f=fragment("delete-demand-actor");UsersAdapter.Row row=request();
