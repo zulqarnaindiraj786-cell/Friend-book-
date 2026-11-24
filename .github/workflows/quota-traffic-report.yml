@@ -1,4 +1,4 @@
-# Refresh production ranking after queued listener fixes; distinguish quiet windows from representative use.
+# Refresh production ranking after app-wide demand fixes; distinguish quiet windows from representative use.
 # Analytics only: no application load, D1 diagnostic scans, deployment or daily certificate.
 name: Analytics-only quota traffic report
 on:
@@ -22,7 +22,7 @@ jobs:
       - name: Read analytics only (no D1 SQL, application traffic or deployment)
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-        run: python3 scripts/loadtest/quota_traffic_report.py --window-minutes 5 60 360 --output /tmp/quota-traffic-report.json
+        run: python3 scripts/loadtest/quota_traffic_report.py --window-minutes 5 15 60 360 --output /tmp/quota-traffic-report.json
       - uses: actions/upload-artifact@v4
         with:
           name: sanitized-quota-traffic-report
