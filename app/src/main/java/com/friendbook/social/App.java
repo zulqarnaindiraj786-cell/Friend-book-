@@ -55,6 +55,9 @@ public class App extends Application implements SensorEventListener {
     public void onCreate() {
         super.onCreate();
         instance = this;
+        // Remove previously saved local Loop Trace data once, without recording anything new.
+        if (!getSharedPreferences("local_loop_trace", MODE_PRIVATE).getAll().isEmpty())
+            deleteSharedPreferences("local_loop_trace");
         com.friendbook.social.core.SoundEffects.warmUp(this);
         com.friendbook.social.core.FastCache.init(this);
         Fb.init(this);
@@ -68,7 +71,6 @@ public class App extends Application implements SensorEventListener {
         // Track real foreground time + apply friendbook zero-lag screen transitions
         registerActivityLifecycleCallbacks(new ActivityLifecycleCallbacks() {
             @Override public void onActivityResumed(Activity a) {
-                com.friendbook.social.core.LoopTrace.screen(a);
                 if (Prefs.instantTransitions(App.this)) {
                     a.overridePendingTransition(0, 0);
                 }

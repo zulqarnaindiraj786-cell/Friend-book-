@@ -21,17 +21,9 @@ public final class CloudflareHttp {
             .addNetworkInterceptor(chain -> {
                 // Count actual network attempts, including token retries, not logical reads.
                 CloudflareRequestTrace.record(chain.request());
-                long traceSession=LoopTrace.begin(chain.request());
-                long traceAt=android.os.SystemClock.elapsedRealtime();
-                int status=-1;
-                try {
-                    Response response = chain.proceed(chain.request());
-                    status=response.code();
-                    // Prevent OkHttp's implicit 503 Retry-After replay.
-                    return response.code() == 503 ? response.newBuilder().removeHeader("Retry-After").build() : response;
-                } finally {
-                    if(traceSession>=0)LoopTrace.end(traceSession,status,android.os.SystemClock.elapsedRealtime()-traceAt);
-                }
+                Response response = chain.proceed(chain.request());
+                // Prevent OkHttp's implicit 503 Retry-After replay.
+                return response.code() == 503 ? response.newBuilder().removeHeader("Retry-After").build() : response;
             })
             .connectTimeout(15, TimeUnit.SECONDS).readTimeout(30, TimeUnit.SECONDS)
             .build();
