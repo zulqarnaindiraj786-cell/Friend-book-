@@ -30,6 +30,6 @@ if(process.argv[1] && import.meta.url===pathToFileURL(process.argv[1]).href){
   console.log('::notice:: Synthetic comment-epoch SQL smoke '+JSON.stringify(await checkCommentEpoch(fetch,process.env.CLOUDFLARE_API_TOKEN,nonce)));
  } catch (error) {
   const allowed=/^(?:epoch|original|candidate): (?:HTTP [0-9]{3}|D1 response unsuccessful)$|^Unexpected smoke result count$|^Synthetic count parity failed$|^Invalid smoke configuration$/;
-  console.error('Synthetic read-only comment SQL smoke failed:',allowed.test(error?.message)?error.message:'network or unexpected error');process.exitCode=1;
+  console.error('::error::Synthetic read-only comment SQL smoke failed: '+(allowed.test(error?.message)?error.message:'network or unexpected error'));process.exitCode=1;
  }
 }
