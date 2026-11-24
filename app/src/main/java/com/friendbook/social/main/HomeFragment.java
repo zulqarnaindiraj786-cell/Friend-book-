@@ -80,7 +80,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
     private final List<Models.Reel> featuredReels=new ArrayList<>();
     private final Map<String,DocumentSnapshot> loadedStoryDocs=new java.util.LinkedHashMap<>();
     private int feedGeneration;
-    private com.friendbook.social.d1.documents.ForegroundReadScope feedReadScope,homeReadScope;
+    private com.friendbook.social.d1.documents.ForegroundReadScope feedReadScope,homeReadScope,pageReadScope;
     private long lastFeedFetch, lastFeedWriteVersion;
     private final android.os.Handler engagementHandler=new android.os.Handler(android.os.Looper.getMainLooper());
     private static final long HOME_SECONDARY_MAX_WAIT_MS = 3000L;
@@ -97,6 +97,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         cancelHomeSecondary();engagementHandler.removeCallbacksAndMessages(null);
         feedGeneration++;loadingPosts=false;
         if(feedReadScope!=null){feedReadScope.close();feedReadScope=null;}
+        closePageReadScope();
         storyGeneration++;loadingStories=false;
         if(homeReadScope!=null){homeReadScope.close();homeReadScope=null;}
         // A canceled first story page must be retryable on the next visible entry.
@@ -209,7 +210,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
                 // post into view. The last adapter row is the paging footer.
                 if(dy>0 && isResumed() && !isHidden() && view.getScrollState()!=RecyclerView.SCROLL_STATE_IDLE
                         && !pageError && manager!=null && adapter.getItemCount()>2
-                        && manager.findLastVisibleItemPosition()>=adapter.getItemCount()-2) loadMore();
+                        && manager.findLastVisibleItemPosition()>=adapter.getItemCount()-2) loadMore(true);
             }
         });
         rv.setBackgroundColor(Ui.bg(a));
@@ -1008,6 +1009,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
     private void startPostsQuery(boolean forceReload) {
         if(!homeStarted || isHidden() || adapter==null)return;
         final int generation=++feedGeneration;
+        closePageReadScope();
         if(feedReadScope!=null)feedReadScope.close();
         feedReadScope=forceReload ? null : new com.friendbook.social.d1.documents.ForegroundReadScope();
         final com.friendbook.social.d1.documents.ForegroundReadScope automaticScope=feedReadScope;
@@ -1369,8 +1371,13 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         startActivity(i);
     }
 
-    @Override
-    public void loadMore() {
+    private void closePageReadScope() {
+        if(pageReadScope!=null){pageReadScope.close();pageReadScope=null;}
+    }
+
+    @Override public void loadMore() { loadMore(false); }
+
+    private void loadMore(boolean automatic) {
         if(!homeStarted || isHidden() || loadingPosts)return;
         if(lastDoc==null){if(pageError)restartPostsListener();return;}
         if(!moreAvailable || feedQuery==null){
@@ -1378,14 +1385,26 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         }
         pageError=false;loadingPosts=true;updatePagingUi();
         final int generation=++feedGeneration; final String actor=feedAccount;
-        engagementHandler.postDelayed(()->{
+        closePageReadScope();
+        pageReadScope=automatic ? new com.friendbook.social.d1.documents.ForegroundReadScope() : null;
+        final com.friendbook.social.d1.documents.ForegroundReadScope scope=pageReadScope;
+        Runnable deadline=new Runnable(){ @Override public void run(){
             if(generation!=feedGeneration || !java.util.Objects.equals(actor,Fb.uid()) || !isAdded() || !homeStarted || isHidden() || !loadingPosts)return;
-            feedGeneration++;loadingPosts=false;pageError=true;updatePagingUi();
-        },20000L);
+            if(scope!=null && !com.friendbook.social.App.isForeground()){
+                scope.whenForeground().addOnSuccessListener(ignored->{
+                    if(generation==feedGeneration && java.util.Objects.equals(actor,Fb.uid()) && isAdded() && homeStarted && !isHidden() && loadingPosts)
+                        engagementHandler.postDelayed(this,20000L);
+                });
+                return;
+            }
+            feedGeneration++;loadingPosts=false;pageError=true;closePageReadScope();updatePagingUi();
+        }};
+        engagementHandler.postDelayed(deadline,20000L);
         final long requestedAt=android.os.SystemClock.elapsedRealtime();
-        feedQuery.startAfter(lastDoc).limit(PAGE).getCachedOrFetch(false).addOnSuccessListener(snapshot -> {
+        Query pageQuery=feedQuery.startAfter(lastDoc).limit(PAGE);
+        (automatic ? pageQuery.getCachedOrFetchAutomatic(scope,Long.MAX_VALUE) : pageQuery.getCachedOrFetch(false)).addOnSuccessListener(snapshot -> {
             if(generation!=feedGeneration || !java.util.Objects.equals(actor,Fb.uid()) || !isAdded() || !homeStarted || isHidden()) return;
-            loadingPosts=false;
+            engagementHandler.removeCallbacks(deadline);closePageReadScope();loadingPosts=false;
             if(snapshot.getMetadata().isFromCache()){
                 pageError=true;updatePagingUi();return; // Keep authoritative cursor for explicit retry.
             }
@@ -1420,7 +1439,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         }).addOnFailureListener(error -> {
             if(generation!=feedGeneration || !java.util.Objects.equals(actor,Fb.uid())
                     || !homeStarted || isHidden() || !isAdded())return;
-            loadingPosts=false;pageError=true;updatePagingUi();
+            engagementHandler.removeCallbacks(deadline);closePageReadScope();loadingPosts=false;pageError=true;updatePagingUi();
         });
     }
 

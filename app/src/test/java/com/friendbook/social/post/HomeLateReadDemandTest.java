@@ -55,6 +55,28 @@ public class HomeLateReadDemandTest {
    call(home,"invalidateHomeReads");
   }
  }
+ @Test public void scrollPageWaitsForForegroundAndExplicitRetryRemainsAvailable()throws Exception{
+  try(MockedStatic<Fb> fb=mockStatic(Fb.class);MockedStatic<com.friendbook.social.App> app=mockStatic(com.friendbook.social.App.class)){
+   fb.when(Fb::uid).thenReturn("actor");app.when(com.friendbook.social.App::isForeground).thenReturn(false);
+   HomeFragment home=spy(new HomeFragment());doReturn(true).when(home).isAdded();doReturn(false).when(home).isHidden();
+   set(home,"adapter",mock(FeedAdapter.class));set(home,"rv",mock(RecyclerView.class));set(home,"homeStarted",true);
+   set(home,"feedAccount","actor");set(home,"moreAvailable",true);
+   DocumentSnapshot cursor=mock(DocumentSnapshot.class);Query query=mock(Query.class),page=mock(Query.class);
+   set(home,"lastDoc",cursor);set(home,"feedQuery",query);when(query.startAfter(cursor)).thenReturn(page);when(page.limit(anyLong())).thenReturn(page);
+   TaskCompletionSource<QuerySnapshot> pending=new TaskCompletionSource<>();
+   when(page.getCachedOrFetchAutomatic(any(ForegroundReadScope.class),eq(Long.MAX_VALUE))).thenReturn(pending.getTask());
+   when(page.getCachedOrFetch(false)).thenReturn(new TaskCompletionSource<QuerySnapshot>().getTask());
+   java.lang.reflect.Method scroll=HomeFragment.class.getDeclaredMethod("loadMore",boolean.class);scroll.setAccessible(true);scroll.invoke(home,true);
+   ForegroundReadScope scope=(ForegroundReadScope)get(home,"pageReadScope");verify(page).getCachedOrFetchAutomatic(scope,Long.MAX_VALUE);
+   Shadows.shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofSeconds(21));
+   assertEquals(true,get(home,"loadingPosts"));assertEquals(false,get(home,"pageError"));
+   app.when(com.friendbook.social.App::isForeground).thenReturn(true);ForegroundReadScope.resume();
+   Shadows.shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofSeconds(21));
+   assertEquals(false,get(home,"loadingPosts"));assertEquals(true,get(home,"pageError"));assertFalse(scope.whenForeground().isSuccessful());
+   home.loadMore();verify(page).getCachedOrFetch(false);
+   call(home,"invalidateHomeReads");
+  }
+ }
  @Test public void pauseMakesInterruptedInitialStoriesAndSuggestionsRetryableAndStopsHiddenPagination()throws Exception{
   HomeFragment home=spy(new HomeFragment());doReturn(true).when(home).isHidden();
   set(home,"storyQuery",mock(Query.class));set(home,"loadingStories",true);set(home,"notesInFlight",true);set(home,"loadingPosts",true);set(home,"headerRequested",true);
