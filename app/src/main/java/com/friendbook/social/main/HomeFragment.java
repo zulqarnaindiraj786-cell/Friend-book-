@@ -240,6 +240,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
     private void refreshWithFriendbookAlgorithm(boolean scrollTop, boolean explicitUserRefresh) {
         android.app.Activity a = getActivity();
         if (a == null) return;
+        if(loadingPosts){updatePagingUi();return;}
         if(explicitUserRefresh && !com.friendbook.social.core.InteractionCooldown.acquire(Fb.uid(),"feed-refresh"))return;
         if (freshPill != null) freshPill.setVisibility(View.GONE);
         forceReRank = true;
@@ -247,8 +248,8 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         FeedAlgorithm.nextRefreshGeneration(a);
         applyFilterOnCachedFeed();
         if (adapter != null) adapter.refreshSponsoredAds();
-        // An explicit pull/Home refresh supersedes an in-flight older page via feedGeneration.
-        loadingPosts=false;startPostsQuery(explicitUserRefresh);
+        // Pull/Home joins the current UI load; it must not supersede a pending page.
+        startPostsQuery(explicitUserRefresh);
         // A user-initiated refresh is the only path allowed to re-read suggestions.
         headerRequested=false;
         forceSections = explicitUserRefresh;
@@ -1015,7 +1016,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
             allVisible.add(p);
             if (matchesFilter(p, filter)) filtered.add(p);
         }
-        if (persistCache && !allVisible.isEmpty()) {
+        if (persistCache) {
             FastCache.saveFeed(a2, allVisible);
         }
 
