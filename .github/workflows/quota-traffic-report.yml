@@ -1,3 +1,4 @@
+# Post D1-safe comment batching rollout: analytics only.
 # Refresh production ranking after app-wide demand fixes; distinguish quiet windows from representative use.
 # Analytics only: no application load, D1 diagnostic scans, deployment or daily certificate.
 name: Analytics-only quota traffic report
