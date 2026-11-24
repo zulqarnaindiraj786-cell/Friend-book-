@@ -18,7 +18,7 @@ class SeamlessPaging(unittest.TestCase):
         for path in ['post/PostDetailActivity.java','reels/ReelCommentsActivity.java']:
             self.assertIn('NearEndPaging.attachComments(', (ROOT/path).read_text())
     def test_no_unchanged_list_rebuild_during_background_page_request(self):
-        for path,token in [('main/NotificationsFragment.java','if(loading){moreButton.setText'),('friends/FollowListActivity.java','if(loading){moreButton.setText'),('profile/ProfileActivity.java','if(isFinishing() || loading)return;')]:
+        for path,token in [('main/NotificationsFragment.java','if(loading){moreButton.setText'),('friends/FollowListActivity.java','if(loading){moreButton.setText'),('profile/ProfileActivity.java','if(loading)return;')]:
             self.assertIn(token,(ROOT/path).read_text())
     def test_comment_anchor_and_no_media_prefetch_added(self):
         code=(ROOT/'post/CommentsAdapter.java').read_text()

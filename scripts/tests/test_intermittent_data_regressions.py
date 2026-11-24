@@ -7,8 +7,8 @@ class IntermittentDataTests(unittest.TestCase):
   self.assertIn('if (user == null) nameT.setText',s)
   self.assertIn('if (d.getMetadata().isFromCache()) return;',s)
   self.assertIn('if (snap==null) return; // keep the last confirmed relationship',s)
-  self.assertIn('if (snap.getMetadata().isFromCache()) return; // a partial cache',s)
-  self.assertGreaterEqual(s.count('if (snap == null || snap.getMetadata().isFromCache()) return;'),2)
+  self.assertGreaterEqual(s.count('.getCachedOrFetch(false,300_000L)'),3)
+  self.assertIn('if(!activeProfile(actor,generation))return;',s)
   self.assertIn('Math.max(user.followerCount, user.friendsCount)',s)
  def test_feed_and_candidate_timeouts_ignore_stale_callbacks(self):
   home=(ROOT/'main/HomeFragment.java').read_text()

@@ -27,7 +27,7 @@ class ProfileFeedConsistencyTest(unittest.TestCase):
 
     def test_profile_count_starts_without_waiting_for_page_callback(self):
         profile = (JAVA / 'profile/ProfileActivity.java').read_text()
-        self.assertIn('postPager.start();\n        refreshPostCount(generation);', profile)
+        self.assertIn('postPager.startCachedFor(120_000L);\n        refreshPostCount(generation);', profile)
         self.assertIn('postPager.forget(id)', profile)
 
     def test_staff_delete_uses_moderation_api_not_owner_only_delete(self):
