@@ -178,8 +178,8 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
             if(swipe!=null)swipe.setRefreshing(false);forceSectionRefresh=false;return;
         }
         if(!sameActor){attemptedProfiles.clear();incoming.clear();outgoing.clear();friendIds.clear();suggestions.clear();userCache.clear();dismissedReqIds.clear();sentIds.clear();cancelledRequestIds.clear();removedFriendIds.clear();requestWrites.clear();loadedSections.clear();}
-        // Relationship checks and profile details belong to the current actor and
-        // must be revalidated on each visit, not just on manual pull-to-refresh.
+        // Actor-scoped relationship checks reuse at most five minutes; explicit
+        // pull-to-refresh invalidates them without turning tab returns into probes.
         boolean keepInline = section == SEC_REQUESTS && suggestionPager != null && me.equals(pageActor)
                 && (swipe == null || !swipe.isRefreshing());
         closePage(keepInline);

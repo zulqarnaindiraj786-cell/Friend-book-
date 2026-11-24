@@ -533,7 +533,6 @@ public class MainActivity extends Activity {
     }
 
     // Badges display at most 15+; full history remains in the paginated screens.
-    private static final int BADGE_WINDOW = 32;
 
     /** Last rendered badge values so a push can bump the pill with zero reads. */
     private static int liveMsgUnread = 0;
@@ -656,10 +655,10 @@ public class MainActivity extends Activity {
         Fb.db().collection("friend_requests")
                 .whereEqualTo("toUid", me).whereEqualTo("status", "pending")
                 .orderBy("createdAt", com.friendbook.social.d1.documents.Query.Direction.DESCENDING)
-                .limit(BADGE_WINDOW)
-                .getCachedOrFetch(false)
+                .limit(10)
+                .getCachedOrFetch(false,300_000L)
                 .addOnSuccessListener((snap) -> {
-                    if (snap == null || !me.equals(Fb.uid())) return;
+                    if (snap == null || !me.equals(Fb.uid()) || isFinishing() || isDestroyed()) return;
                     synchronized (currentPendingReqIds) {
                         currentPendingReqIds.clear();
                         if (snap != null) {

@@ -56,4 +56,30 @@ public class FriendRequestDemandTest {
    verify(q,times(1)).get(Source.SERVER);
   }
  }
+ @Test public void hundredSendDemandsUseOneWriteAndOldActorCannotNotify()throws Exception{
+  try(MockedStatic<Fb> fb=mockStatic(Fb.class);MockedStatic<Notify> notify=mockStatic(Notify.class)){
+   fb.when(Fb::uid).thenReturn("send-request-actor");FriendsFragment f=fragment("send-request-actor");UsersAdapter.Row row=request();row.primaryLabel="＋ Add friend";
+   D1DocumentStore db=mock(D1DocumentStore.class);fb.when(Fb::db).thenReturn(db);CollectionReference requests=mock(CollectionReference.class);when(db.collection("friend_requests")).thenReturn(requests);TaskCompletionSource<DocumentReference> pending=new TaskCompletionSource<>();when(requests.add(any())).thenReturn(pending.getTask());
+   for(int i=0;i<100;i++)f.primary(row);verify(requests,times(1)).add(any());
+   fb.when(Fb::uid).thenReturn("replacement-actor");pending.setResult(mock(DocumentReference.class));Shadows.shadowOf(Looper.getMainLooper()).idle();notify.verifyNoInteractions();
+  }
+ }
+ @Test public void hundredSentRequestCancelsUseOneDeleteAndNoReload()throws Exception{
+  try(MockedStatic<Fb> fb=mockStatic(Fb.class)){
+   fb.when(Fb::uid).thenReturn("cancel-request-actor");FriendsFragment f=fragment("cancel-request-actor");UsersAdapter.Row row=request();row.primaryLabel="✓ Requested";
+   D1DocumentStore db=mock(D1DocumentStore.class);fb.when(Fb::db).thenReturn(db);CollectionReference requests=mock(CollectionReference.class);DocumentReference doc=mock(DocumentReference.class);when(db.collection("friend_requests")).thenReturn(requests);when(requests.document("request")).thenReturn(doc);TaskCompletionSource<Void> pending=new TaskCompletionSource<>();when(doc.delete()).thenReturn(pending.getTask());
+   for(int i=0;i<100;i++)f.primary(row);verify(doc,times(1)).delete();
+   pending.setResult(null);Shadows.shadowOf(Looper.getMainLooper()).idle();for(int i=0;i<100;i++)f.primary(row);verify(doc,times(1)).delete();verify(requests,never()).whereEqualTo(anyString(),any());
+  }
+ }
+ @Test public void tenMissingFriendProfilesUseOneBatchWithoutForcedPerUserGets()throws Exception{
+  try(MockedStatic<Fb> fb=mockStatic(Fb.class)){
+   fb.when(Fb::uid).thenReturn("profiles-request-actor");FriendsFragment f=fragment("profiles-request-actor");
+   D1DocumentStore db=mock(D1DocumentStore.class);fb.when(Fb::db).thenReturn(db);CollectionReference users=mock(CollectionReference.class);Query q=mock(Query.class);when(db.collection("users")).thenReturn(users);when(users.whereIn(any(com.friendbook.social.d1.documents.FieldPath.class),anyList())).thenReturn(q);when(q.limit(10)).thenReturn(q);when(q.get()).thenReturn(new TaskCompletionSource<QuerySnapshot>().getTask());
+   java.lang.reflect.Method ensure=FriendsFragment.class.getDeclaredMethod("ensureUser",String.class);ensure.setAccessible(true);java.lang.reflect.Method hydrate=FriendsFragment.class.getDeclaredMethod("hydrateFriendProfiles",String.class,int.class);hydrate.setAccessible(true);
+   for(int demand=0;demand<100;demand++){for(int uid=0;uid<10;uid++)ensure.invoke(f,"friend-profile-"+uid);hydrate.invoke(f,"profiles-request-actor",0);}
+   verify(q,times(1)).get();verify(users).whereIn(any(com.friendbook.social.d1.documents.FieldPath.class),argThat(ids->ids.size()==10));fb.verify(()->Fb.getUserFresh(anyString()),never());
+  }
+ }
+
 }
