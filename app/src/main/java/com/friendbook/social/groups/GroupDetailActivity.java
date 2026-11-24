@@ -233,7 +233,8 @@ public class GroupDetailActivity extends Activity implements FeedAdapter.Host {
         // Content Frame: Feed RecyclerView (Discussion/Featured) + ScrollView (Members/About)
         FrameLayout contentFrame = new FrameLayout(this);
         feedRv = new RecyclerView(this);
-        feedRv.setLayoutManager(new LinearLayoutManager(this));
+        LinearLayoutManager feedLayout=new LinearLayoutManager(this);
+        feedLayout.setItemPrefetchEnabled(false);feedRv.setLayoutManager(feedLayout);
         feedRv.setItemAnimator(null);
         adapter = new FeedAdapter(this, this);
         adapter.showHeader = false;
@@ -350,6 +351,13 @@ public class GroupDetailActivity extends Activity implements FeedAdapter.Host {
             if(!id.equals(post.groupId) || post.archived || post.trashedAt>0
                     || "pending".equals(post.groupApprovalStatus) || "declined".equals(post.groupApprovalStatus))return;
             separatelyLoadedPin=post;renderGroupHeader();refreshActiveTabView();
+            // One explicit parent-owned pin summary, never an API from bind.
+            com.friendbook.social.post.D1Reactions.loadPost(getApplicationContext(),post,()->{
+                if(generation==screenGeneration && java.util.Objects.equals(actor,Fb.uid())
+                        && canReadGroupPosts() && pin.equals(group.pinnedPostId)){
+                    renderGroupHeader();refreshActiveTabView();
+                }
+            });
         });
     }
 
@@ -432,9 +440,8 @@ public class GroupDetailActivity extends Activity implements FeedAdapter.Host {
         }
 
         if (canManage) {
-            int queue = pendingPosts.size() + group.pendingMemberIds.size();
             manageBtn.setVisibility(View.VISIBLE);
-            manageBtn.setText(queue > 0 ? "🛡 Manage (" + queue + ")" : "🛡 Manage");
+            manageBtn.setText("🛡 Manage & approvals");
         } else {
             manageBtn.setVisibility(View.GONE);
         }
