@@ -2086,11 +2086,24 @@ public class ReelsFragment extends Fragment {
                 if (target.reactions != null && !target.reactions.isEmpty()) return;
                 if (target.likes <= 0 || isReelReactionInFlight(target.id)) return;
                 final String targetId = target.id;
+                final String readActor = Fb.uid();
+                final Object readToken = LegacyReactionReadGate.begin(readActor,targetId,
+                        android.os.SystemClock.elapsedRealtime());
+                if (readToken == null) return;
                 Fb.db().collection("posts").document(targetId).collection("reactions")
                         .limit(200)
                         .get()
                         .addOnSuccessListener(snap -> {
-                            if (snap == null || isReelReactionInFlight(targetId)) return;
+                            if (snap == null) {
+                                LegacyReactionReadGate.failure(readActor,targetId,readToken);
+                                return;
+                            }
+                            boolean stillCurrent = readActor != null && readActor.equals(Fb.uid());
+                            boolean reactionTapInFlight = isReelReactionInFlight(targetId);
+                            LegacyReactionReadGate.success(readActor,targetId,readToken,
+                                    snap.isEmpty() && stillCurrent && !reactionTapInFlight,
+                                    android.os.SystemClock.elapsedRealtime());
+                            if (!stillCurrent || reactionTapInFlight) return;
                             Map<String, String> loaded = new HashMap<>();
                             List<String> uids = new ArrayList<>();
                             for (DocumentSnapshot d : snap.getDocuments()) {
@@ -2115,7 +2128,8 @@ public class ReelsFragment extends Fragment {
                                 reel.likes = target.likes;
                                 renderCounts();
                             }
-                        });
+                        }).addOnFailureListener(error ->
+                                LegacyReactionReadGate.failure(readActor,targetId,readToken));
             }
 
             // Only explicit bind/resume/authoritative metadata refresh requests

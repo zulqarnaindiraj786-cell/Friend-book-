@@ -25,7 +25,7 @@
 
 ## Boundaries / remaining work
 
-- Group **post** listener `.limit(120)` is NOT silently replaced with `.limit(10)`: the same dataset currently powers Discussion, Featured/pinned lookup, pending moderation and management dialogs. Separate cursor-backed views and pinned-post resolution are needed to avoid making older pending approvals inaccessible. No claim this path is fixed.
+- Group post bulk loading is now replaced by an actor-scoped 10-item CursorPager. Pending and moderation queues use their own cursor-backed queries, and a pinned post outside the current page is resolved by explicit ID. This preserves access to older approvals without loading 120 posts up front; see `docs/verification/app-group-post-pagination.md` and `scripts/tests/test_group_post_demand.py`.
 - Other outstanding audit items remain in `docs/quota/full-app-audit.md`: candidate-specific fresh relationship/profile checks, durable background push behavior, exactly-one-startup endpoint, Room migration, complete route billing attribution and real-device corrected-APK acceptance.
 - No Worker/D1/backend changes, Supabase access, deployment, APK release or PR merge. Calculator untouched.
 - Real one-user/minute billed reads, total Worker invocations and production quota savings remain unknown. Controlled demand results must not be substituted for those metrics.

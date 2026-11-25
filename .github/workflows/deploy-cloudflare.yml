@@ -8,8 +8,7 @@ on:
       - 'wrangler.toml'
       - 'package*.json'
       - 'cloudflare/**'
-      - 'docs/**'
-      - '.github/workflows/deploy-cloudflare.yml'
+      # Documentation and workflow-only edits do not change deployed Worker code.
       - 'scripts/admin/configure_video_r2.py'
       - 'scripts/admin/migrate_firestore_to_d1.py'
       - 'scripts/tests/test_firestore_migration.py'
