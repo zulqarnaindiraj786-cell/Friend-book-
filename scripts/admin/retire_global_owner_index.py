@@ -14,7 +14,7 @@ import urllib.request
 
 ROOT=Path(__file__).resolve().parents[2]
 INDEX='idx_friendbook_cf_firestore_owner'
-REQUIRED=('idx_cf_live_chat_sender_time','idx_friendbook_cf_firestore_collection_updated')
+REQUIRED=('idx_cf_live_chat_sender_time','idx_cf_chat_root_updated')
 URL='https://api.cloudflare.com/client/v4/accounts/92f3d04598822de2e49e14561218d090/d1/database/e1c605ca-a50b-46c6-9deb-56dd1f70d163/query'
 PROBES=[
     ("SELECT path FROM friendbook_cf_firestore_documents WHERE collection_id='chat' AND parent_path=? AND owner_uid=? AND create_time>? AND json_extract(document_json,'$.type')='gift'",['lives/__quota_probe__/chat','__quota_probe__',1]),
@@ -32,6 +32,9 @@ def validate_indexes(rows):
     live=re.sub(r'\s+','',indexes[REQUIRED[0]]).lower()
     if "(parent_path,owner_uid,create_timedesc)wherecollection_id='chat'" not in live:
         raise ValueError('Live throttle index differs; no retirement allowed')
+    chat=re.sub(r'\s+','',indexes[REQUIRED[1]]).lower()
+    if "(parent_path,update_timedesc)wherecollection_id='chats'andparent_path='chats'" not in chat:
+        raise ValueError('Chat-root replacement index differs; no retirement allowed')
     if INDEX in indexes:
         definition=re.sub(r'\s+','',indexes[INDEX]).lower().rstrip(';')
         expected='createindex'+INDEX+'onfriendbook_cf_firestore_documents(owner_uid)'
@@ -46,8 +49,8 @@ def validate_plans(plans):
             raise ValueError('Live throttle must retain scoped sender/time search')
     if not any('path=?' in p and 'SEARCH' in p for p in plans[2]):
         raise ValueError('Path authorization must retain primary-key search')
-    if not any('idx_friendbook_cf_firestore_collection_updated' in p for p in plans[3]):
-        raise ValueError('Chat ordering must retain its index')
+    if not any('idx_cf_chat_root_updated' in p for p in plans[3]):
+        raise ValueError('Chat ordering must use the reviewed root-only replacement index')
 
 
 def main():

@@ -15,6 +15,9 @@ class OwnerIndexRetirement(unittest.TestCase):
             db.row_factory=sqlite3.Row
             for path in sorted((ROOT/'cloudflare/migrations').glob('*.sql')):
                 if path.name<'0089_': db.executescript(path.read_text())
+            # Production already has 0090's chat-root replacement but still
+            # retains the owner-only index because its retirement gate failed.
+            db.executescript((ROOT/'cloudflare/migrations/0090_scope_chat_timestamp_index.sql').read_text())
             def indexes():
                 return [dict(r) for r in db.execute("SELECT name,sql FROM sqlite_schema WHERE type='index'")]
             self.assertTrue(m.validate_indexes(indexes()))
