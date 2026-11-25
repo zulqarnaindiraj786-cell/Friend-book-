@@ -18,4 +18,8 @@ class RetirementTest(unittest.TestCase):
   self.assertEqual(restore(query),{'restored':True,'rows':1,'backup_retained':True})
   self.assertEqual(tuple(db.execute('SELECT * FROM friendbook_cf_documents').fetchone()),('users/test','users','test','owner','{"uid":"test"}',42))
   with self.assertRaises(ValueError):restore(query)
+  # Rehearse a table reappearing after 0105: 0106 re-verifies exact parity to
+  # the retained snapshot, then enforces DROP again.
+  db.executescript((mdir/'0106_enforce_document_mirror_retirement.sql').read_text())
+  self.assertIsNone(db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='friendbook_cf_documents'").fetchone())
 if __name__=='__main__':unittest.main()

@@ -9,7 +9,7 @@ import {createWorker} from '../../worker.js';
 test('removing message sender index preserves scoped queries, cursors and authorization',async t=>{
   const sql=new DatabaseSync(':memory:');t.after(()=>sql.close());
   const dir=new URL('../migrations/',import.meta.url), removal='0079_remove_unused_message_sender_index.sql';
-  for(const file of readdirSync(dir).filter(f=>f.endsWith('.sql')&&f!==removal).sort()) sql.exec(readFileSync(new URL(file,dir),'utf8'));
+  for(const file of readdirSync(dir).filter(f=>f.endsWith('.sql')&&f!==removal&&f!=='0105_retire_legacy_document_mirror.sql'&&f!=='0106_enforce_document_mirror_retirement.sql').sort()) sql.exec(readFileSync(new URL(file,dir),'utf8'));
   const insert=sql.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)');
   const add=(parent,id,doc)=>insert.run(`${parent}/${id}`,parent,parent.split('/').at(-1),id,'alice',JSON.stringify(doc),1,1);
   add('users','alice',{uid:'alice'});add('users','bob',{uid:'bob'});add('chats','r',{participants:['alice','bob']});

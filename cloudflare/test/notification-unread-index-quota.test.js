@@ -8,7 +8,7 @@ import {createWorker} from '../../worker.js';
 test('unread page index handles compatibility fallback without reading another inbox',async t=>{
  const sql=new DatabaseSync(':memory:');t.after(()=>sql.close());
  const dir=new URL('../migrations/',import.meta.url),removal='0081_remove_redundant_unread_index.sql';
- for(const file of readdirSync(dir).filter(f=>f.endsWith('.sql')&&f!==removal&&f!=='0093_remove_redundant_notification_recipient.sql'&&f!=='0102_remove_legacy_notification_recipient.sql'&&f!=='0105_retire_legacy_document_mirror.sql').sort())sql.exec(readFileSync(new URL(file,dir),'utf8'));
+ for(const file of readdirSync(dir).filter(f=>f.endsWith('.sql')&&f!==removal&&f!=='0093_remove_redundant_notification_recipient.sql'&&f!=='0102_remove_legacy_notification_recipient.sql'&&f!=='0105_retire_legacy_document_mirror.sql'&&f!=='0106_enforce_document_mirror_retirement.sql').sort())sql.exec(readFileSync(new URL(file,dir),'utf8'));
  const c=sql.prepare('INSERT OR REPLACE INTO friendbook_cf_firestore_documents VALUES(?,?,?,?,?,?,?,?)');
  const a=canonicalSeed(sql);
  for(const uid of ['alice','bob'])c.run('users/'+uid,'users','users',uid,uid,JSON.stringify({uid}),1,1);

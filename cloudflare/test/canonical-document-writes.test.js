@@ -23,7 +23,7 @@ function fixture(){
 }
 function fullMigrationFixture(){
  const sql=new DatabaseSync(':memory:');
- for(const name of readdirSync(new URL('../migrations/',import.meta.url)).filter(n=>n.endsWith('.sql')&&n!=='0105_retire_legacy_document_mirror.sql').sort())
+ for(const name of readdirSync(new URL('../migrations/',import.meta.url)).filter(n=>n.endsWith('.sql')&&!['0105_retire_legacy_document_mirror.sql','0106_enforce_document_mirror_retirement.sql'].includes(n)).sort())
   sql.exec(readFileSync(new URL(`../migrations/${name}`,import.meta.url),'utf8'));
  const retirement=readFileSync(new URL('../migrations/0104_retire_legacy_derived_index_triggers.sql',import.meta.url),'utf8');
  sql.exec(retirement);

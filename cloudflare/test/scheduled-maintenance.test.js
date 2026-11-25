@@ -8,7 +8,7 @@ test('real-schema maintenance ends stale lives, preserves fresh rooms and histor
   const sql=new DatabaseSync(':memory:');
   try {
     const dir=new URL('../migrations/',import.meta.url);
-    for(const f of readdirSync(dir).filter(f=>f.endsWith('.sql')).sort())sql.exec(readFileSync(new URL(f,dir),'utf8'));
+    for(const f of readdirSync(dir).filter(f=>f.endsWith('.sql')&&f!=='0105_retire_legacy_document_mirror.sql'&&f!=='0106_enforce_document_mirror_retirement.sql').sort())sql.exec(readFileSync(new URL(f,dir),'utf8'));
     const now=Date.now();
     for(const [id,heartbeat] of [['stale',now-240000],['fresh',now]])
       sql.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)').run(`lives/${id}`,'lives','lives',id,'host',JSON.stringify({status:'live',lastHeartbeatMs:heartbeat}),1,1);
@@ -44,7 +44,7 @@ test('maintenance seeks active status even with thousands of ended lives and exp
  const sql=new DatabaseSync(':memory:');
  try {
    const dir=new URL('../migrations/',import.meta.url);
-   for(const f of readdirSync(dir).filter(f=>f.endsWith('.sql')).sort())sql.exec(readFileSync(new URL(f,dir),'utf8'));
+   for(const f of readdirSync(dir).filter(f=>f.endsWith('.sql')&&f!=='0105_retire_legacy_document_mirror.sql'&&f!=='0106_enforce_document_mirror_retirement.sql').sort())sql.exec(readFileSync(new URL(f,dir),'utf8'));
    const put=sql.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)');
    const now=Date.now();
    for(let i=0;i<2500;i++)put.run(`lives/ended${i}`,'lives','lives',`ended${i}`,'host',JSON.stringify({status:'ended',lastHeartbeatMs:1}),1,1);

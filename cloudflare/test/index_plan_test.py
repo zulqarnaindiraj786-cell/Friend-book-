@@ -10,7 +10,7 @@ class IndexPlans(unittest.TestCase):
     def test_production_migrations_and_index_plans(self):
         with sqlite3.connect(':memory:') as db:
             for migration in sorted(MIGRATIONS.glob('*.sql')):
-                if migration.name == '0105_retire_legacy_document_mirror.sql':
+                if migration.name in ('0105_retire_legacy_document_mirror.sql','0106_enforce_document_mirror_retirement.sql'):
                     continue
                 db.executescript(migration.read_text())
             db.executescript((MIGRATIONS / '0038_document_and_reply_indexes.sql').read_text())
@@ -65,7 +65,7 @@ class IndexPlans(unittest.TestCase):
     def test_obsolete_legacy_name_index_is_removed_without_losing_prefix_seek(self):
         with sqlite3.connect(':memory:') as db:
             for migration in sorted(MIGRATIONS.glob('*.sql')):
-                if migration.name not in ('0075_remove_obsolete_legacy_name_index.sql','0105_retire_legacy_document_mirror.sql'):
+                if migration.name not in ('0075_remove_obsolete_legacy_name_index.sql','0105_retire_legacy_document_mirror.sql','0106_enforce_document_mirror_retirement.sql'):
                     db.executescript(migration.read_text())
             db.execute('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)',
                        ('users/alice', 'users', 'alice', 'alice', '{"displayName":"Alice","lastSeenMs":0}', 1))
@@ -103,7 +103,7 @@ class IndexPlans(unittest.TestCase):
     def test_chat_membership_source_index_reduces_local_work_without_changing_results(self):
         with sqlite3.connect(':memory:') as db:
             for migration in sorted(MIGRATIONS.glob('*.sql')):
-                if migration.name not in ('0073_chat_membership_source_seek.sql','0105_retire_legacy_document_mirror.sql'):
+                if migration.name not in ('0073_chat_membership_source_seek.sql','0105_retire_legacy_document_mirror.sql','0106_enforce_document_mirror_retirement.sql'):
                     db.executescript(migration.read_text())
             for n in range(500):
                 path = f'chats/room{n}'
@@ -141,7 +141,7 @@ class IndexPlans(unittest.TestCase):
     def test_root_message_guards_seek_all_representations(self):
         with sqlite3.connect(':memory:') as db:
             for migration in sorted(MIGRATIONS.glob('*.sql')):
-                if migration.name == '0105_retire_legacy_document_mirror.sql':
+                if migration.name in ('0105_retire_legacy_document_mirror.sql','0106_enforce_document_mirror_retirement.sql'):
                     continue
                 db.executescript(migration.read_text())
             # Migrations are safe to rerun, including the new partial indexes.
