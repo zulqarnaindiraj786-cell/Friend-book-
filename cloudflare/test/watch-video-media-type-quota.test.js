@@ -34,7 +34,7 @@ test('Watch/Reels mediaType pages read only matching post candidates and retain 
             indexedRows+=rows.length;
             plans.push(sql.prepare('EXPLAIN QUERY PLAN '+query).all(...args).map(row=>row.detail).join('\\n'));
           }
-          if(query.includes('quota_root_posts'))fullRows+=rows.length;
+          if(query.includes('friendbook_cf_firestore_documents') && !query.includes('INDEXED BY idx_cf_posts_media_type') && args.includes('posts'))fullRows+=rows.length;
           return {results:rows};
         },
         run:async()=>stmt.run(...args),
