@@ -36,3 +36,5 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: python3 scripts/admin/retire_notification_recipient_index.py --apply
+
+# Owner-requested rollout; equivalence and D1 write-cost checks remain mandatory.
