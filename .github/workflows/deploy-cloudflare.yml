@@ -877,6 +877,7 @@ jobs:
           WORKERS_BUILD_ID: '06d6767d-56ae-404a-aca2-f54832d62e9e'
         run: |
           node --input-type=module <<'JS'
+          const fs=await import('node:fs');
           const token=process.env.CLOUDFLARE_API_TOKEN;
           if (!token) throw new Error('Cloudflare token secret unavailable to workflow');
           const url=`https://api.cloudflare.com/client/v4/accounts/${process.env.CLOUDFLARE_ACCOUNT_ID}/builds/builds/${process.env.WORKERS_BUILD_ID}/logs`;
@@ -885,6 +886,14 @@ jobs:
           let payload; try { payload=JSON.parse(raw); } catch { payload={raw:raw.slice(0,3000)}; }
           const redact=value=>String(value).split(token).join('[REDACTED_TOKEN]');
           const logs=(payload?.result?.lines||[]).map(x=>Array.isArray(x)?x.at(-1):x).map(redact).slice(-180).join('\n');
-          console.log(JSON.stringify({httpStatus:response.status,success:payload.success,errors:payload.errors,logs:logs||redact(JSON.stringify(payload))},null,2));
+          const report={httpStatus:response.status,success:payload.success,errors:payload.errors,logs:logs||redact(JSON.stringify(payload))};
+          fs.writeFileSync('cloudflare-build-report.json',JSON.stringify(report,null,2));
+          console.log(JSON.stringify(report,null,2));
           if (!response.ok || payload.success===false) process.exitCode=1;
           JS
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: cloudflare-build-diagnostic
+          path: cloudflare-build-report.json
+          if-no-files-found: warn
