@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """GraphQL-only quota report. No D1 SQL, app requests, scans, or deployments.
 
+[quota-traffic-report] Owner-requested fresh attribution snapshot; analytics only.
+
 Separate recognizable maintenance/probe shapes from unattributed traffic.
 Top-N shape subtotals are NOT complete totals and must never be subtracted from
 account billing. Unknown/empty/error analytics are never reported as zero usage.
