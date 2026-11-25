@@ -871,12 +871,20 @@ async function canReadChatMessages(db, chatId, uid) {
   return Array.isArray(data?.participants) && data.participants.includes(uid);
 }
 
-// An identical operation may skip writing only if the authorized canonical
-// snapshot is current AND the historical mirror already has the exact data and
-// owner that writeRow would write. A stale/missing mirror must still be repaired.
+// In the explicitly staged canonical-write mode, literal retries need only
+// verify the authorized canonical snapshot. The default compatibility mode
+// keeps repairing/checking the historical mirror exactly as before.
 async function unchangedRootState(db,path,row,doc) {
-  const coll=collectionIdOf(path),id=docIdOf(path);
-  const owner=ownerOf(doc,row.owner_uid || (coll==='users'?id:''));
+  const id=docIdOf(path);
+  if(db.__canonicalDocumentWrites===true) {
+    const current=await db.prepare(`SELECT EXISTS(
+      SELECT 1 FROM friendbook_cf_firestore_documents
+      WHERE path=?1 AND document_json=?2 AND update_time=?3 AND owner_uid IS ?4
+    ) AS current`).bind(path,row.document_json,row.update_time,row.owner_uid??null).first();
+    const unchanged=current?.current===1;
+    return {current:unchanged,mirror:unchanged};
+  }
+  const coll=collectionIdOf(path),owner=ownerOf(doc,row.owner_uid || (coll==='users'?id:''));
   const appOwner=owner || (coll==='users'?id:'');
   return db.prepare(`SELECT
     EXISTS(SELECT 1 FROM friendbook_cf_firestore_documents WHERE path=?1 AND document_json=?2 AND update_time=?3 AND owner_uid IS ?4) AS current,
@@ -2062,7 +2070,7 @@ async function applyOperation(db, op, uid, now, existingCache) {
 
 // The legacy Android acceptance batch is recognized as one strictly defined operation.
 // All authorization snapshots, duplicate checks and writes run in a single D1 batch.
-async function acceptFriendBatch(db, uid, ops, now, indexedCandidates=false) {
+async function acceptFriendBatch(db, uid, ops, now, indexedCandidates=false,canonicalOnly=false) {
   const forbidden = () => json({error:'Forbidden'},403);
   if (ops.length !== 4 || typeof db.batch !== 'function') return forbidden();
   const requests=ops.filter(o=>splitPath(o.path)?.length===2 && splitPath(o.path)[0]==='friend_requests');
@@ -2105,7 +2113,7 @@ async function acceptFriendBatch(db, uid, ops, now, indexedCandidates=false) {
   // A fresh, recipient-accepted request can safely reconfirm a legacy friendship.
   // Reuse the existing row and counters: neither legacy fields nor a one-sided
   // action alone grants access to friends-only content.
-  const candidates=await friendshipCandidates(db,uid,indexedCandidates);
+  const candidates=await friendshipCandidates(db,uid,indexedCandidates,canonicalOnly);
   const existingPair = await db.prepare(`SELECT path FROM (${candidates.sql}) d WHERE (json_array_length(document_json,'$.participants')=2 AND
     ((json_extract(document_json,'$.participants[0]')=? AND json_extract(document_json,'$.participants[1]')=?) OR
      (json_extract(document_json,'$.participants[0]')=? AND json_extract(document_json,'$.participants[1]')=?))) OR
@@ -2174,7 +2182,7 @@ async function acceptFriendBatch(db, uid, ops, now, indexedCandidates=false) {
 
 // Remove all records for one pair and adjust both counters together. A caller may
 // never supply another pair, an arbitrary counter delta, or a partial duplicate set.
-async function unfriendBatch(db,uid,ops,now,indexedCandidates=false) {
+async function unfriendBatch(db,uid,ops,now,indexedCandidates=false,canonicalOnly=false) {
   const forbidden=()=>json({error:'Forbidden'},403);
   if (typeof db.batch!=='function' || ops.length<3 || ops.length>21) return forbidden();
   const type=o=>o.op || o.type || 'set';
@@ -2216,7 +2224,7 @@ async function unfriendBatch(db,uid,ops,now,indexedCandidates=false) {
   }
   // Refuse a partial removal if duplicate friendship rows exist. Test both native
   // JSON and historical Firestore envelopes, ignoring stale legacy mirrors.
-  const candidates=await friendshipCandidates(db,uid,indexedCandidates);
+  const candidates=await friendshipCandidates(db,uid,indexedCandidates,canonicalOnly);
   const countPredicate=`(SELECT count(*) FROM (${candidates.sql}) d WHERE (
     (json_array_length(d.document_json,'$.participants')=2 AND
      ((json_extract(d.document_json,'$.participants[0]')=? AND json_extract(d.document_json,'$.participants[1]')=?) OR
@@ -3944,7 +3952,8 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0, ct
       try {
         const friendOp=ops.find(op=>splitPath(op?.path)?.[0]==='friends');
         const indexedCandidates=env.FRIEND_GUARD_INDEXED==='true';
-        return (friendOp.op || friendOp.type) === 'delete' ? await unfriendBatch(db,uid,ops,now,indexedCandidates) : await acceptFriendBatch(db,uid,ops,now,indexedCandidates);
+        const canonicalOnly=env.DOCUMENT_MIRROR_MODE==='canonical';
+        return (friendOp.op || friendOp.type) === 'delete' ? await unfriendBatch(db,uid,ops,now,indexedCandidates,canonicalOnly) : await acceptFriendBatch(db,uid,ops,now,indexedCandidates,canonicalOnly);
       }
       catch { return json({error:'Friendship changed or unavailable'},409); }
     }

@@ -13,6 +13,7 @@ import { fcmGateway, pushIncomingCall } from './cloudflare/fcm-push.js';
 import { createRemoteJWKSet, jwtVerify } from 'jose';
 import { accountStatus } from './cloudflare/account-access.js';
 import { isPaymentAdmin } from './cloudflare/payment-access.js';
+import { canonicalDocumentWriteEnv } from './cloudflare/canonical-document-writes.js';
 
 const googleKeys = createRemoteJWKSet(new URL(
   'https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com'
@@ -52,6 +53,7 @@ async function isRetiredStatusHeartbeat(request, uid) {
 export function createWorker(verify = verifyFirebaseToken) {
   return {
     async fetch(request, env, ctx) {
+      env = canonicalDocumentWriteEnv(env);
       const path = new URL(request.url).pathname;
       // API namespaces must never fall through to HTML, even for unknown endpoints.
       const api = path === '/health' || path.startsWith('/health/') || path === '/v1' || path.startsWith('/v1/')

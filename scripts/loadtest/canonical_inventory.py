@@ -62,13 +62,28 @@ def inspect_users(query):
     return {'sampled': sampled, 'legacy_only': missing, 'truncated': sampled == 1001, 'rows_read': read}
 
 
+def require_complete_canonical(result):
+    if result.get('truncated') is not False:
+        raise ValueError('Inventory is truncated or incomplete')
+    collections = result.get('collections', {})
+    if any(type(row.get('legacy_only')) is not int or row['legacy_only'] != 0
+           for row in collections.values()):
+        raise ValueError('Legacy-only documents remain')
+    if 'legacy_only' in result and result['legacy_only'] != 0:
+        raise ValueError('Legacy-only users remain')
+    return result
+
+
 def main():
     import sys
     users_only = '--users' in sys.argv
+    require_canonical = '--require-no-legacy-only' in sys.argv
     try:
-        result = inspect_users(remote_query) if users_only else inspect(remote_query, FULL_CAP if '--full' in sys.argv else CAP)
+        result = inspect_users(remote_query) if users_only else inspect(remote_query, FULL_CAP if '--full' in sys.argv or require_canonical else CAP)
+        if require_canonical:
+            require_complete_canonical(result)
     except (ValueError, KeyError, TypeError, urllib.error.URLError, TimeoutError):
-        raise SystemExit('Inventory unavailable; no changes made.')
+        raise SystemExit('Inventory unavailable or incomplete; no changes made.')
     print('::notice:: Bounded ' + ('user' if users_only else 'document') + ' inventory ' + json.dumps(result, sort_keys=True))
     if result['truncated']:
         print('::warning:: Inventory is truncated; it does not prove complete coverage.')

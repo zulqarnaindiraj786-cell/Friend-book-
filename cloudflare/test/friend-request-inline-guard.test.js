@@ -6,7 +6,7 @@ import { readFileSync } from 'node:fs';
 import { createWorker } from '../../worker.js';
 
 const migration=n=>readFileSync(new URL(`../migrations/${n}`,import.meta.url),'utf8');
-function fixture() {
+function fixture(canonicalMode=false) {
   const sql=new DatabaseSync(':memory:');
   for(const n of ['0003_additive_interactions.sql','0011_additive_app_documents.sql','0014_additive_firestore_documents.sql','0018_social_guards.sql','0023_friend_request_lookup_indexes.sql'])sql.exec(migration(n));
   const canonical=sql.prepare('INSERT OR REPLACE INTO friendbook_cf_firestore_documents VALUES(?,?,?,?,?,?,?,?)');
@@ -17,7 +17,7 @@ function fixture() {
     run:async()=>{if(q.includes('INSERT INTO friendbook_cf_social_guards'))guards++;if(q.includes('INSERT INTO friendbook_cf_firestore_documents'))inserts++;return stmt.run(...a)},
     all:async()=>({results:stmt.all(...a)}),first:async()=>stmt.get(...a)||null,
   };}}},async batch(stmts){if(beforeBatch){const f=beforeBatch;beforeBatch=null;f();}sql.exec('BEGIN');try{for(const s of stmts)await s.run();sql.exec('COMMIT');}catch(e){sql.exec('ROLLBACK');throw e;}}};
-  const app=createWorker(async token=>token),env={DB:db,FIREBASE_PROJECT_ID:'test'};
+  const app=createWorker(async token=>token),env={DB:db,FIREBASE_PROJECT_ID:'test',...(canonicalMode?{DOCUMENT_MIRROR_MODE:'canonical'}:{})};
   const send=(to='bob',uid='alice',from='alice')=>app.fetch(new Request('https://example.test/v1/firestore/document?parent=friend_requests',{
     method:'POST',headers:{authorization:`Bearer ${uid}`,'content-type':'application/json'},body:JSON.stringify({data:{fromUid:from,toUid:to,status:'pending'}})}),env);
   const add=(store,id,doc)=>{const path=`friend_requests/${id}`;if(store==='canonical')canonical.run(path,'friend_requests','friend_requests',id,'alice',JSON.stringify(doc),1,1);else legacy.run(path,'friend_requests',id,'alice',JSON.stringify(doc),1);};
@@ -37,6 +37,17 @@ test('friend request create skips temporary guard rows and keeps authorization a
   assert.equal((await f.send()).status,409);
   assert.equal((await f.send('carol')).status,201);
   f.sql.close();
+});
+
+test('opt-in canonical write mode creates a canonical request, suppresses mirror insert and keeps duplicate protection',async()=>{
+  const f=fixture(true);
+  try {
+    const response=await f.send();assert.equal(response.status,201,JSON.stringify(await response.clone().json()));
+    const body=await response.json();
+    assert.equal(f.sql.prepare('SELECT count(*) n FROM friendbook_cf_firestore_documents WHERE path=?').get(body.path).n,1);
+    assert.equal(f.sql.prepare('SELECT count(*) n FROM friendbook_cf_documents WHERE path=?').get(body.path).n,0);
+    assert.equal((await f.send()).status,409);
+  } finally { f.sql.close(); }
 });
 
 test('pending duplicates, historical envelopes and canonical shadowing remain intact',async()=>{
