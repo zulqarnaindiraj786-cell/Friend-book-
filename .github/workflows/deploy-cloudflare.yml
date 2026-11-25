@@ -196,10 +196,13 @@ jobs:
               '0101_legacy_comment_epoch.sql',
               '0102_remove_legacy_notification_recipient.sql',
           ]
-          if found != expected:
-              print(f'Unexpected pending migration set for reviewed rollout: {found!r}', file=sys.stderr)
+          if len(found) > len(expected) or found != expected[len(expected)-len(found):]:
+              print(f'Pending migrations are not a suffix of the reviewed 0088–0102 rollout: {found!r}', file=sys.stderr)
               raise SystemExit(1)
-          print('Reviewed migration set matches all individually preflighted 0088–0102 DDL.')
+          if found:
+              print('Remaining migrations are a reviewed suffix of 0088–0102; only those will be applied.')
+          else:
+              print('Reviewed 0088–0102 migrations are already applied; no D1 migration will run.')
           PY_PENDING
             status=$?
             if [ "$status" -ne 0 ]; then
