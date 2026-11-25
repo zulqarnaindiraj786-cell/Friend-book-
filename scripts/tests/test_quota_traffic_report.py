@@ -90,7 +90,7 @@ class TrafficReport(unittest.TestCase):
         self.assertNotIn('redacted_unmapped_canonical_structure',p.safe_shape("SELECT * FROM friendbook_cf_firestore_documents WHERE path='secret'"))
 
     def test_posts_anti_join_structure_is_allowlisted_and_private(self):
-        sql="/* PRIVATE_COMMENT */ WITH candidates AS MATERIALIZED (
+        sql="""/* PRIVATE_COMMENT */ WITH candidates AS MATERIALIZED (
           SELECT path, document_json FROM friendbook_cf_firestore_documents
           WHERE parent_path='posts' AND json_extract(document_json,'$.secret') IS NOT NULL
         ), cleanup AS (
@@ -99,7 +99,7 @@ class TrafficReport(unittest.TestCase):
             SELECT 1 FROM candidates WHERE candidates.path=friendbook_cf_firestore_documents.path
           ) AND json_extract(document_json,'$.privateField')='PRIVATE_VALUE'
           RETURNING path
-        ) SELECT count(*) FROM cleanup"
+        ) SELECT count(*) FROM cleanup"""
         shape=p.safe_shape(sql)
         self.assertIn('anti_join',shape['features'])
         self.assertIn('json_field_predicate',shape['features'])
