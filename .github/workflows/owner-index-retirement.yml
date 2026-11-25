@@ -44,3 +44,5 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: python3 scripts/admin/retire_global_owner_index.py --retire-reviewed-index
+
+# Owner-requested rollout; production preflight and replacement-plan checks remain mandatory.
