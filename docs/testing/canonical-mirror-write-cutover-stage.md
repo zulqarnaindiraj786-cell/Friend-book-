@@ -10,7 +10,7 @@ A deployment preflight transfers any historical view totals from D1 into an immu
 
 ## Local regression evidence
 
-`npm test` covers canonical source-1 chat/follow/post-search trigger maintenance, actual follow/unfollow routes, chat-group/message routes, friend-request acceptance with a stale mirror-only friendship, canonical-only friendship candidate SQL, duplicate/race guards, and canonical-mode no-op behavior. Wrapper tests now assert mirror reads fail closed and all mirror DML (including deletes) is suppressed only in canonical mode. Latest complete local result: 340/340 Node tests and 534 Python tests passed; local schema, migration and index-plan tests also passed.
+`npm test` covers canonical source-1 chat/follow/post-search trigger maintenance, actual follow/unfollow routes, chat-group/message routes, friend-request acceptance with a stale mirror-only friendship, canonical-only friendship candidate SQL, duplicate/race guards, and canonical-mode no-op behavior. Wrapper tests now assert mirror reads fail closed and all mirror DML (including deletes) is suppressed only in canonical mode. Latest complete local result: 342/342 Node tests and 539 Python tests passed; local schema, migration and index-plan tests also passed.
 
 These are local Worker/SQLite tests, not production account interactions or proof of per-device behavior.
 
