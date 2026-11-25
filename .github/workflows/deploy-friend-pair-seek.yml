@@ -82,3 +82,5 @@ jobs:
             /tmp/quota-rollout-before.json
             /tmp/quota-preview-replay.json
           retention-days: 7
+
+# Owner-requested rollout; exact-pair preflight and rollback checks stay enabled.
