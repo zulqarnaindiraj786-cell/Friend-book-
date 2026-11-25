@@ -13,13 +13,14 @@ public class FriendCandidatePagesTest {
     }
     @Test public void existingFriendsAreExcludedFromPendingRequestProbes(){
         List<String> candidates=Arrays.asList("friend","stranger");
-        assertEquals(Collections.singletonList("stranger"),FriendCandidatePages.requestCheckCandidates(
-                candidates,Map.of("friend",true,"stranger",false)));
-        assertTrue(FriendCandidatePages.requestCheckCandidates(Collections.singletonList("friend"),
-                Map.of("friend",true)).isEmpty());
+        Map<String,Boolean> mixed=new HashMap<>();mixed.put("friend",Boolean.TRUE);mixed.put("stranger",Boolean.FALSE);
+        assertEquals(Collections.singletonList("stranger"),FriendCandidatePages.requestCheckCandidates(candidates,mixed));
+        Map<String,Boolean> allFriends=new HashMap<>();allFriends.put("friend",Boolean.TRUE);
+        assertTrue(FriendCandidatePages.requestCheckCandidates(Collections.singletonList("friend"),allFriends).isEmpty());
     }
     @Test(expected=IllegalArgumentException.class)public void incompleteFriendFactsFailClosed(){
-        FriendCandidatePages.requestCheckCandidates(Arrays.asList("a","b"),Map.of("a",false));
+        Map<String,Boolean> incomplete=new HashMap<>();incomplete.put("a",Boolean.FALSE);
+        FriendCandidatePages.requestCheckCandidates(Arrays.asList("a","b"),incomplete);
     }
     @Test public void fiveThousandVirtualSuggestionPagesStayWithinBatchBudget(){
         List<String> candidates=new ArrayList<>();for(int i=0;i<10;i++)candidates.add("candidate"+i);
