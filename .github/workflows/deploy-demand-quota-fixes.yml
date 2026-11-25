@@ -85,3 +85,5 @@ jobs:
             /tmp/quota-rollout-before.json
             /tmp/quota-preview-replay.json
           retention-days: 7
+
+# Owner-requested rollout; both index-build and rollback gates remain mandatory.
