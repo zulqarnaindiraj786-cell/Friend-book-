@@ -84,3 +84,5 @@ jobs:
             /tmp/quota-rollout-before.json
             /tmp/quota-preview-replay.json
           retention-days: 7
+
+# Owner-requested rollout; expiry-index size and query-plan gates remain mandatory.
