@@ -942,9 +942,14 @@ public final class LivePkAndGiftsUi {
         searchScroll.setVisibility(View.GONE);
         sheet.addView(searchScroll, new LinearLayout.LayoutParams(-1, Ui.dp(a, 145)));
         final int[] searchVersion = {0};
+        final java.util.Set<String> pendingSearches = new java.util.HashSet<>();
         Runnable runSearch = () -> {
             String typed = pkSearch.getText().toString().trim();
             if (typed.length() < 2 || typed.length() > 60) { pkSearch.setError("Enter 2–60 characters"); return; }
+            // The Search button and IME action can fire back-to-back for the
+            // same input. Do not create a second billed prefix query while the
+            // first one (including its optional casing fallback) is pending.
+            if (!pendingSearches.add(typed)) return;
             int version = ++searchVersion[0];
             searchScroll.setVisibility(View.VISIBLE);
             searchResults.removeAllViews();
@@ -955,7 +960,9 @@ public final class LivePkAndGiftsUi {
                 if (!task.getResult().isEmpty() || version != searchVersion[0] || !dialog.isShowing() || !me.equals(Fb.uid())) return task;
                 return pkPeoplePrefix(name).get();
             }).addOnSuccessListener(found -> {
-                if (!dialog.isShowing() || version != searchVersion[0] || !me.equals(Fb.uid())) return;
+                pendingSearches.remove(typed);
+                if (version != searchVersion[0]) return;
+                if (!dialog.isShowing() || !me.equals(Fb.uid())) return;
                 searchResults.removeAllViews();
                 for (DocumentSnapshot d : found) {
                     Models.User u = Models.User.fromDoc(d);
@@ -968,7 +975,9 @@ public final class LivePkAndGiftsUi {
                 }
                 if (searchResults.getChildCount() == 0) searchResults.addView(Ui.tv(a, "No matching people found", 13, Color.WHITE));
             }).addOnFailureListener(error -> {
-                if (!dialog.isShowing() || version != searchVersion[0]) return;
+                pendingSearches.remove(typed);
+                if (version != searchVersion[0]) return;
+                if (!dialog.isShowing()) return;
                 searchResults.removeAllViews();
                 searchResults.addView(Ui.tv(a, "Couldn't search. Tap Search to retry.", 13, Color.WHITE));
             });
