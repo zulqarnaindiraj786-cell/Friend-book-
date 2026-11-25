@@ -94,7 +94,7 @@ public class FriendRequestDemandTest {
  @Test public void candidateChecksWaitForFriendFactsBeforePendingRequestReadsAndRemainScoped()throws Exception{
   try(MockedStatic<Fb> fb=mockStatic(Fb.class);MockedStatic<com.friendbook.social.App> app=mockStatic(com.friendbook.social.App.class)){
    fb.when(Fb::uid).thenReturn("candidate-actor");app.when(com.friendbook.social.App::isForeground).thenReturn(false);
-   FriendsFragment f=fragment("candidate-actor");Models.User u=new Models.User();u.uid="candidate";((List<Models.User>)field("suggestions").get(f)).add(u);
+   FriendsFragment f=fragment("candidate-actor");field("empty").set(f,null);Models.User u=new Models.User();u.uid="candidate";((List<Models.User>)field("suggestions").get(f)).add(u);
    D1DocumentStore db=mock(D1DocumentStore.class);fb.when(Fb::db).thenReturn(db);
    TaskCompletionSource<Map<String,Boolean>> facts=new TaskCompletionSource<>();when(db.friendshipFactsAutomatic(anyList(),any(ForegroundReadScope.class))).thenReturn(facts.getTask());
    CollectionReference requests=mock(CollectionReference.class);Query received=mock(Query.class),sent=mock(Query.class);when(db.collection("friend_requests")).thenReturn(requests);
@@ -118,7 +118,7 @@ public class FriendRequestDemandTest {
  @Test public void alreadyFriendCandidatesSkipBothPendingRequestQueries()throws Exception{
   try(MockedStatic<Fb> fb=mockStatic(Fb.class);MockedStatic<com.friendbook.social.App> app=mockStatic(com.friendbook.social.App.class)){
    fb.when(Fb::uid).thenReturn("existing-friend-actor");app.when(com.friendbook.social.App::isForeground).thenReturn(true);
-   FriendsFragment f=fragment("existing-friend-actor");Models.User u=new Models.User();u.uid="already-friend";((List<Models.User>)field("suggestions").get(f)).add(u);
+   FriendsFragment f=fragment("existing-friend-actor");field("empty").set(f,null);Models.User u=new Models.User();u.uid="already-friend";((List<Models.User>)field("suggestions").get(f)).add(u);
    D1DocumentStore db=mock(D1DocumentStore.class);fb.when(Fb::db).thenReturn(db);
    when(db.friendshipFactsAutomatic(anyList(),any(ForegroundReadScope.class))).thenReturn(Tasks.forResult(Map.of("already-friend",true)));
    CollectionReference requests=mock(CollectionReference.class);when(db.collection("friend_requests")).thenReturn(requests);
