@@ -136,6 +136,7 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: '92f3d04598822de2e49e14561218d090'
           WRANGLER_SEND_METRICS: 'false'
           HEAD_COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
+          GITHUB_EVENT_BEFORE: ${{ github.event.before }}
         run: |
           set +e
           mkdir -p "$RUNNER_TEMP/d1-migration-diagnostics"
@@ -215,10 +216,15 @@ jobs:
               exit 0
             fi
           fi
-          if grep -q '^DOCUMENT_MIRROR_MODE = "canonical"$' wrangler.toml; then
-            # Mirror writes are disabled in the Worker shipped by this branch.
-            # Take a full bounded legacy-vs-canonical snapshot first and fail closed
-            # if any legacy-only records remain or the inventory cap is reached.
+          current_mirror_mode=$(sed -n 's/^DOCUMENT_MIRROR_MODE = "\([^"]*\)"$/\1/p' wrangler.toml | head -n 1)
+          previous_mirror_mode=""
+          if [ -n "$GITHUB_EVENT_BEFORE" ] && git cat-file -e "$GITHUB_EVENT_BEFORE:wrangler.toml" 2>/dev/null; then
+            previous_mirror_mode=$(git show "$GITHUB_EVENT_BEFORE:wrangler.toml" | sed -n 's/^DOCUMENT_MIRROR_MODE = "\([^"]*\)"$/\1/p' | head -n 1)
+          fi
+          if [ "$current_mirror_mode" = "canonical" ] && [ "$previous_mirror_mode" != "canonical" ]; then
+            # Run the full coverage snapshot only on the one-time dual -> canonical
+            # cutover. Repeating it on every Worker deploy consumed ~46k D1 reads
+            # without changing application state. The cutover still fails closed.
             set -o pipefail
             python3 -m scripts.loadtest.canonical_inventory --require-no-legacy-only 2>&1 | tee -a "$log"
             inventory_status=${PIPESTATUS[0]}
@@ -230,6 +236,8 @@ jobs:
               echo 'migration_status=canonical-coverage-preflight-failed' >> "$GITHUB_OUTPUT"
               exit 0
             fi
+          else
+            echo "Canonical inventory preflight skipped; mirror mode was already '$current_mirror_mode' (previous '$previous_mirror_mode')."
           fi
           if printf '%s\n' "$pending" | grep -q '0103_comment_reaction_covering_index.sql'; then
             # The new covering index scans reaction rows during construction.
