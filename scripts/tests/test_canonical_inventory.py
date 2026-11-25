@@ -23,7 +23,10 @@ class CanonicalInventoryTest(unittest.TestCase):
         self.assertIn("'0104_retire_legacy_derived_index_triggers.sql'",workflow)
         self.assertIn("python3 -m scripts.loadtest.canonical_inventory --require-no-legacy-only",workflow)
         import re
-        self.assertRegex(workflow,r'grep -q .*DOCUMENT_MIRROR_MODE.*canonical.*wrangler\.toml')
+        self.assertIn('GITHUB_EVENT_BEFORE: ${{ github.event.before }}',workflow)
+        self.assertIn('current_mirror_mode=$(sed -n',workflow)
+        self.assertIn('previous_mirror_mode=$(git show "$GITHUB_EVENT_BEFORE:wrangler.toml"',workflow)
+        self.assertIn('[ "$current_mirror_mode" = "canonical" ] && [ "$previous_mirror_mode" != "canonical" ]',workflow)
         self.assertIn('DOCUMENT_MIRROR_MODE = "canonical"',config)
         self.assertIn('DOCUMENT_MIRROR_MODE = "dual"',config)
 
