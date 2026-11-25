@@ -9,6 +9,10 @@ from datetime import datetime, timezone
 from scripts.loadtest.retired_table_preflight import remote_query
 
 PAGE = 250
+KNOWN_FIELDS = frozenset({'id','uid','fromUid','toUid','status','participants','friendsCount','followersCount',
+    'followingCount','isRead','createdAt','updatedAt','createTime','updateTime','name','username','displayName',
+    'photoUrl','avatarUrl','profileImage','email','phone','text','caption','visibility','ownerUid','postId',
+    'chatId','groupId','type','title','body','lastMessage','lastMessageAt','blocked','blockedUsers'})
 
 
 def _timestamp(value):
@@ -28,6 +32,10 @@ def decode_value(value):
         return [decode_value(item) for item in value]
     if not isinstance(value, dict):
         return value
+    if value.get('__type') == 'timestamp' and isinstance(value.get('millis'), (int, float)):
+        return int(value['millis'])
+    if value.get('__type') == 'reference' and isinstance(value.get('path'), str):
+        return value['path']
     if 'stringValue' in value:
         return str(value['stringValue'])
     if 'booleanValue' in value:
@@ -100,15 +108,23 @@ def inspect(query, page_size=PAGE):
             collection = row.get('collection') if isinstance(row.get('collection'), str) else 'other'
             item = totals.setdefault(collection, {'sampled': 0, 'canonical_missing': 0,
                 'semantic_match': 0, 'semantic_mismatch': 0, 'owner_match': 0, 'owner_mismatch': 0,
-                'malformed': 0})
+                'owner_mismatch_canonical_empty': 0, 'owner_mismatch_mirror_empty': 0,
+                'owner_mismatch_canonical_is_doc_id': 0, 'owner_mismatch_mirror_is_doc_id': 0,
+                'mismatch_fields': {}, 'malformed': 0})
             item['sampled'] += 1
             if row.get('canonical_json') is None:
                 item['canonical_missing'] += 1
                 continue
-            if row.get('mirror_owner') == row.get('canonical_owner'):
+            mirror_owner, canonical_owner = row.get('mirror_owner'), row.get('canonical_owner')
+            doc_id = row.get('canonical_id') or row.get('mirror_id')
+            if mirror_owner == canonical_owner:
                 item['owner_match'] += 1
             else:
                 item['owner_mismatch'] += 1
+                if not canonical_owner: item['owner_mismatch_canonical_empty'] += 1
+                if not mirror_owner: item['owner_mismatch_mirror_empty'] += 1
+                if canonical_owner == doc_id: item['owner_mismatch_canonical_is_doc_id'] += 1
+                if mirror_owner == doc_id: item['owner_mismatch_mirror_is_doc_id'] += 1
             try:
                 mid = row.get('canonical_id') or row.get('mirror_id')
                 mirror = plain_document(row.get('mirror_json'), row.get('mirror_id') or mid)
@@ -120,6 +136,11 @@ def inspect(query, page_size=PAGE):
                 item['semantic_match'] += 1
             else:
                 item['semantic_mismatch'] += 1
+                keys = set(mirror) | set(canonical)
+                for key in keys:
+                    if mirror.get(key) != canonical.get(key) or (key in mirror) != (key in canonical):
+                        label = key if key in KNOWN_FIELDS else '_other'
+                        item['mismatch_fields'][label] = item['mismatch_fields'].get(label, 0) + 1
         if len(rows) < page_size:
             break
     return {'collections': totals, 'sampled': sum(x['sampled'] for x in totals.values()),

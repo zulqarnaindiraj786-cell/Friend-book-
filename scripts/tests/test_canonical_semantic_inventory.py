@@ -24,15 +24,19 @@ class CanonicalSemanticInventoryTest(unittest.TestCase):
         CREATE TABLE friendbook_cf_firestore_documents(path TEXT PRIMARY KEY,doc_id TEXT,owner_uid TEXT,document_json TEXT,create_time TEXT);''')
         legacy={'name':'Alice','id':'u','createdAt':1704067200000}
         wire={'fields':{'name':{'stringValue':'Alice'}},'createTime':'2024-01-01T00:00:00Z'}
+        legacy['privateCustomField']='old-value'
+        wire['fields']['privateCustomField']={'stringValue':'new-value'}
         db.execute('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?)',('users/u','users','u','u',json.dumps(legacy)))
         db.execute('INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?)',('users/u','u','u',json.dumps(wire),'2024-01-01T00:00:00Z'))
         def query(sql,params):
             return [dict(r) for r in db.execute(sql,params)], {'rows_read':1}
         result=inspect(query,page_size=1)
         user=result['collections']['users']
-        self.assertEqual(user['semantic_match'],1)
+        self.assertEqual(user['semantic_match'],0)
+        self.assertEqual(user['semantic_mismatch'],1)
+        self.assertEqual(user['mismatch_fields'],{'_other':1})
         self.assertEqual(user['canonical_missing'],0)
-        self.assertNotIn('Alice',str(result))
+        self.assertNotIn('Alice',str(result));self.assertNotIn('privateCustomField',str(result))
 
     def test_page_size_is_bounded(self):
         with self.assertRaises(ValueError): inspect(lambda *_: ([],{'rows_read':0}),0)
