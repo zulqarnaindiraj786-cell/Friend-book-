@@ -43,3 +43,5 @@ jobs:
           name: shared-chat-activity-index-evidence
           path: /tmp/chat-activity-index-evidence.json
           retention-days: 14
+
+# Owner-requested rollout; billing gate remains required.
