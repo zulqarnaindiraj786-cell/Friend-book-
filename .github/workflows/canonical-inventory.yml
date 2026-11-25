@@ -26,5 +26,5 @@ jobs:
           set -e
           python3 scripts/loadtest/d1_account_usage_analytics.py --notification-inspection-budget
           python3 -m scripts.loadtest.canonical_inventory --full
-          python3 -m scripts.loadtest.canonical_semantic_inventory
+          node scripts/loadtest/canonical_semantic_inventory.mjs
           python3 scripts/loadtest/d1_account_usage_analytics.py --notification-inspection-budget
