@@ -19,7 +19,7 @@ class FriendsCursorPages(unittest.TestCase):
         self.assertIn('Load more sent requests',code)
     def test_candidate_checks_bounded_guarded_and_fail_closed(self):
         code=(JAVA/'friends/FriendsFragment.java').read_text()
-        for token in ['offset+=10','Fb.db().friendshipFactsAutomatic(ids,scope)','Tasks.whenAllSuccess','a.size()!=ids.size()','b.size()==10','if(!current(token,me) || !checkingUsers.containsAll(ids))return','frameHandler.postDelayed(deadline,20000L)','failedCandidates.addAll(ids)','FriendCandidatePages.canOfferRequest']:
+        for token in ['offset+=10','Fb.db().friendshipFactsAutomatic(ids,scope)','Tasks.whenAllSuccess','a.size()!=ids.size()','incomingRows.size()==10','if(!current(token,me) || !checkingUsers.containsAll(ids))return','frameHandler.postDelayed(deadline,20000L)','failedCandidates.addAll(ids)','FriendCandidatePages.canOfferRequest']:
             self.assertIn(token,code)
     def test_action_targets_and_account_guards(self):
         code=(JAVA/'friends/FriendsFragment.java').read_text()
