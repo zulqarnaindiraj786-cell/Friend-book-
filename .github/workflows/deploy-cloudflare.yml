@@ -225,7 +225,7 @@ jobs:
             fi
             python3 -m unittest scripts.tests.test_document_mirror_retirement -v
             python3 scripts/loadtest/d1_account_usage_analytics.py --preflight-budget
-            # Aggregate-only current-vs-snapshot diagnostics run before the exact-copy DROP guard.
+            # Run the full aggregate diff exactly once before the DROP guard; never repeat it after a refusal.
             if printf '%s\n' "$pending" | grep -q '0106_enforce_document_mirror_retirement.sql'; then
               python3 -m scripts.loadtest.verify_canonical_mirror_retirement --diff
             fi
@@ -370,10 +370,6 @@ jobs:
           npx wrangler d1 migrations apply friendbook-db --remote 2>&1 | tee -a "$log"
           migration_status=${PIPESTATUS[0]}
           printf '%s\n' "migration_exit_code=$migration_status" | tee -a "$log"
-          if [ "$migration_status" -ne 0 ] && printf '%s\n' "$pending" | grep -q '0106_enforce_document_mirror_retirement.sql'; then
-            echo 'Read-only aggregate diff after guarded rollback refusal (privacy-safe counts only):' | tee -a "$log"
-            python3 -m scripts.loadtest.verify_canonical_mirror_retirement --diff 2>&1 | tee -a "$log"
-          fi
           if [ "$migration_status" -eq 0 ] && printf '%s\n' "$pending" | grep -q '0086_remove_unused_status_tables.sql'; then
             python3 -m scripts.loadtest.verify_retired_drop 2>&1 | tee -a "$log"
             if [ "${PIPESTATUS[0]}" -ne 0 ]; then
