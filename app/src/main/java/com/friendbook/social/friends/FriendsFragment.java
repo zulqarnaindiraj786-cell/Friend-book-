@@ -295,14 +295,12 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
             com.google.android.gms.tasks.Task<java.util.Map<String,Boolean>> friends=Fb.db().friendshipFactsAutomatic(ids,scope);
             friends.addOnSuccessListener(a->{
                 if(!current(token,me) || !checkingUsers.containsAll(ids))return;
-                if(a==null || a.size()!=ids.size() || !a.keySet().containsAll(ids) || a.containsValue(null)){
+                List<String> requestIds;
+                try{requestIds=com.friendbook.social.core.FriendCandidatePages.requestCheckCandidates(ids,a);}
+                catch(IllegalArgumentException invalidFacts){
                     frameHandler.removeCallbacks(deadline);checkingUsers.removeAll(ids);failedCandidates.addAll(ids);if(empty!=null)requestRender();return;
                 }
-                List<String> requestIds=new ArrayList<>();
-                for(String candidate:ids){
-                    if(Boolean.TRUE.equals(a.get(candidate)))candidateFriends.add(candidate);
-                    else requestIds.add(candidate);
-                }
+                for(String candidate:ids)if(!requestIds.contains(candidate))candidateFriends.add(candidate);
                 // A confirmed friend is never offered a request, so checking
                 // pending inbound/outbound requests for that UID cannot affect UI.
                 if(requestIds.isEmpty()){
