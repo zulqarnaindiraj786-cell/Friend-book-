@@ -225,6 +225,7 @@ jobs:
             fi
             python3 -m unittest scripts.tests.test_document_mirror_retirement -v
             python3 scripts/loadtest/d1_account_usage_analytics.py --preflight-budget
+            # Aggregate-only current-vs-snapshot diagnostics run before the exact-copy DROP guard.
             if printf '%s\n' "$pending" | grep -q '0106_enforce_document_mirror_retirement.sql'; then
               python3 -m scripts.loadtest.verify_canonical_mirror_retirement --diff
             fi
