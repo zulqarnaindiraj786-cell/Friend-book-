@@ -53,7 +53,10 @@ public class GroupChatInfoActivity extends Activity {
 
     private String chatId;
     private Models.ChatRoom room;
-    private ListenerRegistration reg;
+    private ListenerRegistration reg,peopleReg;
+    private AlertDialog addMembersDialog;
+    private int roomGeneration;
+    private String roomActor;
 
     private ImageView groupAvatar;
     private TextView groupTitleTv, groupSubTv;
@@ -214,9 +217,14 @@ public class GroupChatInfoActivity extends Activity {
     @Override
     protected void onStart() {
         super.onStart();
+        String actor=Fb.uid();
+        if(actor==null || (roomActor!=null && !java.util.Objects.equals(roomActor,actor))){finish();return;}
+        roomActor=actor;final int generation=++roomGeneration;
         reg = Fb.db().collection("chats").document(chatId)
                 .addSnapshotListener((d, err) -> {
-                    if (d == null || !d.exists()) { finish(); return; }
+                    if(generation!=roomGeneration || !java.util.Objects.equals(actor,Fb.uid()) || isFinishing() || isDestroyed())return;
+                    if(d==null)return; // A failed read is not proof of group deletion.
+                    if(!d.exists()){if(!d.getMetadata().isFromCache())finish();return;}
                     room = Models.ChatRoom.fromDoc(d);
                     renderRoom();
                 });
@@ -225,7 +233,10 @@ public class GroupChatInfoActivity extends Activity {
     @Override
     protected void onStop() {
         super.onStop();
+        roomGeneration++;
         if (reg != null) reg.remove();
+        if(addMembersDialog!=null)addMembersDialog.dismiss();
+        if(peopleReg!=null){peopleReg.remove();peopleReg=null;}
     }
 
     private void renderRoom() {
@@ -316,13 +327,13 @@ public class GroupChatInfoActivity extends Activity {
 
         String fallbackPhoto = room.participantPhotos.get(memberUid);
         Ui.avatar(this, av, fallbackPhoto);
-        Fb.getUser(memberUid).addOnSuccessListener(u -> {
-            if (u == null || isFinishing()) return;
-            FastCache.putUser(u);
-            nameTv.setText(u.displayName);
-            Ui.avatar(this, av, u.photoUrl);
-            Icons.setTickBadge(tk, u.tickLevel, false);
-        });
+        // The room includes member names/photos. Cache enrichment must not become
+        // one profile request per member on every room/receipt update.
+        Models.User cached=FastCache.getUser(memberUid);
+        if(cached!=null){
+            nameTv.setText(cached.displayName);Ui.avatar(this,av,cached.photoUrl);
+            Icons.setTickBadge(tk,cached.tickLevel,false);
+        }
 
         row.setOnClickListener(v -> showMemberMenu(v, memberUid, nameTv.getText().toString(), amAdmin));
         return row;
@@ -405,46 +416,22 @@ public class GroupChatInfoActivity extends Activity {
     }
 
     private void showAddMembersDialog() {
-        if (room == null) return;
+        if (room == null || (addMembersDialog!=null && addMembersDialog.isShowing())) return;
+        final String actor=Fb.uid();
         LinearLayout list = Ui.col(this);
         Ui.pad(list, 14, 10, 14, 10);
         ScrollView sv = new ScrollView(this);
         sv.addView(list);
+        LinearLayout content=Ui.col(this),controls=Ui.col(this);content.addView(sv,new LinearLayout.LayoutParams(-1,Ui.dp(this,320)));content.addView(controls);
         final Set<Models.User> picked = new LinkedHashSet<>();
 
-        Fb.db().collection("users").limit(200).get().addOnSuccessListener(snap -> {
-            if (snap == null || isFinishing()) return;
-            for (DocumentSnapshot d : snap.getDocuments()) {
-                Models.User u = Models.User.fromDoc(d);
-                if (u.uid==null || u.uid.isEmpty() || room.participants.contains(u.uid) || u.banned || u.deactivated) continue;
-                LinearLayout row = Ui.row(this);
-                row.setGravity(Gravity.CENTER_VERTICAL);
-                Ui.pad(row, 4, 7, 4, 7);
-                ImageView av = new ImageView(this);
-                Ui.avatar(this, av, u.photoUrl);
-                int s = Ui.dp(this, 36);
-                row.addView(av, new LinearLayout.LayoutParams(s, s));
-                TextView nm = Ui.tvBold(this, u.displayName, 14, Ui.txt(this));
-                nm.setPadding(Ui.dp(this, 10), 0, 0, 0);
-                row.addView(nm, new LinearLayout.LayoutParams(0, -2, 1));
-                CheckBox cb = new CheckBox(this);
-                cb.setOnCheckedChangeListener((b, ch) -> {
-                    if (ch) picked.add(u); else picked.remove(u);
-                });
-                row.addView(cb);
-                row.setOnClickListener(v -> cb.setChecked(!cb.isChecked()));
-                list.addView(row);
-            }
-            if (list.getChildCount() == 0) {
-                list.addView(Ui.tv(this, "Everyone is already in this group!", 13, Ui.sub(this)));
-            }
-        });
 
-        new AlertDialog.Builder(this)
+
+        addMembersDialog=new AlertDialog.Builder(this)
                 .setTitle("➕ Add Members to Group")
-                .setView(sv)
+                .setView(content)
                 .setPositiveButton("Add Selected", (d, w) -> {
-                    if (picked.isEmpty()) return;
+                    if (picked.isEmpty() || !java.util.Objects.equals(actor,Fb.uid()) || room==null || !room.isGroupAdmin(actor)) return;
                     Map<String, String> names = new HashMap<>(room.participantNames);
                     Map<String, String> photos = new HashMap<>(room.participantPhotos);
                     List<String> newUids = new ArrayList<>();
@@ -468,6 +455,38 @@ public class GroupChatInfoActivity extends Activity {
                 })
                 .setNegativeButton("Cancel", null)
                 .show();
+        addMembersDialog.setOnDismissListener(d->{if(peopleReg!=null){peopleReg.remove();peopleReg=null;}addMembersDialog=null;});
+        peopleReg=com.friendbook.social.core.PagedLists.attach(this,controls,Fb.db().collection("users"),10,
+                "chat-people:add-members:"+chatId,(snap,pageError)->{
+            if(!java.util.Objects.equals(actor,Fb.uid()) || room==null)return;
+            list.removeAllViews();
+            if (snap == null || isFinishing()) return;
+            for (DocumentSnapshot d : snap.getDocuments()) {
+                Models.User u = Models.User.fromDoc(d);
+                if (u.uid==null || u.uid.isEmpty() || room.participants.contains(u.uid) || u.banned || u.deactivated) continue;
+                LinearLayout row = Ui.row(this);
+                row.setGravity(Gravity.CENTER_VERTICAL);
+                Ui.pad(row, 4, 7, 4, 7);
+                ImageView av = new ImageView(this);
+                Ui.avatar(this, av, u.photoUrl);
+                int s = Ui.dp(this, 36);
+                row.addView(av, new LinearLayout.LayoutParams(s, s));
+                TextView nm = Ui.tvBold(this, u.displayName, 14, Ui.txt(this));
+                nm.setPadding(Ui.dp(this, 10), 0, 0, 0);
+                row.addView(nm, new LinearLayout.LayoutParams(0, -2, 1));
+                CheckBox cb = new CheckBox(this);
+                cb.setChecked(picked.stream().anyMatch(chosen->java.util.Objects.equals(chosen.uid,u.uid)));
+                cb.setOnCheckedChangeListener((b, ch) -> {
+                    picked.removeIf(chosen->java.util.Objects.equals(chosen.uid,u.uid));if(ch)picked.add(u);
+                });
+                row.addView(cb);
+                row.setOnClickListener(v -> cb.setChecked(!cb.isChecked()));
+                list.addView(row);
+            }
+            if (list.getChildCount() == 0) {
+                list.addView(Ui.tv(this, "Everyone is already in this group!", 13, Ui.sub(this)));
+            }
+        });
     }
 
     private void leaveGroup() {

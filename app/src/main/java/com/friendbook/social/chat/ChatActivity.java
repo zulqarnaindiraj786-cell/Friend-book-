@@ -55,7 +55,7 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
     private TextView historyButton;
     private android.widget.ProgressBar historySpinner;
     private TextView threadStatus;
-    private boolean chatVisible;
+    private boolean chatVisible,unreadResetFailed;
     private String messageActor;
     // Until the next snapshot reflects the acknowledgement, don't write the same receipt again.
     private final java.util.Map<String,Boolean> confirmedReceipts = new java.util.LinkedHashMap<>();
@@ -265,10 +265,7 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         messageRefresh = new androidx.swiperefreshlayout.widget.SwipeRefreshLayout(this);
         messageRefresh.setColorSchemeColors(Ui.BLUE);
         messageRefresh.addView(rv);
-        messageRefresh.setOnRefreshListener(() -> {
-            if (msgReg == null) { messageRefresh.setRefreshing(false); return; }
-            Fb.db().refreshChatMessages(chatId);
-        });
+        messageRefresh.setOnRefreshListener(this::refreshOpenChat);
         android.widget.FrameLayout messageWrap=new android.widget.FrameLayout(this);messageWrap.addView(messageRefresh,new android.widget.FrameLayout.LayoutParams(-1,-1));
         threadStatus=Ui.tv(this,"Opening conversation…",14,Ui.sub(this));
         threadStatus.setGravity(Gravity.CENTER); Ui.pad(threadStatus,20,8,20,8);
@@ -437,14 +434,42 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         return wrap;
     }
 
+    private boolean chatStarted,chatRefreshInFlight;
+    private int chatRefreshAttempt;
+    private void refreshOpenChat(){
+        if(!chatStarted || msgReg==null || !java.util.Objects.equals(messageActor,Fb.uid())){
+            messageRefresh.setRefreshing(false);return;
+        }
+        if(chatRefreshInFlight)return;
+        if(!com.friendbook.social.core.InteractionCooldown.acquire(messageActor,"chat-refresh:"+chatId)){
+            messageRefresh.setRefreshing(false);return;
+        }
+        chatRefreshInFlight=true;final int attempt=++chatRefreshAttempt,generation=historyGeneration;
+        final String actor=messageActor;
+        Fb.db().refreshChatMessages(chatId);
+        new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(()->{
+            if(activeChatRead(actor,generation) && attempt==chatRefreshAttempt){
+                chatRefreshInFlight=false;messageRefresh.setRefreshing(false);
+            }
+        },20_000L);
+    }
+    private boolean activeChatRead(String actor,int generation){
+        return chatStarted && generation==historyGeneration && java.util.Objects.equals(actor,Fb.uid())
+                && !isFinishing() && !isDestroyed();
+    }
+
     @Override
     protected void onStart() {
         super.onStart();
         if(Fb.uid()==null || (messageActor!=null && !java.util.Objects.equals(messageActor,Fb.uid()))){finish();return;}
 
+        chatStarted=true;
+        historyGeneration++;
+        final int chatGeneration=historyGeneration;final String chatActor=Fb.uid();
         if (isGroupChat) {
             roomReg = Fb.db().collection("chats").document(chatId)
                     .addSnapshotListener((d, err) -> {
+                        if(!activeChatRead(chatActor,chatGeneration))return;
                         if (d == null) {
                             if (err != null && err.getCode()==com.friendbook.social.d1.documents.D1DocumentStoreException.Code.PERMISSION_DENIED) finish();
                             return; // a transient read failure is not a deleted room
@@ -499,6 +524,7 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
             // Listen for incoming Voice/Video Calls on this 1:1 chat doc too!
             roomReg = Fb.db().collection("chats").document(chatId)
                     .addSnapshotListener((d, err) -> {
+                        if(!activeChatRead(chatActor,chatGeneration))return;
                         if (d != null && d.exists()) {
                             CallActivity.maybeHandleIncomingFromRoomDoc(ChatActivity.this, d);
                         }
@@ -507,6 +533,7 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
             // Peer profile (live)
             userReg = Fb.db().collection("users").document(peerId)
                     .addSnapshotListener((d, err) -> {
+                        if(!activeChatRead(chatActor,chatGeneration))return;
                         if (d == null || !d.exists()) return;
                         Models.User u = Models.User.fromDoc(d);
                         com.friendbook.social.core.FastCache.putUser(u);
@@ -525,8 +552,7 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         if(!java.util.Objects.equals(messageActor,Fb.uid())){
             messageSnapshots.clear();historyMessages.clear();pendingMessages.clear();historyRanges.clear();maskedHistoryIds.clear();historyEnd=null;lastServerMessage=null;historyCursor=null;historyMore=true;initialScrollDone=false;adapter.setData(new ArrayList<>());messageActor=Fb.uid();
         }
-        historyLoading=false;historySpinner.setVisibility(View.GONE);historyGeneration++;
-        final int chatGeneration=historyGeneration; final String chatActor=Fb.uid();
+        historyLoading=false;historySpinner.setVisibility(View.GONE);
         final Set<String> knownAtAttach=new HashSet<>(historyMessages.keySet());knownAtAttach.addAll(messageSnapshots.keySet());
         final boolean[] firstServer={true};
         final Set<String> previewIds=new HashSet<>();
@@ -536,8 +562,10 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
                 .orderBy("createdAt", Query.Direction.ASCENDING)
                 .limitToLast(10)
                 .addSnapshotListener(com.friendbook.social.d1.documents.MetadataChanges.INCLUDE, (snap, err) -> {
-                    if (chatGeneration!=historyGeneration || !java.util.Objects.equals(chatActor,Fb.uid()) || isFinishing()) return;
-                    if (snap == null || !snap.getMetadata().isFromCache()) messageRefresh.setRefreshing(false);
+                    if (!activeChatRead(chatActor,chatGeneration)) return;
+                    if (snap == null || !snap.getMetadata().isFromCache()) {
+                        chatRefreshInFlight=false;messageRefresh.setRefreshing(false);
+                    }
                     if(snap==null) {
                         if(err!=null && (err.getCode()==com.friendbook.social.d1.documents.D1DocumentStoreException.Code.PERMISSION_DENIED
                                 || err.getCode()==com.friendbook.social.d1.documents.D1DocumentStoreException.Code.UNAUTHENTICATED)) {
@@ -651,7 +679,7 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
                             break;
                         }
                     }
-                    hydrateTeamSharedReactions(list);
+                    hydrateTeamSharedReactions(new ArrayList<>(messageSnapshots.values()));
                     historyButton.setVisibility(View.GONE);
                     if (nearBottom && !list.isEmpty() && (!initialScrollDone || forceScrollBottom || (rv.getScrollState() == RecyclerView.SCROLL_STATE_IDLE && list.size() > prevCount))) {
                         initialScrollDone = true;
@@ -685,7 +713,7 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
     }
 
     private void loadOlderMessages() {
-        if(historyLoading || !historyMore || historyCursor==null) return;
+        if(!chatStarted || !java.util.Objects.equals(messageActor,Fb.uid()) || historyLoading || !historyMore || historyCursor==null) return;
         historyLoading=true; final int generation=historyGeneration; final String actor=Fb.uid();
         final int attempt=++historyPageAttempt;
         final DocumentSnapshot requestedCursor=historyCursor;
@@ -695,12 +723,12 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         Query older=Fb.db().collection("chats").document(chatId).collection("messages")
                 .orderBy("createdAt",Query.Direction.DESCENDING).startAfter(historyCursor);
         if(historyEnd!=null)older=older.endBefore(historyEnd);
-        older.limit(11).get(com.friendbook.social.d1.documents.Source.SERVER)
+        older.limit(10).get(com.friendbook.social.d1.documents.Source.SERVER)
                 .addOnSuccessListener(page -> {
                     historySpinner.removeCallbacks(deadline);
                     if(!isCurrentHistoryPage(generation,attempt,actor)) return;
                     if(historyCursor!=requestedCursor){failHistoryPage(generation,attempt,actor);return;}
-                    historyLoading=false;historyFailed=false;historySpinner.setVisibility(View.GONE); historyMore=page.size()>10;
+                    historyLoading=false;historyFailed=false;historySpinner.setVisibility(View.GONE); historyMore=page.size()==10;
                     if(!page.isEmpty()) historyCursor=page.getDocuments().get(Math.min(10,page.size())-1);
                     if(historyEnd!=null && !historyMore){HistoryResume saved=historyRanges.pop();historyCursor=saved.cursor;historyEnd=saved.end;historyMore=saved.more;maskedHistoryIds=saved.masked;}
                     LinearLayoutManager manager=(LinearLayoutManager)rv.getLayoutManager();
@@ -724,7 +752,7 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
 
     private boolean isCurrentHistoryPage(int generation,int attempt,String actor) {
         return historyLoading && generation==historyGeneration && attempt==historyPageAttempt
-                && java.util.Objects.equals(actor,Fb.uid()) && !isFinishing();
+                && activeChatRead(actor,generation);
     }
 
     private void failHistoryPage(int generation,int attempt,String actor) {
@@ -753,15 +781,18 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         batch.update(Fb.db().collection("chats").document(chatId),com.friendbook.social.d1.documents.FieldPath.of("unreadCount",me),0);
         batch.commit().addOnCompleteListener(done->{
             receiptInFlight.removeAll(claimed);
-            if(!done.isSuccessful()){receiptFailed.addAll(claimed);return;}
             if(!me.equals(Fb.uid()))return;
+            if(!done.isSuccessful()){receiptFailed.addAll(claimed);unreadResetFailed=true;return;}
+            unreadResetFailed=false;
             for(String id:claimed)confirmedReceipts.put(id,markSeen);
             while(confirmedReceipts.size()>128)confirmedReceipts.remove(confirmedReceipts.keySet().iterator().next());
         });
     }
 
     @Override protected void onResume() {
-        super.onResume();chatVisible=true;receiptFailed.clear();unreadResetOnce=false;markVisibleReceipts(); com.friendbook.social.core.SoundEffects.visibleChat(chatId);
+        super.onResume();chatVisible=true;receiptFailed.clear();
+        if(unreadResetFailed){unreadResetOnce=false;unreadResetFailed=false;}
+        markVisibleReceipts(); com.friendbook.social.core.SoundEffects.visibleChat(chatId);
     }
     @Override protected void onPause() {
         chatVisible=false;com.friendbook.social.core.SoundEffects.clearVisibleChat(chatId); super.onPause();
@@ -770,7 +801,7 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
     @Override
     protected void onStop() {
         super.onStop();
-        historyGeneration++; historyLoading=false;
+        chatStarted=false;chatRefreshInFlight=false;chatRefreshAttempt++;historyGeneration++; historyLoading=false;
         if (msgReg != null) msgReg.remove();
         if (userReg != null) userReg.remove();
         if (roomReg != null) roomReg.remove();
@@ -831,8 +862,9 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         Ui.toast(this, "Uploading voice note…");
         Uri uri = Uri.fromFile(new java.io.File(voicePath));
         String path = "chat/" + chatId + "/voice_" + System.currentTimeMillis() + ".m4a";
+        final String uploadActor=Fb.uid();
         com.friendbook.social.core.Cloudinary.uploadOrFirebase(this, path, uri)
-                .addOnSuccessListener(url -> sendVoice(url.toString(), durSec))
+                .addOnSuccessListener(url -> {if(java.util.Objects.equals(uploadActor,Fb.uid()))sendVoice(url.toString(), durSec);})
                 .addOnFailureListener(e -> Ui.toast(this, "Voice upload failed"));
     }
 
@@ -875,7 +907,16 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
                 "unreadCount", unread);
     }
 
+    private boolean admitSend(String kind,String payload){
+        String actor=Fb.uid();
+        return chatStarted && actor!=null && java.util.Objects.equals(messageActor,actor)
+                && !isFinishing() && !isDestroyed()
+                && com.friendbook.social.core.InteractionCooldown.acquire(actor,
+                        "chat-send:"+chatId+":"+kind+":"+String.valueOf(payload));
+    }
+
     private void sendVoice(String url, int durSec) {
+        if(!admitSend("voice",url))return;
         String me = Fb.uid();
         if (me == null) return;
         long now = System.currentTimeMillis();
@@ -971,6 +1012,7 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
     }
 
     private void sendSticker(String emoji) {
+        if(!admitSend("sticker",emoji))return;
         String me = Fb.uid();
         if (me == null) return;
         long now = System.currentTimeMillis();
@@ -1030,6 +1072,7 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
             }
         }
         String type = imageUrl != null ? "image" : "text";
+        if(!admitSend(type,imageUrl!=null?imageUrl:finalText))return;
         long now = System.currentTimeMillis();
 
         // ⚡ 0.0ms Optimistic UI: clear input & render bubble immediately!
@@ -1130,10 +1173,11 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         super.onActivityResult(req, res, data);
         if (req == PICK_IMG && res == RESULT_OK && data != null && data.getData() != null) {
             Uri uri = data.getData();
+            final String uploadActor=Fb.uid();
             java.util.List<Uri> single = new ArrayList<>();
             single.add(uri);
             com.friendbook.social.core.ContentSafetyEngine.scanMediaAsync(this, single, false, "", v -> {
-                if (isFinishing()) return;
+                if (isFinishing() || isDestroyed() || !java.util.Objects.equals(uploadActor,Fb.uid())) return;
                 if (v.unsafe) {
                     Ui.info(this, "🛡 Unsafe Photo Blocked", v.message);
                     return;
@@ -1141,7 +1185,7 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
                 Ui.toast(this, "Uploading photo…");
                 String path = "chat/" + chatId + "/" + System.currentTimeMillis() + ".jpg";
                 com.friendbook.social.core.Cloudinary.uploadOrFirebase(this, path, uri)
-                        .addOnSuccessListener(url -> send(null, url.toString(), null))
+                        .addOnSuccessListener(url -> {if(java.util.Objects.equals(uploadActor,Fb.uid()))send(null, url.toString(), null);})
                         .addOnFailureListener(e -> Ui.toast(this, "Upload failed"));
             });
         }
@@ -1224,23 +1268,32 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
 
     private void hydrateTeamSharedReactions(List<Models.Message> messages) {
         if (!isTeamChat || messages == null || messages.isEmpty()) return;
-        for (final Models.Message m : messages) {
-            if (m == null || m.id == null || !hydratedTeamMsgIds.add(m.id)) continue;
-            final String sharedDocId = m.sharedTeamReactionDocId();
-            Fb.db().collection("chats").document("team_shared_reactions")
-                    .collection("messages").document(sharedDocId)
-                    .get()
-                    .addOnSuccessListener(doc -> {
-                        if (isFinishing() || doc == null || !doc.exists()) return;
-                        Models.Message shared = Models.Message.fromDoc(doc);
-                        if (shared.reactions == null || shared.reactions.isEmpty()) return;
-                        if (m.reactions == null) m.reactions = new HashMap<>();
-                        if (m.reactorNames == null) m.reactorNames = new HashMap<>();
-                        if (m.reactorPhotos == null) m.reactorPhotos = new HashMap<>();
-                        m.reactions.putAll(shared.reactions);
-                        if (shared.reactorNames != null) m.reactorNames.putAll(shared.reactorNames);
-                        if (shared.reactorPhotos != null) m.reactorPhotos.putAll(shared.reactorPhotos);
-                        adapter.notifyDataSetChanged();
+        final String actor=Fb.uid();final int generation=historyGeneration;
+        Map<String,List<Models.Message>> bySharedId=new java.util.LinkedHashMap<>();
+        for(Models.Message m:messages){
+            if(m==null || m.id==null || !hydratedTeamMsgIds.add(m.id))continue;
+            bySharedId.computeIfAbsent(m.sharedTeamReactionDocId(),key->new ArrayList<>()).add(m);
+        }
+        for(List<String> ids:Ui.chunks(new ArrayList<>(bySharedId.keySet()),10)){
+            Fb.db().collection("chats").document("team_shared_reactions").collection("messages")
+                    .whereIn(com.friendbook.social.d1.documents.FieldPath.documentId(),ids).limit(10).get()
+                    .addOnSuccessListener(snap->{
+                        if(!activeChatRead(actor,generation))return;
+                        boolean changed=false;
+                        for(DocumentSnapshot doc:snap){
+                            Models.Message shared=Models.Message.fromDoc(doc);
+                            if(shared.reactions==null || shared.reactions.isEmpty())continue;
+                            for(Models.Message m:bySharedId.getOrDefault(doc.getId(),java.util.Collections.emptyList())){
+                                if(m.reactions==null)m.reactions=new HashMap<>();
+                                if(m.reactorNames==null)m.reactorNames=new HashMap<>();
+                                if(m.reactorPhotos==null)m.reactorPhotos=new HashMap<>();
+                                m.reactions.putAll(shared.reactions);
+                                if(shared.reactorNames!=null)m.reactorNames.putAll(shared.reactorNames);
+                                if(shared.reactorPhotos!=null)m.reactorPhotos.putAll(shared.reactorPhotos);
+                                changed=true;
+                            }
+                        }
+                        if(changed)adapter.notifyDataSetChanged();
                     });
         }
     }

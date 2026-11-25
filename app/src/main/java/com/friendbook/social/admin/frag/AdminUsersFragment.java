@@ -39,6 +39,10 @@ public class AdminUsersFragment extends Fragment {
     private TextView countT;
     private final List<Models.User> all = new ArrayList<>();
     private ListenerRegistration reg;
+    private com.friendbook.social.core.CursorPager userPages;
+    private TextView more;
+    private boolean started;
+    private String actor;
     private String filter = "";
     private final Handler h = new Handler(Looper.getMainLooper());
     private Runnable pending;
@@ -59,7 +63,7 @@ public class AdminUsersFragment extends Fragment {
             @Override public void onTextChanged(CharSequence s, int x, int y, int z) {
                 if (pending != null) h.removeCallbacks(pending);
                 pending = () -> { filter = s.toString().toLowerCase(Locale.ROOT); render(); };
-                h.postDelayed(pending, 250);
+                h.postDelayed(pending,com.friendbook.social.core.SearchReadPolicy.DEBOUNCE_MS);
             }
             @Override public void afterTextChanged(Editable s) { }
         });
@@ -67,6 +71,8 @@ public class AdminUsersFragment extends Fragment {
         countT = Ui.tv(a, "", 12, Ui.sub(a));
         Ui.pad(countT, 14, 4, 14, 2);
         root.addView(countT);
+        TextView hint=Ui.tv(a,"Filters and counts apply to loaded users. Refresh after changing an older user, then load their page again.",12,Ui.sub(a));
+        Ui.pad(hint,14,2,14,4);root.addView(hint);
 
         RecyclerView rv = new RecyclerView(a);
         rv.setLayoutManager(new LinearLayoutManager(a));
@@ -86,25 +92,55 @@ public class AdminUsersFragment extends Fragment {
         });
         rv.setAdapter(adapter);
         root.addView(rv, new LinearLayout.LayoutParams(-1, 0, 1));
+        LinearLayout controls=Ui.row(a);
+        TextView refresh=Ui.tvBold(a,"Refresh users",13,Ui.BLUE);Ui.pad(refresh,14,10,14,10);
+        refresh.setOnClickListener(v->startUserPages());controls.addView(refresh);
+        more=Ui.tvBold(a,"Load 10 more",13,Ui.BLUE);Ui.pad(more,14,10,14,10);
+        more.setOnClickListener(v->{if(userPages!=null)userPages.next();});controls.addView(more);
+        root.addView(controls);
         return root;
     }
 
     @Override
     public void onStart() {
         super.onStart();
-        reg = Fb.db().collection("users")
-                .orderBy("createdAt", Query.Direction.DESCENDING).limit(300)
-                .addSnapshotListener((snap, err) -> {
-                    all.clear();
-                    if (snap != null) for (DocumentSnapshot d : snap) all.add(Models.User.fromDoc(d));
-                    render();
-                });
+        android.app.Activity a=getActivity();
+        if(a==null || !Admin.isAdmin() || Fb.uid()==null)return;
+        if(actor!=null && !actor.equals(Fb.uid())){a.finish();return;}
+        actor=Fb.uid();started=true;
+        startUserPages();
+    }
+
+    private void startUserPages() {
+        if(!started || !java.util.Objects.equals(actor,Fb.uid()) || getActivity()==null)return;
+        if(reg!=null){reg.remove();reg=null;}
+        if(userPages!=null){userPages.close();userPages=null;}
+        all.clear();render();
+        Query query=Fb.db().collection("users").orderBy("createdAt",Query.Direction.DESCENDING);
+        userPages=new com.friendbook.social.core.CursorPager(query,10,"admin-users",(docs,hasMore,busy,error)->{
+            if(!started || !java.util.Objects.equals(actor,Fb.uid()) || getActivity()==null)return;
+            more.setText(busy?"Loading…":!error.isEmpty()?"Retry page":hasMore?"Load 10 more":"All loaded");
+            more.setEnabled(!busy && hasMore);
+            if(!busy && (error.isEmpty() || !docs.isEmpty())) {
+                all.clear();for(DocumentSnapshot doc:docs)all.add(Models.User.fromDoc(doc));render();
+            }
+            if(!error.isEmpty())Ui.toast(getActivity(),error);
+        });
+        userPages.startObserved();
+        reg=query.limit(10).addSnapshotListener((snap,err)->{
+            if(!started || !java.util.Objects.equals(actor,Fb.uid()) || userPages==null)return;
+            if(err!=null){userPages.observedError();return;}
+            if(snap!=null)userPages.acceptObservedFirstPage(snap);
+        });
     }
 
     @Override
     public void onStop() {
         super.onStop();
-        if (reg != null) reg.remove();
+        started=false;
+        if(pending!=null){h.removeCallbacks(pending);pending=null;}
+        if(reg!=null){reg.remove();reg=null;}
+        if(userPages!=null){userPages.close();userPages=null;}
     }
 
     private void render() {
@@ -135,7 +171,7 @@ public class AdminUsersFragment extends Fragment {
             rows.add(r);
         }
         adapter.setData(rows);
-        countT.setText(rows.size() + " users · " + verifiedCount + " have the blue tick ✓");
+        countT.setText(rows.size() + " shown · " + verifiedCount + " verified in loaded users ✓");
     }
 
     private void moreActions(Models.User u) {

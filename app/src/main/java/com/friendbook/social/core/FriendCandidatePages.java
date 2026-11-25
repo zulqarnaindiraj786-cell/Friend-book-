@@ -3,6 +3,11 @@ import java.util.*;
 /** Small relationship probes for visible suggestion candidates, never a full friend-graph download. */
 public final class FriendCandidatePages {
     private FriendCandidatePages(){}
+    public static boolean validUid(String uid){
+        if(uid==null || uid.isEmpty() || uid.length()>128)return false;
+        for(int i=0;i<uid.length();i++)if(uid.charAt(i)=='/' || uid.charAt(i)<32)return false;
+        return true;
+    }
     public static List<List<String>> pairs(String actor,List<String> candidates){
         if(actor==null || candidates.size()>10)throw new IllegalArgumentException("At most ten candidates per probe");
         List<List<String>> pairs=new ArrayList<>();

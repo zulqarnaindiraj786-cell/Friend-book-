@@ -45,6 +45,11 @@ import java.util.Map;
  * Wellbeing, Audience & Visibility (Privacy), Your Activity/Archive/Trash, and Legal.
  */
 public class SettingsActivity extends Activity {
+    private com.friendbook.social.d1.documents.ListenerRegistration summaryCountReg;
+    private boolean summaryLoading;
+    private com.friendbook.social.d1.documents.ListenerRegistration insightsReg;
+    private AlertDialog insightsDialog;
+
 
     private static class SearchEntry {
         View view;
@@ -139,7 +144,7 @@ public class SettingsActivity extends Activity {
                 () -> startActivity(new Intent(this, com.friendbook.social.bluetick.MonetizationActivity.class))));
         if (me != null && (Icons.tickRank(me.tickLevel) > 0 || me.professionalMode)) {
             body.addView(rowI(Icons.CHART, "Creator & profile insights",
-                    "Reach, total likes, followers, Stars & streak analytics", this::verifiedInsights));
+                    "Loaded post activity, followers, Stars & streak", this::verifiedInsights));
             body.addView(rowI(Icons.MAIL, "Priority support",
                     "Direct fast-track creator/verified support", this::verifiedSupport));
         }
@@ -1031,9 +1036,12 @@ public class SettingsActivity extends Activity {
 
     private void accessInfoDialog() {
         String me = Fb.uid();
-        if (me == null) return;
+        if (me == null || summaryLoading) return;
+        summaryLoading=true;
         Ui.toast(this, "Loading your account summary…");
-        com.friendbook.social.core.CountReads.once(Fb.db().collection("posts").whereEqualTo("authorId",me),totalPosts->{
+        if(summaryCountReg!=null)summaryCountReg.remove();
+        summaryCountReg=com.friendbook.social.core.CountReads.once(Fb.db().collection("posts").whereEqualTo("authorId",me),totalPosts->{
+                    summaryLoading=false;
                     if(isFinishing() || isDestroyed())return;
                     Models.User u = Fb.me;
                     Ui.info(this, "📋 Your friendbook information",
@@ -1047,7 +1055,18 @@ public class SettingsActivity extends Activity {
                                     + "• Verification tick: " + (u != null ? Admin.tickLabel(u.tickLevel) : "none") + "\n"
                                     + "• Stars balance: " + (u != null ? u.stars : 0) + " ⭐\n"
                                     + "• Saved reels/highlights: " + (u != null ? u.highlightStoryIds.size() : 0));
+                },error -> {
+                    summaryLoading=false;
+                    if(!isFinishing() && !isDestroyed()) Ui.toast(this,"Couldn't load account summary. Tap to retry.");
                 });
+    }
+
+    @Override protected void onStop() {
+        if(summaryCountReg!=null){summaryCountReg.remove();summaryCountReg=null;}
+        if(insightsDialog!=null){insightsDialog.dismiss();insightsDialog=null;}
+        if(insightsReg!=null){insightsReg.remove();insightsReg=null;}
+        summaryLoading=false;
+        super.onStop();
     }
 
     private void storageDialog() {
@@ -1164,25 +1183,41 @@ public class SettingsActivity extends Activity {
     }
 
     private void verifiedInsights() {
-        Ui.toast(this, "Calculating insights…");
-        Fb.db().collection("posts").whereEqualTo("authorId", Fb.uid()).limit(300).get()
-                .addOnSuccessListener(snap -> {
-                    int posts = snap.size(), likes = 0, comments = 0, shares = 0;
-                    for (DocumentSnapshot d : snap.getDocuments()) {
-                        Long l = d.getLong("likes"); if (l != null) likes += l;
-                        Long c = d.getLong("comments"); if (c != null) comments += c;
-                        Long s = d.getLong("shares"); if (s != null) shares += s;
+        final String actor=Fb.uid();
+        if(actor==null || isFinishing())return;
+        if(insightsDialog!=null)insightsDialog.dismiss();
+        LinearLayout content=Ui.col(this);Ui.pad(content,18,8,18,8);
+        TextView result=Ui.tv(this,"Loading insights…",14,Ui.txt(this));content.addView(result);
+        content.addView(Ui.tv(this,"Post figures cover loaded posts only, not total account activity.",12,Ui.sub(this)));
+        LinearLayout controls=Ui.col(this);content.addView(controls);
+        AlertDialog dialog=new AlertDialog.Builder(this).setTitle("📊 Creator & Profile Insights")
+                .setView(content).setNegativeButton("Close",null).create();
+        insightsDialog=dialog;
+        dialog.setOnDismissListener(d->{
+            if(insightsDialog==dialog){
+                if(insightsReg!=null){insightsReg.remove();insightsReg=null;}
+                insightsDialog=null;
+            }
+        });
+        dialog.show();
+        insightsReg=com.friendbook.social.core.PagedLists.attach(this,controls,
+                Fb.db().collection("posts").whereEqualTo("authorId",actor),10,"creator-insights",(snap,err)->{
+                    if(!dialog.isShowing() || !java.util.Objects.equals(actor,Fb.uid()) || snap==null)return;
+                    long likes=0,comments=0,shares=0;
+                    for(DocumentSnapshot d:snap) {
+                        Long l=d.getLong("likes");if(l!=null)likes+=l;
+                        Long c=d.getLong("comments");if(c!=null)comments+=c;
+                        Long sh=d.getLong("shares");if(sh!=null)shares+=sh;
                     }
-                    Models.User me = Fb.me;
-                    Ui.info(this, "📊 Creator & Profile Insights",
-                            "📝 Published posts: " + posts + "\n"
-                                    + "❤️ Total reactions: " + likes + "\n"
-                                    + "💬 Total comments: " + comments + "\n"
-                                    + "↗ Total shares: " + shares + "\n"
-                                    + "👥 Friends: " + (me != null ? me.friendsCount : 0) + "\n"
-                                    + "👀 Followers: " + (me != null ? me.followers.size() : 0) + "\n"
-                                    + "⭐ Stars earned: " + (me != null ? me.stars : 0) + "\n"
-                                    + "🔥 Daily bonus streak: " + (me != null ? me.dailyStreak : 0) + " day(s)");
+                    Models.User me=Fb.me;
+                    result.setText("📝 Loaded posts: "+snap.size()+"\n"
+                            +"❤️ Reactions in loaded posts: "+likes+"\n"
+                            +"💬 Comments in loaded posts: "+comments+"\n"
+                            +"↗ Shares in loaded posts: "+shares+"\n"
+                            +"👥 Friends: "+(me!=null?me.friendsCount:0)+"\n"
+                            +"👀 Followers: "+(me!=null?me.followers.size():0)+"\n"
+                            +"⭐ Stars earned: "+(me!=null?me.stars:0)+"\n"
+                            +"🔥 Daily bonus streak: "+(me!=null?me.dailyStreak:0)+" day(s)");
                 });
     }
 

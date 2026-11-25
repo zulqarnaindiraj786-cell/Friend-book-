@@ -23,3 +23,6 @@
 # Meta Audience Network carries compile-time Infer nullability metadata.
 
 # AdMob waterfall loads adapter entry points by their server-supplied class names.
+
+# User-opt-in diagnostic report uses screen class names only, never Activity data.
+-keepnames class * extends android.app.Activity

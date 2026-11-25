@@ -1,9 +1,9 @@
-# Read-only account-wide analytics only. No D1 SQL, mutations, or app traffic.
+# Read-only analytics, Worker metadata and schema SQL. No mutations or app traffic.
 # Compare whole-account totals after disabling typing and optimizing live/call checks.
 name: Read-only account D1 usage
 on:
   push:
-    branches: [arena/7c7ddb7b-friend-book]
+    branches: [arena/b52bc74d-friend-book]
     paths:
       - '.github/workflows/d1-account-usage.yml'
       - 'scripts/loadtest/d1_account_usage_analytics.py'
@@ -22,3 +22,46 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: python3 scripts/loadtest/d1_account_usage_analytics.py
+
+      - name: Read only deployed guard flag and deployment metadata
+        if: "!contains(github.event.head_commit.message, '[analytics-only]')"
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          python3 - <<'PYMETA'
+          import json, os, urllib.request
+          base='https://api.cloudflare.com/client/v4/accounts/92f3d04598822de2e49e14561218d090/workers/scripts/rough-firefly-dd7b'
+          def get(suffix):
+              req=urllib.request.Request(base+suffix,headers={'Authorization':'Bearer '+os.environ['CLOUDFLARE_API_TOKEN']})
+              with urllib.request.urlopen(req,timeout=25) as response: payload=json.load(response)
+              if not payload.get('success'): raise SystemExit('Read-only Worker metadata unavailable')
+              return payload['result']
+          settings=get('/settings')
+          flag=next((x.get('text') for x in settings.get('bindings',[]) if x.get('name')=='FRIEND_GUARD_INDEXED' and x.get('type')=='plain_text'),None)
+          print('::notice::Deployed FRIEND_GUARD_INDEXED='+json.dumps(flag))
+          deployments=get('/deployments')
+          rows=deployments.get('deployments',[]) if isinstance(deployments,dict) else deployments
+          if rows:
+              latest=rows[0]
+              print('::notice::Active deployment metadata '+json.dumps({k:latest.get(k) for k in ['id','created_on','versions']},sort_keys=True))
+          query="SELECT name FROM sqlite_schema WHERE type='index' AND (name LIKE 'idx_cf_friend_%' OR name LIKE 'idx_cf_legacy_friend_%') ORDER BY name"
+          req=urllib.request.Request('https://api.cloudflare.com/client/v4/accounts/92f3d04598822de2e49e14561218d090/d1/database/e1c605ca-a50b-46c6-9deb-56dd1f70d163/query',data=json.dumps({'sql':query}).encode(),headers={'Authorization':'Bearer '+os.environ['CLOUDFLARE_API_TOKEN'],'Content-Type':'application/json'})
+          with urllib.request.urlopen(req,timeout=25) as response: schema=json.load(response)
+          if not schema.get('success'): raise SystemExit('Read-only schema metadata unavailable')
+          for result in schema['result']:
+              print('::notice::Friendship schema indexes '+json.dumps(result.get('results',[]),sort_keys=True))
+              print('::notice::Schema query cost '+json.dumps(result.get('meta',{}),sort_keys=True))
+          query="SELECT name,sql FROM sqlite_schema WHERE type='index' AND (name LIKE '%request%' OR name LIKE 'idx_cf_friend_%' OR name LIKE 'idx_cf_legacy_friend_%') ORDER BY name"
+          req=urllib.request.Request('https://api.cloudflare.com/client/v4/accounts/92f3d04598822de2e49e14561218d090/d1/database/e1c605ca-a50b-46c6-9deb-56dd1f70d163/query',data=json.dumps({'sql':query}).encode(),headers={'Authorization':'Bearer '+os.environ['CLOUDFLARE_API_TOKEN'],'Content-Type':'application/json'})
+          with urllib.request.urlopen(req,timeout=25) as response: schema=json.load(response)
+          if not schema.get('success'): raise SystemExit('Read-only index definitions unavailable')
+          for result in schema['result']:
+              print('::notice::Request and friendship index definitions '+json.dumps(result.get('results',[]),sort_keys=True))
+          req=urllib.request.Request(base,headers={'Authorization':'Bearer '+os.environ['CLOUDFLARE_API_TOKEN']})
+          try:
+              with urllib.request.urlopen(req,timeout=25) as response: source=response.read().decode('utf-8',errors='replace')
+              markers=['malformedFriendProbe','idx_cf_friend_guard_exceptions','idx_cf_friend_participant_0','friendshipCandidates','duplicateCanonical','duplicateLegacy','FRIEND_GUARD_INDEXED']
+              print('::notice::Deployed source markers '+json.dumps({m:m in source for m in markers},sort_keys=True))
+          except urllib.error.HTTPError as error:
+              print('::warning::Deployed source unavailable HTTP '+str(error.code)+'; metadata presence alone does not prove deployed query implementation')
+          PYMETA

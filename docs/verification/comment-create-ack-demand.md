@@ -1,0 +1,17 @@
+# Comment create: reuse a verified acknowledgement
+
+The earlier comment path immediately invalidated a cached engagement summary after each successful POST and could start a summary GET (including authorization, reaction totals, legacy count and preview) for a bound post. This is one conditional source of the high-ranked engagement consumer; it does not establish what fraction of historical production reads came from comment creation.
+
+The Worker adds optional acknowledgement metadata derived from the INSERT's own D1 batch `meta.changes`: `created` is true only for an actual insert; an existing idempotent retry returns false. `visibleToActor` reflects the authorized actor's current blocked list. If change metadata is unavailable, the creation claim is omitted. Existing fields, authorization, transactional insertion, replay behavior and old clients are preserved. This adds no SQL statement, index, trigger or table.
+
+For a new interactive comment, Android captures a fresh pre-send summary only when idle. A verified created/visible ACK updates count and the sorted two-comment preview without another summary read only if the same actor, summary object, generation and freshness still match and no read/reaction write is active. It preserves the prior freshness timestamp. Any changed baseline, unknown/duplicate creation, invisible actor, malformed summary/ACK, retry draft, stale cache, read in flight, or reaction write takes the existing invalidation/refresh path. No speculative increment for an uncertain retry. Other clients and older Workers remain compatible.
+
+Worker integration tests verify new, duplicate, denied, blocked, malformed-metadata cases; Android actual `CommentsEngine.sendComment` test verifies optimistic ACK updates a cached model without a summary GET and preserves its age. Tests also exercise duplicate/invisible/actor-change and concurrent edit guards. These tests do not establish physical-device behavior or billed savings.
+
+Verification for production source `049c25d`: 307 Worker tests, 512 Python tests and Android full compile/JVM tests [45362269879](https://github.com/zulqarnaindiraj786-cell/Friend-book-/actions/runs/45362269879) passed. PR Worker [45362269968](https://github.com/zulqarnaindiraj786-cell/Friend-book-/actions/runs/45362269968) passed. The extra concurrency-fallback behavioral test at `3dec7ed` requires its own Android CI result. No APK or PR merge; representative-day quota acceptance remains unproven.
+
+## Rollout and concurrent fallback
+
+The code-only backend rollout at `119aad1` completed successfully: [45362620195](https://github.com/zulqarnaindiraj786-cell/Friend-book-/actions/runs/45362620195). Full regressions and config checks passed, Worker deployed without migrations, binding/cron preservation and health/auth smoke passed, and rollback metadata was saved. The added actual-send concurrency fallback test passed in Android CI [45362582002](https://github.com/zulqarnaindiraj786-cell/Friend-book-/actions/runs/45362582002). A Worker race fixture also simulates another request inserting the same comment between the initial read and batch, then uses D1-shaped `meta.changes`: it reports `created:false`, while a fresh insertion reports true.
+
+The backend change is compatible with the currently installed APK, but the reduced-read Android logic is not installed. The backend metadata alone does not remove the installed client's follow-up GET. No new APK/download, merge or representative-day quota result.

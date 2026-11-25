@@ -18,24 +18,26 @@ public final class PagedLists {
         @Override public Iterator<DocumentSnapshot> iterator(){return docs.iterator();}
     }
     public interface Listener {void changed(Page page,Exception error);}
-    public static ListenerRegistration attach(Activity activity,LinearLayout controls,Query query,int size,String key,Listener listener) {
+    public static ListenerRegistration attach(Activity activity,LinearLayout controls,Query query,int requestedSize,String key,Listener listener) {
+        final int size=Math.max(1,Math.min(10,requestedSize));
+        final String actor=Fb.uid();
         LinearLayout row=Ui.row(activity);String label=key.split(":",2)[0].replace('-',' ');
         TextView refresh=Ui.tvBold(activity,"Refresh "+label,13,Ui.BLUE);
         TextView more=Ui.tvBold(activity,"Load "+size+" more",13,Ui.BLUE);
-        Ui.pad(refresh,12,8,12,8);Ui.pad(more,12,8,12,8);refresh.setVisibility(android.view.View.GONE);row.addView(more);controls.addView(row);
+        Ui.pad(refresh,12,8,12,8);Ui.pad(more,12,8,12,8);row.addView(refresh);row.addView(more);controls.addView(row);
         final CursorPager[] current={null};final boolean[] closed={false};
-        Runnable start=()->{
+        java.util.function.Consumer<Boolean> start=(force)->{
             if(current[0]!=null)current[0].close();
             current[0]=new CursorPager(query,size,key,(docs,hasMore,busy,error)->{
-                if(closed[0] || activity.isFinishing())return;
+                if(closed[0] || activity.isFinishing() || activity.isDestroyed() || !Objects.equals(actor,Fb.uid()))return;
                 more.setText(busy?"Loading…":!error.isEmpty()?"Retry page":hasMore?"Load "+size+" more":"All loaded");
                 more.setEnabled(!busy && hasMore);refresh.setEnabled(!busy);
                 // An empty in-flight cache isn't an authoritative empty result.
                 if(!busy && (error.isEmpty() || !docs.isEmpty()))listener.changed(new Page(docs),null);
                 if(!error.isEmpty())Ui.toast(activity,error);
-            });if(key.startsWith("groups:"))current[0].startCachedDay(); else current[0].start();
+            });if(force)current[0].refreshOnDemand(); else if(key.startsWith("chat-people:"))current[0].startOnDemand(); else if(key.startsWith("groups:"))current[0].startCachedDay(); else if(key.startsWith("live-discovery"))current[0].startCachedFor(0L); else current[0].startCachedFor(key.startsWith("friend-list:")?300_000L:120_000L);
         };
-        refresh.setOnClickListener(v->start.run());more.setOnClickListener(v->{if(current[0]!=null)current[0].next();});start.run();
+        refresh.setOnClickListener(v->start.accept(true));more.setOnClickListener(v->{if(current[0]!=null)current[0].next();});start.accept(false);
         return ()->{closed[0]=true;if(current[0]!=null)current[0].close();controls.removeView(row);};
     }
 }

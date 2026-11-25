@@ -47,6 +47,7 @@ public final class ContentSafetyEngine {
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
     private static final Set<String> SCANNED_SAFE_IDS = Collections.synchronizedSet(new HashSet<>());
     private static final Set<String> DELETED_IDS = Collections.synchronizedSet(new HashSet<>());
+    private static final Set<List<String>> SUBMITTED_ACTIONS = Collections.synchronizedSet(new HashSet<>());
 
     /** Zero-tolerance Child Sexual Abuse / Exploitation (CSAE) patterns. */
     private static final Pattern CSAE_PATTERN = Pattern.compile(
@@ -491,6 +492,10 @@ public final class ContentSafetyEngine {
             MAIN.post(onDeletedUi);
         }
 
+        // Cache/local UI suppression must still happen for every caller, but a
+        // cached flagged document must not submit flag/delete/report on each paint.
+        final String actor=Fb.uid();
+        if(actor==null || actor.isEmpty() || !SUBMITTED_ACTIONS.add(java.util.Arrays.asList(actor,collection,docId)))return;
         try {
             // 1. Mark safetyFlagged=true first (allowed by signedIn() update rule), then delete!
             Map<String, Object> flag = new HashMap<>();
@@ -498,10 +503,12 @@ public final class ContentSafetyEngine {
             flag.put("safetyCategory", category == null ? "policy_violation" : category);
             Fb.db().collection(collection).document(docId)
                     .set(flag, SetOptions.merge())
-                    .addOnSuccessListener(x ->
-                            Fb.db().collection(collection).document(docId).delete())
-                    .addOnFailureListener(e ->
-                            Fb.db().collection(collection).document(docId).delete());
+                    .addOnSuccessListener(x -> {
+                        if(actor.equals(Fb.uid()))Fb.db().collection(collection).document(docId).delete();
+                    })
+                    .addOnFailureListener(e -> {
+                        if(actor.equals(Fb.uid()))Fb.db().collection(collection).document(docId).delete();
+                    });
 
             // 2. Log automated safety action for Admin transparency
             Map<String, Object> audit = new HashMap<>();
@@ -511,7 +518,7 @@ public final class ContentSafetyEngine {
             audit.put("type", "auto_safety_deleted");
             audit.put("category", category == null ? "policy_violation" : category);
             audit.put("reason", reason == null ? "Automated content safety deletion" : reason);
-            audit.put("reportedBy", Fb.uid() != null ? Fb.uid() : "auto_safety_engine");
+            audit.put("reportedBy", actor);
             audit.put("createdAt", FieldValue.serverTimestamp());
             Fb.db().collection("reports").add(audit);
         } catch (Throwable ignored) {}

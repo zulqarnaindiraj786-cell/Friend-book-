@@ -1,10 +1,13 @@
+import { inboxSqlActivity } from './inbox-activity-sql.js';
+import { recordInboxSortCost, inboxSeekSize, suspendInboxSeek } from './inbox-plan-hints.js';
+import { writeAttribution } from './write-attribution.js';
 import { accountStatus } from './account-access.js';
 import { pushCommittedChat } from './fcm-push.js';
 import { profileAudience } from './profile-audience.js';
 import { mapBounded } from './map-bounded.js';
 import { engagementSummary, batchEngagementReads, MAX_FEED_ENGAGEMENT_PAGE } from './interactions.js';
-import { requestAccountReads, readD1DocumentFields, toFirestoreFields } from './app-documents.js';
-import { callAccountsAllowed } from './call-access.js';
+import { requestAccountReads, readD1DocumentFields, toFirestoreFields, fromFirestoreValue } from './app-documents.js';
+import { callAccountsAllowed, readCallProfile } from './call-access.js';
 import { authorizeLiveMedia, authorizeLiveRoom } from './live-access.js';
 import { canReadPayment, canCreateFreeReview, isPaymentAdmin } from './payment-access.js';
 import { canReadFriendRequest, canCreateFriendRequest, canDeleteFriendRequest, friendshipReadView, canCreateGroup, canUpdateGroup, canManageGroup, canSelfManageGroup, isSelfArrayChange, groupReadView, trustedGroupOwner } from './social-access.js';
@@ -285,6 +288,16 @@ export function appDocumentToFirestoreRow(row) {
 
 // Internal source marker; not serialized in any document response.
 const canonicalRootSnapshot=Symbol('canonicalRootSnapshot');
+const canonicalContentSnapshot=Symbol('canonicalContentSnapshot');
+// Only call with rows directly selected from canonical storage, before projection.
+function canonicalContentDocument(row) {
+  const doc=rowToDocument(row);
+  const parts=doc && splitPath(doc.path);
+  if(doc && parts?.length===2 && ['posts','reels','stories'].includes(parts[0])
+      && doc.parent===parts[0] && doc.path===`${doc.parent}/${doc.id}`)
+    doc[canonicalContentSnapshot]=toFirestoreFields(row.document_json);
+  return doc;
+}
 async function readRootStorageRow(db,path) {
   // One indexed canonical lookup; a mirror-only row is not a document.
   return db.prepare(`SELECT path, parent_path, collection_id, doc_id, owner_uid, document_json, create_time, update_time
@@ -303,10 +316,134 @@ export async function readRow(db, path) {
   return normalizeRootStorageRow(await readRootStorageRow(db,path));
 }
 
+// Batch pre-reads for generic Firestore write batches. Preserve the exact row
+// shape and canonical-root marker used by readRow(), while replacing one D1
+// round trip per operation with bounded IN queries (D1 bind ceiling: 100).
+export async function readRows(db, paths) {
+  const unique=[...new Set((paths||[]).filter(path=>typeof path==='string' && path.length>0))];
+  const result=new Map(unique.map(path=>[path,null]));
+  for(let offset=0;offset<unique.length;offset+=80){
+    const chunk=unique.slice(offset,offset+80),marks=chunk.map(()=>'?').join(',');
+    const rows=await db.prepare(`SELECT path,parent_path,collection_id,doc_id,owner_uid,document_json,create_time,update_time
+      FROM friendbook_cf_firestore_documents WHERE path IN (${marks})`).bind(...chunk).all();
+    for(const row of rows.results||[])result.set(row.path,isRootDocument(row.path)?normalizeRootStorageRow(row):row);
+  }
+  return result;
+}
+
 // Only the trusted Worker entry point creates this request-local snapshot.
 export async function readProfileMutationSnapshot(db,uid) {
   const accountRow=await readRootStorageRow(db,`users/${uid}`);
   return {accountRow, profileRow:normalizeRootStorageRow(accountRow)};
+}
+
+// Match decodeValue + the historical inbox projection exactly (including zero
+// falling through to the next timestamp representation).
+function inboxActivity(data) {
+  const millis=value=>typeof value==='number' && Number.isFinite(value) ? value
+    : value?.__type==='timestamp' && Number.isFinite(value.millis) ? value.millis : 0;
+  return millis(data.lastMessageTime)||millis(data.lastMessageTimeMs)||millis(data.lastMessageAt);
+}
+
+
+// Choose a bounded shared-index head only after measured sort cost justifies
+// it; otherwise retain membership-first paging. No per-member activity table
+// or message-write fanout is introduced. The compatibility plan still sorts.
+async function boundedInboxPage(db,uid,spec,requestUserReads) {
+  if(spec?.parent!=='chats' || !Number.isInteger(spec.limit) || spec.limit<1 || spec.limit>100
+    || spec.limitToLast || spec.orderBy?.length!==1 || spec.orderBy[0]?.field!=='inboxActivityAt'
+    || !['ASCENDING','DESCENDING'].includes(spec.orderBy[0].direction)
+    || (spec.filters||[]).some(f=>f.field!=='participants' || f.op!=='array-contains' || f.value!==uid))return null;
+  for(const key of ['startAfter','startAt','endBefore','endAt']) {
+    const c=spec[key];
+    if(c!==undefined && (!Array.isArray(c) || c.length>2
+      || (c.length && (typeof c[0]!=='number' || !Number.isFinite(c[0]) || Math.abs(c[0])>Number.MAX_SAFE_INTEGER))
+      || (c.length===2 && (typeof c[1]!=='string' || /[^\x20-\x7e]/.test(c[1])))))return null;
+  }
+  const desc=spec.orderBy[0].direction==='DESCENDING', direction=desc?'DESC':'ASC';
+  const predicates=[],bindings=[uid];
+  function bound(cursor,start,inclusive) {
+    if(!cursor?.length)return;
+    const op=(start!==desc)?'>':'<';
+    if(cursor.length===1){predicates.push(`inbox_activity ${op}${inclusive?'=':''} ?`);bindings.push(cursor[0]);}
+    else {predicates.push(`(inbox_activity ${op}= ? AND (inbox_activity ${op} ? OR (inbox_activity=? AND doc_id ${op}${inclusive?'=':''} ?)))`);bindings.push(cursor[0],cursor[0],cursor[0],cursor[1]);}
+  }
+  bound(spec.startAfter,true,false);bound(spec.startAt,true,true);
+  bound(spec.endBefore,false,false);bound(spec.endAt,false,true);
+  // Only try the shared ordered stream after actual D1 metadata has shown
+  // this actor's membership sort to be expensive. No extra count/probe query
+  // for small inboxes. The hint never substitutes for current document ACLs.
+  const seekSize=inboxSeekSize(db,uid,spec.limit);
+  if(seekSize) {
+    try {
+      // Do not materialize another actor's chat JSON merely to inspect the
+      // shared ordered head. The same source-1 membership check gates JSON;
+      // authoritative canonical membership is still rechecked below.
+      const memberSql=`EXISTS(SELECT 1 FROM friendbook_cf_chat_participants m
+        WHERE m.participant_uid=?1 AND m.chat_path=f.path AND m.source=1)`;
+      const head=await db.prepare(`SELECT f.path,f.parent_path,f.collection_id,f.doc_id,
+        f.owner_uid,f.create_time,f.update_time,
+        CASE WHEN ${memberSql} THEN f.document_json ELSE '{}' END AS document_json,
+        CAST((${inboxSqlActivity}) AS REAL) AS inbox_activity,
+        ${memberSql} AS inbox_member
+        FROM friendbook_cf_firestore_documents f INDEXED BY idx_cf_chat_activity_seek
+        WHERE f.path='chats/'||f.doc_id
+          ${predicates.map(p=>' AND '+p.replaceAll('inbox_activity',`(${inboxSqlActivity})`)).join('')}
+        ORDER BY (${inboxSqlActivity}) ${direction},doc_id ${direction} LIMIT ?`)
+        .bind(uid,...bindings.slice(1),seekSize).all();
+      const rows=head.results||[];
+      if(rows.every(row=>Math.abs(row.inbox_activity)<=Number.MAX_SAFE_INTEGER && /^[\x20-\x7e]+$/.test(row.doc_id) && row.path===`chats/${row.doc_id}` && isDocumentPath(row.path))) {
+        const memberRows=rows.filter(row=>row.inbox_member===1);
+        const docs=memberRows.map(row=>rowToDocument({...row,[canonicalRootSnapshot]:true}));
+        if(docs.every((doc,i)=>inboxActivity(doc.data)===memberRows[i].inbox_activity)) {
+          const visible=await visibleDocuments(db,uid,'chats',prefilterRaw(docs,'chats',spec.filters),requestUserReads);
+          if(visible.length>=spec.limit || rows.length<seekSize)
+            return applyQuery(visible.map(doc=>({...doc,data:{...doc.data,inboxActivityAt:inboxActivity(doc.data)}})),spec);
+        }
+      }
+      // A sparse user's index attempt must not add a bounded unrelated head to
+      // every request. Retain the exact membership query during cooldown.
+      suspendInboxSeek(db,uid);
+    } catch(error) {
+      if(!/no such index: idx_cf_chat_activity_seek/.test(String(error)))throw error;
+      suspendInboxSeek(db,uid);
+    }
+  }
+  const allowed=[];let after=null,batches=0;
+  while(allowed.length<spec.limit) {
+    // A badly stale membership index must not cause repeated whole-inbox sorts.
+    if(batches++===4)return null;
+    const extra=after?` AND (inbox_activity ${desc?'<':'>'} ? OR (inbox_activity=? AND doc_id ${desc?'<':'>'} ?))`:'';
+    const size=after?Math.max(20,spec.limit-allowed.length):spec.limit;
+    let result;
+    try {
+      result=await db.prepare(`WITH quota_inbox_candidates AS (
+        SELECT f.*, CAST((${inboxSqlActivity}) AS REAL) AS inbox_activity
+        FROM friendbook_cf_chat_participants m INDEXED BY idx_cf_chat_participant_source
+        JOIN friendbook_cf_firestore_documents f ON f.path=m.chat_path
+        WHERE m.participant_uid=? AND m.source=1)
+        SELECT * FROM quota_inbox_candidates WHERE 1=1 ${predicates.map(p=>' AND '+p).join('')}${extra}
+        ORDER BY inbox_activity ${direction},doc_id ${direction} LIMIT ?`)
+        .bind(...bindings,...(after?[after.time,after.time,after.id]:[]),size).all();
+    } catch(error) {
+      if(/no such (?:index: idx_cf_chat_participant_source|table: friendbook_cf_chat_participants)/.test(String(error)))return null;
+      throw error;
+    }
+    recordInboxSortCost(db,uid,result.meta);
+    const rows=result.results||[];
+    // SQLite UTF-8 and JS UTF-16 can disagree amongst non-ASCII ID ties.
+    // ASCII candidates cannot be displaced by those ties; otherwise preserve
+    // the full compatibility evaluator rather than silently skipping a room.
+    if(rows.some(row=>Math.abs(row.inbox_activity)>Number.MAX_SAFE_INTEGER || /[^\x20-\x7e]/.test(row.doc_id) || row.parent_path!=='chats'
+      || row.path!==`chats/${row.doc_id}` || !isDocumentPath(row.path)))return null;
+    const docs=rows.map(row=>rowToDocument({...row,[canonicalRootSnapshot]:true}));
+    if(docs.some((doc,i)=>inboxActivity(doc.data)!==rows[i].inbox_activity))return null;
+    const visible=await visibleDocuments(db,uid,'chats',prefilterRaw(docs,'chats',spec.filters),requestUserReads);
+    allowed.push(...visible.map(doc=>({...doc,data:{...doc.data,inboxActivityAt:inboxActivity(doc.data)}})));
+    if(rows.length<size)break;
+    const tail=rows.at(-1);after={time:tail.inbox_activity,id:tail.doc_id};
+  }
+  return applyQuery(allowed,spec);
 }
 
 // A bounded fast path for ordinary canonical chat pages. Unusual historical timestamp
@@ -586,6 +723,22 @@ async function readCollectionRows(db, parent, uid, filters, spec, env) {
     }
   }
   if (parent === 'friends') {
+    // Exact two-person candidate probes must not materialize the entire graph.
+    // Feed a bounded, deduplicated set into pair-index seeks. The ordinary
+    // projection/filter/ACL pipeline still decides the returned documents.
+    const pairFilter=filters?.find(f=>f.field==='participants' && (f.op==='in' || f.op==='=='));
+    const pairs=pairFilter ? (pairFilter.op==='in'?pairFilter.value:[pairFilter.value]) : null;
+    if(Array.isArray(pairs) && pairs.length>0 && pairs.length<=30
+        && pairs.every(pair=>Array.isArray(pair) && pair.length===2 && pair.every(value=>typeof value==='string'))) {
+      const authorized=[...new Map(pairs.filter(pair=>pair.includes(uid)).map(pair=>[JSON.stringify(pair),pair])).values()];
+      if(!authorized.length)return [];
+      const exact=await db.prepare(`SELECT f.path,f.parent_path,f.collection_id,f.doc_id,f.owner_uid,f.document_json,f.create_time,f.update_time
+        FROM json_each(?1) pair CROSS JOIN friendbook_cf_firestore_documents f
+        WHERE f.parent_path='friends'
+          AND json_extract(f.document_json,'$.participants[0]')=json_extract(pair.value,'$[0]')
+          AND json_extract(f.document_json,'$.participants[1]')=json_extract(pair.value,'$[1]')`).bind(JSON.stringify(authorized)).all();
+      return exact.results||[];
+    }
     // Only a participant can see a friendship. Index the two positions instead
     // of loading every user's relationships and projecting them in JavaScript.
     const canonical=await db.prepare(`SELECT path,parent_path,collection_id,doc_id,owner_uid,document_json,create_time,update_time
@@ -718,12 +871,20 @@ async function canReadChatMessages(db, chatId, uid) {
   return Array.isArray(data?.participants) && data.participants.includes(uid);
 }
 
-// An identical operation may skip writing only if the authorized canonical
-// snapshot is current AND the historical mirror already has the exact data and
-// owner that writeRow would write. A stale/missing mirror must still be repaired.
+// In the explicitly staged canonical-write mode, literal retries need only
+// verify the authorized canonical snapshot. The default compatibility mode
+// keeps repairing/checking the historical mirror exactly as before.
 async function unchangedRootState(db,path,row,doc) {
-  const coll=collectionIdOf(path),id=docIdOf(path);
-  const owner=ownerOf(doc,row.owner_uid || (coll==='users'?id:''));
+  const id=docIdOf(path);
+  if(db.__canonicalDocumentWrites===true) {
+    const current=await db.prepare(`SELECT EXISTS(
+      SELECT 1 FROM friendbook_cf_firestore_documents
+      WHERE path=?1 AND document_json=?2 AND update_time=?3 AND owner_uid IS ?4
+    ) AS current`).bind(path,row.document_json,row.update_time,row.owner_uid??null).first();
+    const unchanged=current?.current===1;
+    return {current:unchanged,mirror:unchanged};
+  }
+  const coll=collectionIdOf(path),owner=ownerOf(doc,row.owner_uid || (coll==='users'?id:''));
   const appOwner=owner || (coll==='users'?id:'');
   return db.prepare(`SELECT
     EXISTS(SELECT 1 FROM friendbook_cf_firestore_documents WHERE path=?1 AND document_json=?2 AND update_time=?3 AND owner_uid IS ?4) AS current,
@@ -731,9 +892,14 @@ async function unchangedRootState(db,path,row,doc) {
     .bind(path,row.document_json,row.update_time,row.owner_uid??null,JSON.stringify({...doc,id}),appOwner).first()
     .then(result=>({current:result?.current===1,mirror:result?.mirror===1 && row.owner_uid===owner}));
 }
+function literalValue(value) {
+  if(value===null || ['boolean','number','string'].includes(typeof value))return true;
+  if(!value || typeof value!=='object' || isFieldValue(value))return false;
+  return Object.values(value).every(literalValue);
+}
 function literalFields(fields) {
   return !!fields && typeof fields==='object' && !Array.isArray(fields) && Object.keys(fields).length>0
-    && Object.values(fields).every(value=>value===null || ['boolean','number','string'].includes(typeof value));
+    && Object.values(fields).every(literalValue);
 }
 
 function unchangedNotificationRead(path,row,fields) {
@@ -783,11 +949,11 @@ async function writeRow(db, path, doc, now, existing, guarded = false, inlineGua
   // A changed snapshot makes path NULL and aborts the whole mirror transaction.
   // Legacy/missing documents retain the original absence/conversion guards.
   const writes = [inline ? db.prepare(
-    `INSERT INTO friendbook_cf_firestore_documents(path, parent_path, collection_id, doc_id, owner_uid, document_json, create_time, update_time)
+    `INSERT INTO friendbook_cf_firestore_documents AS ${writeAttribution('document',path)}(path, parent_path, collection_id, doc_id, owner_uid, document_json, create_time, update_time)
      VALUES (CASE WHEN (SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?1)=?2 THEN ?1 ELSE NULL END,?3,?4,?5,?6,?7,?8,?9)
      ON CONFLICT(path) DO UPDATE SET owner_uid = excluded.owner_uid, document_json = excluded.document_json, update_time = excluded.update_time`
   ).bind(path,existing.document_json,parent,coll,id,owner,serialized,createTime,now) : db.prepare(
-    `INSERT INTO friendbook_cf_firestore_documents(path, parent_path, collection_id, doc_id, owner_uid, document_json, create_time, update_time)
+    `INSERT INTO friendbook_cf_firestore_documents AS ${writeAttribution('document',path)}(path, parent_path, collection_id, doc_id, owner_uid, document_json, create_time, update_time)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(path) DO UPDATE SET owner_uid = excluded.owner_uid, document_json = excluded.document_json, update_time = excluded.update_time`
   ).bind(path, parent, coll, id, owner, serialized, createTime, now)];
@@ -798,7 +964,7 @@ async function writeRow(db, path, doc, now, existing, guarded = false, inlineGua
     const appDoc = JSON.stringify({ ...doc, id });
     const appOwner = owner || (coll === 'users' ? id : '');
     writes.push(db.prepare(
-      `INSERT INTO friendbook_cf_documents(path, collection, doc_id, owner_uid, document_json, updated_at)
+      `INSERT INTO friendbook_cf_documents AS ${writeAttribution('document',path)}(path, collection, doc_id, owner_uid, document_json, updated_at)
        VALUES (?, ?, ?, ?, ?, ?)
        ON CONFLICT(path) DO UPDATE SET owner_uid=excluded.owner_uid, document_json=excluded.document_json, updated_at=excluded.updated_at`
     ).bind(path, coll, id, appOwner, appDoc, now));
@@ -1109,13 +1275,14 @@ async function visibleDocuments(db,uid,parent,docs,requestUserReads = new Map(),
   // Query/count authorize the live room before accessing its chat collection.
   if (parts?.length===3 && parts[0]==='lives' && parts[2]==='chat') return docs;
   const allowed=new Array(docs.length).fill(false);
+  const requestRoomReads=new Map();
   let next=0;
   await Promise.all(Array.from({length:Math.min(8,docs.length)},async()=>{
     for (;;) {
       const i=next++; if (i>=docs.length) return;
       const doc=docs[i];
       allowed[i]=(nestedChat || (parent==='chats' && doc[canonicalRootSnapshot]!==undefined
-        ? storedChatMember(doc[canonicalRootSnapshot],uid) : await chatReadAllowed(db,doc.path,uid,doc.data))) && await contentReadAllowed(db,uid,doc.path,requestUserReads,includeArchivedOwner);
+        ? storedChatMember(doc[canonicalRootSnapshot],uid) : await chatReadAllowed(db,doc.path,uid,doc.data,requestRoomReads))) && await contentReadAllowed(db,uid,doc.path,requestUserReads,includeArchivedOwner,doc[canonicalContentSnapshot]);
     }
   }));
   return docs.filter((_,i)=>allowed[i]);
@@ -1126,21 +1293,37 @@ async function feedEngagement(db, env, uid, body, docs, requestUserReads) {
   if (body?.feedEngagement!==true || body.parent!=='posts' || !Number.isInteger(body.limit)
       || body.limit<1 || body.limit>MAX_FEED_ENGAGEMENT_PAGE || env.D1_INTERACTIONS_ENABLED!=='true' || !docs.length) return docs;
   try {
-    const resources=docs.map(d=>`posts/${d.id}`);
+    const enrichCount=Number.isInteger(body.feedEngagementLimit) && body.feedEngagementLimit>0
+      ? Math.min(Number.isInteger(body.limit) && body.limit>0 ? body.limit : docs.length,body.feedEngagementLimit,docs.length) : docs.length;
+    const pageDocs=docs.slice(0,enrichCount);
+    const resources=pageDocs.map(d=>`posts/${d.id}`);
+    const stateRows=async()=>{
+      const slots=resources.map(()=>'?').join(',');
+      const read=index=>db.prepare(`SELECT resource,state FROM friendbook_cf_interaction_resources ${index} WHERE resource IN (${slots})`).bind(...resources).all();
+      try { return await read('INDEXED BY idx_cf_interaction_resource_state_cover'); }
+      catch(error) {
+        if(/no such index: idx_cf_interaction_resource_state_cover/.test(String(error)))return read('');
+        throw error;
+      }
+    };
     const [viewer,states]=await Promise.all([
       requestUserReads.has(`users/${uid}`)
         ? requestUserReads.get(`users/${uid}`) : readD1DocumentFields(db,`users/${uid}`),
-      db.prepare(`SELECT resource,state FROM friendbook_cf_interaction_resources WHERE resource IN (${resources.map(()=>'?').join(',')})`).bind(...resources).all(),
+      stateRows(),
     ]);
     const stateByResource=new Map((states.results||[]).map(row=>[row.resource,row.state]));
     const blocked=[...(viewer?.blocked?.arrayValue?.values||[]),...(viewer?.blockedUsers?.arrayValue?.values||[])].map(v=>v.stringValue).filter(v=>typeof v==='string');
-    const preloaded=await batchEngagementReads(db,resources.filter(resource=>!stateByResource.get(resource) || stateByResource.get(resource)==='verified'),uid,blocked);
-    return await mapBounded(docs,3,async doc=>{
+    // Primary-first session makes each epoch validation authoritative even if
+    // read replicas are enabled; the cache scope is the database binding itself.
+    const primarySessions=typeof env.DB.withSession==='function';
+    const summaryDb=primarySessions?env.DB.withSession('first-primary'):db;
+    const preloaded=await batchEngagementReads(summaryDb,resources.filter(resource=>!stateByResource.get(resource) || stateByResource.get(resource)==='verified'),uid,blocked,primarySessions?env.DB:null);
+    const enriched=await mapBounded(pageDocs,3,async doc=>{
       const resource=`posts/${doc.id}`;
       const state=stateByResource.get(resource);
       if (state && state!=='verified') return doc;
       try {
-        const engagement=await engagementSummary(db,resource,uid,doc.data.authorId,blocked,preloaded.get(resource));
+        const engagement=await engagementSummary(summaryDb,resource,uid,doc.data.authorId,blocked,preloaded.get(resource));
         // Missing import metadata is not proof that a historical post had zero likes.
         if (!state && !engagement.types.length && (Number(doc.data.likes)>0 || Object.keys(doc.data.reactionsMap||{}).length)) {
           engagement.reactionStateUnknown=true;
@@ -1154,6 +1337,8 @@ async function feedEngagement(db, env, uid, body, docs, requestUserReads) {
       }
       catch { return doc; } // A summary failure must not hide an authorized post.
     });
+    const byId=new Map(enriched.map(doc=>[doc.id,doc]));
+    return docs.map(doc=>byId.get(doc.id)||doc);
   } catch { return docs; }
 }
 
@@ -1212,6 +1397,10 @@ async function boundedPeopleHead(db,uid,spec,admin,moderator) {
     const docs=rows.map(rowToDocument).filter(Boolean).map(doc=>({...doc,
       data:profileReadView(doc.path,uid,doc.data,admin,moderator)})).filter(doc=>doc.data!==null);
     const page=applyQuery(docs,spec);
+    // A short index head already contains the complete collection. Returning
+    // its projected page avoids immediately reading the same short collection
+    // again in the refill path, including when every profile is hidden.
+    if(rows.length<size)return page;
     if(page.length!==spec.limit)return null;
     const last=page.at(-1).id;
     // The extra boundary row proves every omitted row sorts strictly later.
@@ -1231,18 +1420,27 @@ async function boundedPeopleHead(db,uid,spec,admin,moderator) {
 // Stop as soon as enough *visible* profiles have been found, not at a raw SQL limit.
 async function boundedPeoplePage(db,env,uid,spec) {
   if (spec.parent!=='users' || spec.filters?.length || spec.orderBy?.length
-      || spec.limitToLast || spec.startAfter || spec.startAt || spec.endBefore || spec.endAt
+      || spec.limitToLast || spec.startAt || spec.endBefore || spec.endAt
       || !Number.isInteger(spec.limit) || spec.limit<1 || spec.limit>50) return null;
+  // Snapshot cursors for an unordered Android query serialize as [document ID].
+  // An ASCII ID has the same relationship to every Unicode ID in SQLite and
+  // JavaScript. Do not use object cursors (whose missing-anchor semantics vary)
+  // or non-ASCII boundaries in this fast path.
+  const cursor=spec.startAfter;
+  if(cursor && (!Array.isArray(cursor) || cursor.length!==1 || typeof cursor[0]!=='string'
+      || !/^[-_a-zA-Z0-9]{1,512}$/.test(cursor[0])))return null;
   const admin=isPaymentAdmin(env,uid), moderator=!admin && await verifiedModerator(db,uid);
-  const head=await boundedPeopleHead(db,uid,spec,admin,moderator);
-  if(head!==null)return head;
+  if(!cursor){
+    const head=await boundedPeopleHead(db,uid,spec,admin,moderator);
+    if(head!==null)return head;
+  }
   const page=[];
   let after=null;
   for (let batch=0;batch<4;batch++) {
     // Only overfetch once hidden rows prove a refill is needed.
     const size=batch===0 ? spec.limit : Math.max(16,spec.limit);
-    const seek=after?' AND (doc_id,path)>(?,?)':'';
-    const bindings=after?[...after,size+1]:[size+1];
+    const seek=after?' AND (doc_id,path)>(?,?)':cursor?' AND doc_id>?':'';
+    const bindings=after?[...after,size+1]:cursor?[cursor[0],size+1]:[size+1];
     let results;
     try { ({results=[]}=await db.prepare(`WITH candidates AS (
       SELECT path,parent_path,collection_id,doc_id,owner_uid,document_json,create_time,update_time
@@ -1351,17 +1549,273 @@ async function boundedRecentPeoplePage(db,env,uid,spec) {
   }
 }
 
+// Home story rail: seek the existing expiry index instead of materializing all
+// stories newer than the anchor. Rare encodings are merged before fresh ACLs.
+async function boundedStoryPage(db,uid,spec,requestUserReads) {
+  const filters=Array.isArray(spec?.filters)?spec.filters:[];
+  const f=filters[0], anchor=f?.value;
+  if(spec.parent!=='stories' || filters.length!==1 || f.field!=='expiresAt' || f.op!=='>'
+      || anchor?.__type!=='timestamp' || !Number.isSafeInteger(anchor.millis)
+      || spec.orderBy?.length!==1 || spec.orderBy[0]?.field!=='expiresAt' || spec.orderBy[0]?.direction!=='ASCENDING'
+      || spec.limitToLast || spec.startAt || spec.endAt || spec.endBefore
+      || !Number.isInteger(spec.limit) || spec.limit<1 || spec.limit>10) return null;
+  let cursor=null;
+  if(spec.startAfter) {
+    const c=spec.startAfter;
+    if(!Array.isArray(c) || c.length!==2 || c[0]?.__type!=='timestamp' || !Number.isSafeInteger(c[0].millis)
+        || typeof c[1]!=='string' || !/^[-_a-zA-Z0-9]{1,512}$/.test(c[1])) return null;
+    cursor=[c[0].millis,c[1]];
+  }
+  const time=`CASE WHEN json_type(document_json,'$.expiresAt') IN ('object','array') THEN
+      CASE WHEN json_extract(document_json,'$.expiresAt.__type')='timestamp'
+        AND json_type(document_json,'$.expiresAt.millis') IN ('integer','real')
+        THEN json_extract(document_json,'$.expiresAt.millis') ELSE 'compat' END END`;
+  const standard=`json_type(document_json,'$.expiresAt')='object'
+    AND json_extract(document_json,'$.expiresAt.__type')='timestamp'
+    AND json_type(document_json,'$.expiresAt.millis')='integer'
+    AND json_extract(document_json,'$.expiresAt.millis') BETWEEN -9007199254740991 AND 9007199254740991
+    AND doc_id<>'' AND length(doc_id)<=512 AND instr(doc_id,char(0))=0 AND doc_id NOT GLOB '*[^a-zA-Z0-9_-]*' AND path='stories/'||doc_id`;
+  const exception=`json_type(document_json,'$.expiresAt') IN ('object','array') AND COALESCE((${standard}),0)=0`;
+  try {
+    const unusual=await db.prepare(`SELECT * FROM friendbook_cf_firestore_documents INDEXED BY idx_cf_story_expiry_exceptions
+      WHERE parent_path='stories' AND ${exception} LIMIT 65`).all();
+    if((unusual.results||[]).length>64 || (unusual.results||[]).some(row=>row.path!==`stories/${row.doc_id}` || !isRootDocument(row.path))
+        || new Set((unusual.results||[]).map(row=>row.doc_id)).size!==(unusual.results||[]).length)return null;
+    let odd=(unusual.results||[]).map(canonicalContentDocument).filter(Boolean)
+      .map(doc=>({...doc,data:profileReadView(doc.path,uid,doc.data)}));
+    odd=applyQuery(odd,{...spec,limit:null});
+    const visible=[];
+    for(let pass=0;;pass++) {
+      const chunk=pass===0?spec.limit:Math.min(100,Math.max(20,spec.limit*2));
+      // SQLite does not seek the second component of a row comparison when
+      // the first is an expression index. Use an equality seek within the tie,
+      // then a separate strict time range, preserving the anchor's strict >.
+      const rows=[];
+      if(cursor && cursor[0]>anchor.millis) {
+        const equal=await db.prepare(`SELECT * FROM friendbook_cf_firestore_documents INDEXED BY idx_cf_story_expiry_page
+          WHERE parent_path='stories' AND (${time})=? AND doc_id>? AND ${standard}
+          ORDER BY doc_id ASC LIMIT ?`).bind(cursor[0],cursor[1],chunk+1).all();
+        rows.push(...(equal.results||[]));
+      }
+      if(rows.length<chunk+1) {
+        const later=await db.prepare(`SELECT * FROM friendbook_cf_firestore_documents INDEXED BY idx_cf_story_expiry_page
+          WHERE parent_path='stories' AND (${time})>? AND ${standard}
+          ORDER BY (${time}) ASC,doc_id ASC LIMIT ?`).bind(Math.max(anchor.millis,cursor?.[0]??anchor.millis),chunk+1-rows.length).all();
+        rows.push(...(later.results||[]));
+      }
+      const docs=rows.slice(0,chunk).map(canonicalContentDocument).filter(Boolean)
+        .map(doc=>({...doc,data:profileReadView(doc.path,uid,doc.data)}));
+      if(docs.length!==Math.min(rows.length,chunk) || new Set(docs.map(d=>d.id)).size!==docs.length)return null;
+      const last=docs.at(-1);
+      const nextCursor=last?[last.data.expiresAt.millis,last.id]:null;
+      const split=rows.length<=chunk ? odd.length : odd.findIndex(doc=>
+        compareDocumentToCursor(doc,[last.data.expiresAt,last.id],spec.orderBy)>0);
+      const merged=sortDocuments([...docs,...odd.splice(0,split<0?odd.length:split)],spec.orderBy);
+      // Authorize before applying the limit. Refill only as needed.
+      for(let i=0;i<merged.length && visible.length<spec.limit;) {
+        const count=Math.min(merged.length-i,spec.limit-visible.length);
+        visible.push(...await visibleDocuments(db,uid,'stories',merged.slice(i,i+count),requestUserReads));
+        i+=count;
+      }
+      if(visible.length>=spec.limit)return visible.slice(0,spec.limit);
+      cursor=nextCursor;
+      if(rows.length<=chunk)break;
+    }
+    return visible;
+  } catch(error) {
+    if(/no such index: idx_cf_story_(?:expiry_exceptions|expiry_page)/.test(String(error)))return null;
+    throw error;
+  }
+}
+
+// StoryViewer asks for a single author's stories in default document-ID order.
+// Probe odd IDs per author first: SQLite and JavaScript do not have equivalent
+// ordering for all Unicode IDs, and malformed paths must keep legacy behavior.
+async function boundedStoryAuthorPage(db,uid,spec,requestUserReads) {
+  const filters=spec?.filters;
+  if(spec?.parent!=='stories' || !Array.isArray(filters) || filters.length!==1
+      || filters[0]?.field!=='authorId' || filters[0]?.op!=='=='
+      || typeof filters[0]?.value!=='string' || !Array.isArray(spec.orderBy) || spec.orderBy.length
+      || spec.limitToLast || spec.startAt || spec.endAt || spec.endBefore
+      || !Number.isInteger(spec.limit) || spec.limit<1 || spec.limit>10) return null;
+  let cursor=null;
+  if(spec.startAfter) {
+    if(!Array.isArray(spec.startAfter) || spec.startAfter.length!==1
+        || typeof spec.startAfter[0]!=='string' || !/^[-_a-zA-Z0-9]{1,512}$/.test(spec.startAfter[0])) return null;
+    cursor=spec.startAfter[0];
+  }
+  const author=filters[0].value;
+  const exception=`(doc_id='' OR length(doc_id)>512 OR instr(doc_id,char(0))>0
+    OR doc_id GLOB '*[^a-zA-Z0-9_-]*' OR path<>'stories/'||doc_id)`;
+  try {
+    const unusual=await db.prepare(`SELECT doc_id FROM friendbook_cf_firestore_documents INDEXED BY idx_cf_story_author_exceptions
+      WHERE parent_path='stories' AND json_extract(document_json,'$.authorId')=? AND ${exception} LIMIT 1`).bind(author).all();
+    if((unusual.results||[]).length)return null;
+    const visible=[];
+    let deniedBurst=1;
+    for(;;) {
+      const chunk=Math.min(100,Math.max(deniedBurst,spec.limit-visible.length));
+      const bound=cursor===null?'':' AND doc_id>?';
+      const args=cursor===null?[author,chunk]:[author,cursor,chunk];
+      const page=await db.prepare(`SELECT path,parent_path,collection_id,doc_id,owner_uid,document_json,create_time,update_time
+        FROM friendbook_cf_firestore_documents INDEXED BY idx_cf_story_author_page
+        WHERE parent_path='stories' AND json_extract(document_json,'$.authorId')=?${bound}
+        ORDER BY doc_id ASC LIMIT ?`).bind(...args).all();
+      const rows=page.results||[];
+      const docs=rows.map(canonicalContentDocument).filter(Boolean)
+        .map(doc=>({...doc,data:profileReadView(doc.path,uid,doc.data)}))
+        // json_extract returns serialized arrays/objects as text too. The
+        // generic evaluator compares decoded values, not that SQL rendering.
+        .filter(doc=>matchesFilter(doc.data,filters[0],doc.id));
+      const allowed=await visibleDocuments(db,uid,'stories',docs,requestUserReads);
+      visible.push(...allowed);
+      deniedBurst=allowed.length?1:Math.min(100,chunk*2);
+      if(visible.length>=spec.limit)return visible.slice(0,spec.limit);
+      if(rows.length<chunk)break;
+      cursor=rows.at(-1).doc_id;
+    }
+    return visible;
+  } catch(error) {
+    if(/no such index: idx_cf_story_author_(?:page|exceptions)/.test(String(error)))return null;
+    throw error;
+  }
+}
+
+// Reel discovery's video-post query has no explicit order: Firestore's default
+// is ascending document ID. Seek only video rows and authorize before LIMIT.
+// Non-ASCII/malformed IDs use the existing evaluator because SQLite binary and
+// JavaScript UTF-16 order are not generally equivalent.
+async function boundedVideoPostPage(db,uid,spec,requestUserReads) {
+  const filters=spec?.filters;
+  if(spec?.parent!=='posts' || !Array.isArray(filters) || filters.length!==1
+      || filters[0]?.field!=='mediaType' || filters[0]?.op!=='==' || filters[0]?.value!=='video'
+      || !Array.isArray(spec.orderBy) || spec.orderBy.length || spec.limitToLast
+      || spec.startAt || spec.endAt || spec.endBefore || !Number.isInteger(spec.limit)
+      || spec.limit<1 || spec.limit>100) return null;
+  let cursor=null;
+  if(spec.startAfter) {
+    if(!Array.isArray(spec.startAfter) || spec.startAfter.length!==1
+        || typeof spec.startAfter[0]!=='string' || !/^[\x20-\x7e]+$/.test(spec.startAfter[0])) return null;
+    cursor=spec.startAfter[0];
+  }
+  const exception=`(doc_id='' OR doc_id GLOB '*[^ -~]*' OR instr(doc_id,char(0))>0 OR instr(doc_id,'/')>0 OR path<>'posts/'||doc_id)`;
+  try {
+    const unusual=await db.prepare(`SELECT doc_id FROM friendbook_cf_firestore_documents INDEXED BY idx_cf_video_post_exceptions
+      WHERE parent_path='posts' AND json_extract(document_json,'$.mediaType')='video' AND ${exception} LIMIT 1`).bind().all();
+    if((unusual.results||[]).length) return null;
+    const visible=[];
+    let deniedBurst=1;
+    for(;;) {
+      const chunk=Math.min(100,Math.max(deniedBurst,spec.limit-visible.length));
+      const bound=cursor===null?'':' AND doc_id>?';
+      const args=cursor===null?[chunk]:[cursor,chunk];
+      const page=await db.prepare(`SELECT path,parent_path,collection_id,doc_id,owner_uid,document_json,create_time,update_time
+        FROM friendbook_cf_firestore_documents INDEXED BY idx_cf_video_post_page
+        WHERE parent_path='posts' AND json_extract(document_json,'$.mediaType')='video'${bound}
+        ORDER BY doc_id ASC LIMIT ?`).bind(...args).all();
+      const rows=page.results||[];
+      const docs=rows.map(canonicalContentDocument).filter(Boolean);
+      // Loaded rows are canonical; maintain the same request-local, fresh ACL.
+      const allowed=await visibleDocuments(db,uid,'posts',docs,requestUserReads);
+      visible.push(...allowed);
+      deniedBurst=allowed.length?1:Math.min(100,chunk*2);
+      if(visible.length>=spec.limit)return visible.slice(0,spec.limit);
+      if(rows.length<chunk)break;
+      cursor=rows.at(-1).doc_id;
+    }
+    return visible;
+  } catch(error) {
+    // Rolling deploys without the new indexes retain the exact old evaluator.
+    if(/no such index: idx_cf_video_post_(?:page|exceptions)/.test(String(error)))return null;
+    throw error;
+  }
+}
+
+// Fast head for the common timestamp-only Home page. Lower-ranked historical
+// strings/numbers/nulls cannot enter a full visible timestamp page. If a
+// competing object/array exception exists, or the page cannot be filled, use
+// the original complete exception merge. The exception probe is inside each
+// SELECT, not a stale process cache or a separate check-then-read race.
+async function boundedTimestampFeedHead(db,uid,spec,requestUserReads) {
+  if(spec?.parent!=='posts' || !Array.isArray(spec.filters) || spec.filters.length
+      || !Array.isArray(spec.orderBy) || spec.orderBy.length!==1
+      || spec.orderBy[0]?.field!=='createdAt' || spec.orderBy[0]?.direction!=='DESCENDING'
+      || spec.limitToLast || spec.startAt || spec.endAt || spec.endBefore
+      || !Number.isInteger(spec.limit) || spec.limit<1 || spec.limit>10) return null;
+  let cursor=null;
+  if(spec.startAfter) {
+    const c=spec.startAfter;
+    if(!Array.isArray(c) || c.length!==2 || c[0]?.__type!=='timestamp' || !Number.isSafeInteger(c[0].millis)
+        || typeof c[1]!=='string' || !/^[-_a-zA-Z0-9]{1,512}$/.test(c[1]))return null;
+    cursor=[c[0].millis,c[1]];
+  }
+  const rank=`CASE WHEN json_type(document_json,'$.createdAt') IN ('integer','real') THEN 2 ELSE 4 END`;
+  const time=`CASE WHEN json_type(document_json,'$.createdAt') IN ('integer','real') THEN json_extract(document_json,'$.createdAt') ELSE json_extract(document_json,'$.createdAt.millis') END`;
+  const high=`json_type(document_json,'$.createdAt') IN ('object','array')
+    AND COALESCE((json_type(document_json,'$.createdAt')='object'
+      AND json_extract(document_json,'$.createdAt.__type')='timestamp'
+      AND json_type(document_json,'$.createdAt.millis')='integer'
+      AND json_extract(document_json,'$.createdAt.millis') BETWEEN -9007199254740991 AND 9007199254740991
+      AND doc_id<>'' AND length(doc_id)<=512 AND instr(doc_id,char(0))=0
+      AND doc_id NOT GLOB '*[^a-zA-Z0-9_-]*' AND path='posts/'||doc_id),0)=0`;
+  const guard=`NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents INDEXED BY idx_cf_feed_high_rank_exceptions
+    WHERE parent_path='posts' AND ${high} LIMIT 1)`;
+  try {
+    const visible=[];
+    let examined=0;
+    while(examined<50) {
+      const chunk=Math.min(50-examined,Math.max(spec.limit-visible.length,examined?10:1));
+      const rows=[];
+      if(cursor) {
+        const equal=await db.prepare(`SELECT * FROM friendbook_cf_firestore_documents INDEXED BY idx_cf_posts_feed_page
+          WHERE parent_path='posts' AND (${rank})=4 AND json_type(document_json,'$.createdAt')='object' AND (${time})=? AND doc_id<? AND ${guard}
+          ORDER BY doc_id DESC LIMIT ?`).bind(cursor[0],cursor[1],chunk).all();
+        rows.push(...(equal.results||[]));
+      }
+      if(rows.length<chunk) {
+        const bound=cursor?` AND (${time})<?`:'';
+        const later=await db.prepare(`SELECT * FROM friendbook_cf_firestore_documents INDEXED BY idx_cf_posts_feed_page
+          WHERE parent_path='posts' AND (${rank})=4 AND json_type(document_json,'$.createdAt')='object' AND (${time})>=-9007199254740991${bound} AND ${guard}
+          ORDER BY (${time}) DESC,doc_id DESC LIMIT ?`).bind(...(cursor?[cursor[0],chunk-rows.length]:[chunk])).all();
+        rows.push(...(later.results||[]));
+      }
+      examined+=rows.length;
+      const docs=rows.map(canonicalContentDocument).filter(Boolean);
+      visible.push(...await visibleDocuments(db,uid,'posts',docs,requestUserReads));
+      if(visible.length>=spec.limit)return visible.slice(0,spec.limit);
+      if(rows.length<chunk)return null;
+      const last=docs.at(-1);
+      if(!last || !Number.isSafeInteger(last.data?.createdAt?.millis))return null;
+      cursor=[last.data.createdAt.millis,last.id];
+    }
+    return null;
+  } catch(error) {
+    if(/no such index: idx_cf_(?:feed_high_rank_exceptions|posts_feed_page)/.test(String(error)))return null;
+    throw error;
+  }
+}
+
 async function boundedFeedPage(db,uid,spec,requestUserReads) {
   const root=spec?.parent;
   if (root!=='posts' && root!=='reels') return null;
   const filters=Array.isArray(spec?.filters)?spec.filters:[];
   const author=filters.length===1 && filters[0]?.field==='authorId' && filters[0]?.op==='==' && typeof filters[0]?.value==='string' ? filters[0].value : null;
-  const authorArgs=author===null?[]:[author];
-  const authorField="json_extract(document_json,'$.authorId')";
-  const byAuthor=author===null?'':` AND ${authorField}=?`;
+  const groupFilter=filters.find(f=>f?.field==='groupId' && f.op==='==' && typeof f.value==='string');
+  // Group feed and its explicit pending tab only. Other query shapes retain the
+  // generic evaluator; client-provided group IDs never grant access.
+  const group=groupFilter && filters.filter(f=>f?.field==='groupId').length===1
+      && filters.every(f=>f===groupFilter || (f?.field==='groupApprovalStatus' && f.op==='==' && f.value==='pending'))
+      && filters.length<=2 ? groupFilter.value : null;
+  const pending=group!==null && filters.some(f=>f?.field==='groupApprovalStatus');
+  const groupIndex=pending?'idx_cf_group_pending_page':'idx_cf_group_posts_page';
+  const scoped=author!==null?author:group;
+  const scopedArgs=scoped===null?[]:[scoped];
+  const byScoped=author!==null ? " AND json_extract(document_json,'$.authorId')=?"
+      : group!==null ? " AND json_type(document_json,'$.groupId')='text' AND json_extract(document_json,'$.groupId')=?"
+          +(pending?" AND json_extract(document_json,'$.groupApprovalStatus')='pending'":'') : '';
   if ((root==='reels' && filters.length) || !Array.isArray(spec.orderBy) || spec.orderBy.length!==1
       || spec.orderBy[0]?.field!=='createdAt' || spec.orderBy[0]?.direction!=='DESCENDING'
-      || (filters.length && author===null) || spec.limitToLast || spec.startAt || spec.endAt || spec.endBefore
+      || (filters.length && author===null && group===null) || spec.limitToLast || spec.startAt || spec.endAt || spec.endBefore
       || !Number.isInteger(spec.limit) || spec.limit<=0 || spec.limit>100) return null;
   let cursor=null;
   if (spec.startAfter) {
@@ -1376,22 +1830,22 @@ async function boundedFeedPage(db,uid,spec,requestUserReads) {
     OR (json_type(document_json,'$.createdAt')='object' AND json_extract(document_json,'$.createdAt.__type')='timestamp'
       AND json_type(document_json,'$.createdAt.millis')='integer' AND json_extract(document_json,'$.createdAt.millis') BETWEEN -9007199254740991 AND 9007199254740991)),0)=0`;
   const canonicalException=`(doc_id GLOB '*[^ -~]*' OR path<>'${root}/'||doc_id OR ${standard})`;
-  const exceptionIndex=root==='posts'?'feed_exceptions':'reels_feed_exceptions';
+  const exceptionIndex=group!==null?'group_posts_exceptions':root==='posts'?'feed_exceptions':'reels_feed_exceptions';
   // A few unusual timestamps (including on author pages) must not force
   // the fallback. Merge only matching exceptions into the normal keyset stream.
   let unusual;
   try {
     unusual=await (
       db.prepare(`SELECT * FROM friendbook_cf_firestore_documents INDEXED BY idx_cf_${exceptionIndex}
-        WHERE parent_path='${root}'${byAuthor} AND ${canonicalException} LIMIT 129`).bind(...authorArgs).all()
+        WHERE parent_path='${root}'${byScoped} AND ${canonicalException} LIMIT 129`).bind(...scopedArgs).all()
     );
   } catch(error) {
-    if (/no such index: idx_cf_(?:legacy_)?(?:reels_)?feed_exceptions/.test(String(error))) return null;
+    if (/no such index: idx_cf_(?:(?:legacy_)?(?:reels_)?feed_exceptions|group_posts_exceptions)/.test(String(error))) return null;
     throw error;
   }
   const odd=unusual.results||[];
   if (odd.length>128 || odd.some(row=>row.path!==`${root}/${row.doc_id}`)) return null;
-  const exceptions=applyQuery(odd.map(rowToDocument).filter(Boolean),{...spec,limit:null});
+  const exceptions=applyQuery(odd.map(canonicalContentDocument).filter(Boolean),{...spec,limit:null});
   const rank=`CASE WHEN json_type(a.document_json,'$.createdAt') IN ('integer','real') THEN 2 ELSE 4 END`;
   const time=`CASE WHEN json_type(a.document_json,'$.createdAt') IN ('integer','real') THEN json_extract(a.document_json,'$.createdAt') ELSE json_extract(a.document_json,'$.createdAt.millis') END`;
   const visible=[];
@@ -1400,7 +1854,7 @@ async function boundedFeedPage(db,uid,spec,requestUserReads) {
   for (let pass=0;;pass++) {
     const chunk=pass===0 ? spec.limit : Math.min(100,Math.max(20,spec.limit*2));
     const bound=cursor?` AND (${rank},${time},a.doc_id)<(?,?,?)`:'';
-    const args=[...authorArgs,...(cursor||[]),chunk];
+    const args=[...scopedArgs,...(cursor||[]),chunk];
     let batches;
     try {
       // SQLite's tuple comparison on the expression index can scan from the
@@ -1417,7 +1871,12 @@ async function boundedFeedPage(db,uid,spec,requestUserReads) {
           ORDER BY quota_feed_rank DESC,quota_feed_time DESC,doc_id DESC LIMIT ?`)
           .bind(...prefix,4,cursor[1],cursor[1],cursor[2],chunk,...prefix,2,chunk,chunk).all();
       };
-      if (cursor && author===null) {
+      if (cursor && group!==null) {
+        batches=await Promise.all([
+          seekWindow('a.path,a.parent_path,a.collection_id,a.doc_id,a.owner_uid,a.document_json,a.create_time,a.update_time',
+            'friendbook_cf_firestore_documents',groupIndex,`a.parent_path='posts'${byScoped} AND NOT ${canonicalException}`,[group]),
+        ]);
+      } else if (cursor && author===null) {
         batches=await Promise.all([
           seekWindow('a.path,a.parent_path,a.collection_id,a.doc_id,a.owner_uid,a.document_json,a.create_time,a.update_time',
             'friendbook_cf_firestore_documents',`idx_cf_${root}_feed_page`,`a.parent_path='${root}' AND NOT ${canonicalException}`),
@@ -1430,35 +1889,36 @@ async function boundedFeedPage(db,uid,spec,requestUserReads) {
         try {
           batches=await Promise.all([
             seekWindow('a.path,a.parent_path,a.collection_id,a.doc_id,a.owner_uid,a.document_json,a.create_time,a.update_time',
-              'friendbook_cf_firestore_documents','idx_cf_posts_author_page',`a.parent_path='posts'${byAuthor} AND NOT ${canonicalException}`,[author]),
+              'friendbook_cf_firestore_documents','idx_cf_posts_author_page',`a.parent_path='posts'${byScoped} AND NOT ${canonicalException}`,[author]),
           ]);
         } catch (error) {
           if (!/no such index: idx_cf_(?:legacy_)?posts_author_page/.test(String(error))) throw error;
           batches=await Promise.all([
             db.prepare(`SELECT a.path,a.parent_path,a.collection_id,a.doc_id,a.owner_uid,a.document_json,a.create_time,a.update_time
-              FROM friendbook_cf_firestore_documents a WHERE a.parent_path='posts'${byAuthor}${bound} AND NOT ${canonicalException}
+              FROM friendbook_cf_firestore_documents a WHERE a.parent_path='posts'${byScoped}${bound} AND NOT ${canonicalException}
               ORDER BY ${rank} DESC,${time} DESC,a.doc_id DESC LIMIT ?`).bind(...args).all(),
           ]);
         }
       } else {
         batches=await Promise.all([
           db.prepare(`SELECT a.path,a.parent_path,a.collection_id,a.doc_id,a.owner_uid,a.document_json,a.create_time,a.update_time
-            FROM friendbook_cf_firestore_documents a ${author===null?`INDEXED BY idx_cf_${root}_feed_page`:''} WHERE a.parent_path='${root}'${byAuthor}${bound} AND NOT ${canonicalException}
+            FROM friendbook_cf_firestore_documents a ${group!==null?`INDEXED BY ${groupIndex}`:author===null?`INDEXED BY idx_cf_${root}_feed_page`:''} WHERE a.parent_path='${root}'${byScoped}${bound} AND NOT ${canonicalException}
             ORDER BY ${rank} DESC,${time} DESC,a.doc_id DESC LIMIT ?`).bind(...args).all(),
         ]);
       }
     } catch(error) {
-      if (/no such index: idx_cf_(?:legacy_)?(?:posts|reels)_feed_page/.test(String(error))) return null;
+      if (/no such index: idx_cf_(?:(?:legacy_)?(?:posts|reels)_feed_page|group_posts_page|group_pending_page)/.test(String(error))) return null;
       throw error;
     }
     const [canonical]=batches;
 
-    const docs=sortDocuments((canonical.results||[]).map(rowToDocument).filter(Boolean),spec.orderBy).slice(0,chunk);
+    const docs=sortDocuments((canonical.results||[]).map(canonicalContentDocument).filter(Boolean),spec.orderBy).slice(0,chunk);
     const last=docs.at(-1), value=last?.data.createdAt;
     const nextCursor=last?[typeof value==='number'?2:4,typeof value==='number'?value:value.millis,last.id]:null;
     const split=docs.length<chunk ? exceptions.length : exceptions.findIndex(doc=>
       compareDocumentToCursor(doc,[value,last.id],spec.orderBy)>0);
-    const merged=sortDocuments([...docs,...exceptions.splice(0,split<0?exceptions.length:split)],spec.orderBy);
+    const merged=sortDocuments([...docs,...exceptions.splice(0,split<0?exceptions.length:split)],spec.orderBy)
+      .filter(doc=>filters.every(filter=>matchesFilter(doc.data,filter,doc.id)));
     // The same checks used by the normal document query; privacy is never inferred
     // from the client-supplied author, a stale legacy mirror, or the SQL sort key.
     let deniedBurst=1;
@@ -1510,7 +1970,7 @@ async function boundedNotificationPage(db,uid,spec) {
       return db.prepare(`SELECT 1 AS hit FROM ${table} a WHERE ${where} LIMIT 1`).bind(...args).first();
     }
   };
-  const canonicalBad=await probe('friendbook_cf_firestore_documents','idx_cf_notif_exceptions',`parent_path='notifications'${byRecipient}
+  const canonicalBad=await probe('friendbook_cf_firestore_documents','idx_cf_notif_exceptions',`parent_path='notifications'${byRecipient}${unreadOnly}
       AND (doc_id GLOB '*[^ -~]*' OR path<>'notifications/'||doc_id OR ${standard})`,recipientArgs);
   if (canonicalBad) return null;
   const rank=`CASE WHEN json_type(a.document_json,'$.createdAt') IN ('integer','real') THEN 2 ELSE 4 END`;
@@ -1610,7 +2070,7 @@ async function applyOperation(db, op, uid, now, existingCache) {
 
 // The legacy Android acceptance batch is recognized as one strictly defined operation.
 // All authorization snapshots, duplicate checks and writes run in a single D1 batch.
-async function acceptFriendBatch(db, uid, ops, now, indexedCandidates=false) {
+async function acceptFriendBatch(db, uid, ops, now, indexedCandidates=false,canonicalOnly=false) {
   const forbidden = () => json({error:'Forbidden'},403);
   if (ops.length !== 4 || typeof db.batch !== 'function') return forbidden();
   const requests=ops.filter(o=>splitPath(o.path)?.length===2 && splitPath(o.path)[0]==='friend_requests');
@@ -1653,7 +2113,7 @@ async function acceptFriendBatch(db, uid, ops, now, indexedCandidates=false) {
   // A fresh, recipient-accepted request can safely reconfirm a legacy friendship.
   // Reuse the existing row and counters: neither legacy fields nor a one-sided
   // action alone grants access to friends-only content.
-  const candidates=await friendshipCandidates(db,uid,indexedCandidates);
+  const candidates=await friendshipCandidates(db,uid,indexedCandidates,canonicalOnly);
   const existingPair = await db.prepare(`SELECT path FROM (${candidates.sql}) d WHERE (json_array_length(document_json,'$.participants')=2 AND
     ((json_extract(document_json,'$.participants[0]')=? AND json_extract(document_json,'$.participants[1]')=?) OR
      (json_extract(document_json,'$.participants[0]')=? AND json_extract(document_json,'$.participants[1]')=?))) OR
@@ -1722,7 +2182,7 @@ async function acceptFriendBatch(db, uid, ops, now, indexedCandidates=false) {
 
 // Remove all records for one pair and adjust both counters together. A caller may
 // never supply another pair, an arbitrary counter delta, or a partial duplicate set.
-async function unfriendBatch(db,uid,ops,now,indexedCandidates=false) {
+async function unfriendBatch(db,uid,ops,now,indexedCandidates=false,canonicalOnly=false) {
   const forbidden=()=>json({error:'Forbidden'},403);
   if (typeof db.batch!=='function' || ops.length<3 || ops.length>21) return forbidden();
   const type=o=>o.op || o.type || 'set';
@@ -1764,7 +2224,7 @@ async function unfriendBatch(db,uid,ops,now,indexedCandidates=false) {
   }
   // Refuse a partial removal if duplicate friendship rows exist. Test both native
   // JSON and historical Firestore envelopes, ignoring stale legacy mirrors.
-  const candidates=await friendshipCandidates(db,uid,indexedCandidates);
+  const candidates=await friendshipCandidates(db,uid,indexedCandidates,canonicalOnly);
   const countPredicate=`(SELECT count(*) FROM (${candidates.sql}) d WHERE (
     (json_array_length(d.document_json,'$.participants')=2 AND
      ((json_extract(d.document_json,'$.participants[0]')=? AND json_extract(d.document_json,'$.participants[1]')=?) OR
@@ -2187,14 +2647,90 @@ function broadcastPayload(env, data) {
 }
 function broadcastWrites(db,path,data,owner,row,now) {
   const parent=parentPath(path), collection=collectionIdOf(path), id=docIdOf(path);
-  const writes=[db.prepare(`INSERT INTO friendbook_cf_firestore_documents(path,parent_path,collection_id,doc_id,owner_uid,document_json,create_time,update_time)
+  const writes=[db.prepare(`INSERT INTO friendbook_cf_firestore_documents AS ${writeAttribution('broadcast',path)}(path,parent_path,collection_id,doc_id,owner_uid,document_json,create_time,update_time)
     VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET owner_uid=excluded.owner_uid,document_json=excluded.document_json,update_time=excluded.update_time`)
     .bind(path,parent,collection,id,owner,JSON.stringify(data),row?.create_time||now,now)];
-  if (isRootDocument(path)) writes.push(db.prepare(`INSERT INTO friendbook_cf_documents(path,collection,doc_id,owner_uid,document_json,updated_at)
+  if (isRootDocument(path)) writes.push(db.prepare(`INSERT INTO friendbook_cf_documents AS ${writeAttribution('broadcast',path)}(path,collection,doc_id,owner_uid,document_json,updated_at)
     VALUES (?,?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET owner_uid=excluded.owner_uid,document_json=excluded.document_json,updated_at=excluded.updated_at`)
     .bind(path,collection,id,owner,JSON.stringify({...data,id}),now));
   return writes;
 }
+// A page needs only yes/no membership, never the actor's full friend graph or
+// every duplicate historical friendship document. All candidates include the
+// authenticated actor, and the partial pair index excludes malformed arrays.
+async function friendshipFacts(request,db,uid) {
+  if(request.method!=='POST')return json({error:'Method not allowed'},405);
+  let input;try{input=await request.json();}catch{return json({error:'Invalid JSON'},400);}
+  const validUid=value=>typeof value==='string' && value.length>0 && value.length<=128 && !/[\/\x00-\x1f]/.test(value);
+  if(!validUid(uid) || !input || Object.keys(input).some(k=>k!=='candidates')
+      || !Array.isArray(input.candidates) || input.candidates.length<1 || input.candidates.length>10
+      || input.candidates.some(candidate=>!validUid(candidate) || candidate===uid)
+      || new Set(input.candidates).size!==input.candidates.length) return json({error:'Invalid candidates'},400);
+  try {
+    const rows=await db.prepare(`SELECT candidate.value AS uid,
+      (EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents f INDEXED BY idx_cf_friend_valid_pair
+        WHERE f.parent_path='friends' AND json_type(f.document_json,'$.participants')='array'
+          AND json_array_length(f.document_json,'$.participants')=2
+          AND json_extract(f.document_json,'$.participants[0]')=?1
+          AND json_extract(f.document_json,'$.participants[1]')=candidate.value)
+      OR EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents f INDEXED BY idx_cf_friend_valid_pair
+        WHERE f.parent_path='friends' AND json_type(f.document_json,'$.participants')='array'
+          AND json_array_length(f.document_json,'$.participants')=2
+          AND json_extract(f.document_json,'$.participants[0]')=candidate.value
+          AND json_extract(f.document_json,'$.participants[1]')=?1)) AS friend
+      FROM json_each(?2) candidate`).bind(uid,JSON.stringify(input.candidates)).all();
+    return json({facts:(rows.results||[]).map(row=>({uid:row.uid,friend:!!row.friend}))});
+  } catch {return json({error:'Friendship facts unavailable'},503);}
+}
+
+// Referral rows are server-owned; historical canonical rows use the same
+// refBy count as the previous client. Count at most 50 (the highest threshold).
+// The rank comparison happens inside the transaction against the CURRENT
+// profile, so concurrent paid/admin upgrades cannot be downgraded or lost.
+function referralAwardStatements(db,uid,now) {
+  const profile=`users/${uid}`;
+  const award=db.prepare(`WITH referral(n) AS (
+      SELECT COUNT(*) FROM (SELECT path FROM friendbook_cf_firestore_documents INDEXED BY idx_cf_referrals_from
+        WHERE parent_path='referrals' AND json_extract(document_json,'$.refBy')=? LIMIT 50)
+    ), earned(rank) AS (SELECT CASE WHEN n>=50 THEN 3 WHEN n>=20 THEN 2 WHEN n>=5 THEN 1 ELSE 0 END FROM referral)
+    UPDATE friendbook_cf_firestore_documents SET
+      document_json=json_set(document_json,'$.tickLevel',
+        (SELECT CASE rank WHEN 3 THEN 'diamond' WHEN 2 THEN 'gold' ELSE 'blue' END FROM earned),
+        '$.isVerified',json('true')), update_time=?
+    WHERE path=? AND json_type(document_json,'$.fields') IS NOT 'object'
+      AND (json_type(document_json,'$.tickLevel') IS NULL
+        OR json_type(document_json,'$.tickLevel')='null'
+        OR json_extract(document_json,'$.tickLevel') IN ('none','blue','gold','diamond'))
+      AND (SELECT rank FROM earned) > CASE json_extract(document_json,'$.tickLevel')
+        WHEN 'diamond' THEN 3 WHEN 'gold' THEN 2 WHEN 'blue' THEN 1
+        ELSE CASE WHEN json_type(document_json,'$.isVerified')='true' THEN 1 ELSE 0 END END`)
+    .bind(uid,now,profile);
+  // db.batch executes these sequentially in one transaction. Mirror only if
+  // the immediately preceding canonical UPDATE changed a profile.
+  const mirror=db.prepare(`INSERT INTO friendbook_cf_documents(path,collection,doc_id,owner_uid,document_json,updated_at)
+    SELECT path,collection_id,doc_id,owner_uid,json_set(document_json,'$.id',doc_id),update_time
+    FROM friendbook_cf_firestore_documents WHERE path=? AND changes()=1
+    ON CONFLICT(path) DO UPDATE SET owner_uid=excluded.owner_uid,
+      document_json=excluded.document_json,updated_at=excluded.updated_at`).bind(profile);
+  return [award,mirror];
+}
+async function referralStatus(request,db,uid,now) {
+  if(request.method!=='POST')return json({error:'Method not allowed'},405);
+  if(typeof db.batch!=='function')return json({error:'Atomic storage unavailable'},503);
+  try {
+    const result=await db.batch(referralAwardStatements(db,uid,now));
+    const awarded=Number(result?.[0]?.meta?.changes ?? result?.[0]?.changes ?? 0)>0;
+    const [count,row]=await Promise.all([
+      db.prepare(`SELECT COUNT(*) AS n FROM (SELECT path FROM friendbook_cf_firestore_documents INDEXED BY idx_cf_referrals_from
+        WHERE parent_path='referrals' AND json_extract(document_json,'$.refBy')=? LIMIT 50)`).bind(uid).first(),
+      readRow(db,`users/${uid}`)
+    ]);
+    if(!row)return json({error:'Profile unavailable'},404);
+    const profile=decodeValue(JSON.parse(row.document_json));
+    return json({count:Number(count?.n||0),tickLevel:typeof profile.tickLevel==='string'?profile.tickLevel:(profile.isVerified?'blue':'none'),isVerified:profile.isVerified===true,awarded});
+  } catch {return json({error:'Referral status unavailable'},503);}
+}
+
 async function claimReferral(request,db,uid,now) {
   if (request.method!=='POST') return json({error:'Method not allowed'},405);
   let body; try { body=await request.json(); } catch { return json({error:'Invalid JSON'},400); }
@@ -2217,6 +2753,7 @@ async function claimReferral(request,db,uid,now) {
       )`).bind(uid),
       db.prepare('INSERT INTO friendbook_cf_referral_claims(referred_uid,inviter_uid,created_at) VALUES (?,?,?)').bind(uid,inviter,now),
       ...broadcastWrites(db,path,{refBy:inviter,refTo:uid,status:'completed',date,createdAt:date},uid,null,now),
+      ...referralAwardStatements(db,inviter,now),
       db.prepare('DELETE FROM friendbook_cf_social_guards').bind()]);
     return json({ok:true},201);
   } catch (error) {
@@ -2324,13 +2861,14 @@ export async function resumeOfficialBroadcasts(env,now=Date.now()) {
   }));
 }
 
-const adsFields=new Set(['appId','feed_native_unit_v3','reels_native_unit_v3','ads_enabled_v3','websiteUrl','appAdsTxtUrl','updatedBy','updatedAt']);
+const adsFields=new Set(['appId','feed_native_unit_v3','reels_native_unit_v3','ads_enabled_v3','quota_saver_v1','websiteUrl','appAdsTxtUrl','updatedBy','updatedAt']);
 function adsView(doc) { return Object.fromEntries(Object.entries(doc||{}).filter(([key])=>adsFields.has(key))); }
 async function writeAdsConfig(db,env,uid,path,body,now) {
   if (!isPaymentAdmin(env,uid)) return json({error:'Forbidden'},403);
   const data=body?.data;
   if(!data || typeof data!=='object' || Array.isArray(data) || Object.keys(data).some(key=>!adsFields.has(key))
     || data.updatedBy!==uid || typeof data.ads_enabled_v3!=='boolean'
+    || (data.quota_saver_v1!==undefined && typeof data.quota_saver_v1!=='boolean')
     || ['appId','feed_native_unit_v3','reels_native_unit_v3','websiteUrl','appAdsTxtUrl'].some(k=>typeof data[k]!=='string' || data[k].length>256)) return json({error:'Invalid config'},400);
   try {
     const existing=await readRow(db,path),old=existing?decodeValue(JSON.parse(existing.document_json)):null;
@@ -2443,7 +2981,7 @@ async function writeChatMessage(db,path,doc,now,existing,auth,uid,deleted=false)
     if (serialized.length>1_800_000) return json({error:'Document too large'},413);
     // The INSERT itself checks room membership's snapshot and both possible
     // message stores. No guard rows are needed for a single new nested message.
-    const inserted=await db.prepare(`INSERT INTO friendbook_cf_firestore_documents
+    const inserted=await db.prepare(`INSERT INTO friendbook_cf_firestore_documents AS ${writeAttribution('chat_message',path)}
       (path,parent_path,collection_id,doc_id,owner_uid,document_json,create_time,update_time)
       SELECT ?1,?2,?3,?4,?5,?6,?7,?7
       WHERE EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents WHERE path=?8 AND document_json=?9)
@@ -2479,8 +3017,8 @@ async function writeChatMessage(db,path,doc,now,existing,auth,uid,deleted=false)
   } else {
     const serialized=JSON.stringify(doc), owner=ownerOf(doc,existing?.owner_uid||uid), created=existing?.create_time||now;
     if (serialized.length>1_800_000) return json({error:'Document too large'},413);
-    statements.push(db.prepare(`INSERT INTO friendbook_cf_firestore_documents(path,parent_path,collection_id,doc_id,owner_uid,document_json,create_time,update_time) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET owner_uid=excluded.owner_uid,document_json=excluded.document_json,update_time=excluded.update_time`).bind(path,parent,coll,id,owner,serialized,created,now));
-    if (isRootDocument(path)) statements.push(db.prepare(`INSERT INTO friendbook_cf_documents(path,collection,doc_id,owner_uid,document_json,updated_at) VALUES (?,?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET owner_uid=excluded.owner_uid,document_json=excluded.document_json,updated_at=excluded.updated_at`).bind(path,coll,id,owner,JSON.stringify({...doc,id}),now));
+    statements.push(db.prepare(`INSERT INTO friendbook_cf_firestore_documents AS ${writeAttribution('chat_message',path)}(path,parent_path,collection_id,doc_id,owner_uid,document_json,create_time,update_time) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET owner_uid=excluded.owner_uid,document_json=excluded.document_json,update_time=excluded.update_time`).bind(path,parent,coll,id,owner,serialized,created,now));
+    if (isRootDocument(path)) statements.push(db.prepare(`INSERT INTO friendbook_cf_documents AS ${writeAttribution('chat_message',path)}(path,collection,doc_id,owner_uid,document_json,updated_at) VALUES (?,?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET owner_uid=excluded.owner_uid,document_json=excluded.document_json,updated_at=excluded.updated_at`).bind(path,coll,id,owner,JSON.stringify({...doc,id}),now));
   }
   statements.push(db.prepare('DELETE FROM friendbook_cf_social_guards').bind());
   await db.batch(statements);
@@ -2540,17 +3078,37 @@ async function groupChatLedgerChanges(db,path,before,after) {
   return {guards:[guard],writes};
 }
 
-async function writeChatRoot(db,path,doc,now,row,uid,{canonicalOnly=false}={}) {
+async function writeChatRoot(db,path,doc,now,row,uid,{canonicalOnly=false,literalNoop=false}={}) {
   if (typeof db.batch!=='function') return json({error:'Atomic storage unavailable'},503);
-  const guards=await chatRootGuards(db,path,row), before=row?decodeValue(JSON.parse(row.document_json)):null;
+  const before=row?decodeValue(JSON.parse(row.document_json)):null;
+  if(literalNoop && row?.[canonicalRootSnapshot] && before?.isGroup!==true
+    && doc.isGroup!==true && JSON.stringify(doc)===row.document_json
+    && ownerOf(doc,row.owner_uid||uid)===row.owner_uid) {
+    const state=await unchangedRootState(db,path,row,doc);
+    if(!state.current)throw new Error('Room changed');
+    if(state.mirror)return json(rowToDocument(row));
+    // Missing/stale mirrors still repair through the atomic write below.
+  }
+  // Existing canonical direct rooms have no group authority ledger. Enforce
+  // their authorized snapshot in the canonical upsert itself, so its mirror
+  // remains atomic without inserting/deleting a temporary guard row.
+  const inline=Boolean(row?.[canonicalRootSnapshot] && before?.isGroup!==true && doc.isGroup!==true);
+  const guards=inline?[]:await chatRootGuards(db,path,row);
   const ledger=await groupChatLedgerChanges(db,path,before,doc);
   const id=docIdOf(path), data=JSON.stringify(doc);
   if (data.length>1_800_000) return json({error:'Document too large'},413);
   const owner=ownerOf(doc,row?.owner_uid||uid), createTime=row?.create_time||now;
-  await db.batch([...guards,...ledger.guards,...ledger.writes,
-    db.prepare(`INSERT INTO friendbook_cf_firestore_documents(path,parent_path,collection_id,doc_id,owner_uid,document_json,create_time,update_time) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET owner_uid=excluded.owner_uid,document_json=excluded.document_json,update_time=excluded.update_time`).bind(path,'chats','chats',id,owner,data,createTime,now),
-    ...(canonicalOnly ? [] : [db.prepare(`INSERT INTO friendbook_cf_documents(path,collection,doc_id,owner_uid,document_json,updated_at) VALUES (?,?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET owner_uid=excluded.owner_uid,document_json=excluded.document_json,updated_at=excluded.updated_at`).bind(path,'chats',id,owner,JSON.stringify({...doc,id}),now)]),
-    db.prepare('DELETE FROM friendbook_cf_social_guards').bind()]);
+  const canonical=inline ? db.prepare(`INSERT INTO friendbook_cf_firestore_documents AS ${writeAttribution('chat_root',path)}
+    (path,parent_path,collection_id,doc_id,owner_uid,document_json,create_time,update_time)
+    VALUES (CASE WHEN (SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?1)=?2
+      AND (SELECT update_time FROM friendbook_cf_firestore_documents WHERE path=?1)=?3
+      THEN ?1 ELSE NULL END,'chats','chats',?4,?5,?6,?7,?8)
+    ON CONFLICT(path) DO UPDATE SET owner_uid=excluded.owner_uid,document_json=excluded.document_json,update_time=excluded.update_time`)
+    .bind(path,row.document_json,row.update_time,id,owner,data,createTime,now)
+    : db.prepare(`INSERT INTO friendbook_cf_firestore_documents AS ${writeAttribution('chat_root',path)}(path,parent_path,collection_id,doc_id,owner_uid,document_json,create_time,update_time) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET owner_uid=excluded.owner_uid,document_json=excluded.document_json,update_time=excluded.update_time`).bind(path,'chats','chats',id,owner,data,createTime,now);
+  await db.batch([...guards,...ledger.guards,...ledger.writes,canonical,
+    ...(canonicalOnly ? [] : [db.prepare(`INSERT INTO friendbook_cf_documents AS ${writeAttribution('chat_root',path)}(path,collection,doc_id,owner_uid,document_json,updated_at) VALUES (?,?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET owner_uid=excluded.owner_uid,document_json=excluded.document_json,updated_at=excluded.updated_at`).bind(path,'chats',id,owner,JSON.stringify({...doc,id}),now)]),
+    ...(!inline || ledger.guards.length ? [db.prepare('DELETE FROM friendbook_cf_social_guards').bind()] : [])]);
   return json({exists:true,id,path,parent:'chats',collection:'chats',data:doc,createTime,updateTime:now});
 }
 
@@ -2601,7 +3159,7 @@ const LIVE_GIFTS=new Map(Object.entries({rose:['Rose','rose',1],heart:['Finger H
   airplane:['Private Jet','jet',299],lion:['Golden Lion','lion',500],universe:['Universe','rocket',1000]}));
 
 // PK invitations and transitions are separate from chat messages and client-owned fields.
-async function livePk(request,db,uid,now) {
+async function livePk(request,db,uid,now,identity) {
   let input;
   if (request.method!=='POST') return json({error:'Method not allowed'},405);
   try { input=await request.json(); } catch { return json({error:'Invalid JSON'},400); }
@@ -2612,15 +3170,17 @@ async function livePk(request,db,uid,now) {
       || !Number.isInteger(input.durationSec) || input.durationSec<60 || input.durationSec>600)) return json({error:'Invalid PK rooms'},400);
   if (action!=='invite' && !validRoom(action==='room'?input.room:input.id)) return json({error:'Invalid PK ID'},400);
   try {
+    const reads=requestAccountReads(identity);
     if (action==='room') {
       const row=await db.prepare(`SELECT * FROM friendbook_cf_live_pk WHERE status='active' AND expires_at>? AND (room_a=? OR room_b=?) LIMIT 1`).bind(now,input.room,input.room).first();
       // The four checks belong to one request. Share in-flight room/account
       // reads only here; the next poll rechecks fresh privacy and ban state.
-      const reads=new Map();
       if (!row || !await authorizeLiveMedia(db,row.room_a,uid,'watch',reads) || !await authorizeLiveMedia(db,row.room_b,uid,'watch',reads)
           || !await authorizeLiveMedia(db,row.room_a,row.host_a,'publish',reads) || !await authorizeLiveMedia(db,row.room_b,row.host_b,row.room_a===row.room_b?'watch':'publish',reads)) return json({status:'idle'});
-      const [a,b]=await Promise.all([readRow(db,`users/${row.host_a}`),readRow(db,`users/${row.host_b}`)]);
-      const name=r=>r ? String(decodeValue(JSON.parse(r.document_json)).displayName||'').slice(0,200) : '';
+      // Publish/watch ACLs already loaded both current host profiles. Reuse
+      // those same-request fields rather than fetching each host again for a name.
+      const [a,b]=await Promise.all([reads.get(`users/${row.host_a}`),reads.get(`users/${row.host_b}`)]);
+      const name=fields=>String(fromFirestoreValue(fields?.displayName)||'').slice(0,200);
       return json({...row,name_a:name(a)||'Host A',name_b:name(b)||'Host B'});
     }
     const load=id=>db.prepare('SELECT * FROM friendbook_cf_live_pk WHERE id=?').bind(id).first();
@@ -2629,25 +3189,26 @@ async function livePk(request,db,uid,now) {
     const roomA=battle?.room_a ?? input.roomA,roomB=battle?.room_b ?? input.roomB;
     if (action==='status') {
       if (![battle.host_a,battle.host_b].includes(uid) && (battle.status!=='active' || battle.expires_at<=now
-          || !await authorizeLiveMedia(db,roomA,uid,'watch') || !await authorizeLiveMedia(db,roomB,uid,'watch'))) return json({error:'Forbidden'},403);
+          || !await authorizeLiveMedia(db,roomA,uid,'watch',reads) || !await authorizeLiveMedia(db,roomB,uid,'watch',reads))) return json({error:'Forbidden'},403);
       return json({...battle,status:['invited','active'].includes(battle.status) && battle.expires_at<=now?'ended':battle.status});
     }
     const [a,b]=await Promise.all([readRow(db,`lives/${roomA}`),readRow(db,`lives/${roomB}`)]);
     if (!a || !b) return json({error:'PK rooms unavailable'},404);
     const aa=decodeValue(JSON.parse(a.document_json)),bb=decodeValue(JSON.parse(b.document_json));
+    reads.set(`lives/${roomA}`,toFirestoreFields(a.document_json));
+    reads.set(`lives/${roomB}`,toFirestoreFields(b.document_json));
     const guest=roomA===roomB;
     const guards=[await chatDocumentGuard(db,a.path,a),...(guest?[]:[await chatDocumentGuard(db,b.path,b)])];
     const clear=db.prepare('DELETE FROM friendbook_cf_social_guards').bind();
     if (action==='invite') {
       const target=guest ? input.guestUid : bb.hostId;
       if (aa.hostId!==uid || uid===target || (guest && aa.coHostUid) || bb.pkInvitesEnabled===false
-          || !await authorizeLiveMedia(db,roomA,uid,'publish') || !await authorizeLiveMedia(db,roomB,target,guest?'watch':'publish')
-          || !await authorizeLiveMedia(db,roomB,uid,'watch') || !await authorizeLiveMedia(db,roomA,target,'watch')) return json({error:'Forbidden'},403);
+          || !await authorizeLiveMedia(db,roomA,uid,'publish',reads) || !await authorizeLiveMedia(db,roomB,target,guest?'watch':'publish',reads)
+          || !await authorizeLiveMedia(db,roomB,uid,'watch',reads) || !await authorizeLiveMedia(db,roomA,target,'watch',reads)) return json({error:'Forbidden'},403);
       const id=autoId();
       const inviteId=autoId();
-      const profile=await readRow(db,`users/${uid}`);
-      const actor=profile?decodeValue(JSON.parse(profile.document_json)):{};
-      const msg={type:'pk_invite',uid,name:String(actor.displayName||'').slice(0,200),targetUid:target,pkBattleId:id,
+      const actor=await reads.get(`users/${uid}`);
+      const msg={type:'pk_invite',uid,name:String(fromFirestoreValue(actor?.displayName)||'').slice(0,200),targetUid:target,pkBattleId:id,
         text:'sent a PK battle invitation',durationSec:input.durationSec,createdAt:now,createdAtMs:now};
       await db.batch([...guards,db.prepare(`INSERT INTO friendbook_cf_live_pk(id,room_a,room_b,host_a,host_b,status,duration_sec,created_at,expires_at)
         SELECT ?,?,?,?,?,'invited',?,?,? WHERE NOT EXISTS (
@@ -2659,9 +3220,9 @@ async function livePk(request,db,uid,now) {
     }
     if (aa.hostId!==battle.host_a || (!guest && bb.hostId!==battle.host_b) || (action==='end'?![battle.host_a,battle.host_b].includes(uid):uid!==battle.host_b)) return json({error:'Forbidden'},403);
     const accepting=action==='accept';
-    if (accepting && ((guest && aa.coHostUid) || bb.pkInvitesEnabled===false || !await authorizeLiveMedia(db,roomA,battle.host_a,'publish')
-        || !await authorizeLiveMedia(db,roomB,battle.host_b,guest?'watch':'publish') || !await authorizeLiveMedia(db,roomA,battle.host_b,'watch')
-        || !await authorizeLiveMedia(db,roomB,battle.host_a,'watch'))) return json({error:'Forbidden'},403);
+    if (accepting && ((guest && aa.coHostUid) || bb.pkInvitesEnabled===false || !await authorizeLiveMedia(db,roomA,battle.host_a,'publish',reads)
+        || !await authorizeLiveMedia(db,roomB,battle.host_b,guest?'watch':'publish',reads) || !await authorizeLiveMedia(db,roomA,battle.host_b,'watch',reads)
+        || !await authorizeLiveMedia(db,roomB,battle.host_a,'watch',reads))) return json({error:'Forbidden'},403);
     const status=accepting?'active':action==='decline'?'declined':'ended';
     const expected=action==='end'?'active':'invited';
     const expires=accepting?now+battle.duration_sec*1000:now;
@@ -2675,7 +3236,7 @@ async function livePk(request,db,uid,now) {
   }
 }
 
-async function signalChatCall(request,db,uid,now) {
+async function signalChatCall(request,db,uid,now,identity) {
   if (request.method!=='POST') return json({error:'Method not allowed'},405);
   let input; try { input=await request.json(); } catch { return json({error:'Invalid JSON'},400); }
   const {chatId,callId,action}=input||{};
@@ -2690,13 +3251,14 @@ async function signalChatCall(request,db,uid,now) {
     }
     if (!room || room.isGroup===true || !Array.isArray(room.participants) || room.participants.length!==2 || !room.participants.includes(uid)) return json({error:'Forbidden'},403);
     const peer=room.participants.find(id=>id!==uid);
-    if (!validSegment(peer) || !await callAccountsAllowed(db,uid,peer)) return json({error:'Forbidden'},403);
+    const reads=requestAccountReads(identity);
+    if (!validSegment(peer) || !await callAccountsAllowed(db,uid,peer,reads)) return json({error:'Forbidden'},403);
     const stored=await db.prepare('SELECT * FROM friendbook_cf_chat_calls WHERE chat_id=?').bind(chatId).first();
     let next, expires;
     if (action==='start') {
       if (!['voice','video'].includes(input.callType) || (stored && ['ringing','connected'].includes(stored.status) && stored.expires_at>now)) return json({error:'Call already active or invalid'},409);
-      const caller=await readRow(db,`users/${uid}`), profile=caller?decodeValue(JSON.parse(caller.document_json)):{};
-      next={callId,chatId,callerId:uid,calleeId:peer,callerName:String(profile.displayName||'').slice(0,200),callerPhoto:String(profile.photoUrl||'').slice(0,2048),callType:input.callType,status:'ringing',startedAt:now};
+      const profile=await readCallProfile(db,uid,reads);
+      next={callId,chatId,callerId:uid,calleeId:peer,callerName:String(fromFirestoreValue(profile?.displayName)||'').slice(0,200),callerPhoto:String(fromFirestoreValue(profile?.photoUrl)||'').slice(0,2048),callType:input.callType,status:'ringing',startedAt:now};
       expires=now+45000;
     } else {
       const call=room.activeCall;
@@ -2858,9 +3420,11 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0, ct
       && writingContent(url.searchParams.get('path') || url.searchParams.get('parent'))))) return json({error:'Account suspended'},403);
 
 
+  if (path === '/v1/firestore/friendship-facts') return friendshipFacts(request,db,uid);
+  if (path === '/v1/firestore/referral-status') return referralStatus(request,db,uid,now);
   if (path === '/v1/firestore/claim-referral') return claimReferral(request,db,uid,now);
-  if (path === '/v1/chat/call') return signalChatCall(request,db,uid,now);
-  if (path === '/v1/live/pk') return livePk(request,db,uid,now);
+  if (path === '/v1/chat/call') return signalChatCall(request,db,uid,now,identity);
+  if (path === '/v1/live/pk') return livePk(request,db,uid,now,identity);
   if (path === '/v1/admin/recover-social') return recoverLegacySocial(request,env,uid,now);
   if (path === '/v1/admin/broadcast') return adminBroadcast(request,env,uid,now);
   if (path === '/v1/admin/moderation') return adminModeration(request,env,uid,now);
@@ -2905,7 +3469,11 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0, ct
     catch { return json({ error: 'Read unavailable' }, 503); }
     if (!row) return json({ exists: false, id: docIdOf(docPath), path: docPath, data: null });
     const document = rowToDocument(row);
-    try { if (!(await contentReadAllowed(db,uid,docPath,requestAccountReads(identity),true))) return json({error:'Forbidden'},403); }
+    // Only the just-read canonical root can seed content authorization. Keep
+    // nested resources and every profile/group/friendship dependency fresh.
+    const canonicalContentFields=row[canonicalRootSnapshot] && parts.length===2
+      && ['posts','reels','stories'].includes(parts[0]) ? toFirestoreFields(row.document_json) : undefined;
+    try { if (!(await contentReadAllowed(db,uid,docPath,requestAccountReads(identity),true,canonicalContentFields))) return json({error:'Forbidden'},403); }
     catch { return json({error:'Content access unavailable'},503); }
     if (parts[0] === 'friend_requests' && !canReadFriendRequest(uid, document.data)) return json({ error:'Forbidden' }, 403);
     if (parts[0]==='officialBroadcasts' && document.data?.adminId!==uid) return json({error:'Forbidden'},403);
@@ -2972,7 +3540,9 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0, ct
         }
       }
       if (chatAuth.roomPath) return await writeChatMessage(db,docPath,next,now,existing,chatAuth,uid);
-      if (splitPath(docPath).length===2 && splitPath(docPath)[0]==='chats') return await writeChatRoot(db,docPath,next,now,existing,uid);
+      if (splitPath(docPath).length===2 && splitPath(docPath)[0]==='chats') return await writeChatRoot(db,docPath,next,now,existing,uid,{
+        literalNoop:body.merge===true && body.mergeFields==null && literalFields(body.data),
+      });
       const row = await writeRow(db, docPath, next, now, existing, ['stories','events','pages','lives'].includes(splitPath(docPath)[0]));
       return json(rowToDocument(row));
     } catch (e) {
@@ -3054,7 +3624,7 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0, ct
           if (!updated) return json({error:'Update unavailable'},503);
           return json(rowToDocument({...existing,document_json:serialized,update_time:now}));
         }
-        return await writeChatRoot(db,docPath,next,now,existing,uid,{canonicalOnly});
+        return await writeChatRoot(db,docPath,next,now,existing,uid,{canonicalOnly,literalNoop:literalFields(fields)});
       }
       // Active hosts send this exact telemetry patch every eight seconds.
       // Changed telemetry still persists immediately. A quiet renewal can skip
@@ -3264,9 +3834,11 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0, ct
           WHERE friendbook_cf_post_search MATCH ? AND s.source=1`).bind(match).all();
         rows=[...(canonical.results || [])];
       } else {
+        const inbox=await boundedInboxPage(db,uid,body,requestUserReads);
+        if(inbox!==null)return queryResponse(parent,inbox,body.knownRevisions);
         const people=await boundedNamePage(db,env,uid,body) ?? await boundedPeoplePage(db,env,uid,body) ?? await boundedRecentPeoplePage(db,env,uid,body);
         if (people!==null) return queryResponse(parent,people,body.knownRevisions);
-        const page=parent==='notifications'?await boundedNotificationPage(db,uid,body):await boundedFeedPage(db,uid,body,requestUserReads);
+        const page=parent==='notifications'?await boundedNotificationPage(db,uid,body):parent==='stories'?await boundedStoryPage(db,uid,body,requestUserReads) ?? await boundedStoryAuthorPage(db,uid,body,requestUserReads):await boundedVideoPostPage(db,uid,body,requestUserReads) ?? await boundedTimestampFeedHead(db,uid,body,requestUserReads) ?? await boundedFeedPage(db,uid,body,requestUserReads);
         if (page!==null) return queryResponse(parent,await feedEngagement(db,env,uid,body,page,requestUserReads),body.knownRevisions);
         rows = await readCollectionRows(db, parent, uid, body?.filters, body, env);
       }
@@ -3276,7 +3848,7 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0, ct
     let docs;
     const ownFollowFilters=Array.isArray(body?.filters) ? body.filters.filter(f=>ownFollowFilter(parent,uid,f)) : [];
     try {
-      const source=rows.map(rowToDocument).filter(doc => doc && canReadNotification(doc.path, uid, doc.data) && (parent !== 'friend_requests' || canReadFriendRequest(uid,doc.data)) && (parent !== 'payments' || canReadPayment(env,uid,doc.data)) && (parent !== 'subscriptions' || canReadSubscription(env,uid,doc.data)) && ownFollowFilters.every(f=>matchesFilter(doc.data,f,doc.id)));
+      const source=rows.map(row=>['posts','reels','stories'].includes(parent)?canonicalContentDocument(row):rowToDocument(row)).filter(doc => doc && canReadNotification(doc.path, uid, doc.data) && (parent !== 'friend_requests' || canReadFriendRequest(uid,doc.data)) && (parent !== 'payments' || canReadPayment(env,uid,doc.data)) && (parent !== 'subscriptions' || canReadSubscription(env,uid,doc.data)) && ownFollowFilters.every(f=>matchesFilter(doc.data,f,doc.id)));
       docs = (await Promise.all(prefilterRaw(source,parent,body?.filters).map(async doc => {
         const view = parent === 'groups' ? groupReadView(uid,doc.data,await trustedGroupOwner(db,doc.path)) : parent === 'friends' ? friendshipReadView(uid,doc.data) : profileReadView(doc.path, uid, doc.data, isPaymentAdmin(env,uid), moderator);
         return view === null ? null : { ...doc, data: view };
@@ -3310,10 +3882,7 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0, ct
     // Inbox pagination must order all authorized rooms before taking ten, not
     // alphabetically page first and sort only the rows the client happened to receive.
     if(parent==='chats' && spec.orderBy?.some?.(order=>order?.field==='inboxActivityAt')) {
-      const millis=value=>typeof value==='number' && Number.isFinite(value) ? value
-        : value?.__type==='timestamp' && Number.isFinite(value.millis) ? value.millis : 0;
-      visible=visible.map(doc=>({...doc,data:{...doc.data,inboxActivityAt:
-        millis(doc.data.lastMessageTime)||millis(doc.data.lastMessageTimeMs)||millis(doc.data.lastMessageAt)}}));
+      visible=visible.map(doc=>({...doc,data:{...doc.data,inboxActivityAt:inboxActivity(doc.data)}}));
     }
     const result = applyQuery(visible, spec);
     return queryResponse(parent,await feedEngagement(db,env,uid,body,result,requestUserReads),body.knownRevisions);
@@ -3346,7 +3915,7 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0, ct
     let docs;
     const ownFollowFilters=Array.isArray(filters) ? filters.filter(f=>ownFollowFilter(parent,uid,f)) : [];
     try {
-      const source=rows.map(rowToDocument).filter(doc => doc && canReadNotification(doc.path, uid, doc.data) && (parent !== 'friend_requests' || canReadFriendRequest(uid,doc.data)) && (parent !== 'payments' || canReadPayment(env,uid,doc.data)) && (parent !== 'subscriptions' || canReadSubscription(env,uid,doc.data)) && ownFollowFilters.every(f=>matchesFilter(doc.data,f,doc.id)));
+      const source=rows.map(row=>['posts','reels','stories'].includes(parent)?canonicalContentDocument(row):rowToDocument(row)).filter(doc => doc && canReadNotification(doc.path, uid, doc.data) && (parent !== 'friend_requests' || canReadFriendRequest(uid,doc.data)) && (parent !== 'payments' || canReadPayment(env,uid,doc.data)) && (parent !== 'subscriptions' || canReadSubscription(env,uid,doc.data)) && ownFollowFilters.every(f=>matchesFilter(doc.data,f,doc.id)));
       docs = (await Promise.all(prefilterRaw(source,parent,filters).map(async doc => {
         const view = parent === 'groups' ? groupReadView(uid,doc.data,await trustedGroupOwner(db,doc.path)) : parent === 'friends' ? friendshipReadView(uid,doc.data) : profileReadView(doc.path, uid, doc.data, isPaymentAdmin(env,uid));
         return view === null ? null : { ...doc, data: view };
@@ -3383,25 +3952,17 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0, ct
       try {
         const friendOp=ops.find(op=>splitPath(op?.path)?.[0]==='friends');
         const indexedCandidates=env.FRIEND_GUARD_INDEXED==='true';
-        return (friendOp.op || friendOp.type) === 'delete' ? await unfriendBatch(db,uid,ops,now,indexedCandidates) : await acceptFriendBatch(db,uid,ops,now,indexedCandidates);
+        const canonicalOnly=env.DOCUMENT_MIRROR_MODE==='canonical';
+        return (friendOp.op || friendOp.type) === 'delete' ? await unfriendBatch(db,uid,ops,now,indexedCandidates,canonicalOnly) : await acceptFriendBatch(db,uid,ops,now,indexedCandidates,canonicalOnly);
       }
       catch { return json({error:'Friendship changed or unavailable'},409); }
     }
     // Pre-read existing docs so FieldValue transforms resolve against current state.
-    const cache = new Map();
-    // Chat sends carry exactly two independent pre-reads (message and room).
-    // Keep large generic batches sequential to avoid flooding D1.
+    // Batch them by path instead of issuing one D1 statement per operation.
     const paths=[...new Set(ops.map(op=>op?.path).filter(Boolean))];
-    const room=paths.find(p=>typeof p==='string' && /^chats\/[^/]+$/.test(p));
-    try {
-      if (ops.length===2 && paths.length===2 && room && paths.some(p=>typeof p==='string'
-          && p.startsWith(`${room}/messages/`) && splitPath(p)?.length===4)) {
-        const rows=await Promise.all(paths.map(p=>readRow(db,p)));
-        paths.forEach((p,i)=>cache.set(p,rows[i]));
-      } else {
-        for (const p of paths) cache.set(p,await readRow(db,p));
-      }
-    } catch { return json({ error: 'Read unavailable' }, 503); }
+    let cache;
+    try { cache=await readRows(db,paths); }
+    catch { return json({ error: 'Read unavailable' }, 503); }
     // Compute final docs in memory, then write atomically via D1 batch.
     const finalDocs = new Map(); // path -> {doc|null(deleted), existingRow}
     const order = [];
@@ -3550,7 +4111,7 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0, ct
         // The first write checks both authorized snapshots inside the same D1
         // transaction. A missing/changed message or room forces a constraint
         // failure and rolls back the whole batch, including the unread reset.
-        statements.push(db.prepare(`INSERT INTO friendbook_cf_firestore_documents
+        statements.push(db.prepare(`INSERT INTO friendbook_cf_firestore_documents AS quota_writer_batch_chats
           (path,parent_path,collection_id,doc_id,owner_uid,document_json,create_time,update_time)
           VALUES (CASE WHEN EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents WHERE path=?1 AND document_json=?2)
             AND EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents WHERE path=?3 AND document_json=?4)
@@ -3568,7 +4129,7 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0, ct
         // stores. A failed check violates path's NOT NULL constraint, rolling
         // back the whole D1 batch including the room update. No guard row is
         // inserted or deleted, and a retry redoes reads, transforms and ACLs.
-        statements.push(db.prepare(`INSERT INTO friendbook_cf_firestore_documents
+        statements.push(db.prepare(`INSERT INTO friendbook_cf_firestore_documents AS quota_writer_batch_chats
           (path,parent_path,collection_id,doc_id,owner_uid,document_json,create_time,update_time)
           VALUES (CASE WHEN EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents WHERE path=?1 AND document_json=?2)
             AND NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents WHERE path=?3) THEN ?3 ELSE NULL END,?4,?5,?6,?7,?8,?9,?9)`)
@@ -3576,7 +4137,7 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0, ct
         const roomOwner=ownerOf(roomEntry.doc,roomEntry.existingRow.owner_uid||uid);
         statements.push(db.prepare(`UPDATE friendbook_cf_firestore_documents SET owner_uid=?,document_json=?,update_time=? WHERE path=?`)
           .bind(roomOwner,roomJson,now,roomPath));
-        if (!canonicalOnlyRoom(roomPath,roomEntry)) statements.push(db.prepare(`INSERT INTO friendbook_cf_documents(path,collection,doc_id,owner_uid,document_json,updated_at)
+        if (!canonicalOnlyRoom(roomPath,roomEntry)) statements.push(db.prepare(`INSERT INTO friendbook_cf_documents AS quota_writer_batch_chats(path,collection,doc_id,owner_uid,document_json,updated_at)
           VALUES (?,?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET owner_uid=excluded.owner_uid,document_json=excluded.document_json,updated_at=excluded.updated_at`)
           .bind(roomPath,'chats',docIdOf(roomPath),roomOwner,JSON.stringify({...roomEntry.doc,id:docIdOf(roomPath)}),now));
       } else {
@@ -3620,7 +4181,7 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0, ct
             const serialized = JSON.stringify(entry.doc);
             if (serialized.length > 1_800_000) return json({ error: 'Document too large' }, 413);
             statements.push(db.prepare(
-              `INSERT INTO friendbook_cf_firestore_documents(path, parent_path, collection_id, doc_id, owner_uid, document_json, create_time, update_time)
+              `INSERT INTO friendbook_cf_firestore_documents AS ${writeAttribution('batch',p)}(path, parent_path, collection_id, doc_id, owner_uid, document_json, create_time, update_time)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(path) DO UPDATE SET owner_uid = excluded.owner_uid, document_json = excluded.document_json, update_time = excluded.update_time`
             ).bind(p, parent, coll, id, owner, serialized, createTime, now));
@@ -3628,7 +4189,7 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0, ct
               const appDoc = JSON.stringify({ ...entry.doc, id });
               const appOwner = owner || (coll === 'users' ? id : '');
               statements.push(db.prepare(
-                `INSERT INTO friendbook_cf_documents(path, collection, doc_id, owner_uid, document_json, updated_at)
+                `INSERT INTO friendbook_cf_documents AS ${writeAttribution('batch',p)}(path, collection, doc_id, owner_uid, document_json, updated_at)
                  VALUES (?, ?, ?, ?, ?, ?)
                  ON CONFLICT(path) DO UPDATE SET owner_uid=excluded.owner_uid, document_json=excluded.document_json, updated_at=excluded.updated_at`
               ).bind(p, coll, id, appOwner, appDoc, now));

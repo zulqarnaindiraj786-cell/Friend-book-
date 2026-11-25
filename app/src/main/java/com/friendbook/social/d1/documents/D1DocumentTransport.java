@@ -65,7 +65,8 @@ final class D1DocumentTransport {
             response=requestOnce(method,pathAndQuery,body,actor,true);
         }
         if (!"GET".equals(method) && !"/v1/firestore/query".equals(pathAndQuery)
-                && !pathAndQuery.startsWith("/v1/firestore/count?")) READ_EPOCH.incrementAndGet();
+                && !pathAndQuery.startsWith("/v1/firestore/count?")
+                && !"/v1/firestore/friendship-facts".equals(pathAndQuery)) READ_EPOCH.incrementAndGet();
         return response;
     }
 
@@ -119,6 +120,15 @@ final class D1DocumentTransport {
         String response=READS.read(key, () -> request(method,path,body).toString());
         requireActor(actor);
         return new JSONObject(response); // Never share mutable JSON across consumers.
+    }
+
+    static JSONObject referralStatus() throws Exception {
+        return read("POST","/v1/firestore/referral-status",new JSONObject());
+    }
+
+    static JSONObject friendshipFacts(java.util.List<String> candidates) throws Exception {
+        return read("POST","/v1/firestore/friendship-facts",
+                new JSONObject().put("candidates",new JSONArray(candidates)));
     }
 
     static JSONObject getDocument(String path) throws Exception {return getDocument(path,false);}

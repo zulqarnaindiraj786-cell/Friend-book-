@@ -13,10 +13,9 @@ import static org.junit.Assert.*;
 /** Guards the three on-demand budgets: suggestions, listener caps and cold start. */
 public class OnDemandLoadsTest {
 
-    @Test public void chatBadgeListenerIsCappedAtOneHundredRooms() {
-        assertEquals(100, OnDemandLoads.CHAT_BADGE_LIMIT);
-        assertTrue(OnDemandLoads.FRIEND_GRAPH_LIMIT > 0);
-        assertTrue(OnDemandLoads.FRIEND_GRAPH_LIMIT <= 500);
+    @Test public void chatBadgeReadIsCappedAtTwentyRooms() {
+        // QUOTA: the badge is a one-shot read for a pill that shows "99+"; 20 recent rooms is plenty.
+        assertEquals(20, OnDemandLoads.CHAT_BADGE_LIMIT);
         assertTrue(OnDemandLoads.BADGE_WINDOW <= 32);
     }
 
@@ -46,16 +45,16 @@ public class OnDemandLoadsTest {
                 main.contains("OnDemandLoads.CHAT_BADGE_LIMIT"));
         assertTrue("Chat badge listener must bound the read",
                 main.contains(".limit(com.friendbook.social.core.OnDemandLoads.CHAT_BADGE_LIMIT)"));
-        assertTrue("Friend graph listener must be limited",
-                home.contains("OnDemandLoads.FRIEND_GRAPH_LIMIT"));
+        assertTrue("Visible friendship facts must be bounded to submitted candidates",
+                home.contains("Fb.db().friendshipFactsAutomatic(ids,scope)") && home.contains("Ui.chunks(new ArrayList<>(needed),10)"));
         assertTrue("Suggestions must be served from cache",
                 home.contains("restorePymkFromCache") && home.contains("pymkCacheFresh"));
         assertTrue("Suggestions fetch only through the guarded path",
-                home.contains("loadNotesUsers(true)"));
+                home.contains("loadNotesUsers(discoveryRefresh)") && home.contains("public void onDiscoveryVisible()"));
         assertFalse("Suggestions must not be re-read on every tab return",
                 home.contains("pendingHomeSecondary = () -> {\n            pendingHomeSecondary = null;\n            if (!homeStarted || !isAdded() || isHidden() || !actor.equals(Fb.uid())) return;\n            startHomeWatchers();\n            startStoriesListener();\n            loadFeaturedReelsForHome();\n            loadNotesUsers(true);"));
-        assertTrue("Referral totals must not join the cold-start burst",
-                main.contains("watchReferralsForFreeTick, 4_000L"));
+        assertFalse("Referral totals must not join the cold-start burst",
+                main.contains("watchReferralsForFreeTick"));
     }
 
     private static String read(String relative) throws Exception {

@@ -32,7 +32,6 @@ import com.friendbook.social.settings.SettingsActivity;
 import com.friendbook.social.settings.TimeSpentActivity;
 import com.google.firebase.Timestamp;
 import com.friendbook.social.d1.documents.FieldValue;
-import com.friendbook.social.d1.documents.ListenerRegistration;
 
 import java.util.Calendar;
 import java.util.HashMap;
@@ -48,7 +47,7 @@ public class MenuFragment extends Fragment {
 
     private ImageView avatar, tickIv;
     private TextView name, bio;
-    private ListenerRegistration meReg;
+    private final Fb.MeObserver meObserver=this::renderSharedProfile;
 
     @Nullable
     @Override
@@ -297,7 +296,7 @@ public class MenuFragment extends Fragment {
             Prefs.setQuiet(a, on);
             Ui.toast(a, on ? "Quiet mode ON — badges muted" : "Quiet mode OFF");
         }));
-        body.addView(item(a, Icons.BOOKMARK, "📥 Preload 30 Posts for Offline / 2G",
+        body.addView(item(a, Icons.BOOKMARK, "📥 Preload 10 Posts for Offline / 2G",
                 "Cache latest feed posts & mini thumbnails for instant 0ms offline reading",
                 () -> com.friendbook.social.core.FastCache.preloadFeedForOffline(a, null)));
 
@@ -348,6 +347,8 @@ public class MenuFragment extends Fragment {
                     a.finish();
                 }));
         body.addView(logout);
+        body.addView(spacer(a,20));
+        body.addView(inviteFriendsCard(a));
 
         TextView ver = Ui.tv(a, "friendbook for Android · v" + vName, 11, Ui.sub(a));
         ver.setGravity(Gravity.CENTER);
@@ -357,6 +358,29 @@ public class MenuFragment extends Fragment {
         sv.addView(body);
         root.addView(sv, new LinearLayout.LayoutParams(-1, 0, 1));
         return root;
+    }
+
+    private View inviteFriendsCard(Activity a) {
+        LinearLayout card=Ui.col(a);
+        card.setBackground(Ui.round(a,Ui.isDark(a)?0xFF202433:0xFFEEF1FF,20));
+        Ui.pad(card,20,18,20,18);
+        card.addView(Ui.tvBold(a,"Invite Friends",23,Ui.txt(a)));
+        TextView subtitle=Ui.tv(a,"Help your friends discover friendbook",14,Ui.sub(a));
+        subtitle.setPadding(0,Ui.dp(a,4),0,Ui.dp(a,18));
+        card.addView(subtitle);
+        TextView share=Ui.btn(a,"Share on WhatsApp");
+        share.setTextColor(Color.WHITE);
+        share.setBackground(Ui.round(a,0xFF4355B5,16));
+        Ui.pad(share,16,12,16,12);
+        android.graphics.drawable.Drawable icon=a.getDrawable(android.R.drawable.ic_menu_share).mutate();
+        icon.setTint(Color.WHITE);icon.setBounds(0,0,Ui.dp(a,22),Ui.dp(a,22));
+        share.setCompoundDrawables(icon,null,null,null);
+        share.setCompoundDrawablePadding(Ui.dp(a,9));
+        share.setContentDescription("Invite friends: share friendbook Play Store link on WhatsApp");
+        share.setOnClickListener(v -> com.friendbook.social.core.InviteFriends.shareOnWhatsApp(a));
+        card.setOnClickListener(v -> com.friendbook.social.core.InviteFriends.shareOnWhatsApp(a));
+        card.addView(share,new LinearLayout.LayoutParams(-2,-2));
+        return card;
     }
 
     private void addGridRow(LinearLayout body, Activity a, View left, View right) {
@@ -470,32 +494,32 @@ public class MenuFragment extends Fragment {
         return wrap;
     }
 
-    @Override
-    public void onStart() {
-        super.onStart();
-        String me = Fb.uid();
-        if (me == null) return;
-        meReg = Fb.db().collection("users").document(me)
-                .addSnapshotListener((d, err) -> {
-                    if (d == null || !d.exists() || getActivity() == null) return;
-                    Models.User u = Models.User.fromDoc(d);
-                    name.setText(u.displayName);
-                    Icons.setTickBadge(tickIv, u.tickLevel, false);
-                    String sub = (u.professionalMode ? "📊 Creator · " : "")
-                            + (u.bio == null || u.bio.isEmpty() ? "Tap to view your profile" : u.bio);
-                    bio.setText(sub);
-                    Ui.avatar(getActivity(), avatar, u.photoUrl);
-                    if (Fb.auth().getCurrentUser() != null) {
-                        Prefs.saveAccount(getActivity(), u.uid,
-                                Fb.auth().getCurrentUser().getEmail(), u.displayName, u.photoUrl);
-                    }
-                });
+    private void renderSharedProfile(Models.User u) {
+        if (!isAdded() || isHidden() || getActivity()==null || name==null
+                || u==null || !java.util.Objects.equals(u.uid,Fb.uid())) return;
+        name.setText(u.displayName);
+        Icons.setTickBadge(tickIv,u.tickLevel,false);
+        bio.setText((u.professionalMode ? "📊 Creator · " : "")
+                + (u.bio==null || u.bio.isEmpty()?"Tap to view your profile":u.bio));
+        Ui.avatar(getActivity(),avatar,u.photoUrl);
+        if(Fb.auth().getCurrentUser()!=null) Prefs.saveAccount(getActivity(),u.uid,
+                Fb.auth().getCurrentUser().getEmail(),u.displayName,u.photoUrl);
     }
 
-    @Override
-    public void onStop() {
+    @Override public void onStart() {
+        super.onStart();
+        if (!isHidden()) Fb.addMeObserver(meObserver);
+    }
+
+    @Override public void onHiddenChanged(boolean hidden) {
+        super.onHiddenChanged(hidden);
+        if(hidden) Fb.removeMeObserver(meObserver);
+        else if(isAdded() && isResumed()) Fb.addMeObserver(meObserver);
+    }
+
+    @Override public void onStop() {
+        Fb.removeMeObserver(meObserver);
         super.onStop();
-        if (meReg != null) meReg.remove();
     }
 
     private void claimDailyBonus(final Activity a) {

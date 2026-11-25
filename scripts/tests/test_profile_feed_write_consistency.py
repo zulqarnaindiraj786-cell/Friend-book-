@@ -27,7 +27,7 @@ class ProfileFeedConsistencyTest(unittest.TestCase):
 
     def test_profile_count_starts_without_waiting_for_page_callback(self):
         profile = (JAVA / 'profile/ProfileActivity.java').read_text()
-        self.assertIn('postPager.start();\n        refreshPostCount(generation);', profile)
+        self.assertIn('postPager.startCachedForForeground(120_000L);\n        refreshPostCount(generation);', profile)
         self.assertIn('postPager.forget(id)', profile)
 
     def test_staff_delete_uses_moderation_api_not_owner_only_delete(self):
@@ -41,7 +41,8 @@ class ProfileFeedConsistencyTest(unittest.TestCase):
         source = (JAVA / 'post/FeedAdapter.java').read_text()
         self.assertIn('requestedAuthors.add(String.valueOf(actor) + ":" + p.authorId)', source)
         self.assertIn('java.util.Objects.equals(actor, Fb.uid())', source)
-        self.assertIn('Fb.getUserFresh(p.authorId).addOnSuccessListener', source)
+        self.assertIn('FieldPath.documentId(),chunk)', source)
+        self.assertNotIn('Fb.getUserFresh(p.authorId)', source)
         self.assertIn('String dpUrl = photo;', source)
 
 

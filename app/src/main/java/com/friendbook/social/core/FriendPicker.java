@@ -15,7 +15,9 @@ public final class FriendPicker {
         LinearLayout root=Ui.col(a),rows=Ui.col(a),controls=Ui.col(a);ScrollView scroll=new ScrollView(a);scroll.addView(rows);
         root.addView(scroll,new LinearLayout.LayoutParams(-1,Ui.dp(a,320)));root.addView(controls);
         AlertDialog.Builder builder=new AlertDialog.Builder(a).setTitle(title).setView(root).setNegativeButton("Cancel",null);
-        if(selected!=null)builder.setPositiveButton("Done",(d,w)->multi.accept(new LinkedHashMap<>(selected)));
+        if(selected!=null)builder.setPositiveButton("Done",(d,w)->{
+            if(Objects.equals(actor,Fb.uid()) && !a.isFinishing() && !a.isDestroyed())multi.accept(new LinkedHashMap<>(selected));
+        });
         AlertDialog dialog=builder.create();dialog.show();final int[] generation={0};
         ListenerRegistration reg=PagedLists.attach(a,controls,Fb.db().collection("friends").whereArrayContains("participants",actor),20,"friend-picker",(page,error)->{
             int request=++generation[0];rows.removeAllViews();Set<String> ids=new LinkedHashSet<>();
@@ -25,10 +27,24 @@ public final class FriendPicker {
                 Fb.getUser(uid).addOnSuccessListener(user->{
                     if(user==null || !dialog.isShowing() || request!=generation[0] || !Objects.equals(actor,Fb.uid()))return;
                     row.setText(user.displayName);
-                    if(selected==null)row.setOnClickListener(v->{dialog.dismiss();single.accept(user);});
+                    if(selected==null)row.setOnClickListener(v->{
+                        if(!dialog.isShowing() || !Objects.equals(actor,Fb.uid()) || a.isFinishing() || a.isDestroyed())return;
+                        dialog.dismiss();single.accept(user);
+                    });
                     else {CheckBox check=(CheckBox)row;check.setChecked(selected.containsKey(uid));check.setOnCheckedChangeListener((button,on)->{if(on)selected.put(uid,user.displayName);else selected.remove(uid);});}
                 });
             }
-        });dialog.setOnDismissListener(d->{generation[0]++;reg.remove();});
+        });
+        android.app.Application.ActivityLifecycleCallbacks lifecycle=new android.app.Application.ActivityLifecycleCallbacks(){
+            public void onActivityCreated(Activity activity,android.os.Bundle state){}
+            public void onActivityStarted(Activity activity){}
+            public void onActivityResumed(Activity activity){}
+            public void onActivityPaused(Activity activity){}
+            public void onActivityStopped(Activity activity){if(activity==a && dialog.isShowing())dialog.dismiss();}
+            public void onActivitySaveInstanceState(Activity activity,android.os.Bundle state){}
+            public void onActivityDestroyed(Activity activity){if(activity==a && dialog.isShowing())dialog.dismiss();}
+        };
+        a.getApplication().registerActivityLifecycleCallbacks(lifecycle);
+        dialog.setOnDismissListener(d->{generation[0]++;reg.remove();a.getApplication().unregisterActivityLifecycleCallbacks(lifecycle);});
     }
 }

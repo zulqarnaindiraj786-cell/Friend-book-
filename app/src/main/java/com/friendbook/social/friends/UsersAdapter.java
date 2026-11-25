@@ -156,7 +156,7 @@ public class UsersAdapter extends RecyclerView.Adapter<UsersAdapter.VH> {
             h.primary.setVisibility(View.VISIBLE);
             h.primary.setText(r.primaryLabel);
             h.primary.setOnClickListener(v -> {
-                if (handler != null) handler.primary(r);
+                if (handler != null && com.friendbook.social.core.InteractionCooldown.disableBriefly(v)) handler.primary(r);
             });
         } else h.primary.setVisibility(View.GONE);
 
@@ -164,7 +164,7 @@ public class UsersAdapter extends RecyclerView.Adapter<UsersAdapter.VH> {
             h.secondary.setVisibility(View.VISIBLE);
             h.secondary.setText(r.secondaryLabel);
             h.secondary.setOnClickListener(v -> {
-                if (handler != null) handler.secondary(r);
+                if (handler != null && com.friendbook.social.core.InteractionCooldown.disableBriefly(v)) handler.secondary(r);
             });
         } else h.secondary.setVisibility(View.GONE);
 

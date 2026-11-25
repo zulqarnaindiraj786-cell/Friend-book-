@@ -6,6 +6,7 @@ on:
     branches: ['arena/**']
     paths:
       - '.github/workflows/android-unit-tests.yml'
+      - 'scripts/ci/fetch_robolectric_jars.sh'
       - 'app/src/test/**'
       - 'app/src/main/java/com/friendbook/social/d1/**'
       - 'app/src/main/java/**'
@@ -43,14 +44,29 @@ jobs:
         with:
           gradle-version: '8.11.1'
 
+      - name: Fetch and verify Robolectric Android jars before test JVM startup
+        timeout-minutes: 8
+        run: bash scripts/ci/fetch_robolectric_jars.sh
+
       - name: Run JVM unit tests
+        env:
+          # Use Maven Central's canonical endpoint in both Gradle and its test JVMs.
+          # The release workflow already uses this endpoint for Robolectric Android jars.
+          JAVA_TOOL_OPTIONS: '-Drobolectric.dependency.repo.url=https://repo.maven.apache.org/maven2'
         run: |
           set +e
           gradle testDebugUnitTest --console=plain > unit-tests.log 2>&1
           RESULT=$?
           grep -E "d1.documents.ListenerPollingPolicyTest|tests completed|FAILED" unit-tests.log | tail -30
           if [ "$RESULT" != "0" ]; then
-            grep -nE "error: |FAILED|expected:|Tests? .*failed|AssertionError|Exception" unit-tests.log \
+            python3 - <<'PYTEST'
+          import glob, xml.etree.ElementTree as ET
+          for path in glob.glob('app/build/test-results/testDebugUnitTest/TEST-*.xml'):
+              for failure in ET.parse(path).iter('failure'):
+                  for line in (failure.text or '').splitlines()[:12]:
+                      print('::error::Android unit regression: '+line[:350])
+          PYTEST
+            grep -nE "error: |FAILED|expected:|Tests? .*failed|AssertionError|Exception|Failed to fetch|Server returned HTTP" unit-tests.log \
               | head -40 | while IFS= read -r line; do echo "::error::${line:0:400}"; done
             tail -40 unit-tests.log | while IFS= read -r line; do echo "::warning::${line:0:400}"; done
           else

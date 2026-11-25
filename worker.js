@@ -13,6 +13,7 @@ import { fcmGateway, pushIncomingCall } from './cloudflare/fcm-push.js';
 import { createRemoteJWKSet, jwtVerify } from 'jose';
 import { accountStatus } from './cloudflare/account-access.js';
 import { isPaymentAdmin } from './cloudflare/payment-access.js';
+import { canonicalDocumentWriteEnv } from './cloudflare/canonical-document-writes.js';
 
 const googleKeys = createRemoteJWKSet(new URL(
   'https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com'
@@ -34,9 +35,25 @@ export async function verifyFirebaseToken(token, project, keys = googleKeys) {
 const json = (body, status = 200) => Response.json(body, {
   status, headers: { 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' },
 });
+async function isRetiredStatusHeartbeat(request, uid) {
+  if (request.method !== 'PATCH') return false;
+  const url = new URL(request.url);
+  if (url.pathname !== '/v1/firestore/document' || url.searchParams.get('path') !== `users/${uid}`) return false;
+  try {
+    const body = await request.clone().json();
+    const fields = body?.fields || body?.data || body?.updates;
+    const keys = ['isOnline','isActive','showActiveStatus','lastSeenMs','lastSeen'];
+    return Boolean(fields && typeof fields === 'object' && !Array.isArray(fields)
+      && Object.keys(fields).length === keys.length && Object.keys(fields).every(key => keys.includes(key))
+      && fields.isOnline === true && fields.isActive === true
+      && typeof fields.showActiveStatus === 'boolean' && Number.isSafeInteger(fields.lastSeenMs)
+      && fields.lastSeen?.__fieldValue === 'serverTimestamp');
+  } catch { return false; }
+}
 export function createWorker(verify = verifyFirebaseToken) {
   return {
     async fetch(request, env, ctx) {
+      env = canonicalDocumentWriteEnv(env);
       const path = new URL(request.url).pathname;
       // API namespaces must never fall through to HTML, even for unknown endpoints.
       const api = path === '/health' || path.startsWith('/health/') || path === '/v1' || path.startsWith('/v1/')
@@ -61,7 +78,7 @@ export function createWorker(verify = verifyFirebaseToken) {
       const phoneVideo = /^\/v1\/videos\/(preview|full)$/.exec(path);
       const video = path === '/v1/videos' || Boolean(phoneVideo);
       const photo = path === '/v1/photos';
-      const firestore = path === '/v1/chat/call' || path === '/v1/firestore/claim-referral' || path === '/v1/live/pk' || path === '/v1/firestore/document' || path === '/v1/firestore/query' || path === '/v1/firestore/profile-bootstrap'
+      const firestore = path === '/v1/chat/call' || path === '/v1/firestore/friendship-facts' || path === '/v1/firestore/referral-status' || path === '/v1/firestore/claim-referral' || path === '/v1/live/pk' || path === '/v1/firestore/document' || path === '/v1/firestore/query' || path === '/v1/firestore/profile-bootstrap'
         || path === '/v1/firestore/batch' || path === '/v1/firestore/transaction' || path === '/v1/firestore/count'
         || path === '/v1/admin/recover-social' || path === '/v1/admin/moderation' || path === '/v1/admin/broadcast' || path === '/v1/firestore/story-engagement';
       const fcm = path === '/functions/v1/send-fcm-notification' || path === '/functions/v1/bulk-mentions';
@@ -102,6 +119,10 @@ export function createWorker(verify = verifyFirebaseToken) {
       let uid;
       try { uid = await verify(bearer[1], env.FIREBASE_PROJECT_ID); }
       catch { return json({ error: 'Unauthorized' }, 401); }
+      // An old online-status heartbeat can still arrive from a legacy APK.
+      // Acknowledge its exact profile-only shape before account/profile D1 reads;
+      // it is a no-op because online status is no longer supported.
+      if (await isRetiredStatusHeartbeat(request, uid)) return json({ ok: true, retired: true });
       // Keep the own-profile read available so the Android app can detect a ban
       // and sign out, but reject all other operations for disabled accounts.
       const ownProfileRead=path==='/v1/firestore/document' && request.method==='GET'

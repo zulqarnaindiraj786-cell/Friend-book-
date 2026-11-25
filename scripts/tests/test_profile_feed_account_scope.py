@@ -11,11 +11,13 @@ class ProfileFeedScope(unittest.TestCase):
   self.assertIn('if (me != null && !uid.equals(me.uid)) me=null;',fb)
   self.assertIn('public static Task<Models.User> getUserFresh',fb)
   self.assertIn('Objects.equals(actor,Fb.uid())',fb)
- def test_friends_rechecks_actor_relationships_and_profiles_on_visit(self):
+ def test_friends_bounds_relationship_cache_and_batches_missing_profiles(self):
   s=(ROOT/'friends/FriendsFragment.java').read_text()
-  self.assertIn('checkedCandidates.clear();candidateFriends.clear();candidateIncoming.clear();candidateOutgoing.clear();failedCandidates.clear();userCache.clear();',s)
+  self.assertIn('checkedCandidates.clear();candidateFriends.clear();candidateIncoming.clear();candidateOutgoing.clear();failedCandidates.clear();',s)
   self.assertIn('loadingProfiles=new HashSet<>()',s)
-  self.assertIn('Fb.getUserFresh(uid)',s)
+  self.assertNotIn('Fb.getUserFresh(uid)',s)
+  self.assertIn('hydrateFriendProfiles(me,token)',s)
+  self.assertIn('candidatesCheckedAt>=300_000L',s)
   self.assertIn('this::loadInlineSuggestions',s)
   self.assertNotIn('ensureUser(req.fromUid)',s)
   self.assertNotIn('suggestionPager.start()',s.split('private void loadInlineSuggestions',1)[0])
@@ -25,5 +27,6 @@ class ProfileFeedScope(unittest.TestCase):
   self.assertIn('if(!offline || !records.containsKey(doc.getId()))records.put',s)
  def test_feed_refreshes_author_even_when_post_has_old_name(self):
   s=(ROOT/'post/FeedAdapter.java').read_text()
-  self.assertIn('Fb.getUserFresh(p.authorId)',s)
+  self.assertIn('hydrateMissingAuthors(list)',s)
+  self.assertNotIn('Fb.getUserFresh(p.authorId)',s)
 if __name__=='__main__':unittest.main()

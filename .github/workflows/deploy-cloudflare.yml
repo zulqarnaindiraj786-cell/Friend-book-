@@ -2,7 +2,7 @@
 name: Deploy FriendBook Cloudflare Worker (D1 ON)
 on:
   push:
-    branches: [main, 'arena/15a53658-friend-book', 'arena/f6bf61bd-friend-book', 'arena/7c7ddb7b-friend-book']
+    branches: [main, 'arena/15a53658-friend-book', 'arena/f6bf61bd-friend-book', 'arena/7c7ddb7b-friend-book', 'arena/b52bc74d-friend-book']
     paths:
       - 'worker.js'
       - 'wrangler.toml'
@@ -26,7 +26,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   deploy:
-    if: (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/arena/15a53658-friend-book' || github.ref == 'refs/heads/arena/f6bf61bd-friend-book' || (github.ref == 'refs/heads/arena/7c7ddb7b-friend-book' && github.event_name == 'push' && contains(github.event.head_commit.message, '[deploy-cloudflare-production]'))) && !contains(github.event.head_commit.message, '[no-deploy]')
+    if: (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/arena/15a53658-friend-book' || github.ref == 'refs/heads/arena/f6bf61bd-friend-book' || (github.ref == 'refs/heads/arena/7c7ddb7b-friend-book' && github.event_name == 'push' && contains(github.event.head_commit.message, '[deploy-cloudflare-production]')) || (github.ref == 'refs/heads/arena/b52bc74d-friend-book' && github.event_name == 'push' && contains(github.event.head_commit.message, '[deploy-cloudflare-production]'))) && !contains(github.event.head_commit.message, '[no-deploy]')
     runs-on: ubuntu-latest
     timeout-minutes: 360
     steps:
@@ -63,7 +63,7 @@ jobs:
           python3 cloudflare/test/schema_test.py
           python3 cloudflare/test/migration_test.py
           python3 cloudflare/test/index_plan_test.py
-          python3 -m unittest scripts.tests.test_fcm_claim_migration_gate scripts.tests.test_d1_account_usage_analytics scripts.tests.test_retired_table_preflight scripts.tests.test_verify_retired_drop scripts.tests.test_retired_migration_gate
+          python3 -m unittest scripts.tests.test_fcm_claim_migration_gate scripts.tests.test_d1_account_usage_analytics scripts.tests.test_retired_table_preflight scripts.tests.test_verify_retired_drop scripts.tests.test_retired_migration_gate scripts.tests.test_canonical_inventory
       - name: Verify Save Forever R2 configuration (no R2 object deletion)
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -170,6 +170,80 @@ jobs:
               echo "whoami_status=$whoami_status" >> "$GITHUB_OUTPUT"
               echo "d1_list_status=$d1_list_status" >> "$GITHUB_OUTPUT"
               echo 'migration_status=retired-table-preflight-failed' >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          fi
+          if [ "$GITHUB_REF" = refs/heads/arena/b52bc74d-friend-book ]; then
+            printf '%s\n' "$pending" > "$RUNNER_TEMP/b52-pending-migrations.txt"
+            python3 - "$RUNNER_TEMP/b52-pending-migrations.txt" <<'PY_PENDING'
+          import pathlib, re, sys
+          text = pathlib.Path(sys.argv[1]).read_text(errors='replace')
+          found = sorted(set(re.findall(r'(\d{4}_[A-Za-z0-9_]+\.sql)', text)))
+          expected = [
+              '0088_pending_duplicate_request_seek.sql',
+              '0089_remove_redundant_global_owner_index.sql',
+              '0090_scope_chat_timestamp_index.sql',
+              '0091_chat_activity_seek.sql',
+              '0092_friend_exact_pair_seek.sql',
+              '0093_remove_redundant_notification_recipient.sql',
+              '0094_friend_membership_facts.sql',
+              '0095_video_post_page.sql',
+              '0096_group_post_page.sql',
+              '0097_story_expiry_exceptions.sql',
+              '0098_story_author_page.sql',
+              '0099_feed_high_rank_exceptions.sql',
+              '0100_interaction_state_cover.sql',
+              '0101_legacy_comment_epoch.sql',
+              '0102_remove_legacy_notification_recipient.sql',
+              '0103_comment_reaction_covering_index.sql',
+              '0104_retire_legacy_derived_index_triggers.sql',
+          ]
+          if len(found) > len(expected) or found != expected[len(expected)-len(found):]:
+              print(f'Pending migrations are not a suffix of the reviewed 0088–0104 rollout: {found!r}', file=sys.stderr)
+              raise SystemExit(1)
+          if found:
+              print('Remaining migrations are a reviewed suffix of 0088–0104; only those will be applied.')
+          else:
+              print('Reviewed 0088–0104 migrations are already applied; no D1 migration will run.')
+          PY_PENDING
+            status=$?
+            if [ "$status" -ne 0 ]; then
+              echo 'Migration set differs from exact reviewed rollout; no migration attempted.' | tee -a "$log"
+              echo "whoami_status=$whoami_status" >> "$GITHUB_OUTPUT"
+              echo "d1_list_status=$d1_list_status" >> "$GITHUB_OUTPUT"
+              echo 'migration_status=reviewed-set-mismatch' >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          fi
+          if grep -q '^DOCUMENT_MIRROR_MODE = "canonical"$' wrangler.toml; then
+            # Mirror writes are disabled in the Worker shipped by this branch.
+            # Take a full bounded legacy-vs-canonical snapshot first and fail closed
+            # if any legacy-only records remain or the inventory cap is reached.
+            set -o pipefail
+            python3 -m scripts.loadtest.canonical_inventory --require-no-legacy-only 2>&1 | tee -a "$log"
+            inventory_status=${PIPESTATUS[0]}
+            set +o pipefail
+            if [ "$inventory_status" -ne 0 ]; then
+              echo 'Canonical coverage preflight failed; no migration or Worker deployment allowed.' | tee -a "$log"
+              echo "whoami_status=$whoami_status" >> "$GITHUB_OUTPUT"
+              echo "d1_list_status=$d1_list_status" >> "$GITHUB_OUTPUT"
+              echo 'migration_status=canonical-coverage-preflight-failed' >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          fi
+          if printf '%s\n' "$pending" | grep -q '0103_comment_reaction_covering_index.sql'; then
+            # The new covering index scans reaction rows during construction.
+            # Proceed only when the account-wide delayed quota sample leaves a
+            # conservative reserve; if analytics is unavailable the migration stays pending.
+            set -o pipefail
+            python3 scripts/loadtest/d1_account_usage_analytics.py --preflight-budget 2>&1 | tee -a "$log"
+            preflight_status=${PIPESTATUS[0]}
+            set +o pipefail
+            if [ "$preflight_status" -ne 0 ]; then
+              echo 'Comment reaction index quota preflight failed; no migration attempted.' | tee -a "$log"
+              echo "whoami_status=$whoami_status" >> "$GITHUB_OUTPUT"
+              echo "d1_list_status=$d1_list_status" >> "$GITHUB_OUTPUT"
+              echo 'migration_status=comment-reaction-index-preflight-failed' >> "$GITHUB_OUTPUT"
               exit 0
             fi
           fi
@@ -428,7 +502,7 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: '92f3d04598822de2e49e14561218d090'
-          WORKERS_BUILD_ID: '7e5fbcc8-fc28-4e09-b2d6-fc43084e1aa2'
+          WORKERS_BUILD_ID: '06d6767d-56ae-404a-aca2-f54832d62e9e'
         run: |
           node <<'NODE' | tee workers-build-diagnostic.log
           const fs = require('node:fs');
@@ -829,3 +903,45 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: '92f3d04598822de2e49e14561218d090'
         run: node cloudflare/report-views-ae.mjs
+  build_diagnostics:
+    if: github.event_name == 'push' && contains(github.event.head_commit.message, '[build-diagnose]')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch exact Cloudflare Workers Build log
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: '92f3d04598822de2e49e14561218d090'
+          WORKERS_BUILD_ID: '06d6767d-56ae-404a-aca2-f54832d62e9e'
+        run: |
+          node --input-type=module <<'JS'
+          const fs=await import('node:fs');
+          const token=process.env.CLOUDFLARE_API_TOKEN;
+          if (!token) throw new Error('Cloudflare token secret unavailable to workflow');
+          const url=`https://api.cloudflare.com/client/v4/accounts/${process.env.CLOUDFLARE_ACCOUNT_ID}/builds/builds/${process.env.WORKERS_BUILD_ID}/logs`;
+          const response=await fetch(url,{headers:{Authorization:`Bearer ${token}`,Accept:'application/json'}});
+          const raw=await response.text();
+          let payload; try { payload=JSON.parse(raw); } catch { payload={raw:raw.slice(0,3000)}; }
+          const redact=value=>String(value).split(token).join('[REDACTED_TOKEN]');
+          const logs=(payload?.result?.lines||[]).map(x=>Array.isArray(x)?x.at(-1):x).map(redact).slice(-180).join('\n');
+          const report={httpStatus:response.status,success:payload.success,errors:payload.errors,logs:logs||redact(JSON.stringify(payload))};
+          fs.writeFileSync('cloudflare-build-report.json',JSON.stringify(report,null,2));
+          console.log(JSON.stringify(report,null,2));
+          if (!response.ok || payload.success===false) console.log('::warning::Cloudflare API denied access to build logs; production Worker deployment status is independent.');
+          JS
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: cloudflare-build-diagnostic
+          path: cloudflare-build-report.json
+          if-no-files-found: warn
+      - name: Publish redacted diagnostic to PR
+        if: always() && hashFiles('cloudflare-build-report.json') != ''
+        uses: actions/github-script@v7
+        env:
+          BUILD_ID: '06d6767d-56ae-404a-aca2-f54832d62e9e'
+        with:
+          script: |
+            const fs=require('fs');
+            const report=JSON.parse(fs.readFileSync('cloudflare-build-report.json','utf8'));
+            const body='Cloudflare Workers Build diagnostic (build '+process.env.BUILD_ID+')\n\n```json\n'+JSON.stringify(report,null,2).slice(0,12000)+'\n```';
+            await github.rest.issues.createComment({owner:context.repo.owner,repo:context.repo.repo,issue_number:36,body});

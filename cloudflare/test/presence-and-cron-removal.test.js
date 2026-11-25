@@ -42,7 +42,7 @@ test('exactly one cron runs every fifteen minutes and it only does bounded maint
   assert.doesNotMatch(scheduled, /setInterval|setTimeout|while\s*\(/, 'no looping inside the pass');
   assert.match(scheduled, /UPDATE friendbook_cf_firestore_documents[\s\S]*?LIMIT 20/, 'stale live rooms are bounded');
   assert.match(scheduled, /drainBroadcastPush/, 'only the durable outbox is retried');
-  assert.match(scheduled, /DELETE FROM friendbook_cf_view_dedupe[\s\S]*?LIMIT 200/, 'dedupe cleanup is bounded');
+  assert.doesNotMatch(scheduled, /DELETE FROM friendbook_cf_view_dedupe/, 'retired view table has no invented timestamp cleanup');
 });
 
 test('chat, feed and presence-free requests still reach the Worker exactly as before', async () => {

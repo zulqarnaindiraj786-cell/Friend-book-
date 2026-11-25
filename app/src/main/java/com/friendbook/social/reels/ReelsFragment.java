@@ -68,7 +68,7 @@ import java.util.Map;
  * ⚡ friendbook Ultra-Fast Pro Reels Player:
  * - Hardware TextureView + MediaPlayer + Persistent 240 MB SSD Cache (ReelVideoCache)
  * - Instant 0.0ms first-frame JPEG poster thumbnail (zero black screen on swipe!)
- * - Automatic 3-Reel lookahead background prefetching (pos + 1, pos + 2, pos + 3)
+ * - Only the selected Reel streams; next-holder preparation uses complete local files only.
  * - Non-destructive snapshot updates so Likes/Comments NEVER interrupt video playback
  * - Crystal-clear high-visibility "＋ Upload Reel" button in top bar AND right action rail
  * - Live background upload status pill + instant optimistic playback of user's own uploaded Reel
@@ -341,13 +341,10 @@ public class ReelsFragment extends Fragment {
                     FeedAlgorithm.recordVideoImpression(getActivity(), cur.id);
                 }
                 int rIdx = adapter.reelIndexForPos(position);
-                if(rIdx>=adapter.rawReels().size()-3) {
-                    if (!moreReels && !moreVideoPosts) {
-                        appendEndlessCycleIfNeeded();
-                    } else {
-                        loadNextVideos();
-                    }
-                }
+                // More videos is explicit demand. A selection/bind, including the
+                // initial page callback, must not prefetch another network page.
+                if(cur!=null && rIdx>=adapter.rawReels().size()-3 && !moreReels && !moreVideoPosts)
+                    appendEndlessCycleIfNeeded();
             }
         });
         // Banner is outside the pager so it cannot cover the right-side controls.
@@ -525,10 +522,6 @@ public class ReelsFragment extends Fragment {
     public void onStart() {
         super.onStart();
         ReelUploadManager.addListener(bgUploadListener);
-        if (fromReels.isEmpty() && fromPosts.isEmpty()) {
-            resetVideoPages();
-        }
-
         if (!isHidden() && pager != null && adapter != null && adapter.getItemCount() > 0) {
             pager.post(() -> {
                 if (!isHidden() && pager != null) adapter.playOnly(pager, pager.getCurrentItem());
@@ -687,7 +680,7 @@ public class ReelsFragment extends Fragment {
         rebuildMergedFeed(wasEmpty);
     }
     private void loadNextVideos() {
-        if(pagingVideos || (!moreReels && !moreVideoPosts) || !isAdded()) return;
+        if(pagingVideos || (!moreReels && !moreVideoPosts) || !isAdded() || !isResumed() || isHidden()) return;
         pagingVideos=true; reelsLoadFailed=false; final int generation=videoGeneration; final String actor=Fb.uid();
         // A Firestore get() on a black-hole network calls NEITHER listener. Without this watchdog the
         // opening spinner would spin forever; after 15s the user gets the failure state and a Retry.
@@ -768,8 +761,17 @@ public class ReelsFragment extends Fragment {
         }
     }
 
+    private void startVisibleVideosIfNeeded() {
+        if(isAdded() && isResumed() && !isHidden() && !pagingVideos && !reelsLoadFailed
+                && fromReels.isEmpty() && fromPosts.isEmpty()) resetVideoPages();
+    }
+    private void retireVideoLoad() {
+        videoGeneration++;pagingVideos=false;watchdogGen++;
+        reelsWatchdog.removeCallbacksAndMessages(null);
+    }
     @Override public void onResume(){
         super.onResume();
+        startVisibleVideosIfNeeded();
         if (getActivity() != null) ConsentManager.retryConsentOnResume(getActivity());
         updateReelBanner();
         if(pager!=null && adapter!=null){
@@ -778,6 +780,7 @@ public class ReelsFragment extends Fragment {
         }
     }
     @Override public void onPause(){
+        retireVideoLoad();
         if(reelBanners!=null)reelBanners.setActive(false);
         if(adapter!=null && pager!=null)adapter.pauseAll(pager);
         super.onPause();
@@ -796,13 +799,10 @@ public class ReelsFragment extends Fragment {
         updateReelBanner();
         if (adapter == null || pager == null) return;
         if (hidden) {
+            retireVideoLoad();
             adapter.pauseAll(pager);
         } else {
-            if (adapter.rawReels().isEmpty()) {
-                resetVideoPages();
-            } else if (adapter.rawReels().size() < 4 && (moreReels || moreVideoPosts)) {
-                loadNextVideos();
-            }
+            startVisibleVideosIfNeeded();
             pager.post(() -> {
                 adapter.playOnly(pager, pager.getCurrentItem());
             });
@@ -942,7 +942,10 @@ public class ReelsFragment extends Fragment {
                 if(holder.getBindingAdapterPosition()==pos) { selected=holder; continue; }
                 if(holder instanceof VH) ((VH)holder).pause();
             }
-            if(selected instanceof VH) ((VH)selected).play();
+            if(selected instanceof VH) {
+                ((VH)selected).refreshEngagement();
+                ((VH)selected).play();
+            }
         }
 
         @Override public int getItemCount() { return data.size(); }
@@ -961,7 +964,10 @@ public class ReelsFragment extends Fragment {
 
         @Override public void onViewAttachedToWindow(@NonNull RecyclerView.ViewHolder h){
             super.onViewAttachedToWindow(h);
-            if(h instanceof VH && visible.getAsBoolean() && h.getBindingAdapterPosition()==playingPos)((VH)h).play();
+            if(h instanceof VH && visible.getAsBoolean() && h.getBindingAdapterPosition()==playingPos){
+                ((VH)h).refreshEngagement();
+                ((VH)h).play();
+            }
         }
         @Override public void onViewDetachedFromWindow(@NonNull RecyclerView.ViewHolder h){
             if(h instanceof VH)((VH)h).pause();super.onViewDetachedFromWindow(h);
@@ -1325,6 +1331,7 @@ public class ReelsFragment extends Fragment {
                 // Action Listeners: 1-tap adds/removes ONLY currentUserId's reaction; long-press picks any of 6!
                 likeBtnBox.setOnClickListener(v -> {
                     if (reel == null) return;
+                    if(!com.friendbook.social.core.InteractionCooldown.disableBriefly(v))return;
                     Ui.haptic(v);
                     String cur = resolveMyReelReaction(reel);
                     applyReelReaction(cur != null ? null : "like", false);
@@ -1430,6 +1437,7 @@ public class ReelsFragment extends Fragment {
                 this.reel = updated;
                 renderCreatorAndCaption();
                 renderCounts();
+                refreshEngagement();
             }
 
             private void renderCreatorAndCaption() {
@@ -1533,6 +1541,7 @@ public class ReelsFragment extends Fragment {
 
                 renderCreatorAndCaption();
                 renderCounts();
+                refreshEngagement();
                 hydrateLegacyPostReelReactionsIfNeeded(r);
 
                 if (sameVideo) {
@@ -1680,11 +1689,6 @@ public class ReelsFragment extends Fragment {
                         renderedFirstFrame = true;
                         final int position = getBindingAdapterPosition();
                         prepareNextHolder(position);
-                        java.lang.ref.WeakReference<VH> weak = new java.lang.ref.WeakReference<>(this);
-                        ReelVideoCache.warmUpcomingAfterPlay(context, data, reelIndexForPos(position), () -> {
-                            VH holder = weak.get();
-                            if (holder != null) holder.prepareNextHolder(position);
-                        });
                     }
                 } else if (what == MediaPlayer.MEDIA_INFO_BUFFERING_START && wantPlay && !userPaused) {
                     ReelVideoCache.cancelUpcomingWarm();
@@ -2114,10 +2118,25 @@ public class ReelsFragment extends Fragment {
                         });
             }
 
+            // Only explicit bind/resume/authoritative metadata refresh requests
+            // engagement. Async completion only paints cache; it cannot refetch.
+            private void refreshEngagement() {
+                // ViewPager attaches/prebinds neighboring holders. They are not
+                // user-visible reads; selected play/attach will refresh later.
+                if (!visible.getAsBoolean() || getBindingAdapterPosition() != playingPos
+                        || playingPos < 0) return;
+                if (reel == null || reel.id == null || reel.id.startsWith("local_uploading_")) return;
+                if (!com.friendbook.social.core.D1Client.enabled(reel.isFromPost?"posts":"reels")) return;
+                final Models.Reel current = reel;
+                com.friendbook.social.post.D1Reactions.reel(itemView.getContext(),current,()->{
+                    if (reel == current) renderCounts();
+                });
+            }
+
             private void renderCounts() {
                 if (reel == null) return;
                 Context c = itemView.getContext();
-                if(com.friendbook.social.core.D1Client.enabled(reel.isFromPost?"posts":"reels")){final Models.Reel current=reel;com.friendbook.social.post.D1Reactions.reel(c,current,()->{if(reel==current)renderCounts();});}
+                if(com.friendbook.social.core.D1Client.enabled(reel.isFromPost?"posts":"reels"))com.friendbook.social.post.D1Reactions.hydrateReel(reel);
                 String me = Fb.uid();
                 String myRx = resolveMyReelReaction(reel);
 
@@ -2403,6 +2422,7 @@ public class ReelsFragment extends Fragment {
                 if (reel == null) return;
                 String me = Fb.uid();
                 if (me == null) return;
+                if(!com.friendbook.social.core.InteractionCooldown.disableBriefly(followT))return;
                 final String authorId = reel.authorId, authorName = reel.authorName;
                 Notify.follow(authorId, true).addOnSuccessListener(v -> {
                     if (!me.equals(Fb.uid())) return;

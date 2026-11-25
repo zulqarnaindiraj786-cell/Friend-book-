@@ -2,15 +2,20 @@
 # Rows whose projection would change real values or authorization are skipped
 # and stay on the legacy fallback; the workflow prints the per-collection table.
 name: Legacy root backfill
+# Completed migration: no automatic push/schedule reruns against production.
 on:
   workflow_dispatch:
-  push:
-    branches: ['arena/7c7ddb7b-friend-book']
-    paths:
-      - '.github/workflows/legacy-roots-backfill.yml'
-      - 'scripts/loadtest/promote_legacy_roots.mjs'
-      - 'scripts/loadtest/verify_root_backfill.py'
-      - 'cloudflare/test/legacy-root-backfill.test.js'
+    inputs:
+      confirm_production_scan:
+        description: 'Explicitly authorize legacy inventory/promotion D1 cost; not ordinary app maintenance'
+        type: boolean
+        default: false
+        required: true
+      mode:
+        description: 'Recovery operation (only after a new need is verified)'
+        type: choice
+        default: diagnose
+        options: [diagnose, promote, finish]
 permissions:
   contents: read
 concurrency:
@@ -20,7 +25,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   promote:
-    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[legacy-roots-backfill]') || contains(github.event.head_commit.message, '[legacy-roots-diagnose]') || contains(github.event.head_commit.message, '[legacy-roots-finish]')
+    if: github.event_name == 'workflow_dispatch' && inputs.confirm_production_scan == true
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
@@ -36,10 +41,10 @@ jobs:
       - name: Account reserve before writing
         run: python3 scripts/loadtest/d1_account_usage_analytics.py --root-backfill-budget
       - name: Classify the remaining rows without writing (diagnose only)
-        if: contains(github.event.head_commit.message, '[legacy-roots-diagnose]')
+        if: inputs.mode == 'diagnose'
         run: node scripts/loadtest/promote_legacy_roots.mjs --collection=comments --dry-run
       - name: Promote each requested collection and print the verification table
-        if: contains(github.event.head_commit.message, '[legacy-roots-backfill]')
+        if: inputs.mode == 'promote'
         run: |
           set -uo pipefail
           status=0
@@ -53,7 +58,7 @@ jobs:
           python3 scripts/loadtest/d1_account_usage_analytics.py --root-backfill-budget || true
           exit $status
       - name: Finish every remaining collection (users, groups, lives, reels, stories, live_chat)
-        if: contains(github.event.head_commit.message, '[legacy-roots-finish]')
+        if: inputs.mode == 'finish'
         run: |
           set -uo pipefail
           status=0
@@ -72,14 +77,14 @@ jobs:
           python3 scripts/loadtest/d1_account_usage_analytics.py --root-backfill-budget || true
           exit $status
       - name: Read-only per-collection coverage check
-        if: always() && (contains(github.event.head_commit.message, '[legacy-roots-backfill]') || contains(github.event.head_commit.message, '[legacy-roots-finish]'))
+        if: always() && (inputs.mode == 'promote' || inputs.mode == 'finish')
         run: python3 -m scripts.loadtest.verify_root_backfill
       - name: Whole-table read-only inventory (reporting only)
         continue-on-error: true
-        if: always() && (contains(github.event.head_commit.message, '[legacy-roots-backfill]') || contains(github.event.head_commit.message, '[legacy-roots-finish]'))
+        if: always() && (inputs.mode == 'promote' || inputs.mode == 'finish')
         run: python3 -m scripts.loadtest.canonical_inventory --full
       - name: Account reserve after writing
         if: always()
         run: python3 scripts/loadtest/d1_account_usage_analytics.py --root-backfill-budget
 
-# Re-run marker for the verified bulk promotion.
+# No commit-message marker may restart this completed production migration.

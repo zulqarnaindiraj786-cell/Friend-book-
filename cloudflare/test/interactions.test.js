@@ -55,7 +55,7 @@ test('engagement summary binds the comment actor to parameter one, not an unboun
   const db=f.env.DB; const prepare=db.prepare; let summarySql='';
   db.prepare=function(sql){if(sql.includes('AS preview_json'))summarySql=sql;return prepare.call(this,sql);};
   assert.equal((await call(f.env,'reactions')).status,200);
-  assert.match(summarySql,/r\.uid=\?1\)/);
+  assert.match(summarySql,/r\.uid=\?1 THEN/);
   assert.doesNotMatch(summarySql,/\?(?![0-9])/,'D1 requires exactly three explicitly numbered bindings');
 });
 test('reaction retries set state without duplicate increments or trusting client actor', async t => {
@@ -88,6 +88,27 @@ test('compact reaction writes acknowledge within the batch without reading comme
   assert.equal((await call(f.env,'reactions','PUT',{type:'like'},{...options,post:'p2'})).status,503);
   assert.equal((await call(f.env,'reactions','PUT',{type:'like'},{...options,authorize:async()=>false})).status,403);
 });
+test('reaction action atomically creates one authorized inbox event with its D1 batch',async t=>{
+  const f=fixture();t.after(f.close);
+  const authorize=async(_identity,_collection,_id,_unused,context)=>{Object.assign(context,{owner:'owner',name:'Liker',photo:'photo'});return true;};
+  const response=await call(f.env,'reactions','PUT',{type:'like'},
+    {query:'?response=reaction&notify=1',authorize});
+  assert.equal(response.status,200);
+  const data=await response.json();
+  assert.equal(data.notificationCreated,true);
+  assert.equal(data.notification.toUserId,'owner');
+  assert.equal(data.notification.fromUserId,identity.uid);
+  assert.equal(data.notification.type,'like');
+  assert.equal(f.sql.prepare("SELECT COUNT(*) n FROM friendbook_cf_firestore_documents WHERE parent_path='notifications'").get().n,1);
+  assert.equal(f.sql.prepare("SELECT COUNT(*) n FROM friendbook_cf_documents WHERE collection='notifications'").get().n,0);
+  const changes=f.sql.prepare('SELECT total_changes() n').get().n;
+  const retry=await call(f.env,'reactions','PUT',{type:'like'},
+    {query:'?response=reaction&notify=1',authorize});
+  assert.equal((await retry.json()).notificationCreated,false);
+  assert.equal(f.sql.prepare("SELECT COUNT(*) n FROM friendbook_cf_firestore_documents WHERE parent_path='notifications'").get().n,1);
+  assert.equal(f.sql.prepare('SELECT total_changes() n').get().n,changes);
+});
+
 test('five ordered quick-tap targets leave one Like and the correct persisted count', async t => {
   const f=fixture(); t.after(f.close);
   const options={query:'?response=reaction'};
@@ -113,6 +134,21 @@ test('comments are idempotent, reject conflicts, spoofed authors and cross-post 
   const page = await (await call(f.env, 'comments')).json();
   assert.equal(page.comments.length, 2); assert.ok(page.comments.every(c => c.uid === identity.uid));
 });
+test('comment and recipient/reply inbox events commit in one idempotent D1 batch',async t=>{
+  const f=fixture();t.after(f.close);
+  f.sql.prepare("INSERT INTO friendbook_cf_comments(resource,id,uid,text,parent_id,created_at) VALUES('posts/p1','parent','reply-user','parent',NULL,1)").run();
+  const authorize=async(_identity,_collection,_id,_unused,context)=>{Object.assign(context,{owner:'owner',name:'Writer',photo:'writer.jpg'});return true;};
+  const response=await call(f.env,'comments','POST',{id:'notify-comment',text:'hello',parentId:'parent',notify:true},{authorize});
+  assert.equal(response.status,200,response.status===200?'':await response.clone().text());
+  const data=await response.json();assert.equal(data.notifications.length,2);
+  assert.deepEqual(data.notifications.map(event=>event.toUserId).sort(),['owner','reply-user']);
+  assert.equal(f.sql.prepare("SELECT COUNT(*) n FROM friendbook_cf_firestore_documents WHERE parent_path='notifications'").get().n,2);
+  assert.equal(f.sql.prepare("SELECT COUNT(*) n FROM friendbook_cf_documents WHERE collection='notifications'").get().n,0);
+  const before=f.sql.prepare('SELECT total_changes() n').get().n;
+  const duplicate=await call(f.env,'comments','POST',{id:'notify-comment',text:'hello',parentId:'parent',notify:true},{authorize});
+  assert.equal(duplicate.status,200);assert.equal(f.sql.prepare('SELECT total_changes() n').get().n,before);
+});
+
 test('legacy root app comments are merged into authorized D1 comment pages without reviving removed rows', async t => {
   const f=fixture(); t.after(f.close);
   await call(f.env,'comments','POST',{id:'same',text:'canonical version'});
@@ -478,7 +514,7 @@ test('a full 20-post Feed page batches engagement without individual summary req
   let batchCalls=0;
   const db={...f.env.DB,async batch(statements){
     batchCalls++;
-    assert.equal(statements.length,21);
+    assert.equal(statements.length,24); // 20 summaries plus four D1-safe count groups
     return f.env.DB.batch(statements);
   }};
   const result=await batchEngagementReads(db,resources,'user1',[]);
@@ -543,7 +579,17 @@ test('indexed historical comment pages preserve complete ordering, cursors and e
   async function compare(before,after=null) {
     force=false;normalRows=0;fullRows=0;const actual=await legacyPage(db,'posts/p1','viewer',['blocked'],before,after);
     const fast={normalRows,fullRows};force=true;const expected=await legacyPage(db,'posts/p1','viewer',['blocked'],before,after);force=false;
-    assert.deepEqual(actual,expected);return {actual,fast};
+    assert.deepEqual(actual,expected);
+    // Home renders two historical previews, not a full 21-row comment page.
+    force=false;normalRows=0;
+    const preview=await legacyPage(db,'posts/p1','viewer',['blocked'],before,after,2);
+    assert.deepEqual(preview,expected.slice(0,2));
+    assert.ok(normalRows<=fast.normalRows);
+    force=true;
+    assert.deepEqual(await legacyPage(db,'posts/p1','viewer',['blocked'],before,after,2),expected.slice(0,2));
+    force=false;
+    await assert.rejects(legacyPage(db,'posts/p1','viewer',[],before,after,22),/Invalid comment page size/);
+    return {actual,fast};
   }
   for(const [before,after] of [[[Number.MAX_SAFE_INTEGER,''],null],[[1600,'n0900'],null],[[1600,'n0900'],[1600,'n0900']],[[1600,'tie035'],null],[[1600,'tie035'],[1600,'tie035']]]) {
     const result=await compare(before,after);
@@ -659,4 +705,192 @@ test('multi-type reaction summaries retain viewer, ordering and compact acknowle
   assert.deepEqual(love.types,expected.filter(x=>x.type!=='like').map(x=>x.type==='love'?{type:'love',count:2,mine:1}:x));
   const removed=await (await call(f.env,'reactions','PUT',{type:null},{query:'?response=reaction'})).json();
   assert.deepEqual(removed.types,expected.filter(x=>x.type!=='like').map(x=>({...x,mine:0})));
+});
+
+test('clearing an absent post or comment reaction is a zero-change acknowledged operation',async t=>{
+ const f=fixture();t.after(f.close);
+ assert.equal((await call(f.env,'comments','POST',{id:'clear-test',text:'keep'})).status,200);
+ const changes=()=>f.sql.prepare('SELECT total_changes() n').get().n;
+ const clearPost=()=>call(f.env,'reactions','PUT',{type:null},{query:'?response=reaction'});
+ const clearComment=()=>call(f.env,'comments','PUT',{id:'clear-test',op:'react',type:null});
+ for(let i=0;i<2;i++) {
+   const before=changes();
+   const post=await clearPost();assert.equal(post.status,200);assert.deepEqual((await post.json()).types,[]);
+   const comment=await clearComment();assert.equal(comment.status,200);
+   const saved=(await comment.json()).comment;assert.equal(saved.likes,0);assert.deepEqual(saved.reactions,{});
+   assert.equal(changes(),before,'no tombstone inserted for a reaction that never existed');
+ }
+ assert.equal(f.sql.prepare('SELECT COUNT(*) n FROM friendbook_cf_reactions').get().n,0);
+ assert.equal(f.sql.prepare('SELECT COUNT(*) n FROM friendbook_cf_comment_reactions').get().n,0);
+ for(const type of ['like','love',null,'wow',null]) {
+   const post=await call(f.env,'reactions','PUT',{type},{query:'?response=reaction'});
+   assert.equal(post.status,200);assert.deepEqual((await post.json()).types,type?[{type,count:1,mine:1}]:[]);
+   const comment=await call(f.env,'comments','PUT',{id:'clear-test',op:'react',type});
+   assert.equal(comment.status,200);const saved=(await comment.json()).comment;
+   assert.equal(saved.likes,type?1:0);assert.deepEqual(saved.reactions,type?{user1:type}:{});
+ }
+ const before=changes();await clearPost();await clearComment();assert.equal(changes(),before,'existing null tombstones also remain no-ops');
+ assert.equal((await call(f.env,'reactions','PUT',{type:null},{authorize:async()=>false})).status,403);
+ assert.equal((await call(f.env,'comments','PUT',{id:'missing',op:'react',type:null})).status,404);
+});
+
+test('clearing historical unknown reactions preserves the explicit timestamp transition',async t=>{
+ const f=fixture();t.after(f.close);
+ f.sql.prepare('INSERT INTO friendbook_cf_reactions VALUES (?,?,?,?)').run('posts/p1','user1','like',0);
+ f.sql.prepare('INSERT INTO friendbook_cf_reaction_history VALUES (?,?,?)').run('posts/p1','user1',0);
+ const response=await call(f.env,'reactions','PUT',{type:null},{query:'?response=reaction'});
+ assert.equal(response.status,200);assert.deepEqual((await response.json()).types,[]);
+ assert.equal(f.sql.prepare('SELECT timestamp_known FROM friendbook_cf_reaction_history').get().timestamp_known,1);
+ const saved=f.sql.prepare('SELECT type,updated_at FROM friendbook_cf_reactions').get();
+ assert.equal(saved.type,null);assert.ok(saved.updated_at>0);
+ const before=f.sql.prepare('SELECT total_changes() n').get().n;
+ assert.equal((await call(f.env,'reactions','PUT',{type:null},{query:'?response=reaction'})).status,200);
+ assert.equal(f.sql.prepare('SELECT total_changes() n').get().n,before);
+});
+
+test('ten-comment historical pages bound each route to eleven rows without losing cursors',async t=>{
+ const f=fixture();t.after(f.close);
+ const put=f.sql.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)');
+ for(let i=0;i<120;i++){
+   const id=`small_${String(i).padStart(3,'0')}`;
+   const route=['postId','post_id','resource'][i%3];
+   const data={authorId:'author',content:'historical',createdAt:1000+i,[route]:route==='resource'?'posts/p1':'p1'};
+   put.run(`comments/${id}`,'comments','comments',id,'author',JSON.stringify(data),1,1);
+ }
+ const observed=[],db=f.env.DB,prepare=db.prepare;
+ db.prepare=function(q){
+   const stmt=prepare.call(this,q);
+   return{...stmt,bind(...args){const bound=stmt.bind(...args),run=bound.run;
+     return{...bound,async run(){const result=await run();
+       if(q.includes('idx_cf_canonical_comment_page_') && q.includes('ORDER BY'))observed.push(result.results.length);
+       return result;
+     }};
+   }};
+ };
+ let cursor=null;const ids=[];
+ for(let pageNo=0;pageNo<12;pageNo++){
+   const query='?limit=10'+(cursor?'&before='+encodeURIComponent(cursor):'');
+   const response=await call(f.env,'comments','GET',undefined,{query});assert.equal(response.status,200);
+   const page=await response.json();assert.equal(page.comments.length,10);
+   ids.push(...page.comments.map(c=>c.id));cursor=page.next;
+ }
+ assert.equal(cursor,null);assert.equal(new Set(ids).size,120);
+ assert.deepEqual(ids,Array.from({length:120},(_,i)=>`small_${String(119-i).padStart(3,'0')}`));
+ assert.ok(observed.length>=3);assert.ok(observed.every(n=>n<=11),`historical route overfetch: ${observed.slice(0,3)}`);
+ const after=btoa(JSON.stringify([1050,'small_050']));observed.length=0;
+ const delta=await (await call(f.env,'comments','GET',undefined,{query:'?limit=10&after='+encodeURIComponent(after)})).json();
+ assert.deepEqual(delta.comments.map(c=>c.id),Array.from({length:10},(_,i)=>`small_${String(51+i).padStart(3,'0')}`));
+ assert.ok(delta.next);assert.ok(observed.every(n=>n<=11));
+});
+
+test('zero-visible engagement skips removed/blocked preview history without changing summary', async t=>{
+  const f=fixture();t.after(f.close);
+  f.sql.exec(`WITH RECURSIVE seq(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM seq WHERE i<3000)
+    INSERT INTO friendbook_cf_comments(resource,id,uid,text,created_at)
+    SELECT 'posts/p1','c'||i,'hidden','text',i FROM seq;
+    INSERT INTO friendbook_cf_comment_details(resource,id,removed)
+    SELECT resource,id,1 FROM friendbook_cf_comments WHERE resource='posts/p1';`);
+  let visits=0,forcePreview=false;
+  f.sql.function('quota_preview_probe',_id=>{visits++;return 1;});
+  const db={prepare(query){
+    if(query.includes('AS preview_json')) {
+      query=query.replace('WHERE c.resource = ?2 AND COALESCE(d.removed, 0) = 0',
+        'WHERE c.resource = ?2 AND quota_preview_probe(c.id) AND COALESCE(d.removed, 0) = 0');
+      // Counterfactual: same statement/counts, but force the former unconditional
+      // preview traversal. This measures local row visits, not D1 billing.
+      if(forcePreview)query=query.replace('CASE WHEN engagement_count.total_comments > 0 THEN','CASE WHEN 1 THEN');
+    }
+    return f.env.DB.prepare(query);
+  }};
+  const check=async blocked=>{
+    forcePreview=true;visits=0;
+    const unconditional=await engagementSummary(db,'posts/p1','viewer','owner',blocked);
+    assert.ok(visits>=3000,`counterfactual must traverse history, got ${visits}`);
+    forcePreview=false;visits=0;
+    const optimized=await engagementSummary(db,'posts/p1','viewer','owner',blocked);
+    assert.deepEqual(optimized,unconditional);
+    assert.equal(visits,0,'known empty preview must not visit comment history');
+    assert.equal(optimized.comments,0);assert.deepEqual(optimized.preview,[]);
+  };
+  await check([]);
+  f.sql.exec('UPDATE friendbook_cf_comment_details SET removed=0');
+  await check(['hidden']);
+  // A visible comment must still appear; the optimization cannot disable reads.
+  const visible=await engagementSummary(db,'posts/p1','viewer','owner',[]);
+  assert.equal(visible.comments,3000);assert.equal(visible.preview.length,2);
+  // Old schemas still use the exact compatible count rather than treating a
+  // missing totals table as proof of zero comments.
+  f.sql.exec('DROP TABLE friendbook_cf_visible_comment_totals');
+  const compatible=await engagementSummary(db,'posts/p1','viewer','owner',[]);
+  assert.deepEqual(compatible,visible);
+});
+
+test('zero visible totals skip blocked-author subtraction history while positive totals stay exact',async t=>{
+  const f=fixture();t.after(f.close);
+  f.sql.exec(`WITH RECURSIVE seq(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM seq WHERE i<3000)
+    INSERT INTO friendbook_cf_comments(resource,id,uid,text,created_at)
+    SELECT 'posts/p1','removed'||i,'blocked','text',i FROM seq;
+    INSERT INTO friendbook_cf_comment_details(resource,id,removed)
+    SELECT resource,id,1 FROM friendbook_cf_comments WHERE resource='posts/p1';`);
+  let visits=0,forceOld=false;
+  f.sql.function('quota_blocked_count_probe',_id=>{visits++;return 1;});
+  const db={prepare(query){
+    if(query.includes('AS preview_json')){
+      query=query.replace('WHERE COALESCE(d.removed,0)=0)',
+        'WHERE quota_blocked_count_probe(c.id) AND COALESCE(d.removed,0)=0)');
+      if(forceOld)query=query.replace('CASE WHEN visible_total=0 THEN 0','CASE WHEN 0 THEN 0');
+    }
+    return f.env.DB.prepare(query);
+  }};
+  forceOld=true;
+  const prior=await engagementSummary(db,'posts/p1','viewer','owner',['blocked','blocked']);
+  assert.ok(visits>=3000,`counterfactual must visit removed blocked history, got ${visits}`);
+  forceOld=false;visits=0;
+  const optimized=await engagementSummary(db,'posts/p1','viewer','owner',['blocked','blocked']);
+  assert.deepEqual(optimized,prior);assert.equal(visits,0);
+  f.sql.exec(`INSERT INTO friendbook_cf_comments(resource,id,uid,text,created_at) VALUES
+    ('posts/p1','visible','author','public comment',4000),
+    ('posts/p1','hidden','blocked','blocked comment',4001);`);
+  visits=0;
+  const positive=await engagementSummary(db,'posts/p1','viewer','owner',['blocked','blocked']);
+  assert.equal(positive.comments,1);assert.equal(positive.preview[0].id,'visible');
+  assert.ok(visits>0,'positive totals must still subtract blocked comments');
+});
+
+test('new comment ACK indicates actual insert and visibility without changing idempotent or denied behavior', async t=>{
+  const f=fixture();t.after(f.close);
+  const auth=async(_identity,_collection,_id,_unused,context)=>{context.owner='user2';context.blocked=[];return true;};
+  const payload={id:'created-once',text:'hello'};
+  const first=await call(f.env,'comments','POST',payload,{authorize:auth});assert.equal(first.status,200);
+  let data=await first.json();assert.equal(data.created,true);assert.equal(data.visibleToActor,true);assert.equal(data.comment.authorId,'user1');
+  const retry=await call(f.env,'comments','POST',payload,{authorize:auth});assert.equal(retry.status,200);
+  data=await retry.json();assert.equal(data.created,false);assert.equal(data.visibleToActor,true);
+  assert.equal((await call(f.env,'comments','POST',{...payload,text:'changed'},{authorize:auth})).status,409);
+  const blocked=async(_i,_c,_id,_u,context)=>{context.blocked=['user1'];return true;};
+  const invisible=await (await call(f.env,'comments','POST',{id:'self-blocked',text:'x'},{authorize:blocked})).json();
+  assert.equal(invisible.created,true);assert.equal(invisible.visibleToActor,false);
+  assert.equal((await call(f.env,'comments','POST',{id:'denied',text:'x'},{authorize:async()=>false})).status,403);
+  assert.equal(f.sql.prepare('SELECT COUNT(*) n FROM friendbook_cf_comments').get().n,2);
+});
+
+test('new comment ACK omits creation claim if batch result lacks change metadata',async t=>{
+  const f=fixture();t.after(f.close);const batch=f.env.DB.batch;
+  f.env.DB.batch=async statements=>{const result=await batch(statements);if(statements.length===3)result[0]={};return result;};
+  const response=await call(f.env,'comments','POST',{id:'unknown-change',text:'ok'});assert.equal(response.status,200);
+  const data=await response.json();assert.equal(data.comment.id,'unknown-change');assert.equal(Object.hasOwn(data,'created'),false);
+});
+
+test('comment ACK reports a concurrent identical insert as not created and accepts D1 meta.changes',async t=>{
+  const f=fixture();t.after(f.close);const batch=f.env.DB.batch;let raced=false;
+  f.env.DB.batch=async statements=>{
+    if(statements.length===3 && !raced){raced=true;f.sql.prepare('INSERT INTO friendbook_cf_comments(resource,id,uid,text,parent_id,created_at) VALUES(?,?,?,?,?,?)').run('posts/p1','raced','user1','same',null,123);}
+    const result=await batch(statements);
+    if(statements.length===3){const changes=Number(result[0].changes);result[0]={meta:{changes}};}
+    return result;
+  };
+  const response=await call(f.env,'comments','POST',{id:'raced',text:'same'});assert.equal(response.status,200);
+  const data=await response.json();assert.equal(data.created,false);assert.equal(data.visibleToActor,true);
+  assert.equal(f.sql.prepare("SELECT count(*) n FROM friendbook_cf_comments WHERE id='raced'").get().n,1);
+  const fresh=await call(f.env,'comments','POST',{id:'fresh-meta',text:'hello'});assert.equal(fresh.status,200);
+  assert.equal((await fresh.json()).created,true);
 });

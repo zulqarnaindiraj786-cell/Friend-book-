@@ -44,7 +44,8 @@ public class ActivityLogActivity extends Activity {
     private final TextView[] chips = new TextView[4];
     private Adapter adapter;
     private TextView empty;
-    private int pending = 3;
+    private LinearLayout pageControls;
+    private final List<com.friendbook.social.d1.documents.ListenerRegistration> pages = new ArrayList<>();
 
     @Override
     protected void onCreate(Bundle b) {
@@ -92,6 +93,9 @@ public class ActivityLogActivity extends Activity {
         adapter = new Adapter();
         rv.setAdapter(adapter);
         root.addView(rv, new LinearLayout.LayoutParams(-1, 0, 1));
+        pageControls=Ui.col(this);
+        pageControls.addView(Ui.tv(this,"Filters apply to loaded activity. Load more for older items.",12,Ui.sub(this)));
+        root.addView(pageControls);
         setContentView(root);
 
         // ⚡ 0.0ms Instant Activity Pre-Render from FastCache!
@@ -123,62 +127,46 @@ public class ActivityLogActivity extends Activity {
     @Override
     protected void onStart() {
         super.onStart();
-        String me = Fb.uid();
-        if (me == null) { finish(); return; }
+        String me=Fb.uid();
+        if(me==null){finish();return;}
         allEntries.clear();
-        pending = 3;
-
-        Fb.db().collection("posts").whereEqualTo("authorId", me).limit(80).get()
-                .addOnSuccessListener(snap -> {
-                    for (DocumentSnapshot d : snap) {
-                        Models.Post p = Models.Post.fromDoc(d);
-                        Entry e = new Entry();
-                        e.kind = "post";
-                        e.text = p.content == null || p.content.isEmpty()
-                                ? (p.isMarketplace() ? "🛒 " + p.marketTitle : "[" + p.mediaType + " post]")
-                                : p.content;
-                        e.refId = p.id;
-                        e.when = p.createdAt;
-                        allEntries.add(e);
-                    }
-                    done();
-                }).addOnFailureListener(e -> done());
-
-        Fb.db().collection("comments").whereEqualTo("authorId", me).limit(80).get()
-                .addOnSuccessListener(snap -> {
-                    for (DocumentSnapshot d : snap) {
-                        Models.Comment c = Models.Comment.fromDoc(d);
-                        Entry e = new Entry();
-                        e.kind = "comment";
-                        e.text = c.content;
-                        e.refId = c.postId;
-                        e.when = c.createdAt;
-                        allEntries.add(e);
-                    }
-                    done();
-                }).addOnFailureListener(e -> done());
-
-        Fb.db().collection("stories").whereEqualTo("authorId", me).limit(50).get()
-                .addOnSuccessListener(snap -> {
-                    for (DocumentSnapshot d : snap) {
-                        Models.Story s = Models.Story.fromDoc(d);
-                        Entry e = new Entry();
-                        e.kind = "story";
-                        e.text = s.caption == null || s.caption.isEmpty()
-                                ? ("text".equals(s.mediaType) ? "Text story" : "Photo/video story")
-                                : s.caption;
-                        e.refId = s.id;
-                        e.when = s.createdAt;
-                        allEntries.add(e);
-                    }
-                    done();
-                }).addOnFailureListener(e -> done());
+        applyFilter();
+        for(String kind:new String[]{"post","comment","story"}) {
+            String collection=kind.equals("post")?"posts":kind.equals("comment")?"comments":"stories";
+            pages.add(com.friendbook.social.core.PagedLists.attach(this,pageControls,
+                    Fb.db().collection(collection).whereEqualTo("authorId",me)
+                            .orderBy("createdAt",com.friendbook.social.d1.documents.Query.Direction.DESCENDING),
+                    10,"activity-"+kind,(snap,err)->{
+                        allEntries.removeIf(entry->kind.equals(entry.kind));
+                        if(snap!=null)for(DocumentSnapshot d:snap) {
+                            Entry e=new Entry();e.kind=kind;
+                            if(kind.equals("post")) {
+                                Models.Post p=Models.Post.fromDoc(d);
+                                e.text=p.content==null || p.content.isEmpty()
+                                        ?(p.isMarketplace()?"🛒 "+p.marketTitle:"["+p.mediaType+" post]"):p.content;
+                                e.refId=p.id;e.when=p.createdAt;
+                            } else if(kind.equals("comment")) {
+                                Models.Comment c=Models.Comment.fromDoc(d);
+                                e.text=c.content;e.refId=c.postId;e.when=c.createdAt;
+                            } else {
+                                Models.Story story=Models.Story.fromDoc(d);
+                                e.text=story.caption==null || story.caption.isEmpty()
+                                        ?("text".equals(story.mediaType)?"Text story":"Photo/video story"):story.caption;
+                                e.refId=story.id;e.when=story.createdAt;
+                            }
+                            allEntries.add(e);
+                        }
+                        Collections.sort(allEntries,(x,y)->Long.compare(y.when,x.when));
+                        applyFilter();
+                    }));
+        }
     }
 
-    private void done() {
-        if (--pending > 0) return;
-        Collections.sort(allEntries, (a, b) -> Long.compare(b.when, a.when));
-        applyFilter();
+    @Override
+    protected void onStop() {
+        super.onStop();
+        for(com.friendbook.social.d1.documents.ListenerRegistration page:pages)page.remove();
+        pages.clear();
     }
 
     private void applyFilter() {

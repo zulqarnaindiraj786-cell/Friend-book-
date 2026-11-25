@@ -1,78 +1,55 @@
 package com.friendbook.social.core;
 
 import android.widget.ImageView;
-
 import com.friendbook.social.models.Models;
+import com.friendbook.social.d1.documents.DocumentReference;
+import com.friendbook.social.d1.documents.DocumentSnapshot;
 import com.friendbook.social.d1.documents.Source;
 
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
-
-/**
- * ⚡ Zero-lag session cache of uid → tickLevel.
- * Reads RAM cache (`FastCache` / `CACHE`) in 0ms, then local Firestore disk cache (`Source.CACHE`),
- * touching network only once per unknown user.
- */
+/** Account-scoped cosmetic badges: cache first, one flight per unknown author. */
 public final class TickCache {
     private TickCache() { }
-
-    private static final Map<String, String> CACHE = new ConcurrentHashMap<>();
+    private static final BadgeLookupState<ImageView> STATE = new BadgeLookupState<>();
 
     public static void attach(ImageView iv, String uid) {
         if (iv == null) return;
-        if (uid == null || uid.isEmpty()) {
-            Icons.setTickBadge(iv, "none", false);
-            return;
+        String actor=Fb.uid();
+        if (uid!=null && !uid.isEmpty() && STATE.cached(actor,uid)==null) {
+            Models.User user=FastCache.getUser(uid);
+            if (user!=null) STATE.put(actor,uid,user.tickLevel==null?"none":user.tickLevel);
         }
-        String level = CACHE.get(uid);
-        if (level == null) {
-            Models.User u = FastCache.getUser(uid);
-            if (u != null) {
-                level = u.tickLevel == null ? "none" : u.tickLevel;
-                CACHE.put(uid, level);
-            }
-        }
-        if (level != null) {
-            Icons.setTickBadge(iv, level, false);
-            return;
-        }
-        iv.setTag(uid);
-        Icons.setTickBadge(iv, "none", false);
-        Fb.db().collection("users").document(uid).get(Source.CACHE)
-                .addOnSuccessListener(d -> {
-                    if (d != null && d.exists()) {
-                        String lvl = d.getString("tickLevel");
-                        CACHE.put(uid, lvl == null ? "none" : lvl);
-                        if (uid.equals(iv.getTag())) Icons.setTickBadge(iv, CACHE.get(uid), false);
-                    } else {
-                        fetchRemote(iv, uid);
-                    }
-                })
-                .addOnFailureListener(e -> fetchRemote(iv, uid));
+        BadgeLookupState.Flight<ImageView> flight=STATE.bind(actor,uid,iv,android.os.SystemClock.elapsedRealtime());
+        String level=STATE.cached(actor,uid);
+        Icons.setTickBadge(iv,level==null?"none":level,false);
+        if (flight==null) return;
+        DocumentReference author=Fb.db().collection("users").document(uid);
+        author.get(Source.CACHE).<DocumentSnapshot>continueWithTask(cached->{
+            if (!STATE.current(Fb.uid(),flight))
+                return com.google.android.gms.tasks.Tasks.forException(new java.io.IOException("Account changed"));
+            if (cached.isSuccessful() && cached.getResult()!=null && cached.getResult().exists())
+                return com.google.android.gms.tasks.Tasks.forResult(cached.getResult());
+            return author.get();
+        }).addOnSuccessListener(doc->{
+            String value=doc!=null && doc.exists()?doc.getString("tickLevel"):null;
+            complete(flight,value==null?"none":value);
+        }).addOnFailureListener(error->complete(flight,null));
     }
 
-    private static void fetchRemote(ImageView iv, String uid) {
-        Fb.db().collection("users").document(uid).get()
-                .addOnSuccessListener(d -> {
-                    String lvl = d != null && d.exists() ? d.getString("tickLevel") : null;
-                    CACHE.put(uid, lvl == null ? "none" : lvl);
-                    if (uid.equals(iv.getTag())) Icons.setTickBadge(iv, CACHE.get(uid), false);
-                })
-                .addOnFailureListener(e -> CACHE.put(uid, "none"));
+    private static void complete(BadgeLookupState.Flight<ImageView> flight,String level) {
+        String actor=Fb.uid();
+        for (ImageView view:STATE.finish(actor,flight,level,android.os.SystemClock.elapsedRealtime()))
+            Icons.setTickBadge(view,STATE.cached(actor,flight.uid),false);
     }
 
-    public static void put(String uid, String level) {
-        if (uid != null) CACHE.put(uid, level == null ? "none" : level);
+    public static void put(String uid,String level) {
+        if (uid!=null) STATE.put(Fb.uid(),uid,level==null?"none":level);
     }
-
     public static String peek(String uid) {
-        if (uid == null || uid.isEmpty()) return "none";
-        String level = CACHE.get(uid);
-        if (level != null) return level;
-        Models.User u = FastCache.getUser(uid);
-        if (u != null && u.tickLevel != null) return u.tickLevel;
-        return "none";
+        if (uid==null || uid.isEmpty()) return "none";
+        String level=STATE.cached(Fb.uid(),uid);
+        if (level!=null) return level;
+        Models.User user=FastCache.getUser(uid);
+        return user!=null && user.tickLevel!=null?user.tickLevel:"none";
     }
-
-    public static void clear() { CACHE.clear(); }
+    public static void clear() {STATE.clear();}
 }

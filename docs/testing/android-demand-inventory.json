@@ -1,0 +1,2984 @@
+{
+  "method": "whole Java/Kotlin tree lexical candidates, not AST/callgraph or observed HTTP/billing counts",
+  "java_files_scanned": 214,
+  "kotlin_files_scanned": 1,
+  "all_app_fixed": false,
+  "category_line_counts": {
+    "document_store_entry": 440,
+    "engagement_transport": 9,
+    "snapshot_listener": 46,
+    "explicit_server_read": 8,
+    "count_helper": 5,
+    "cache_first_list": 12,
+    "delayed_or_periodic_candidate": 52,
+    "durable_work": 3,
+    "raw_http_candidate": 18
+  },
+  "findings": [
+    {
+      "file": "App.java",
+      "line": 41,
+      "category": "delayed_or_periodic_candidate"
+    },
+    {
+      "file": "App.java",
+      "line": 77,
+      "category": "delayed_or_periodic_candidate"
+    },
+    {
+      "file": "App.java",
+      "line": 81,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "App.java",
+      "line": 141,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "admin/AdMobSettingsActivity.java",
+      "line": 202,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "admin/AdMobSettingsActivity.java",
+      "line": 203,
+      "category": "snapshot_listener"
+    },
+    {
+      "file": "admin/AdminContentActivity.java",
+      "line": 107,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "admin/AdminContentActivity.java",
+      "line": 109,
+      "category": "snapshot_listener"
+    },
+    {
+      "file": "admin/AdminContentActivity.java",
+      "line": 163,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "admin/AdminFeedbackActivity.java",
+      "line": 60,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "admin/AdminFeedbackActivity.java",
+      "line": 62,
+      "category": "snapshot_listener"
+    },
+    {
+      "file": "admin/AdminFeedbackActivity.java",
+      "line": 112,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "admin/AdminPanelActivity.java",
+      "line": 139,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "admin/AdminPanelActivity.java",
+      "line": 159,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "admin/AdminReportsActivity.java",
+      "line": 60,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "admin/AdminReportsActivity.java",
+      "line": 62,
+      "category": "snapshot_listener"
+    },
+    {
+      "file": "admin/AdminReportsActivity.java",
+      "line": 106,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "admin/AdminReportsActivity.java",
+      "line": 108,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "admin/AdminReportsActivity.java",
+      "line": 110,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "admin/AdminReportsActivity.java",
+      "line": 112,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "admin/AdminReportsActivity.java",
+      "line": 114,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "admin/AdminReportsActivity.java",
+      "line": 124,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "admin/AdminReportsActivity.java",
+      "line": 134,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "admin/ModeratorDeskActivity.java",
+      "line": 123,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "admin/ModeratorDeskActivity.java",
+      "line": 126,
+      "category": "snapshot_listener"
+    },
+    {
+      "file": "admin/ModeratorDeskActivity.java",
+      "line": 135,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "admin/ModeratorDeskActivity.java",
+      "line": 137,
+      "category": "snapshot_listener"
+    },
+    {
+      "file": "admin/ModeratorDeskActivity.java",
+      "line": 222,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "admin/ModeratorDeskActivity.java",
+      "line": 301,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "admin/OfficialBroadcastActivity.java",
+      "line": 128,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "admin/OfficialBroadcastActivity.java",
+      "line": 138,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "admin/OfficialBroadcastActivity.java",
+      "line": 138,
+      "category": "snapshot_listener"
+    },
+    {
+      "file": "admin/OfficialBroadcastWorker.java",
+      "line": 15,
+      "category": "durable_work"
+    },
+    {
+      "file": "admin/OfficialBroadcastWorker.java",
+      "line": 29,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "admin/frag/AdminEarningsFragment.java",
+      "line": 150,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "admin/frag/AdminEarningsFragment.java",
+      "line": 152,
+      "category": "snapshot_listener"
+    },
+    {
+      "file": "admin/frag/AdminEarningsFragment.java",
+      "line": 176,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "admin/frag/AdminEarningsFragment.java",
+      "line": 177,
+      "category": "snapshot_listener"
+    },
+    {
+      "file": "admin/frag/AdminLiveFragment.java",
+      "line": 50,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "admin/frag/AdminLiveFragment.java",
+      "line": 52,
+      "category": "snapshot_listener"
+    },
+    {
+      "file": "admin/frag/AdminLiveFragment.java",
+      "line": 118,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "admin/frag/AdminModeratorsFragment.java",
+      "line": 106,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "admin/frag/AdminModeratorsFragment.java",
+      "line": 107,
+      "category": "snapshot_listener"
+    },
+    {
+      "file": "admin/frag/AdminPaymentsFragment.java",
+      "line": 64,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "admin/frag/AdminPaymentsFragment.java",
+      "line": 66,
+      "category": "snapshot_listener"
+    },
+    {
+      "file": "admin/frag/AdminPaymentsFragment.java",
+      "line": 200,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "admin/frag/AdminPaymentsFragment.java",
+      "line": 206,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "admin/frag/AdminPaymentsFragment.java",
+      "line": 211,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "admin/frag/AdminReferralsFragment.java",
+      "line": 75,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "admin/frag/AdminReferralsFragment.java",
+      "line": 77,
+      "category": "snapshot_listener"
+    },
+    {
+      "file": "admin/frag/AdminUsersFragment.java",
+      "line": 62,
+      "category": "delayed_or_periodic_candidate"
+    },
+    {
+      "file": "admin/frag/AdminUsersFragment.java",
+      "line": 95,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "admin/frag/AdminUsersFragment.java",
+      "line": 97,
+      "category": "snapshot_listener"
+    },
+    {
+      "file": "admin/frag/AdminUsersFragment.java",
+      "line": 174,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "admin/frag/AdminUsersFragment.java",
+      "line": 179,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "admin/frag/AdminUsersFragment.java",
+      "line": 183,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "admin/frag/AdminUsersFragment.java",
+      "line": 188,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "auth/GoogleAuthHelper.java",
+      "line": 415,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "auth/GoogleAuthHelper.java",
+      "line": 450,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "auth/GoogleAuthHelper.java",
+      "line": 559,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "auth/GoogleAuthHelper.java",
+      "line": 582,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "auth/LoginActivity.java",
+      "line": 206,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "auth/LoginActivity.java",
+      "line": 266,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "auth/RegisterActivity.java",
+      "line": 224,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "bluetick/BlueTickActivity.java",
+      "line": 163,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "bluetick/BlueTickActivity.java",
+      "line": 174,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "bluetick/BlueTickActivity.java",
+      "line": 175,
+      "category": "snapshot_listener"
+    },
+    {
+      "file": "bluetick/BlueTickActivity.java",
+      "line": 187,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "bluetick/BlueTickActivity.java",
+      "line": 187,
+      "category": "count_helper"
+    },
+    {
+      "file": "bluetick/BlueTickActivity.java",
+      "line": 198,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "bluetick/BlueTickActivity.java",
+      "line": 202,
+      "category": "snapshot_listener"
+    },
+    {
+      "file": "bluetick/MonetizationActivity.java",
+      "line": 130,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "bluetick/MonetizationActivity.java",
+      "line": 131,
+      "category": "snapshot_listener"
+    },
+    {
+      "file": "bluetick/MonetizationActivity.java",
+      "line": 144,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "bluetick/MonetizationActivity.java",
+      "line": 147,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "bluetick/MonetizationActivity.java",
+      "line": 147,
+      "category": "count_helper"
+    },
+    {
+      "file": "bluetick/MonetizationActivity.java",
+      "line": 167,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "chat/CallActivity.java",
+      "line": 234,
+      "category": "delayed_or_periodic_candidate"
+    },
+    {
+      "file": "chat/CallActivity.java",
+      "line": 266,
+      "category": "delayed_or_periodic_candidate"
+    },
+    {
+      "file": "chat/CallActivity.java",
+      "line": 308,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "chat/CallActivity.java",
+      "line": 319,
+      "category": "delayed_or_periodic_candidate"
+    },
+    {
+      "file": "chat/CallActivity.java",
+      "line": 322,
+      "category": "delayed_or_periodic_candidate"
+    },
+    {
+      "file": "chat/CallActivity.java",
+      "line": 605,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "chat/CallActivity.java",
+      "line": 607,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "chat/CallActivity.java",
+      "line": 619,
+      "category": "snapshot_listener"
+    },
+    {
+      "file": "chat/CallActivity.java",
+      "line": 648,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "chat/CallActivity.java",
+      "line": 650,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "chat/CallActivity.java",
+      "line": 899,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "chat/ChatActivity.java",
+      "line": 270,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "chat/ChatActivity.java",
+      "line": 446,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "chat/ChatActivity.java",
+      "line": 447,
+      "category": "snapshot_listener"
+    },
+    {
+      "file": "chat/ChatActivity.java",
+      "line": 500,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "chat/ChatActivity.java",
+      "line": 501,
+      "category": "snapshot_listener"
+    },
+    {
+      "file": "chat/ChatActivity.java",
+      "line": 508,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "chat/ChatActivity.java",
+      "line": 509,
+      "category": "snapshot_listener"
+    },
+    {
+      "file": "chat/ChatActivity.java",
+      "line": 534,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "chat/ChatActivity.java",
+      "line": 538,
+      "category": "snapshot_listener"
+    },
+    {
+      "file": "chat/ChatActivity.java",
+      "line": 694,
+      "category": "delayed_or_periodic_candidate"
+    },
+    {
+      "file": "chat/ChatActivity.java",
+      "line": 695,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "chat/ChatActivity.java",
+      "line": 740,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "chat/ChatActivity.java",
+      "line": 748,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "chat/ChatActivity.java",
+      "line": 753,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "chat/ChatActivity.java",
+      "line": 883,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "chat/ChatActivity.java",
+      "line": 907,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "chat/ChatActivity.java",
+      "line": 909,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "chat/ChatActivity.java",
+      "line": 936,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "chat/ChatActivity.java",
+      "line": 978,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "chat/ChatActivity.java",
+      "line": 1005,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "chat/ChatActivity.java",
+      "line": 1007,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "chat/ChatActivity.java",
+      "line": 1041,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "chat/ChatActivity.java",
+      "line": 1085,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "chat/ChatActivity.java",
+      "line": 1087,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "chat/ChatActivity.java",
+      "line": 1117,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "chat/ChatActivity.java",
+      "line": 1201,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "chat/ChatActivity.java",
+      "line": 1214,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "chat/ChatActivity.java",
+      "line": 1230,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "chat/ChatActivity.java",
+      "line": 1270,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "chat/ChatActivity.java",
+      "line": 1296,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "chat/ChatActivity.java",
+      "line": 1337,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "chat/ConversationsActivity.java",
+      "line": 67,
+      "category": "delayed_or_periodic_candidate"
+    },
+    {
+      "file": "chat/ConversationsActivity.java",
+      "line": 303,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "chat/ConversationsActivity.java",
+      "line": 358,
+      "category": "cache_first_list"
+    },
+    {
+      "file": "chat/ConversationsActivity.java",
+      "line": 452,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "chat/ConversationsActivity.java",
+      "line": 467,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "chat/CreateGroupChatActivity.java",
+      "line": 140,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "chat/CreateGroupChatActivity.java",
+      "line": 251,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "chat/CreateGroupChatActivity.java",
+      "line": 301,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "chat/GroupChatInfoActivity.java",
+      "line": 157,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "chat/GroupChatInfoActivity.java",
+      "line": 203,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "chat/GroupChatInfoActivity.java",
+      "line": 217,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "chat/GroupChatInfoActivity.java",
+      "line": 218,
+      "category": "snapshot_listener"
+    },
+    {
+      "file": "chat/GroupChatInfoActivity.java",
+      "line": 360,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "chat/GroupChatInfoActivity.java",
+      "line": 375,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "chat/GroupChatInfoActivity.java",
+      "line": 400,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "chat/GroupChatInfoActivity.java",
+      "line": 415,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "chat/GroupChatInfoActivity.java",
+      "line": 463,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "chat/GroupChatInfoActivity.java",
+      "line": 497,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "chat/GroupChatInfoActivity.java",
+      "line": 514,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "chat/GroupChatInfoActivity.java",
+      "line": 532,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "chat/GroupChatInfoActivity.java",
+      "line": 533,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "chat/MessagesAdapter.java",
+      "line": 725,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "chat/MessagesAdapter.java",
+      "line": 752,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "chat/NewChatActivity.java",
+      "line": 125,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "chat/NewChatActivity.java",
+      "line": 137,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "core/Admin.java",
+      "line": 144,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "core/Admin.java",
+      "line": 156,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "core/Admin.java",
+      "line": 167,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "core/Admin.java",
+      "line": 194,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "core/Admin.java",
+      "line": 197,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "core/Admin.java",
+      "line": 210,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "core/Admin.java",
+      "line": 213,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "core/Admin.java",
+      "line": 237,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "core/Admin.java",
+      "line": 250,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "core/AdsConfig.java",
+      "line": 270,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "core/AdsConfig.java",
+      "line": 271,
+      "category": "snapshot_listener"
+    },
+    {
+      "file": "core/AdsConfig.java",
+      "line": 300,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "core/AdsConfig.java",
+      "line": 1123,
+      "category": "delayed_or_periodic_candidate"
+    },
+    {
+      "file": "core/AdsConfig.java",
+      "line": 1388,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "core/AdsConfig.java",
+      "line": 1422,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "core/AdsConfig.java",
+      "line": 1499,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "core/AnchoredBannerPool.java",
+      "line": 173,
+      "category": "delayed_or_periodic_candidate"
+    },
+    {
+      "file": "core/AnchoredBannerPool.java",
+      "line": 286,
+      "category": "delayed_or_periodic_candidate"
+    },
+    {
+      "file": "core/CloudAppConfig.java",
+      "line": 25,
+      "category": "raw_http_candidate"
+    },
+    {
+      "file": "core/CloudflareHttp.java",
+      "line": 19,
+      "category": "raw_http_candidate"
+    },
+    {
+      "file": "core/CloudflareRequestTrace.java",
+      "line": 14,
+      "category": "delayed_or_periodic_candidate"
+    },
+    {
+      "file": "core/CloudflareStore.java",
+      "line": 55,
+      "category": "raw_http_candidate"
+    },
+    {
+      "file": "core/CloudflareViews.java",
+      "line": 186,
+      "category": "raw_http_candidate"
+    },
+    {
+      "file": "core/CloudflareViews.java",
+      "line": 247,
+      "category": "raw_http_candidate"
+    },
+    {
+      "file": "core/Cloudinary.java",
+      "line": 69,
+      "category": "raw_http_candidate"
+    },
+    {
+      "file": "core/Cloudinary.java",
+      "line": 300,
+      "category": "raw_http_candidate"
+    },
+    {
+      "file": "core/Cloudinary.java",
+      "line": 420,
+      "category": "raw_http_candidate"
+    },
+    {
+      "file": "core/ConsentManager.java",
+      "line": 214,
+      "category": "delayed_or_periodic_candidate"
+    },
+    {
+      "file": "core/ConsentManager.java",
+      "line": 268,
+      "category": "delayed_or_periodic_candidate"
+    },
+    {
+      "file": "core/ContentSafetyEngine.java",
+      "line": 499,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "core/ContentSafetyEngine.java",
+      "line": 502,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "core/ContentSafetyEngine.java",
+      "line": 504,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "core/ContentSafetyEngine.java",
+      "line": 516,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "core/CountReads.java",
+      "line": 20,
+      "category": "explicit_server_read"
+    },
+    {
+      "file": "core/CountReads.java",
+      "line": 28,
+      "category": "delayed_or_periodic_candidate"
+    },
+    {
+      "file": "core/CursorPager.java",
+      "line": 133,
+      "category": "delayed_or_periodic_candidate"
+    },
+    {
+      "file": "core/CursorPager.java",
+      "line": 135,
+      "category": "cache_first_list"
+    },
+    {
+      "file": "core/D1Client.java",
+      "line": 73,
+      "category": "raw_http_candidate"
+    },
+    {
+      "file": "core/FastCache.java",
+      "line": 593,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "core/Fb.java",
+      "line": 53,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "core/Fb.java",
+      "line": 66,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "core/Fb.java",
+      "line": 93,
+      "category": "snapshot_listener"
+    },
+    {
+      "file": "core/FeedHeadReads.java",
+      "line": 12,
+      "category": "explicit_server_read"
+    },
+    {
+      "file": "core/FriendPicker.java",
+      "line": 20,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "core/InteractionCooldown.java",
+      "line": 24,
+      "category": "delayed_or_periodic_candidate"
+    },
+    {
+      "file": "core/MediaDiskCache.java",
+      "line": 127,
+      "category": "raw_http_candidate"
+    },
+    {
+      "file": "core/Mentions.java",
+      "line": 143,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "core/Mentions.java",
+      "line": 143,
+      "category": "cache_first_list"
+    },
+    {
+      "file": "core/Mentions.java",
+      "line": 194,
+      "category": "delayed_or_periodic_candidate"
+    },
+    {
+      "file": "core/Notify.java",
+      "line": 32,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "core/Notify.java",
+      "line": 33,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "core/Notify.java",
+      "line": 35,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "core/Notify.java",
+      "line": 83,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "core/Notify.java",
+      "line": 96,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "core/Notify.java",
+      "line": 119,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "core/Notify.java",
+      "line": 125,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "core/Notify.java",
+      "line": 172,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "core/Notify.java",
+      "line": 186,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "core/QueryActions.java",
+      "line": 18,
+      "category": "explicit_server_read"
+    },
+    {
+      "file": "core/QueryActions.java",
+      "line": 21,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "core/QueryActions.java",
+      "line": 32,
+      "category": "explicit_server_read"
+    },
+    {
+      "file": "core/QueryActions.java",
+      "line": 42,
+      "category": "explicit_server_read"
+    },
+    {
+      "file": "core/QueryActions.java",
+      "line": 46,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "core/R2VideoClient.java",
+      "line": 74,
+      "category": "raw_http_candidate"
+    },
+    {
+      "file": "core/R2VideoClient.java",
+      "line": 88,
+      "category": "raw_http_candidate"
+    },
+    {
+      "file": "core/R2VideoClient.java",
+      "line": 111,
+      "category": "raw_http_candidate"
+    },
+    {
+      "file": "core/R2VideoClient.java",
+      "line": 142,
+      "category": "raw_http_candidate"
+    },
+    {
+      "file": "core/R2VideoClient.java",
+      "line": 159,
+      "category": "raw_http_candidate"
+    },
+    {
+      "file": "core/TickCache.java",
+      "line": 25,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "d1/documents/D1DocumentJson.java",
+      "line": 71,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "d1/documents/D1DocumentStore.java",
+      "line": 524,
+      "category": "delayed_or_periodic_candidate"
+    },
+    {
+      "file": "friends/BirthdaysActivity.java",
+      "line": 85,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "friends/BirthdaysActivity.java",
+      "line": 228,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "friends/FollowListActivity.java",
+      "line": 67,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "friends/FriendsFragment.java",
+      "line": 67,
+      "category": "delayed_or_periodic_candidate"
+    },
+    {
+      "file": "friends/FriendsFragment.java",
+      "line": 169,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "friends/FriendsFragment.java",
+      "line": 171,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "friends/FriendsFragment.java",
+      "line": 172,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "friends/FriendsFragment.java",
+      "line": 173,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "friends/FriendsFragment.java",
+      "line": 207,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "friends/FriendsFragment.java",
+      "line": 242,
+      "category": "delayed_or_periodic_candidate"
+    },
+    {
+      "file": "friends/FriendsFragment.java",
+      "line": 248,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "friends/FriendsFragment.java",
+      "line": 249,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "friends/FriendsFragment.java",
+      "line": 250,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "friends/FriendsFragment.java",
+      "line": 378,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "friends/FriendsFragment.java",
+      "line": 390,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "friends/FriendsFragment.java",
+      "line": 407,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "friends/FriendsFragment.java",
+      "line": 424,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "friends/FriendsFragment.java",
+      "line": 425,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "friends/FriendsFragment.java",
+      "line": 427,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "friends/FriendsFragment.java",
+      "line": 433,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "friends/FriendsFragment.java",
+      "line": 434,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "friends/FriendsFragment.java",
+      "line": 448,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "friends/FriendsFragment.java",
+      "line": 452,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "friends/FriendsFragment.java",
+      "line": 453,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "friends/FriendsFragment.java",
+      "line": 454,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "friends/SearchActivity.java",
+      "line": 143,
+      "category": "delayed_or_periodic_candidate"
+    },
+    {
+      "file": "friends/SearchActivity.java",
+      "line": 217,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "friends/SearchActivity.java",
+      "line": 222,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "friends/SearchActivity.java",
+      "line": 229,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "groups/GroupDetailActivity.java",
+      "line": 269,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "groups/GroupDetailActivity.java",
+      "line": 270,
+      "category": "snapshot_listener"
+    },
+    {
+      "file": "groups/GroupDetailActivity.java",
+      "line": 278,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "groups/GroupDetailActivity.java",
+      "line": 281,
+      "category": "snapshot_listener"
+    },
+    {
+      "file": "groups/GroupDetailActivity.java",
+      "line": 495,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "groups/GroupDetailActivity.java",
+      "line": 498,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "groups/GroupDetailActivity.java",
+      "line": 501,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "groups/GroupDetailActivity.java",
+      "line": 507,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "groups/GroupDetailActivity.java",
+      "line": 536,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "groups/GroupDetailActivity.java",
+      "line": 570,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "groups/GroupDetailActivity.java",
+      "line": 643,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "groups/GroupDetailActivity.java",
+      "line": 687,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "groups/GroupDetailActivity.java",
+      "line": 699,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "groups/GroupDetailActivity.java",
+      "line": 744,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "groups/GroupDetailActivity.java",
+      "line": 756,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "groups/GroupDetailActivity.java",
+      "line": 810,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "groups/GroupDetailActivity.java",
+      "line": 820,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "groups/GroupDetailActivity.java",
+      "line": 854,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "groups/GroupDetailActivity.java",
+      "line": 926,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "groups/GroupDetailActivity.java",
+      "line": 1063,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "groups/GroupDetailActivity.java",
+      "line": 1067,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "groups/GroupDetailActivity.java",
+      "line": 1075,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "groups/GroupDetailActivity.java",
+      "line": 1082,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "groups/GroupDetailActivity.java",
+      "line": 1143,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "groups/GroupsActivity.java",
+      "line": 150,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "groups/GroupsActivity.java",
+      "line": 300,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "groups/GroupsActivity.java",
+      "line": 402,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "groups/GroupsActivity.java",
+      "line": 406,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "groups/GroupsActivity.java",
+      "line": 413,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "live/LiveActivity.java",
+      "line": 341,
+      "category": "delayed_or_periodic_candidate"
+    },
+    {
+      "file": "live/LiveActivity.java",
+      "line": 356,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "live/LiveActivity.java",
+      "line": 1334,
+      "category": "delayed_or_periodic_candidate"
+    },
+    {
+      "file": "live/LiveActivity.java",
+      "line": 1337,
+      "category": "delayed_or_periodic_candidate"
+    },
+    {
+      "file": "live/LiveActivity.java",
+      "line": 1344,
+      "category": "delayed_or_periodic_candidate"
+    },
+    {
+      "file": "live/LiveActivity.java",
+      "line": 1358,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "live/LiveActivity.java",
+      "line": 1554,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "live/LiveActivity.java",
+      "line": 1555,
+      "category": "snapshot_listener"
+    },
+    {
+      "file": "live/LiveActivity.java",
+      "line": 1560,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "live/LiveActivity.java",
+      "line": 1563,
+      "category": "snapshot_listener"
+    },
+    {
+      "file": "live/LiveActivity.java",
+      "line": 1964,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "live/LiveActivity.java",
+      "line": 1981,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "live/LiveActivity.java",
+      "line": 1990,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "live/LiveActivity.java",
+      "line": 2006,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "live/LiveActivity.java",
+      "line": 2050,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "live/LiveActivity.java",
+      "line": 2058,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "live/LiveActivity.java",
+      "line": 2083,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "live/LiveActivity.java",
+      "line": 2127,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "live/LiveActivity.java",
+      "line": 2157,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "live/LiveActivity.java",
+      "line": 2181,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "live/LiveActivity.java",
+      "line": 2187,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "live/LiveActivity.java",
+      "line": 2236,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "live/LiveActivity.java",
+      "line": 2261,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "live/LiveActivity.java",
+      "line": 2274,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "live/LiveActivity.java",
+      "line": 2290,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "live/LiveActivity.java",
+      "line": 2368,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "live/LiveActivity.java",
+      "line": 2394,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "live/LiveActivity.java",
+      "line": 2404,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "live/LiveActivity.java",
+      "line": 2414,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "live/LiveActivity.java",
+      "line": 2429,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "live/LiveActivity.java",
+      "line": 2441,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "live/LiveActivity.java",
+      "line": 2457,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "live/LiveActivity.java",
+      "line": 2468,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "live/LiveActivity.java",
+      "line": 2561,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "live/LiveActivity.java",
+      "line": 2606,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "live/LiveActivity.java",
+      "line": 2647,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "live/LiveActivity.java",
+      "line": 2718,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "live/LiveActivity.java",
+      "line": 2727,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "live/LiveActivity.java",
+      "line": 2756,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "live/LiveActivity.java",
+      "line": 2776,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "live/LiveActivity.java",
+      "line": 2887,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "live/LiveActivity.java",
+      "line": 2924,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "live/LiveActivity.java",
+      "line": 2968,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "live/LiveActivity.java",
+      "line": 2994,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "live/LiveActivity.java",
+      "line": 3389,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "live/LiveActivity.java",
+      "line": 3434,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "live/LiveActivity.java",
+      "line": 3507,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "live/LiveActivity.java",
+      "line": 3510,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "live/LiveActivity.java",
+      "line": 3517,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "live/LiveHubActivity.java",
+      "line": 148,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "live/LiveHubActivity.java",
+      "line": 151,
+      "category": "snapshot_listener"
+    },
+    {
+      "file": "live/LivePkAndGiftsUi.java",
+      "line": 780,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "live/LivePkAndGiftsUi.java",
+      "line": 871,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "live/LivePkAndGiftsUi.java",
+      "line": 1075,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "live/LivePkAndGiftsUi.java",
+      "line": 1188,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "live/LivePkAndGiftsUi.java",
+      "line": 1227,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "live/LiveRelayClient.java",
+      "line": 26,
+      "category": "raw_http_candidate"
+    },
+    {
+      "file": "live/LiveStreamEngine.java",
+      "line": 136,
+      "category": "delayed_or_periodic_candidate"
+    },
+    {
+      "file": "live/LiveStreamEngine.java",
+      "line": 346,
+      "category": "delayed_or_periodic_candidate"
+    },
+    {
+      "file": "live/LiveStreamEngine.java",
+      "line": 609,
+      "category": "delayed_or_periodic_candidate"
+    },
+    {
+      "file": "main/HomeFragment.java",
+      "line": 578,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "main/HomeFragment.java",
+      "line": 578,
+      "category": "cache_first_list"
+    },
+    {
+      "file": "main/HomeFragment.java",
+      "line": 715,
+      "category": "delayed_or_periodic_candidate"
+    },
+    {
+      "file": "main/HomeFragment.java",
+      "line": 738,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "main/HomeFragment.java",
+      "line": 741,
+      "category": "cache_first_list"
+    },
+    {
+      "file": "main/HomeFragment.java",
+      "line": 790,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "main/HomeFragment.java",
+      "line": 792,
+      "category": "cache_first_list"
+    },
+    {
+      "file": "main/HomeFragment.java",
+      "line": 858,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "main/HomeFragment.java",
+      "line": 861,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "main/HomeFragment.java",
+      "line": 864,
+      "category": "delayed_or_periodic_candidate"
+    },
+    {
+      "file": "main/HomeFragment.java",
+      "line": 1101,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "main/HomeFragment.java",
+      "line": 1112,
+      "category": "cache_first_list"
+    },
+    {
+      "file": "main/HomeFragment.java",
+      "line": 1192,
+      "category": "delayed_or_periodic_candidate"
+    },
+    {
+      "file": "main/HomeFragment.java",
+      "line": 1197,
+      "category": "cache_first_list"
+    },
+    {
+      "file": "main/MainActivity.java",
+      "line": 528,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "main/MainActivity.java",
+      "line": 528,
+      "category": "count_helper"
+    },
+    {
+      "file": "main/MainActivity.java",
+      "line": 566,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "main/MainActivity.java",
+      "line": 570,
+      "category": "cache_first_list"
+    },
+    {
+      "file": "main/MainActivity.java",
+      "line": 614,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "main/MainActivity.java",
+      "line": 618,
+      "category": "cache_first_list"
+    },
+    {
+      "file": "main/MainActivity.java",
+      "line": 656,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "main/MainActivity.java",
+      "line": 660,
+      "category": "cache_first_list"
+    },
+    {
+      "file": "main/MainActivity.java",
+      "line": 705,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "main/MainActivity.java",
+      "line": 708,
+      "category": "cache_first_list"
+    },
+    {
+      "file": "main/MainActivity.java",
+      "line": 762,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "main/MainActivity.java",
+      "line": 797,
+      "category": "delayed_or_periodic_candidate"
+    },
+    {
+      "file": "main/MainActivity.java",
+      "line": 816,
+      "category": "delayed_or_periodic_candidate"
+    },
+    {
+      "file": "main/MainActivity.java",
+      "line": 824,
+      "category": "delayed_or_periodic_candidate"
+    },
+    {
+      "file": "main/MenuFragment.java",
+      "line": 528,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "main/MenuFragment.java",
+      "line": 559,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "main/NotificationsFragment.java",
+      "line": 162,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "main/NotificationsFragment.java",
+      "line": 171,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "main/NotificationsFragment.java",
+      "line": 226,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "main/NotificationsFragment.java",
+      "line": 298,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "post/CommentsAdapter.java",
+      "line": 336,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "post/CommentsEngine.java",
+      "line": 49,
+      "category": "engagement_transport"
+    },
+    {
+      "file": "post/CommentsEngine.java",
+      "line": 101,
+      "category": "delayed_or_periodic_candidate"
+    },
+    {
+      "file": "post/CommentsEngine.java",
+      "line": 108,
+      "category": "engagement_transport"
+    },
+    {
+      "file": "post/CommentsEngine.java",
+      "line": 217,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "post/CommentsEngine.java",
+      "line": 226,
+      "category": "snapshot_listener"
+    },
+    {
+      "file": "post/CommentsEngine.java",
+      "line": 308,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "post/CommentsEngine.java",
+      "line": 331,
+      "category": "engagement_transport"
+    },
+    {
+      "file": "post/CommentsEngine.java",
+      "line": 338,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "post/CommentsEngine.java",
+      "line": 342,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "post/CommentsEngine.java",
+      "line": 345,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "post/CommentsEngine.java",
+      "line": 391,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "post/CommentsEngine.java",
+      "line": 392,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "post/CommentsEngine.java",
+      "line": 394,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "post/CommentsEngine.java",
+      "line": 397,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "post/CommentsEngine.java",
+      "line": 410,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "post/CommentsEngine.java",
+      "line": 422,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "post/CommentsEngine.java",
+      "line": 423,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "post/CommentsEngine.java",
+      "line": 425,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "post/CreatePostActivity.java",
+      "line": 737,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "post/CreatePostActivity.java",
+      "line": 867,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "post/CreatePostActivity.java",
+      "line": 900,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "post/D1Drafts.java",
+      "line": 27,
+      "category": "engagement_transport"
+    },
+    {
+      "file": "post/D1Reactions.java",
+      "line": 70,
+      "category": "engagement_transport"
+    },
+    {
+      "file": "post/D1Reactions.java",
+      "line": 77,
+      "category": "delayed_or_periodic_candidate"
+    },
+    {
+      "file": "post/D1Reactions.java",
+      "line": 167,
+      "category": "engagement_transport"
+    },
+    {
+      "file": "post/D1Reactions.java",
+      "line": 169,
+      "category": "delayed_or_periodic_candidate"
+    },
+    {
+      "file": "post/D1Reactions.java",
+      "line": 173,
+      "category": "delayed_or_periodic_candidate"
+    },
+    {
+      "file": "post/D1Reactions.java",
+      "line": 207,
+      "category": "engagement_transport"
+    },
+    {
+      "file": "post/D1Reactions.java",
+      "line": 229,
+      "category": "delayed_or_periodic_candidate"
+    },
+    {
+      "file": "post/D1Reactions.java",
+      "line": 230,
+      "category": "engagement_transport"
+    },
+    {
+      "file": "post/D1Reactions.java",
+      "line": 273,
+      "category": "engagement_transport"
+    },
+    {
+      "file": "post/FeedAdapter.java",
+      "line": 179,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "post/FeedAdapter.java",
+      "line": 1625,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "post/FeedAdapter.java",
+      "line": 1688,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "post/FeedAdapter.java",
+      "line": 1771,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "post/FeedAdapter.java",
+      "line": 1778,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "post/FeedAdapter.java",
+      "line": 1786,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "post/FeedAdapter.java",
+      "line": 1798,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "post/FeedAdapter.java",
+      "line": 1807,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "post/FeedAdapter.java",
+      "line": 1859,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "post/FeedAdapter.java",
+      "line": 1872,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "post/FeedAdapter.java",
+      "line": 1880,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "post/FeedAdapter.java",
+      "line": 1881,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "post/FeedAdapter.java",
+      "line": 1912,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "post/FeedAdapter.java",
+      "line": 1935,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "post/FeedAdapter.java",
+      "line": 1990,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "post/FeedAdapter.java",
+      "line": 1991,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "post/FeedAdapter.java",
+      "line": 2040,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "post/FeedAdapter.java",
+      "line": 2050,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "post/FullscreenMediaActivity.java",
+      "line": 322,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "post/FullscreenMediaActivity.java",
+      "line": 322,
+      "category": "snapshot_listener"
+    },
+    {
+      "file": "post/MemoriesActivity.java",
+      "line": 76,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "post/PostDetailActivity.java",
+      "line": 348,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "post/PostDetailActivity.java",
+      "line": 348,
+      "category": "snapshot_listener"
+    },
+    {
+      "file": "post/Reactions.java",
+      "line": 254,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "post/Reactions.java",
+      "line": 353,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "post/Reactions.java",
+      "line": 386,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "post/Reactions.java",
+      "line": 451,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "post/Reactions.java",
+      "line": 472,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "post/Reactions.java",
+      "line": 666,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "post/SavedPostsActivity.java",
+      "line": 106,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "post/WatchActivity.java",
+      "line": 88,
+      "category": "delayed_or_periodic_candidate"
+    },
+    {
+      "file": "post/WatchActivity.java",
+      "line": 99,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "post/WatchActivity.java",
+      "line": 248,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "profile/CreatorDashboardDialog.java",
+      "line": 137,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "profile/CreatorDashboardDialog.java",
+      "line": 191,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "profile/EditProfileActivity.java",
+      "line": 190,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "profile/EditProfileActivity.java",
+      "line": 191,
+      "category": "snapshot_listener"
+    },
+    {
+      "file": "profile/EditProfileActivity.java",
+      "line": 314,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "profile/ProfileActivity.java",
+      "line": 767,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "profile/ProfileActivity.java",
+      "line": 865,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "profile/ProfileActivity.java",
+      "line": 888,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "profile/ProfileActivity.java",
+      "line": 921,
+      "category": "snapshot_listener"
+    },
+    {
+      "file": "profile/ProfileActivity.java",
+      "line": 927,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "profile/ProfileActivity.java",
+      "line": 928,
+      "category": "snapshot_listener"
+    },
+    {
+      "file": "profile/ProfileActivity.java",
+      "line": 935,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "profile/ProfileActivity.java",
+      "line": 937,
+      "category": "snapshot_listener"
+    },
+    {
+      "file": "profile/ProfileActivity.java",
+      "line": 945,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "profile/ProfileActivity.java",
+      "line": 947,
+      "category": "snapshot_listener"
+    },
+    {
+      "file": "profile/ProfileActivity.java",
+      "line": 963,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "profile/ProfileActivity.java",
+      "line": 977,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "profile/ProfileActivity.java",
+      "line": 1017,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "profile/ProfileActivity.java",
+      "line": 1017,
+      "category": "count_helper"
+    },
+    {
+      "file": "profile/ProfileActivity.java",
+      "line": 1072,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "profile/ProfileActivity.java",
+      "line": 1336,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "profile/ProfileActivity.java",
+      "line": 1434,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "profile/ProfileActivity.java",
+      "line": 1446,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "profile/ProfileActivity.java",
+      "line": 1450,
+      "category": "snapshot_listener"
+    },
+    {
+      "file": "profile/ProfileActivity.java",
+      "line": 1512,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "profile/ProfileActivity.java",
+      "line": 1513,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "profile/ProfileActivity.java",
+      "line": 1514,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "profile/ProfileActivity.java",
+      "line": 1517,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "profile/ProfileActivity.java",
+      "line": 1518,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "profile/ProfileActivity.java",
+      "line": 1524,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "profile/ProfileActivity.java",
+      "line": 1537,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "profile/ProfileActivity.java",
+      "line": 1558,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "profile/ProfileActivity.java",
+      "line": 1573,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "profile/ProfileActivity.java",
+      "line": 1582,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "profile/ProfileActivity.java",
+      "line": 1617,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "profile/ProfileActivity.java",
+      "line": 1625,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "profile/ProfileActivity.java",
+      "line": 1627,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "profile/ProfileActivity.java",
+      "line": 1628,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "profile/ProfileActivity.java",
+      "line": 1733,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "profile/ProfileActivity.java",
+      "line": 1747,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "profile/ProfileActivity.java",
+      "line": 1762,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "profile/ProfileActivity.java",
+      "line": 1781,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "profile/ProfileActivity.java",
+      "line": 1815,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "profile/ProfileActivity.java",
+      "line": 1850,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "push/FriendMessagingService.java",
+      "line": 26,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "push/FriendMessagingService.java",
+      "line": 34,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "push/FriendMessagingService.java",
+      "line": 39,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "push/PushDeliveryWorker.java",
+      "line": 32,
+      "category": "durable_work"
+    },
+    {
+      "file": "push/PushFanoutWorker.java",
+      "line": 31,
+      "category": "durable_work"
+    },
+    {
+      "file": "push/PushFanoutWorker.java",
+      "line": 41,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "push/PushFanoutWorker.java",
+      "line": 42,
+      "category": "explicit_server_read"
+    },
+    {
+      "file": "push/PushFanoutWorker.java",
+      "line": 53,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "push/PushFanoutWorker.java",
+      "line": 54,
+      "category": "explicit_server_read"
+    },
+    {
+      "file": "push/PushFanoutWorker.java",
+      "line": 56,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "push/PushFanoutWorker.java",
+      "line": 57,
+      "category": "explicit_server_read"
+    },
+    {
+      "file": "push/PushFanoutWorker.java",
+      "line": 67,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "push/PushGateway.java",
+      "line": 23,
+      "category": "raw_http_candidate"
+    },
+    {
+      "file": "push/PushGateway.java",
+      "line": 25,
+      "category": "raw_http_candidate"
+    },
+    {
+      "file": "push/PushOpenActivity.java",
+      "line": 46,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "reels/AddReelActivity.java",
+      "line": 174,
+      "category": "delayed_or_periodic_candidate"
+    },
+    {
+      "file": "reels/AddReelActivity.java",
+      "line": 190,
+      "category": "delayed_or_periodic_candidate"
+    },
+    {
+      "file": "reels/AddReelActivity.java",
+      "line": 797,
+      "category": "delayed_or_periodic_candidate"
+    },
+    {
+      "file": "reels/ReelUploadManager.java",
+      "line": 357,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "reels/ReelUploadManager.java",
+      "line": 366,
+      "category": "delayed_or_periodic_candidate"
+    },
+    {
+      "file": "reels/ReelsFragment.java",
+      "line": 640,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "reels/ReelsFragment.java",
+      "line": 660,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "reels/ReelsFragment.java",
+      "line": 663,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "reels/ReelsFragment.java",
+      "line": 696,
+      "category": "delayed_or_periodic_candidate"
+    },
+    {
+      "file": "reels/ReelsFragment.java",
+      "line": 733,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "reels/ReelsFragment.java",
+      "line": 734,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "reels/ReelsFragment.java",
+      "line": 1052,
+      "category": "delayed_or_periodic_candidate"
+    },
+    {
+      "file": "reels/ReelsFragment.java",
+      "line": 1651,
+      "category": "delayed_or_periodic_candidate"
+    },
+    {
+      "file": "reels/ReelsFragment.java",
+      "line": 1672,
+      "category": "delayed_or_periodic_candidate"
+    },
+    {
+      "file": "reels/ReelsFragment.java",
+      "line": 2089,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "reels/ReelsFragment.java",
+      "line": 2253,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "reels/ReelsFragment.java",
+      "line": 2299,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "reels/ReelsFragment.java",
+      "line": 2342,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "reels/ReelsFragment.java",
+      "line": 2344,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "reels/ReelsFragment.java",
+      "line": 2450,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "reels/ReelsFragment.java",
+      "line": 2469,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "reels/ReelsFragment.java",
+      "line": 2483,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "reels/ReelsFragment.java",
+      "line": 2531,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "reels/ReelsFragment.java",
+      "line": 2584,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "reels/ReelsFragment.java",
+      "line": 2608,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "reels/TikTokReelStudioHelper.java",
+      "line": 642,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "settings/ActivityLogActivity.java",
+      "line": 131,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "settings/ActivityLogActivity.java",
+      "line": 147,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "settings/ActivityLogActivity.java",
+      "line": 161,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "settings/ArchiveTrashActivity.java",
+      "line": 136,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "settings/ArchiveTrashActivity.java",
+      "line": 145,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "settings/ArchiveTrashActivity.java",
+      "line": 235,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "settings/ArchiveTrashActivity.java",
+      "line": 253,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "settings/ArchiveTrashActivity.java",
+      "line": 273,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "settings/ArchiveTrashActivity.java",
+      "line": 327,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "settings/ArchiveTrashActivity.java",
+      "line": 339,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "settings/ArchiveTrashActivity.java",
+      "line": 343,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "settings/ArchiveTrashActivity.java",
+      "line": 367,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "settings/BlockedUsersActivity.java",
+      "line": 55,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "settings/BlockedUsersActivity.java",
+      "line": 56,
+      "category": "snapshot_listener"
+    },
+    {
+      "file": "settings/FeedPreferencesActivity.java",
+      "line": 128,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "settings/FeedPreferencesActivity.java",
+      "line": 149,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "settings/FeedPreferencesActivity.java",
+      "line": 150,
+      "category": "snapshot_listener"
+    },
+    {
+      "file": "settings/FeedPreferencesActivity.java",
+      "line": 157,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "settings/FeedPreferencesActivity.java",
+      "line": 177,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "settings/MarketplaceActivity.java",
+      "line": 150,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "settings/MarketplaceActivity.java",
+      "line": 152,
+      "category": "snapshot_listener"
+    },
+    {
+      "file": "settings/MarketplaceActivity.java",
+      "line": 306,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "settings/MarketplaceActivity.java",
+      "line": 371,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "settings/MarketplaceActivity.java",
+      "line": 375,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "settings/MarketplaceActivity.java",
+      "line": 381,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "settings/MarketplaceActivity.java",
+      "line": 408,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "settings/MarketplaceActivity.java",
+      "line": 409,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "settings/MarketplaceActivity.java",
+      "line": 410,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "settings/SessionsActivity.java",
+      "line": 42,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "settings/SessionsActivity.java",
+      "line": 92,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "settings/SessionsActivity.java",
+      "line": 94,
+      "category": "snapshot_listener"
+    },
+    {
+      "file": "settings/SettingsActivity.java",
+      "line": 431,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "settings/SettingsActivity.java",
+      "line": 533,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "settings/SettingsActivity.java",
+      "line": 633,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "settings/SettingsActivity.java",
+      "line": 955,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "settings/SettingsActivity.java",
+      "line": 1041,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "settings/SettingsActivity.java",
+      "line": 1041,
+      "category": "count_helper"
+    },
+    {
+      "file": "settings/SettingsActivity.java",
+      "line": 1141,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "settings/SettingsActivity.java",
+      "line": 1183,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "settings/SettingsActivity.java",
+      "line": 1252,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "settings/SettingsActivity.java",
+      "line": 1347,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "settings/SettingsActivity.java",
+      "line": 1352,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "social/EventsActivity.java",
+      "line": 149,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "social/EventsActivity.java",
+      "line": 163,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "social/EventsActivity.java",
+      "line": 164,
+      "category": "snapshot_listener"
+    },
+    {
+      "file": "social/EventsActivity.java",
+      "line": 268,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "social/LeaderboardActivity.java",
+      "line": 55,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "social/PageDetailActivity.java",
+      "line": 196,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "social/PageDetailActivity.java",
+      "line": 197,
+      "category": "snapshot_listener"
+    },
+    {
+      "file": "social/PageDetailActivity.java",
+      "line": 228,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "social/PageDetailActivity.java",
+      "line": 253,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "social/PageDetailActivity.java",
+      "line": 285,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "social/PageDetailActivity.java",
+      "line": 290,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "social/PagesActivity.java",
+      "line": 157,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "social/PagesActivity.java",
+      "line": 171,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "social/PagesActivity.java",
+      "line": 172,
+      "category": "snapshot_listener"
+    },
+    {
+      "file": "social/PagesActivity.java",
+      "line": 271,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "social/PokesActivity.java",
+      "line": 38,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "social/PokesActivity.java",
+      "line": 45,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "social/PokesActivity.java",
+      "line": 46,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "social/PokesActivity.java",
+      "line": 86,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "story/AddStoryActivity.java",
+      "line": 332,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "story/StoryViewerActivity.java",
+      "line": 259,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "story/StoryViewerActivity.java",
+      "line": 273,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "story/StoryViewerActivity.java",
+      "line": 281,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "story/StoryViewerActivity.java",
+      "line": 350,
+      "category": "delayed_or_periodic_candidate"
+    },
+    {
+      "file": "story/StoryViewerActivity.java",
+      "line": 354,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "story/StoryViewerActivity.java",
+      "line": 367,
+      "category": "delayed_or_periodic_candidate"
+    },
+    {
+      "file": "story/StoryViewerActivity.java",
+      "line": 487,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "story/StoryViewerActivity.java",
+      "line": 512,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "story/StoryViewerActivity.java",
+      "line": 534,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "story/StoryViewerActivity.java",
+      "line": 543,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "story/StoryViewerActivity.java",
+      "line": 606,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "story/StoryViewerActivity.java",
+      "line": 651,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "story/StoryViewerActivity.java",
+      "line": 652,
+      "category": "document_store_entry"
+    },
+    {
+      "file": "story/StoryViewerActivity.java",
+      "line": 653,
+      "category": "document_store_entry"
+    }
+  ]
+}

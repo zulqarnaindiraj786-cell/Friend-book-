@@ -18,8 +18,8 @@ android {
         buildConfigField 'String', 'CLOUDFLARE_API_URL', '"https://rough-firefly-dd7b.zulqarnaindiraj786.workers.dev"'
         minSdk 24
         targetSdk 36
-        versionCode 174
-        versionName '2.10.32'
+        versionCode 181
+        versionName '2.10.39'
         ndk {
             debugSymbolLevel 'FULL'
         }
@@ -121,4 +121,6 @@ dependencies {
     implementation 'androidx.viewpager2:viewpager2:1.1.0'
 
     implementation 'com.github.bumptech.glide:glide:4.16.0'
+    // Generates the Glide module index so FriendbookGlideModule (512 MB photo disk cache) applies.
+    annotationProcessor 'com.github.bumptech.glide:compiler:4.16.0'
 }

@@ -16,6 +16,7 @@ import java.util.*;
 /** Selected identities, not guessed names: persist UID + exact UTF-16 range and label. */
 public final class Mentions {
     private static final int BLUE=0xFF1A73E8;
+    private static final long SEARCH_CACHE_MS=5*60*1000L;
     private Mentions() {}
     private static class Identity extends ForegroundColorSpan {
         final String uid,label;
@@ -131,13 +132,17 @@ public final class Mentions {
                 if(at<0 || (at>0 && !Character.isWhitespace(prefix.charAt(at-1)))) return;
                 for(Identity span:editable.getSpans(at,caret,Identity.class)) if(editable.getSpanStart(span)==at) return;
                 String query=prefix.substring(at+1); if(query.length()>40 || query.contains("\n") || query.contains("@")) return;
+                final String actor=Fb.uid();
                 pending=() -> {
+                    if(actor==null || !actor.equals(Fb.uid()) || !input.isAttachedToWindow()
+                            || !input.hasWindowFocus() || !input.hasFocus()) return;
                     Map<String,DocumentSnapshot> found=new LinkedHashMap<>(); int[] done={0};
                     String cap=query.isEmpty()?query:Character.toUpperCase(query.charAt(0))+query.substring(1);
                     Set<String> terms=new LinkedHashSet<>(Arrays.asList(query,cap,query.toLowerCase(Locale.ROOT),query.toUpperCase(Locale.ROOT)));
                     for(String term:terms) {
-                        Fb.db().collection("users").orderBy("displayName").startAt(term).endAt(term+"\uf8ff").limit(10).get().addOnCompleteListener(task -> {
-                            if(request!=generation || !input.isAttachedToWindow()) return;
+                        Fb.db().collection("users").orderBy("displayName").startAt(term).endAt(term+"\uf8ff").limit(10).getCachedOrFetch(false,SEARCH_CACHE_MS).addOnCompleteListener(task -> {
+                            if(request!=generation || !actor.equals(Fb.uid()) || !input.isAttachedToWindow()
+                                    || !input.hasWindowFocus() || !input.hasFocus()) return;
                             if(task.isSuccessful() && task.getResult()!=null) for(DocumentSnapshot d:task.getResult()) found.put(d.getId(),d);
                             if(++done[0]<terms.size()) return;
                             List<DocumentSnapshot> users=new ArrayList<>(found.values()); List<String> names=new ArrayList<>();
@@ -172,7 +177,7 @@ public final class Mentions {
                                 }
                             });
                             popup.setOnItemClickListener((parent,view,position,id) -> {
-                                if(request!=generation) return;
+                                if(request!=generation || !actor.equals(Fb.uid())) return;
                                 boolean isBulk=position<bulk.size(); int userIndex=position-bulk.size();
                                 String label=isBulk?"@"+bulk.get(position):"@"+names.get(userIndex); Editable value=input.getText();
                                 String selectedUid=isBulk?"bulk:"+bulk.get(position):users.get(userIndex).getId();
@@ -186,7 +191,7 @@ public final class Mentions {
                         });
                     }
                 };
-                handler.postDelayed(pending,250);
+                handler.postDelayed(pending,com.friendbook.social.core.SearchReadPolicy.DEBOUNCE_MS);
             }
         });
         input.addOnAttachStateChangeListener(new View.OnAttachStateChangeListener() {

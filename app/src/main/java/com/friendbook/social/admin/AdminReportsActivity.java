@@ -31,6 +31,11 @@ public class AdminReportsActivity extends Activity {
     private Adapter adapter;
     private ListenerRegistration reg;
     private TextView empty;
+    private LinearLayout pageControls;
+    private String screenActor;
+    private boolean started;
+    private final java.util.Set<String> removed = new java.util.HashSet<>();
+    private final java.util.Map<String,String> actionCompleted = new java.util.HashMap<>();
 
     @Override
     protected void onCreate(Bundle b) {
@@ -41,7 +46,7 @@ public class AdminReportsActivity extends Activity {
         root.setBackgroundColor(Ui.bg(this));
         root.addView(Ui.pageBar(this, "🚩 Reports queue"));
 
-        empty = Ui.tv(this, "No reports — everything is clean 🎉", 14, Ui.sub(this));
+        empty = Ui.tv(this, "Loading reports…", 14, Ui.sub(this));
         empty.setGravity(Gravity.CENTER);
         Ui.pad(empty, 24, 60, 24, 0);
         root.addView(empty);
@@ -51,24 +56,28 @@ public class AdminReportsActivity extends Activity {
         adapter = new Adapter();
         rv.setAdapter(adapter);
         root.addView(rv, new LinearLayout.LayoutParams(-1, 0, 1));
+        pageControls=Ui.col(this);root.addView(pageControls);
         setContentView(root);
     }
 
     @Override
     protected void onStart() {
         super.onStart();
-        reg = Fb.db().collection("reports")
-                .orderBy("createdAt", Query.Direction.DESCENDING).limit(100)
-                .addSnapshotListener((snap, err) -> {
+        if(adapter==null || !Admin.isAdmin() || Fb.uid()==null){finish();return;}
+        if(screenActor!=null && !screenActor.equals(Fb.uid())){finish();return;}
+        screenActor=Fb.uid();started=true;
+        reg = com.friendbook.social.core.PagedLists.attach(this,pageControls,
+                Fb.db().collection("reports").orderBy("createdAt", Query.Direction.DESCENDING),
+                10,"admin-reports",(snap, err) -> {
                     if (err != null || snap == null) {
                         empty.setText("Couldn't load reports. Please retry.");
                         empty.setVisibility(View.VISIBLE);
                         return;
                     }
                     reports.clear();
-                    reports.addAll(snap.getDocuments());
+                    for(DocumentSnapshot d:snap)if(!removed.contains(d.getId()))reports.add(d);
                     adapter.notifyDataSetChanged();
-                    empty.setText("No reports — everything is clean 🎉");
+                    empty.setText("No reports in loaded pages");
                     empty.setVisibility(reports.isEmpty() ? View.VISIBLE : View.GONE);
                 });
     }
@@ -76,7 +85,8 @@ public class AdminReportsActivity extends Activity {
     @Override
     protected void onStop() {
         super.onStop();
-        if (reg != null) reg.remove();
+        started=false;
+        if (reg != null) {reg.remove();reg=null;}
     }
 
     private String describe(DocumentSnapshot d) {
@@ -92,48 +102,62 @@ public class AdminReportsActivity extends Activity {
     }
 
     private void actOn(DocumentSnapshot d) {
-        Map<String, Object> m = d.getData();
-        String[] opts = {"🗑 Delete reported content", "🚫 Ban content author", "✖ Dismiss report"};
-        Ui.choose(this, describe(d), opts, w -> {
-            if (w == 0) {
-                if (m == null) return;
-                String postId = Format.str(m, "postId");
-                String reelId = Format.str(m, "reelId");
-                String uid = Format.str(m, "uid");
-                String type = Format.str(m, "type");
-                com.google.android.gms.tasks.Task<Void> action;
-                if (!postId.isEmpty() && !postId.startsWith("reel_")) {
-                    action = Fb.db().moderate("delete_content", "posts", postId);
-                } else if (postId.startsWith("reel_")) {
-                    action = Fb.db().moderate("delete_content", "reels", postId.substring(5));
-                } else if (!reelId.isEmpty()) {
-                    action = Fb.db().moderate("delete_content", "reels", reelId);
-                } else if ("story".equals(type) && !Format.str(m, "targetId").isEmpty()) {
-                    action = Fb.db().moderate("delete_content", "stories", Format.str(m, "targetId"));
-                } else if (!uid.isEmpty() && "profile".equals(type)) {
-                    action = Fb.db().moderate("ban_user", "users", uid);
-                } else {
-                    Ui.toast(this, "No supported content action for this report");
-                    return;
-                }
-                action.addOnSuccessListener(v -> dismissAfterAction(d, "Content action completed ✓"))
-                        .addOnFailureListener(e -> Ui.toast(this, "Action failed; report kept in queue"));
-            } else if (w == 1) {
-                String author = m != null ? Format.str(m, "authorId") : "";
-                if (author.isEmpty()) { Ui.toast(this, "Author unknown for this report"); return; }
-                Fb.db().moderate("ban_user", "users", author)
-                        .addOnSuccessListener(v -> dismissAfterAction(d, "Author banned ✓"))
-                        .addOnFailureListener(e -> Ui.toast(this, "Ban failed; report kept in queue"));
-            } else {
-                dismissAfterAction(d, "Report dismissed");
+        if(!started || !java.util.Objects.equals(screenActor,Fb.uid()) || !Admin.isAdmin())return;
+        final String actor=screenActor,id=d.getId();
+        if(ModerationGate.SHARED.pending(actor,"reports",id))return;
+        if(actionCompleted.containsKey(id)) {
+            if(ModerationGate.SHARED.begin(actor,"reports",id))dismissAfterAction(d,actionCompleted.get(id),actor);
+            return;
+        }
+        Map<String, Object> m=d.getData();
+        String[] opts={"🗑 Delete reported content", "🚫 Ban content author", "✖ Dismiss report"};
+        Ui.choose(this,describe(d),opts,w->{
+            if(!started || !java.util.Objects.equals(actor,Fb.uid()) || !Admin.isAdmin()
+                    || !ModerationGate.SHARED.begin(actor,"reports",id))return;
+            if(w==2){dismissAfterAction(d,"Report dismissed",actor);return;}
+            String targetAction="",collection="",target="";
+            if(w==0 && m!=null) {
+                String postId=Format.str(m,"postId"),reelId=Format.str(m,"reelId"),uid=Format.str(m,"uid"),type=Format.str(m,"type");
+                if(!postId.isEmpty() && !postId.startsWith("reel_")){targetAction="delete_content";collection="posts";target=postId;}
+                else if(postId.startsWith("reel_")){targetAction="delete_content";collection="reels";target=postId.substring(5);}
+                else if(!reelId.isEmpty()){targetAction="delete_content";collection="reels";target=reelId;}
+                else if("story".equals(type) && !Format.str(m,"targetId").isEmpty()){targetAction="delete_content";collection="stories";target=Format.str(m,"targetId");}
+                else if(!uid.isEmpty() && "profile".equals(type)){targetAction="ban_user";collection="users";target=uid;}
+            } else if(w==1 && m!=null) {
+                target=Format.str(m,"authorId");targetAction="ban_user";collection="users";
             }
+            if(target.isEmpty()){
+                ModerationGate.SHARED.end(actor,"reports",id);
+                Ui.toast(this,w==1?"Author unknown for this report":"No supported content action for this report");return;
+            }
+            adapter.notifyDataSetChanged();
+            final String success=w==1?"Author banned ✓":"Content action completed ✓";
+            Fb.db().moderate(targetAction,collection,target).addOnCompleteListener(task->{
+                if(!java.util.Objects.equals(actor,Fb.uid())){ModerationGate.SHARED.end(actor,"reports",id);return;}
+                if(task.isSuccessful()) {
+                    actionCompleted.put(id,success);
+                    dismissAfterAction(d,success,actor);
+                } else {
+                    ModerationGate.SHARED.end(actor,"reports",id);
+                    if(started){adapter.notifyDataSetChanged();Ui.toast(this,w==1?"Ban failed; report kept in queue":"Action failed; report kept in queue");}
+                }
+            });
         });
     }
 
-    private void dismissAfterAction(DocumentSnapshot report, String successMessage) {
-        Fb.db().moderate("delete_content", "reports", report.getId())
-                .addOnSuccessListener(v -> Ui.toast(this, successMessage))
-                .addOnFailureListener(e -> Ui.toast(this, "Couldn't dismiss report. Please try again."));
+    private void dismissAfterAction(DocumentSnapshot report,String successMessage,String actor) {
+        String id=report.getId();
+        if(!java.util.Objects.equals(actor,Fb.uid())){ModerationGate.SHARED.end(actor,"reports",id);return;}
+        Fb.db().moderate("delete_content","reports",id).addOnCompleteListener(task->{
+            ModerationGate.SHARED.end(actor,"reports",id);
+            if(!java.util.Objects.equals(actor,Fb.uid()))return;
+            if(task.isSuccessful()) {
+                actionCompleted.remove(id);removed.add(id);reports.removeIf(d->id.equals(d.getId()));
+                if(started){adapter.notifyDataSetChanged();empty.setVisibility(reports.isEmpty()?View.VISIBLE:View.GONE);Ui.toast(this,successMessage);}
+            } else if(started) {
+                adapter.notifyDataSetChanged();Ui.toast(this,"Couldn't dismiss report. Please try again.");
+            }
+        });
     }
 
     class Adapter extends RecyclerView.Adapter<Adapter.VH> {
@@ -165,6 +189,7 @@ public class AdminReportsActivity extends Activity {
             if (by.length() > 8) by = by.substring(0, 8) + "…";
             h.sub.setText("by " + by + " · "
                     + Format.ago(Format.ts(m == null ? null : m.get("createdAt"))));
+            h.act.setEnabled(!ModerationGate.SHARED.pending(screenActor,"reports",d.getId()));
             h.act.setOnClickListener(v -> actOn(d));
         }
 

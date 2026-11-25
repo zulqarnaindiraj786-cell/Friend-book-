@@ -7,15 +7,18 @@ class SeamlessPaging(unittest.TestCase):
         helper=(ROOT/'core/NearEndPaging.java').read_text()
         self.assertIn('SCROLL_STATE_IDLE',helper)
         self.assertIn('gate.shouldLoad',helper)
-        for path in ['main/NotificationsFragment.java','friends/FollowListActivity.java']:
+        for path in ['friends/FollowListActivity.java']:
             self.assertIn('NearEndPaging.attach(rv,', (ROOT/path).read_text())
+        notifications=(ROOT/'main/NotificationsFragment.java').read_text()
+        self.assertIn('pageGate.shouldLoad(dy',notifications)
+        self.assertIn('getItemCount()-1',notifications)
         inbox=(ROOT/'chat/ConversationsActivity.java').read_text()
         self.assertNotIn('NearEndPaging.attach',inbox)
         self.assertIn('inboxMoreButton.setOnClickListener',inbox)
         for path in ['post/PostDetailActivity.java','reels/ReelCommentsActivity.java']:
             self.assertIn('NearEndPaging.attachComments(', (ROOT/path).read_text())
     def test_no_unchanged_list_rebuild_during_background_page_request(self):
-        for path,token in [('main/NotificationsFragment.java','if(loading){moreButton.setText'),('friends/FollowListActivity.java','if(loading){moreButton.setText'),('profile/ProfileActivity.java','if(isFinishing() || loading)return;')]:
+        for path,token in [('main/NotificationsFragment.java','if(loading){moreButton.setText'),('friends/FollowListActivity.java','if(loading){moreButton.setText'),('profile/ProfileActivity.java','if(loading)return;')]:
             self.assertIn(token,(ROOT/path).read_text())
     def test_comment_anchor_and_no_media_prefetch_added(self):
         code=(ROOT/'post/CommentsAdapter.java').read_text()

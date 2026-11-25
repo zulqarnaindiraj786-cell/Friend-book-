@@ -22,6 +22,7 @@ public final class D1Client {
     private static final ThreadPoolExecutor INTERACTIVE=new ThreadPoolExecutor(2,2,30,TimeUnit.SECONDS,new ArrayBlockingQueue<>(24));
     private static final android.os.Handler MAIN=new android.os.Handler(android.os.Looper.getMainLooper());
     private static final Map<String,List<Runnable>> OBSERVERS=new HashMap<>();
+    private static final EngagementReadCoalescer READS=new EngagementReadCoalescer();
     public static String key(String collection,String id){return collection+"/"+id;}
     public static Runnable observe(String resource,Runnable callback){
         OBSERVERS.computeIfAbsent(resource,k->new ArrayList<>()).add(callback);
@@ -33,10 +34,38 @@ public final class D1Client {
         return request(collection,id,kind,method,body,query,false);
     }
     public static Task<JSONObject> requestInteractive(String collection,String id,String kind,String method,JSONObject body){
-        return request(collection,id,kind,method,body,
-                "reactions".equals(kind) && "PUT".equals(method) ? "?response=reaction" : null,true);
+        String query="reactions".equals(kind) && "PUT".equals(method)
+                ? (body!=null && body.optBoolean("notify",false) ? "?response=reaction&notify=1" : "?response=reaction") : null;
+        return request(collection,id,kind,method,body,query,true);
+    }
+    private static final ProfileReadFlights<List<String>,String> READ_OPERATIONS=new ProfileReadFlights<>();
+    static void invalidateResourceReads(ProfileReadFlights<List<String>,String> reads,String collection,String id) {
+        // A mutation can affect every engagement view of this resource, including
+        // other actors/lanes, but not an unrelated post's in-flight operation.
+        if(collection==null || id==null){reads.invalidateAll();return;}
+        reads.invalidateMatching(key->key.size()<3 || (collection.equals(key.get(1)) && id.equals(key.get(2))));
     }
     private static Task<JSONObject> request(String collection,String id,String kind,String method,JSONObject body,String query,boolean interactive){
+        if(!"GET".equals(method) || body!=null){
+            // A read started before or during this resource's write cannot satisfy a later read.
+            invalidateResourceReads(READ_OPERATIONS,collection,id);
+            Task<JSONObject> write=executeRequest(collection,id,kind,method,body,query,interactive);
+            write.addOnCompleteListener(Runnable::run,ignored->invalidateResourceReads(READ_OPERATIONS,collection,id));
+            return write;
+        }
+        final String actor=Fb.uid();
+        // Share before queueing/token acquisition, not only while HTTP overlaps.
+        // Interactive recovery reads retain their own priority/freshness lane.
+        List<String> key=Arrays.asList(actor,collection,id,kind,query,interactive?"interactive":"normal");
+        Task<String> shared=READ_OPERATIONS.read(key,()->executeRequest(collection,id,kind,method,body,query,interactive)
+                .continueWith(Runnable::run,completed->completed.getResult().toString()));
+        return shared.continueWith(Runnable::run,completed->{
+            if(!Objects.equals(actor,Fb.uid()))throw new IOException("Account changed");
+            // Never share mutable JSON instances between consumers.
+            return new JSONObject(completed.getResult());
+        });
+    }
+    private static Task<JSONObject> executeRequest(String collection,String id,String kind,String method,JSONObject body,String query,boolean interactive){
         TaskCompletionSource<JSONObject> result=new TaskCompletionSource<>();
         if(!enabled(collection)){result.setException(new IOException("D1 route is disabled"));return result.getTask();}
         FirebaseUser user=Fb.auth().getCurrentUser();final String actor=Fb.uid();
@@ -49,19 +78,24 @@ public final class D1Client {
                 String token=Tasks.await(user.getIdToken(false),15,TimeUnit.SECONDS).getToken();
                 if(token==null||!Objects.equals(actor,Fb.uid()))throw new IOException("Account changed");
                 URL url=new URL(BuildConfig.CLOUDFLARE_API_URL+"/v1/engagement/"+Uri.encode(collection)+"/"+Uri.encode(id)+"/"+kind+(query==null?"":query));
-                JSONObject response;
-                try { response=D1HttpTransport.send(url,method,token,body); }
-                catch(D1HttpTransport.HttpStatusException failure) {
-                    if(failure.status!=401 || !Objects.equals(actor,Fb.uid()))throw failure;
-                    String refreshed=Tasks.await(user.getIdToken(true),15,TimeUnit.SECONDS).getToken();
-                    if(refreshed==null || !Objects.equals(actor,Fb.uid()))throw new IOException("Account changed");
-                    response=D1HttpTransport.send(url,method,refreshed,body);
-                }
-                final JSONObject data=response;
+                String response=READS.execute("GET".equals(method) && body==null,actor,url.toString(),
+                        ()->sendWithRefresh(url,method,token,body,user,actor).toString());
+                // Each consumer owns its JSON; sharing a mutable result leaks UI edits.
+                final JSONObject data=new JSONObject(response);
                 MAIN.post(()->{if(Objects.equals(actor,Fb.uid()))result.trySetResult(data);else result.trySetException(new IOException("Account changed"));});
             }catch(Exception error){MAIN.post(()->result.trySetException(new IOException("D1 unavailable. Retry; nothing was written to Firebase.",error)));}
         });}catch(RejectedExecutionException error){result.setException(new IOException("Too many pending requests. Try again."));}
         return result.getTask();
+    }
+    private static JSONObject sendWithRefresh(URL url,String method,String token,JSONObject body,FirebaseUser user,String actor)throws Exception {
+        if(!Objects.equals(actor,Fb.uid()))throw new IOException("Account changed");
+        try { return D1HttpTransport.send(url,method,token,body); }
+        catch(D1HttpTransport.HttpStatusException failure) {
+            if(failure.status!=401 || !Objects.equals(actor,Fb.uid()))throw failure;
+            String refreshed=Tasks.await(user.getIdToken(true),15,TimeUnit.SECONDS).getToken();
+            if(refreshed==null || !Objects.equals(actor,Fb.uid()))throw new IOException("Account changed");
+            return D1HttpTransport.send(url,method,refreshed,body);
+        }
     }
     public static boolean isRetryableReactionFailure(Throwable error) {
         for(Throwable cause=error;cause!=null;cause=cause.getCause()) {

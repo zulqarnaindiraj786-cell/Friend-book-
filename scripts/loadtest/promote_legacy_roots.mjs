@@ -18,7 +18,7 @@ const FIELDS = ['path', 'parent_path', 'collection_id', 'doc_id', 'owner_uid', '
 const SAFE = new Set(['equivalent_root_only', 'facade_projection_diff']);
 // D1 rejects more than 100 bound variables per statement. Each guarded row
 // binds 13 values (8 canonical columns + 5 source guards), so seven rows fit.
-export 
+export
 
 // Keyset page over one collection. The composite index (collection, updated_at)
 // avoids a table scan; the NOT EXISTS probe is answered by the canonical
@@ -190,6 +190,11 @@ export async function promoteCollection(query, collection, {
   if (!BULK_COLLECTIONS.has(collection)) throw Error('unsupported collection');
   if (!Number.isInteger(batch) || batch < 1 || batch > 100) throw Error('invalid batch size');
   const before = await legacyOnly(query, collection);
+  // The complete initial snapshot already proves there is no work. Do not
+  // repeat a potentially large inventory or request an empty keyset page.
+  // Like any read-only inventory this is not a lock against future inserts.
+  if (before === 0) return { collection, before: 0, inserted: 0, after: 0,
+    scanned: 0, skipped: {}, facades: 0, representations: 0, reads: 0, truncated: false };
   let lastUpdated = -1, lastPath = "";
   let scanned = 0, inserted = 0, reads = 0, batches = 0;
   const skipped = {};
@@ -231,7 +236,10 @@ export async function promoteCollection(query, collection, {
 
 export async function legacyOnly(query, collection) {
   const row = (await query(INVENTORY, [collection])).results?.[0];
-  if (!row || !Number.isInteger(row.sampled) || !Number.isInteger(row.legacy_only) || row.sampled > 25001)
+  // 25001 is a sentinel: the sample may omit later rows. Even zero missing
+  // within that sample cannot prove the collection is fully promoted.
+  if (!row || !Number.isInteger(row.sampled) || !Number.isInteger(row.legacy_only)
+      || row.sampled < 0 || row.sampled >= 25001 || row.legacy_only < 0 || row.legacy_only > row.sampled)
     throw Error('inventory unavailable');
   return row.legacy_only;
 }

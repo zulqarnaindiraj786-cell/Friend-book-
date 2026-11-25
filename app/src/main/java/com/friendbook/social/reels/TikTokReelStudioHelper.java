@@ -351,6 +351,7 @@ public final class TikTokReelStudioHelper {
                                              final String currentSoundUrl,
                                              final SoundSelectListener listener) {
         if (act == null || act.isFinishing()) return;
+        final String actor=Fb.uid();if(actor==null)return;
         final Dialog d = new Dialog(act, android.R.style.Theme_Translucent_NoTitleBar_Fullscreen);
         final SharedPreferences sp = act.getSharedPreferences("fb_tiktok_sounds", Context.MODE_PRIVATE);
         final Set<String> favUrls = new HashSet<>(sp.getStringSet("fav_sound_urls", new HashSet<>()));
@@ -368,7 +369,6 @@ public final class TikTokReelStudioHelper {
                 }, "tiktok-sound-preview-stop").start();
             }
         };
-        d.setOnDismissListener(dialog -> stopPreview.run());
 
         FrameLayout overlay = new FrameLayout(act);
         overlay.setBackgroundColor(0x55000000);
@@ -430,7 +430,7 @@ public final class TikTokReelStudioHelper {
 
         // Optional Search Input Row (toggled by search icon)
         final EditText searchInput = new EditText(act);
-        searchInput.setHint("Search user sounds...");
+        searchInput.setHint("Search loaded sounds...");
         searchInput.setHintTextColor(0x77FFFFFF);
         searchInput.setTextColor(Color.WHITE);
         searchInput.setTextSize(13.5f);
@@ -457,6 +457,8 @@ public final class TikTokReelStudioHelper {
         LinearLayout.LayoutParams lslp = new LinearLayout.LayoutParams(-1, Ui.dp(act, 370));
         lslp.topMargin = Ui.dp(act, 6);
         sheet.addView(listScroll, lslp);
+        final LinearLayout pageControls=Ui.col(act);sheet.addView(pageControls);
+        sheet.addView(Ui.tv(act,"Search and favourites cover loaded sounds.",11,0xAAFFFFFF));
 
         final List<SoundItem> allSounds = new ArrayList<>();
         final boolean[] showFavsOnly = {false};
@@ -589,8 +591,8 @@ public final class TikTokReelStudioHelper {
             }
             if (shown == 0) {
                 TextView emptyTv = Ui.tv(act,
-                        showFavsOnly[0] ? "No favourite sounds yet — tap the bookmark icon on any sound!"
-                                : "Loading user sounds from Reels…",
+                        showFavsOnly[0] ? "No favourites among loaded sounds."
+                                : "No matching loaded sounds. Load more or refresh.",
                         13f, 0x88FFFFFF);
                 emptyTv.setGravity(Gravity.CENTER);
                 emptyTv.setPadding(0, Ui.dp(act, 40), 0, Ui.dp(act, 40));
@@ -638,22 +640,23 @@ public final class TikTokReelStudioHelper {
         allSounds.addAll(dedup.values());
         renderList[0].run();
 
-        try {
-            Fb.db().collection("reels")
-                    .orderBy("createdAt", Query.Direction.DESCENDING)
-                    .limit(25)
-                    .get()
-                    .addOnSuccessListener(snap -> {
-                        if (act.isFinishing() || snap == null) return;
-                        for (DocumentSnapshot doc : snap.getDocuments()) {
-                            Models.Reel reel = Models.Reel.fromDoc(doc);
-                            if (reel != null) addReelToSoundMap(dedup, reel);
-                        }
-                        allSounds.clear();
-                        allSounds.addAll(dedup.values());
-                        renderList[0].run();
-                    });
-        } catch (Throwable ignored) {}
+        final Map<String,SoundItem> cachedSounds=new LinkedHashMap<>(dedup);
+        final com.friendbook.social.d1.documents.ListenerRegistration[] soundPages={null};
+        android.app.Application.ActivityLifecycleCallbacks lifecycle=new android.app.Application.ActivityLifecycleCallbacks(){
+            public void onActivityCreated(Activity activity,android.os.Bundle state){}
+            public void onActivityStarted(Activity activity){}
+            public void onActivityResumed(Activity activity){}
+            public void onActivityPaused(Activity activity){}
+            public void onActivityStopped(Activity activity){if(activity==act && d.isShowing())d.dismiss();}
+            public void onActivitySaveInstanceState(Activity activity,android.os.Bundle state){}
+            public void onActivityDestroyed(Activity activity){if(activity==act && d.isShowing())d.dismiss();}
+        };
+        act.getApplication().registerActivityLifecycleCallbacks(lifecycle);
+        d.setOnDismissListener(dialog->{
+            stopPreview.run();
+            if(soundPages[0]!=null){soundPages[0].remove();soundPages[0]=null;}
+            act.getApplication().unregisterActivityLifecycleCallbacks(lifecycle);
+        });
 
         FrameLayout.LayoutParams slp = new FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM);
         overlay.addView(sheet, slp);
@@ -663,6 +666,13 @@ public final class TikTokReelStudioHelper {
             w.setLayout(WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT);
         }
         d.show();
+        soundPages[0]=com.friendbook.social.core.PagedLists.attach(act,pageControls,
+                Fb.db().collection("reels").orderBy("createdAt",Query.Direction.DESCENDING),10,"reel-sounds",(snap,err)->{
+                    if(!d.isShowing() || act.isFinishing() || act.isDestroyed() || !actor.equals(Fb.uid()) || snap==null)return;
+                    dedup.clear();dedup.putAll(cachedSounds);
+                    for(DocumentSnapshot doc:snap)addReelToSoundMap(dedup,Models.Reel.fromDoc(doc));
+                    allSounds.clear();allSounds.addAll(dedup.values());renderList[0].run();
+                });
     }
 
     private static void addReelToSoundMap(Map<String, SoundItem> map, Models.Reel r) {

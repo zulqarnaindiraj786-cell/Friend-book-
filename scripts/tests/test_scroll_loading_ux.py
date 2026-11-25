@@ -20,7 +20,8 @@ class ScrollLoadingUx(unittest.TestCase):
         self.assertNotIn('swipe.postDelayed',code)
         self.assertIn('if(swipe!=null && !loadingPosts)swipe.setRefreshing(false)',code)
         self.assertIn('rv.post(()->',code)
-        self.assertIn('loadingPosts=false;startPostsQuery(true);',code)
+        self.assertIn('if(loadingPosts){updatePagingUi();return;}',code)
+        self.assertIn('startPostsQuery(explicitUserRefresh);',code)
     def test_loader_is_feed_footer_not_manual_paging(self):
         code=(JAVA/'post/FeedAdapter.java').read_text()
         self.assertIn('fh.spinner.setVisibility(loading?',code)

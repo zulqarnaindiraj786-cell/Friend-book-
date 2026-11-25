@@ -7,8 +7,8 @@ class IntermittentDataTests(unittest.TestCase):
   self.assertIn('if (user == null) nameT.setText',s)
   self.assertIn('if (d.getMetadata().isFromCache()) return;',s)
   self.assertIn('if (snap==null) return; // keep the last confirmed relationship',s)
-  self.assertIn('if (snap.getMetadata().isFromCache()) return; // a partial cache',s)
-  self.assertGreaterEqual(s.count('if (snap == null || snap.getMetadata().isFromCache()) return;'),2)
+  self.assertGreaterEqual(s.count('.getCachedOrFetchAutomatic(profileReadScope,300_000L)'),3)
+  self.assertIn('if(!activeProfile(actor,generation))return;',s)
   self.assertIn('Math.max(user.followerCount, user.friendsCount)',s)
  def test_feed_and_candidate_timeouts_ignore_stale_callbacks(self):
   home=(ROOT/'main/HomeFragment.java').read_text()
@@ -16,10 +16,12 @@ class IntermittentDataTests(unittest.TestCase):
   first=home.split('private void startPostsQuery',1)[1].split('private void consumePostsSnapshot',1)[0]
   self.assertIn('loadingPosts=false;pageError=true;updatePagingUi();releaseHomeSecondary();',first)
   self.assertIn('if(!offline && !snapshot.isEmpty()) lastDoc=',first)
-  self.assertIn('if(snapshot.getMetadata().isFromCache()){\n                pageError=true;updatePagingUi();return;',home)
+  self.assertIn('Query pageQuery=feedQuery.startAfter(lastDoc).limit(PAGE)',home)
+  self.assertIn('pageQuery.getCachedOrFetchAutomatic(scope,Long.MAX_VALUE)',home)
+  self.assertIn('explicitRetry ? pageQuery.get(Source.SERVER) : pageQuery.getCachedOrFetch(false)',home)
   self.assertNotIn('feedGeneration++',first)
   self.assertNotIn('Ui.toast',first)
-  self.assertIn('feedGeneration++;loadingPosts=false;pageError=true;updatePagingUi();',home)
+  self.assertIn('feedGeneration++;loadingPosts=false;pageError=true;closePageReadScope();updatePagingUi();',home)
   self.assertIn('if(!current(token,me) || !checkingUsers.containsAll(ids))return;',friends)
   self.assertIn('checkingUsers.removeAll(ids);failedCandidates.addAll(ids);requestRender();',friends)
  def test_reel_engagement_avoids_periodic_reads_and_recursive_cached_render(self):

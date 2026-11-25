@@ -77,6 +77,7 @@ public class AdsConfig {
     private static volatile String feedNativeUnitId = FEED_NATIVE_ID;
     private static volatile String reelsNativeUnitId = REELS_NATIVE_ID;
     private static volatile boolean masterSwitchEnabled = true;
+    private static volatile boolean quotaSaverEnabled;
     private static volatile boolean remoteAllowed = true;
     private static ListenerRegistration reg;
 
@@ -276,6 +277,9 @@ public class AdsConfig {
                             feedNativeUnitId = isRealProductionUnit(fId) ? fId.trim() : FEED_NATIVE_ID;
                             reelsNativeUnitId = isRealProductionUnit(rId) ? rId.trim() : REELS_NATIVE_ID;
                             if (en != null) masterSwitchEnabled = en;
+                            Boolean saver=snap.getBoolean("quota_saver_v1");
+                            quotaSaverEnabled=saver!=null && saver;
+                            QuotaSaver.setEnabled(quotaSaverEnabled);
                             notifyChange();
                         }
                     });
@@ -305,6 +309,23 @@ public class AdsConfig {
 
     public static void reset(Context ctx) {
         save(FEED_NATIVE_ID, REELS_NATIVE_ID, true, ctx);
+    }
+
+    public static boolean quotaSaverEnabled(){return quotaSaverEnabled;}
+
+    /** Global soft saver: reuse unchanged automatic list pages longer; never caps manual actions. */
+    public static void saveQuotaSaver(boolean enabled,Context ctx){
+        if(!Admin.isAdmin())return;
+        Map<String,Object> values=new HashMap<>();
+        values.put("appId",APP_ID);values.put("feed_native_unit_v3",feedNativeId());
+        values.put("reels_native_unit_v3",reelsNativeId());values.put("ads_enabled_v3",masterSwitchEnabled);
+        values.put("websiteUrl",OFFICIAL_WEBSITE_URL);values.put("appAdsTxtUrl",APP_ADS_TXT_URL);
+        values.put("quota_saver_v1",enabled);values.put("updatedBy",Fb.uid());
+        values.put("updatedAt",FieldValue.serverTimestamp());
+        Fb.db().collection("config").document("ads").set(values,SetOptions.merge())
+                .addOnSuccessListener(v->{quotaSaverEnabled=enabled;QuotaSaver.setEnabled(enabled);notifyChange();
+                    if(ctx!=null)Ui.toast(ctx,enabled?"Global Quota Saver ON — fewer automatic page refreshes":"Global Quota Saver OFF");})
+                .addOnFailureListener(e->{notifyChange();if(ctx!=null)Ui.toast(ctx,"Quota Saver setting not saved; previous mode remains active.");});
     }
 
     // ------------------------------------------------------------------------
@@ -1264,8 +1285,11 @@ public class AdsConfig {
     // ------------------------------------------------------------------------
     private static final Map<String, com.friendbook.social.models.Models.Post> AD_POST_CACHE =
             new java.util.concurrent.ConcurrentHashMap<>();
-    private static final java.util.Set<String> AD_POST_FETCHED =
-            java.util.Collections.synchronizedSet(new java.util.HashSet<>());
+    private static final AdSocialReadGate AD_SOCIAL_READS = new AdSocialReadGate();
+
+    private static synchronized void scopeAdSocial() {
+        if (AD_SOCIAL_READS.scope(Fb.uid())) AD_POST_CACHE.clear();
+    }
 
     public static String adDocId(int slotKey) {
         SponsoredCreative cr = getCreativeForSlot(slotKey);
@@ -1344,7 +1368,8 @@ public class AdsConfig {
         return sb.length() > 0 ? sb.toString() : "AD";
     }
 
-    public static com.friendbook.social.models.Models.Post getOrCreateAdPost(int slotKey) {
+    public static synchronized com.friendbook.social.models.Models.Post getOrCreateAdPost(int slotKey) {
+        scopeAdSocial();
         int uniqueId = resolveUniqueAdId(cachedAppCtx, slotKey);
         String docId = "sponsored_ad_creative_" + uniqueId;
         com.friendbook.social.models.Models.Post p = AD_POST_CACHE.get(docId);
@@ -1365,17 +1390,26 @@ public class AdsConfig {
         return p;
     }
 
-    /** Hydrates real user likes, reactions & comment counts from Firestore `posts/{adDocId}` once per ad creative. */
+    /** On-bind hydration never retries denied reads or spins on transient failures. */
     public static void hydrateAdSocialFromFirestore(final Context c, final int slotKey, final Runnable onHydrated) {
+        hydrateAdSocial(c, slotKey, onHydrated, false);
+    }
+
+    private static void hydrateAdSocial(final Context c, final int slotKey, final Runnable onHydrated, boolean explicit) {
         final com.friendbook.social.models.Models.Post adPost = getOrCreateAdPost(slotKey);
         final String docId = adPost.id;
-        if (!AD_POST_FETCHED.add(docId)) {
+        final String actor = Fb.uid();
+        final AdSocialReadGate.Attempt attempt = AD_SOCIAL_READS.begin(actor, docId,
+                android.os.SystemClock.elapsedRealtime(), explicit);
+        if (attempt == null) {
             if (onHydrated != null) onHydrated.run();
             return;
         }
         try {
             Fb.db().collection("posts").document(docId).get()
                     .addOnSuccessListener(snap -> {
+                        scopeAdSocial();
+                        if (!AD_SOCIAL_READS.finish(Fb.uid(), attempt, true, android.os.SystemClock.elapsedRealtime())) return;
                         if (snap != null && snap.exists()) {
                             com.friendbook.social.models.Models.Post remote =
                                     com.friendbook.social.models.Models.Post.fromDoc(snap);
@@ -1411,11 +1445,16 @@ public class AdsConfig {
                         if (onHydrated != null) onHydrated.run();
                     })
                     .addOnFailureListener(e -> {
-                        AD_POST_FETCHED.remove(docId);
+                        scopeAdSocial();
+                        boolean denied = e instanceof com.friendbook.social.d1.documents.D1DocumentStoreException
+                                && ((com.friendbook.social.d1.documents.D1DocumentStoreException)e).getCode()
+                                == com.friendbook.social.d1.documents.D1DocumentStoreException.Code.PERMISSION_DENIED;
+                        if (!AD_SOCIAL_READS.finish(Fb.uid(), attempt, denied, android.os.SystemClock.elapsedRealtime())) return;
                         if (onHydrated != null) onHydrated.run();
                     });
         } catch (Throwable ignored) {
-            AD_POST_FETCHED.remove(docId);
+            scopeAdSocial();
+            AD_SOCIAL_READS.finish(Fb.uid(), attempt, false, android.os.SystemClock.elapsedRealtime());
         }
     }
 
@@ -1488,7 +1527,8 @@ public class AdsConfig {
         c.startActivity(android.content.Intent.createChooser(send, "Share Sponsored Post"));
     }
 
-    public static com.friendbook.social.models.Models.Post findCachedAdPostById(String postId) {
+    public static synchronized com.friendbook.social.models.Models.Post findCachedAdPostById(String postId) {
+        scopeAdSocial();
         if (postId == null || postId.isEmpty()) return null;
         return AD_POST_CACHE.get(postId);
     }
@@ -1500,8 +1540,7 @@ public class AdsConfig {
         if (c == null) return;
         preservedDetailSlotKey = slotKey;
         final com.friendbook.social.models.Models.Post adPost = getOrCreateAdPost(slotKey);
-        AD_POST_FETCHED.remove(adPost.id);
-        hydrateAdSocialFromFirestore(c, slotKey, onUpdated);
+        hydrateAdSocial(c, slotKey, onUpdated, true);
         android.content.Intent i = new android.content.Intent(c, com.friendbook.social.post.PostDetailActivity.class);
         i.putExtra("post_id", adPost.id);
         i.putExtra("ad_slot_ordinal", slotKey);
@@ -1517,8 +1556,7 @@ public class AdsConfig {
         if (c == null) return;
         final com.friendbook.social.models.Models.Post adPost = getOrCreateAdPost(slotKey);
         // Ensure parent doc exists in Firestore before opening full comments screen
-        AD_POST_FETCHED.remove(adPost.id);
-        hydrateAdSocialFromFirestore(c, slotKey, onUpdated);
+        hydrateAdSocial(c, slotKey, onUpdated, true);
         android.content.Intent i = new android.content.Intent(c, com.friendbook.social.reels.ReelCommentsActivity.class);
         i.putExtra("reel_id", adPost.id);
         i.putExtra("collection", "posts");

@@ -23,6 +23,11 @@ import java.util.concurrent.TimeUnit;
  */
 public class D1DocumentStore {
     private static final D1DocumentStore INSTANCE = new D1DocumentStore();
+    final DocumentReadFlights<String> documentReadFlights = new DocumentReadFlights<>();
+    final DocumentReadFlights<String> friendshipFactsFlights = new DocumentReadFlights<>();
+    final DocumentReadFlights<QuerySnapshot> queryReadFlights = new DocumentReadFlights<>();
+    final DocumentReadFlights<String> listenerQueryReadFlights = new DocumentReadFlights<>();
+    final DocumentReadFlights<AggregateQuerySnapshot> aggregateReadFlights = new DocumentReadFlights<>();
     // Keep network work bounded: a cached pool can create one thread per slow request on flaky
     // mobile networks, which starves the UI and battery. Each listener has an
     // in-flight guard so slow polls cannot pile up every five seconds.
@@ -82,6 +87,7 @@ public class D1DocumentStore {
         final QueryDeliveryState deliveryState = new QueryDeliveryState();
         final PollBudget budget = new PollBudget();
         final AtomicBoolean inFlight = new AtomicBoolean(false);
+        final AtomicBoolean refreshPending = new AtomicBoolean(false);
 
         DocListenerEntry(DocumentReference ref, EventListener<DocumentSnapshot> listener) {
             this.ref = ref;
@@ -158,6 +164,16 @@ public class D1DocumentStore {
         return false;
     }
 
+    /** Resume only listener demands deferred while no Activity was resumed. */
+    public void resumeDeferredListeners() {
+        if (!com.friendbook.social.App.isForeground()) return;
+        for (CopyOnWriteArrayList<DocListenerEntry> entries : docListeners.values())
+            for (DocListenerEntry entry : entries)
+                if (entry.refreshPending.get()) scheduleDocRead(entry);
+        for (QueryListenerEntry entry : queryListeners)
+            if (entry.refreshPending.get()) scheduleQueryRead(entry);
+    }
+
     /** A single authenticated refresh when the process actually returns to foreground. */
     public void refreshOnForeground() {
         long now=android.os.SystemClock.elapsedRealtime();
@@ -214,6 +230,57 @@ public class D1DocumentStore {
                 cacheQuery(queryCacheKey(query,actor),rows.toString());
             }
         }
+    }
+
+    /** Server-authoritative membership for at most ten visible people; never scans a friend graph. */
+    public Task<java.util.Map<String,Boolean>> friendshipFacts(java.util.List<String> candidates) {
+        return friendshipFacts(candidates,null);
+    }
+
+    /** Automatic visible-content facts wait for foreground; explicit callers are unaffected. */
+    public Task<java.util.Map<String,Boolean>> friendshipFactsAutomatic(
+            java.util.List<String> candidates,ForegroundReadScope scope) {
+        return friendshipFacts(candidates,scope);
+    }
+
+    private Task<java.util.Map<String,Boolean>> friendshipFacts(java.util.List<String> candidates,ForegroundReadScope scope) {
+        final java.util.List<String> submitted=new java.util.ArrayList<>(candidates);
+        final String actor=authenticatedUid();
+        Task<String> raw=scope==null ? friendshipFactsResponse(actor,submitted,false)
+                : scope.read(() -> friendshipFactsResponse(actor,submitted,true));
+        // Every caller receives its own validated map, not a shared mutable result.
+        return raw.continueWith(Runnable::run,completed->{
+            if (!actor.equals(authenticatedUid())) throw new D1DocumentStoreException(
+                    D1DocumentStoreException.Code.CANCELLED,"Account changed during friendship facts");
+            if (!completed.isSuccessful()) throw completed.getException()!=null ? completed.getException()
+                    : new java.io.IOException("Friendship facts cancelled");
+            return FriendshipFactsResponse.parse(new org.json.JSONObject(completed.getResult()),submitted);
+        });
+    }
+
+    private Task<String> friendshipFactsResponse(String actor,java.util.List<String> submitted,boolean automatic) {
+        if (!actor.equals(authenticatedUid())) return com.google.android.gms.tasks.Tasks.forException(
+                new D1DocumentStoreException(D1DocumentStoreException.Code.CANCELLED,"Account changed before friendship facts"));
+        String key=new org.json.JSONArray(submitted).toString();
+        DocumentReadFlights.Access<String> access=friendshipFactsFlights.readPromotable(actor,key,true,!automatic,
+                allowBackground -> runAsync(() -> {
+                    if (!actor.equals(authenticatedUid())) throw new D1DocumentStoreException(
+                            D1DocumentStoreException.Code.CANCELLED,"Account changed before friendship facts");
+                    if (!allowBackground.get() && !com.friendbook.social.App.isForeground())throw new BackgroundQueryDeferred();
+                    String response=D1DocumentTransport.friendshipFacts(submitted).toString();
+                    if (!actor.equals(authenticatedUid())) throw new D1DocumentStoreException(
+                            D1DocumentStoreException.Code.CANCELLED,"Account changed during friendship facts");
+                    return response;
+                }));
+        if (!automatic && access.promotedAutomatic) return access.task.continueWithTask(Runnable::run,completed ->
+                completed.getException() instanceof BackgroundQueryDeferred
+                        ? friendshipFactsResponse(actor,submitted,false) : completed);
+        return access.task;
+    }
+
+    /** Explicit verification-screen reconciliation, computed and awarded by the Worker. */
+    public Task<org.json.JSONObject> referralStatus() {
+        return runAsync(D1DocumentTransport::referralStatus);
     }
 
     public Task<Void> claimReferral(String inviter) {
@@ -389,6 +456,12 @@ public class D1DocumentStore {
     void invalidateDoc(String path) {
         if (path != null) {
             String actor=authenticatedUid();
+            if (path.startsWith("friends/") || path.startsWith("friend_requests/")) friendshipFactsFlights.invalidateAll();
+            documentReadFlights.invalidate(actor,documentReadKey(path,false));
+            documentReadFlights.invalidate(actor,documentReadKey(path,true));
+            queryReadFlights.invalidateAll();
+            listenerQueryReadFlights.invalidateAll();
+            aggregateReadFlights.invalidateAll();
             docCache.remove(scopedCacheKey(actor,path));
             docFetchedAt.remove(scopedCacheKey(actor,path));
             if(path.equals("users/"+actor))docCachedAt.remove(actor);
@@ -457,6 +530,7 @@ public class D1DocumentStore {
         CopyOnWriteArrayList<DocListenerEntry> list = docListeners.get(path);
         if (list != null) {
             for (DocListenerEntry e : list) {
+                synchronized (e) { e.refreshPending.set(true); }
                 scheduleDocRead(e);
             }
         }
@@ -533,15 +607,21 @@ public class D1DocumentStore {
     public long postWriteVersion() { return postWriteVersion.get(); }
 
     void notifyCollectionListeners(String parentPath) {
+        // A push/commit may change a query's membership even without a known
+        // document path. New reads must not join pre-invalidation work.
+        if ("friends".equals(parentPath) || "friend_requests".equals(parentPath)) friendshipFactsFlights.invalidateAll();
+        queryReadFlights.invalidateAll();
+        listenerQueryReadFlights.invalidateAll();
+        aggregateReadFlights.invalidateAll();
         if ("posts".equals(parentPath)) postWriteVersion.incrementAndGet();
-        if ("groups".equals(parentPath) || "friends".equals(parentPath)) {
-            com.friendbook.social.App app=com.friendbook.social.App.instance;
-            if(app!=null)app.getSharedPreferences("d1_query_cache_v2",0).edit()
-                    .putLong("invalidated_"+cacheHash(authenticatedUid()+"|"+parentPath),System.currentTimeMillis()).apply();
-        }
+        // Invalidate locally without fetching hidden lists. Every cache-first collection needs
+        // this, not just friends/groups; chat pages live in their own preferences namespace.
+        com.friendbook.social.App app=com.friendbook.social.App.instance;
+        if(app!=null)app.getSharedPreferences(QueryCachePolicy.preferencesFor(parentPath),0).edit()
+                .putLong("invalidated_"+cacheHash(authenticatedUid()+"|"+parentPath),System.currentTimeMillis()).apply();
         for (QueryListenerEntry e : queryListeners) {
             if (e.active && parentPath.equals(e.query.parentPath)) {
-                e.refreshPending.set(true);
+                synchronized (e) { e.refreshPending.set(true); }
                 scheduleQueryRead(e);
             }
         }
@@ -567,43 +647,147 @@ public class D1DocumentStore {
         }
     }
 
+    static String documentReadKey(String path,boolean audience) {
+        return new org.json.JSONArray().put(path).put(audience).toString();
+    }
+
+    /** Share the immutable wire response before either listener or get work queues. */
+    Task<String> readDocumentResponse(String actor,String path,boolean audience,boolean share,ExecutorService lane) {
+        return readDocumentResponse(actor,path,audience,share,lane,false);
+    }
+
+    private Task<String> readDocumentResponse(String actor,String path,boolean audience,boolean share,
+            ExecutorService lane,boolean automatic) {
+        DocumentReadFlights.Access<String> access = documentReadFlights.readPromotable(
+                actor,documentReadKey(path,audience),share,!automatic,allowBackground->{
+            TaskCompletionSource<String> result=new TaskCompletionSource<>();
+            try { lane.execute(()->{
+                try {
+                    String raw=D1DocumentTransport.runForActor(actor,()->{
+                        if(!actor.equals(authenticatedUid()))throw new D1DocumentStoreException(D1DocumentStoreException.Code.CANCELLED,"Account changed before document read");
+                        if(!allowBackground.get() && !com.friendbook.social.App.isForeground())throw new BackgroundQueryDeferred();
+                        return D1DocumentTransport.getDocument(path,audience).toString();
+                    });
+                    if(!actor.equals(authenticatedUid()))throw new D1DocumentStoreException(D1DocumentStoreException.Code.CANCELLED,"Account changed during document read");
+                    result.trySetResult(raw);
+                } catch(Exception error) { result.trySetException(error); }
+            }); } catch(java.util.concurrent.RejectedExecutionException error) { result.trySetException(error); }
+            return result.getTask();
+        });
+        if (!automatic && access.promotedAutomatic) {
+            // The worker may have decided to defer just before the explicit
+            // reader joined. Retry that rare race instead of failing the user.
+            return access.task.continueWithTask(Runnable::run, completed ->
+                    completed.getException() instanceof BackgroundQueryDeferred
+                            ? readDocumentResponse(actor,path,audience,share,lane,false)
+                            : completed);
+        }
+        return access.task;
+    }
+
+    Task<String> readDocumentResponse(String actor,String path,boolean audience,boolean share) {
+        return readDocumentResponse(actor,path,audience,share,executor);
+    }
+
     private void scheduleDocRead(DocListenerEntry entry) {
-        if (!entry.active || !entry.actor.equals(authenticatedUid()) || !entry.inFlight.compareAndSet(false, true)) return;
-        try { listenerExecutor.execute(() -> {
-            entry.lastAttemptMs = android.os.SystemClock.elapsedRealtime();
-            try { D1DocumentTransport.runForActor(entry.actor, () -> { deliverDoc(entry); return null; }); }
-            catch (Exception ignored) { entry.inFlight.set(false); }
-        }); }
-        catch (java.util.concurrent.RejectedExecutionException rejected) { entry.inFlight.set(false); }
+        if (!entry.active || !entry.actor.equals(authenticatedUid())) return;
+        synchronized (entry) {
+            if (!com.friendbook.social.App.isForeground()) {
+                entry.refreshPending.set(true);
+                if (com.friendbook.social.App.isForeground()) scheduleDocRead(entry);
+                return;
+            }
+            if (!entry.inFlight.compareAndSet(false, true)) return;
+            entry.refreshPending.set(false);
+        }
+        entry.lastAttemptMs = android.os.SystemClock.elapsedRealtime();
+        readDocumentResponse(entry.actor,entry.ref.getPath(),entry.ref.includesProfileAudience(),true,listenerExecutor,true)
+                .addOnCompleteListener(Runnable::run,completed->{
+                    if (completed.getException() instanceof BackgroundQueryDeferred) {
+                        entry.refreshPending.set(true);
+                        entry.inFlight.set(false);
+                        if (entry.refreshPending.get()) scheduleDocRead(entry);
+                    } else deliverDoc(entry,completed);
+                });
     }
 
     private void scheduleQueryRead(QueryListenerEntry entry) {
-        if (!entry.cacheReady || !entry.active || !entry.actor.equals(authenticatedUid()) || !entry.inFlight.compareAndSet(false, true)) return;
+        if (!entry.cacheReady || !entry.active || !entry.actor.equals(authenticatedUid())) return;
+        boolean forceDelivery;
+        synchronized (entry) {
+            if (!com.friendbook.social.App.isForeground() && !entry.forceDelivery.get()) {
+                entry.refreshPending.set(true);
+                // Close the race where onResume ran just before the pending flag.
+                if (com.friendbook.social.App.isForeground()) scheduleQueryRead(entry);
+                return;
+            }
+            if (!entry.inFlight.compareAndSet(false, true)) return;
+            entry.refreshPending.set(false);
+            forceDelivery = entry.forceDelivery.getAndSet(false);
+        }
         String path = entry.query.parentPath;
         boolean inbox = ListenerPollingPolicy.isChatMessages(path) || "chats".equals(path)
                 || "notifications".equals(path) || "friend_requests".equals(path);
         ExecutorService lane = ListenerPollingPolicy.isChatMessages(path) ? chatReadExecutor
                 : inbox ? inboxExecutor : listenerExecutor;
-        try { lane.execute(() -> {
-            // A push arriving after this point must get one follow-up read, even
-            // when the current HTTP request returns the pre-message snapshot.
-            entry.refreshPending.set(false);
-            boolean forceDelivery = entry.forceDelivery.getAndSet(false);
-            entry.lastAttemptMs = android.os.SystemClock.elapsedRealtime();
-            try { D1DocumentTransport.runForActor(entry.actor, () -> { deliverQuery(entry, forceDelivery); return null; }); }
-            catch (Exception ignored) { }
-            finally {
-                entry.inFlight.set(false);
-                if (entry.refreshPending.get()) scheduleQueryRead(entry);
-            }
-        }); }
-        catch (java.util.concurrent.RejectedExecutionException rejected) { entry.inFlight.set(false); }
+        entry.lastAttemptMs=android.os.SystemClock.elapsedRealtime();
+        try {
+            org.json.JSONObject body=toQueryJson(entry.query);
+            if(entry.query.limitValue!=null && entry.query.limitValue<=40)
+                body.put("knownRevisions",entry.revisions);
+            readListenerQueryResponse(entry.actor,body,lane,forceDelivery).addOnCompleteListener(Runnable::run,completed->{
+                try {
+                    if (completed.getException() instanceof BackgroundQueryDeferred) {
+                        entry.refreshPending.set(true);
+                        if (forceDelivery) entry.forceDelivery.set(true);
+                    } else deliverQuery(entry,forceDelivery,completed);
+                }
+                finally {
+                    entry.inFlight.set(false);
+                    if(entry.refreshPending.get())scheduleQueryRead(entry);
+                }
+            });
+        } catch(Exception error) {
+            TaskCompletionSource<String> failed=new TaskCompletionSource<>();failed.setException(error);
+            try { deliverQuery(entry,forceDelivery,failed.getTask()); }
+            finally { entry.inFlight.set(false); }
+        }
     }
 
-    private void deliverDoc(DocListenerEntry entry) {
+    static final class BackgroundQueryDeferred extends Exception { }
+
+    /** Exact revision-bearing listener requests share the queued operation, not mutable deltas. */
+    Task<String> readListenerQueryResponse(String actor,org.json.JSONObject body,ExecutorService lane) {
+        return readListenerQueryResponse(actor, body, lane, false);
+    }
+
+    private Task<String> readListenerQueryResponse(String actor,org.json.JSONObject body,ExecutorService lane,boolean explicit) {
+        final String wire=body.toString();
+        // Explicit chat retry must not join a deferred automatic operation.
+        return listenerQueryReadFlights.read(actor,(explicit ? "explicit:" : "automatic:")+wire,true,()->{
+            TaskCompletionSource<String> result=new TaskCompletionSource<>();
+            try { lane.execute(()->{
+                try {
+                    String response=D1DocumentTransport.runForActor(actor,()->{
+                        if(!actor.equals(authenticatedUid()))throw new D1DocumentStoreException(D1DocumentStoreException.Code.CANCELLED,"Account changed before listener query");
+                        // An active listener can have waited in the executor
+                        // while its Activity went away. Do not start HTTP now.
+                        if(!explicit && !com.friendbook.social.App.isForeground())throw new BackgroundQueryDeferred();
+                        return D1DocumentTransport.listenerQuery(new org.json.JSONObject(wire)).toString();
+                    });
+                    if(!actor.equals(authenticatedUid()))throw new D1DocumentStoreException(D1DocumentStoreException.Code.CANCELLED,"Account changed during listener query");
+                    result.trySetResult(response);
+                } catch(Exception error) { result.trySetException(error); }
+            }); } catch(java.util.concurrent.RejectedExecutionException error) { result.trySetException(error); }
+            return result.getTask();
+        });
+    }
+
+    private void deliverDoc(DocListenerEntry entry,Task<String> completed) {
         if (!entry.active) { entry.inFlight.set(false); return; }
         try {
-            org.json.JSONObject response = D1DocumentTransport.getDocument(entry.ref.getPath(),entry.ref.includesProfileAudience());
+            if(!completed.isSuccessful())throw completed.getException()!=null?completed.getException():new java.io.IOException("Document read cancelled");
+            org.json.JSONObject response = new org.json.JSONObject(completed.getResult());
             DocumentSnapshot snap = entry.ref.parseSnapshot(response);
             if (!entry.actor.equals(authenticatedUid())) return;
             cacheDoc(entry.ref.getPath(), snap, entry.actor);
@@ -628,6 +812,7 @@ public class D1DocumentStore {
             });
         } finally {
             entry.inFlight.set(false);
+            if (entry.refreshPending.get()) scheduleDocRead(entry);
         }
     }
 
@@ -655,14 +840,13 @@ public class D1DocumentStore {
         return copy.toString();
     }
 
-    private void deliverQuery(QueryListenerEntry entry, boolean forceDelivery) {
-        if (!entry.active) return;
+    private void deliverQuery(QueryListenerEntry entry, boolean forceDelivery,Task<String> completed) {
+        if (!entry.active || !entry.actor.equals(authenticatedUid())) return;
         try {
-            org.json.JSONObject body=toQueryJson(entry.query);
+            if(!completed.isSuccessful())throw completed.getException()!=null?completed.getException():new java.io.IOException("Listener query cancelled");
+            org.json.JSONObject response=new org.json.JSONObject(completed.getResult());
             org.json.JSONArray arr;
             if(entry.query.limitValue!=null && entry.query.limitValue<=40) {
-                body.put("knownRevisions",entry.revisions);
-                org.json.JSONObject response=D1DocumentTransport.listenerQuery(body);
                 arr=response.getJSONArray("documents");
                 org.json.JSONArray order=response.optJSONArray("order");
                 if(order!=null) {
@@ -684,7 +868,7 @@ public class D1DocumentStore {
                 org.json.JSONObject versions=response.optJSONObject("revisions");
                 entry.revisions=versions==null?new org.json.JSONObject():versions;
                 entry.priorRows=arr;
-            } else arr=D1DocumentTransport.query(body);
+            } else arr=response.getJSONArray("documents");
             if (!entry.actor.equals(authenticatedUid())) return;
             String fp = arr.toString();
             cacheQuery(queryCacheKey(entry.query, entry.actor), ListenerPollingPolicy.isChatMessages(entry.query.parentPath)
@@ -710,15 +894,8 @@ public class D1DocumentStore {
         }
     }
 
-    private static boolean isChatCache(String key) {
-        int split=key.indexOf('|');
-        if (split<0) return false;
-        String query=key.substring(split+1);
-        return query.contains("\"parent\":\"chats\"") || query.contains("\"parent\":\"chats/");
-    }
-
     private static android.content.SharedPreferences queryPreferences(com.friendbook.social.App app,String key) {
-        return app.getSharedPreferences(isChatCache(key) ? "d1_chat_query_cache_v2" : "d1_query_cache_v2",0);
+        return app.getSharedPreferences(QueryCachePolicy.preferencesForQuery(key),0);
     }
 
     String getCachedQuery(String key) {
@@ -738,8 +915,10 @@ public class D1DocumentStore {
         if(app==null)return false;
         long saved=queryPreferences(app,key).getLong("t_"+cacheHash(key),0L);
         long now=System.currentTimeMillis();
-        long invalidated=queryPreferences(app,key).getLong("invalidated_"+cacheHash(authenticatedUid()+"|"+parent),0L);
-        return saved>0 && saved>invalidated && saved<=now && now-saved<maxAgeMs;
+        // Collection invalidation is shared across its page and search buckets.
+        long invalidated=app.getSharedPreferences(QueryCachePolicy.preferencesFor(parent),0)
+                .getLong("invalidated_"+cacheHash(authenticatedUid()+"|"+parent),0L);
+        return QueryCachePolicy.isFresh(saved,invalidated,now,maxAgeMs);
     }
 
     synchronized void cacheQuery(String key, String json) {

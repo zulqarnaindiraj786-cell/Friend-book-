@@ -251,8 +251,47 @@ public class Query {
         return get(Source.DEFAULT);
     }
 
-    public Task<QuerySnapshot> get(Source source) {
-        final String actor = D1DocumentStore.authenticatedUid();
+    /** Explicit on-demand lists: reuse even an empty cached result; never revalidate in background.
+     * Cache keys are account-scoped. Pull-to-refresh must pass force=true.
+     */
+    public Task<QuerySnapshot> getCachedOrFetch(boolean force) {
+        return getCachedOrFetch(force,Long.MAX_VALUE);
+    }
+
+    /** Search results can use a short reuse window instead of indefinite list reuse. */
+    public Task<QuerySnapshot> getCachedOrFetch(boolean force,long maxAgeMs) {
+        if (force) return get(Source.SERVER);
+        // A non-forced cold/evicted page needs a network read, not an explicit
+        // freshness override: overlapping callers can share that pending work.
+        if (!hasFreshLocalPage(maxAgeMs)) return get(Source.DEFAULT);
+        return get(Source.CACHE).continueWithTask(Runnable::run, task ->
+                task.isSuccessful() ? com.google.android.gms.tasks.Tasks.forResult(task.getResult())
+                        : get(Source.DEFAULT));
+    }
+
+    /** Automatic screen-owned reads wait for foreground and are cancelled when the screen stops. */
+    public Task<QuerySnapshot> getAutomatic(ForegroundReadScope scope) {
+        return getAutomatic(scope,D1DocumentStore.authenticatedUid());
+    }
+
+    private Task<QuerySnapshot> getAutomatic(ForegroundReadScope scope,String actor) {
+        return scope.read(() -> get(Source.DEFAULT,true,actor));
+    }
+
+    public Task<QuerySnapshot> getCachedOrFetchAutomatic(ForegroundReadScope scope,long maxAgeMs) {
+        String actor=D1DocumentStore.authenticatedUid();
+        if (!hasFreshLocalPage(maxAgeMs)) return getAutomatic(scope,actor);
+        return get(Source.CACHE,false,actor).continueWithTask(Runnable::run, task ->
+                task.isSuccessful() ? com.google.android.gms.tasks.Tasks.forResult(task.getResult())
+                        : getAutomatic(scope,actor));
+    }
+
+    public Task<QuerySnapshot> get(Source source) { return get(source,false,null); }
+
+    private Task<QuerySnapshot> get(Source source,boolean automatic,String requestedActor) {
+        final String actor = requestedActor == null ? D1DocumentStore.authenticatedUid() : requestedActor;
+        if (!actor.equals(D1DocumentStore.authenticatedUid())) return com.google.android.gms.tasks.Tasks.forException(
+                new D1DocumentStoreException(D1DocumentStoreException.Code.CANCELLED,"Account changed before query"));
         final String key = D1DocumentStore.queryCacheKey(this, actor);
         if (source == Source.CACHE) {
             return firestore.runCacheRead(() -> {
@@ -269,29 +308,76 @@ public class Query {
                 return snapshot;
             });
         }
-        java.util.concurrent.Callable<QuerySnapshot> fetch = () -> {
-            JSONArray arr = D1DocumentTransport.query(toQueryBody());
-            if (!actor.equals(D1DocumentStore.authenticatedUid()))
-                throw new D1DocumentStoreException(D1DocumentStoreException.Code.CANCELLED, "Account changed during query");
-            firestore.cacheQuery(key, arr.toString());
-            return parseQuerySnapshot(arr);
-        };
         boolean firstFeedPage = "posts".equals(parentPath) && feedEngagement && limitValue != null
                 && startAfterValues == null && startAtValues == null && endBeforeValues == null && endAtValues == null;
-        return firstFeedPage ? firestore.runFeedFirstPage(fetch) : firestore.runAsync(fetch);
+        // An explicit DEFAULT read may promote an identical queued automatic
+        // flight; SERVER remains independent and never joins.
+        DocumentReadFlights.Access<QuerySnapshot> access = firestore.queryReadFlights.readPromotable(
+                actor,key,source == Source.DEFAULT,!automatic,allowBackground -> {
+            java.util.concurrent.Callable<QuerySnapshot> fetch = () -> {
+                if (!actor.equals(D1DocumentStore.authenticatedUid()))
+                    throw new D1DocumentStoreException(D1DocumentStoreException.Code.CANCELLED, "Account changed before queued query");
+                if (!allowBackground.get() && !com.friendbook.social.App.isForeground())
+                    throw new D1DocumentStore.BackgroundQueryDeferred();
+                JSONArray arr = D1DocumentTransport.query(toQueryBody());
+                if (!actor.equals(D1DocumentStore.authenticatedUid()))
+                    throw new D1DocumentStoreException(D1DocumentStoreException.Code.CANCELLED, "Account changed during query");
+                firestore.cacheQuery(key, arr.toString());
+                return parseQuerySnapshot(arr);
+            };
+            return firstFeedPage ? firestore.runFeedFirstPage(fetch) : firestore.runAsync(fetch);
+        });
+        if (!automatic && access.promotedAutomatic) {
+            // Promotion can race the worker's foreground decision. A user read
+            // must still run even if the automatic attempt was already deferred.
+            return access.task.continueWithTask(Runnable::run, completed ->
+                    completed.getException() instanceof D1DocumentStore.BackgroundQueryDeferred
+                            ? get(source,false,actor) : completed);
+        }
+        return access.task;
     }
 
     public boolean hasFreshLocalPage(long maxAgeMs) {
         return firestore.isQueryCacheFresh(D1DocumentStore.queryCacheKey(this,D1DocumentStore.authenticatedUid()),parentPath,maxAgeMs);
     }
 
+    /** Encode the exact merge input; partial/different cached heads must never share results. */
+    JSONArray cachedHeadRows(QuerySnapshot cached) throws org.json.JSONException {
+        JSONArray result=new JSONArray();
+        for(DocumentSnapshot doc:cached.getDocuments()) {
+            JSONObject row=new JSONObject();
+            java.util.Map<String,Object> data=new java.util.HashMap<>(doc.getData());
+            if(feedEngagement){
+                Object summary=data.remove("__feedEngagement");
+                if(summary instanceof String)try{row.put("engagement",new JSONObject((String)summary));}catch(org.json.JSONException ignored){}
+            }
+            row.put("path",doc.getPath()).put("id",doc.getId()).put("data",D1DocumentJson.encodeMap(data));
+            if(doc.getCreateTime()!=null)row.put("createTime",doc.getCreateTime().toDate().getTime());
+            if(doc.getUpdateTime()!=null)row.put("updateTime",doc.getUpdateTime().toDate().getTime());
+            result.put(row);
+        }
+        return result;
+    }
+
+    static String deltaFlightKey(String headKey,Query delta,JSONArray cachedRows) {
+        return new JSONArray().put("delta-head").put(headKey).put(delta.toQueryBody()).put(cachedRows).toString();
+    }
+
     /** Refresh a descending head without skipping a burst larger than one page. */
     public Task<QuerySnapshot> refreshCachedHead(QuerySnapshot cached) {
-        if (cached == null || cached.isEmpty() || limitValue == null || limitValue <= 0) return get(Source.SERVER);
+        // This is an ordinary lifecycle load, not an explicit forced refresh.
+        if (cached == null || cached.isEmpty() || limitValue == null || limitValue <= 0) return get(Source.DEFAULT);
         final String actor = D1DocumentStore.authenticatedUid();
         final Query delta = endBefore(cached.getDocuments().get(0)).limitToLast(limitValue);
         final String key = D1DocumentStore.queryCacheKey(this, actor);
-        return firestore.runAsync(() -> {
+        final JSONArray cachedRows;
+        try { cachedRows=cachedHeadRows(cached); }
+        catch(Exception error) { return com.google.android.gms.tasks.Tasks.forException(error); }
+        // Include the complete cached merge input, not just the first cursor.
+        // Mutations/pushes detach this registry along with ordinary queries.
+        return firestore.queryReadFlights.read(actor,deltaFlightKey(key,delta,cachedRows),true,()->firestore.runAsync(() -> {
+            if (!actor.equals(D1DocumentStore.authenticatedUid()))
+                throw new D1DocumentStoreException(D1DocumentStoreException.Code.CANCELLED, "Account changed before queued delta read");
             JSONArray updated = D1DocumentTransport.query(delta.toQueryBody());
             if (!actor.equals(D1DocumentStore.authenticatedUid()))
                 throw new D1DocumentStoreException(D1DocumentStoreException.Code.CANCELLED, "Account changed during delta read");
@@ -300,24 +386,15 @@ public class Query {
                 JSONObject row=updated.getJSONObject(i);
                 rows.put(row.getString("id"),row);
             }
-            for(DocumentSnapshot doc:cached.getDocuments()) {
+            for(int i=0;i<cachedRows.length();i++) {
                 if(rows.size()>=limitValue)break;
-                if(rows.containsKey(doc.getId()))continue;
-                JSONObject row=new JSONObject();
-                java.util.Map<String,Object> data=new java.util.HashMap<>(doc.getData());
-                if(feedEngagement){
-                    Object summary=data.remove("__feedEngagement");
-                    if(summary instanceof String)try{row.put("engagement",new JSONObject((String)summary));}catch(org.json.JSONException ignored){}
-                }
-                row.put("path",doc.getPath()).put("id",doc.getId()).put("data",D1DocumentJson.encodeMap(data));
-                if(doc.getCreateTime()!=null)row.put("createTime",doc.getCreateTime().toDate().getTime());
-                if(doc.getUpdateTime()!=null)row.put("updateTime",doc.getUpdateTime().toDate().getTime());
-                rows.put(doc.getId(),row);
+                JSONObject row=cachedRows.getJSONObject(i);
+                if(!rows.containsKey(row.getString("id")))rows.put(row.getString("id"),row);
             }
             JSONArray merged=new JSONArray(rows.values());
             firestore.cacheQuery(key,merged.toString());
             return parseQuerySnapshot(merged);
-        });
+        }));
     }
 
     public ListenerRegistration addSnapshotListener(EventListener<QuerySnapshot> listener) {

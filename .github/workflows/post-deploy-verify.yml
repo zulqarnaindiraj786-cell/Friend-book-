@@ -28,36 +28,56 @@ jobs:
             code=$(curl -sS -o /dev/null -w '%{http_code}' "$BASE$path" || echo 000)
             echo "::notice::$path -> $code"
           done
-      - name: The migration list still shows 0086 unapplied
+      - name: Diagnose deployed Worker health without writing user data
         run: |
-          npx --yes wrangler@4.157.0 d1 migrations list friendbook-db --remote > migrations.log 2>&1 || true
-          grep -E '[0-9]{4}_[A-Za-z0-9_]+\.sql' migrations.log | sed 's/^/pending: /' || echo 'no pending migrations reported'
+          for path in /health /health/r2 /v1/me /v1/presence/me; do
+            file=$(mktemp)
+            status=$(curl -sS --max-time 20 -o "$file" -w '%{http_code}' "$BASE$path" || echo 000)
+            echo "::notice::${path} HTTP ${status}"
+            python3 - "$path" "$status" "$file" <<'PY_HEALTH'
+          import json, pathlib, sys
+          path, status, file = sys.argv[1:]
+          raw = pathlib.Path(file).read_text(errors='replace')
+          try: body = json.loads(raw)
+          except Exception: body = {'body_prefix': raw[:300]}
+          if path == '/health':
+              summary = {k: body.get(k) for k in ('ok','d1InteractionsEnabled','views')}
+          elif path == '/health/r2':
+              summary = {k: body.get(k) for k in ('ok','r2Bound','videoR2Enabled')}
+          else:
+              summary = {'error': body.get('error') if isinstance(body, dict) else None}
+          print('::notice::safe response '+json.dumps({'path':path,'status':status,'body':summary},sort_keys=True))
+          PY_HEALTH
+            rm -f "$file"
+          done
+          file=$(mktemp)
+          status=$(curl -sS --max-time 20 -X POST -o "$file" -w '%{http_code}' "$BASE/v1/videos" || echo 000)
+          echo "::notice::POST /v1/videos HTTP ${status}"
+          echo "::notice::POST /v1/videos body $(head -c 200 "$file")"
+          test "$status" = 401
+          rm -f "$file"
+      - name: Verify retired presence migration is applied
+        run: |
+          npx --yes wrangler@4.157.0 d1 migrations list friendbook-db --remote > migrations.log 2>&1
           if grep -q '0086_remove_unused_status_tables.sql' migrations.log; then
-            echo '::notice::0086 is still pending, so the seven-table DROP has not run.'
-          else
-            echo '::error::0086 is no longer pending; the DROP may have run.'
+            echo '::error::0086 is still pending; presence tables must not be assumed retired.'
             exit 1
           fi
-      - name: The seven retired tables still exist
+          echo '::notice::0086 is not pending; verify the retired table catalog directly.'
+      - name: Verify retired presence and typing tables are absent
         run: |
           npx --yes wrangler@4.157.0 d1 execute friendbook-db --remote --json --command \
             "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('friendbook_cf_presence','friendbook_cf_presence_sessions','friendbook_cf_presence_sessions_copy','friendbook_cf_presence_sessions_fullcopy','friendbook_cf_typing','friendbook_cf_typing_sessions','friendbook_cf_typing_sessions_fullcopy') ORDER BY name" \
             > tables.json 2>tables.err || { cat tables.err; exit 1; }
-          python3 - <<'PY'
+          python3 - <<'PY_TABLES'
           import json
           data = json.load(open('tables.json'))
           rows = (data[0].get('results') if isinstance(data, list) else data.get('results')) or []
           names = sorted(row.get('name') for row in rows)
-          print('::notice::retired tables still present: ' + json.dumps({'count': len(names), 'names': names}))
-          # The three "*copy" tables never existed in production: the earlier
-          # preflight counted 1 + 4,690 + 1 + 311 = 5,003 rows, so those three
-          # contributed zero rows rather than a table.
-          required = {'friendbook_cf_presence', 'friendbook_cf_presence_sessions',
-                      'friendbook_cf_typing', 'friendbook_cf_typing_sessions'}
-          missing = sorted(required - set(names))
-          if missing:
-              raise SystemExit('Retired tables disappeared without a migration: ' + ', '.join(missing))
-          PY
+          print('::notice::retired presence/typing tables remaining: ' + json.dumps({'count': len(names), 'names': names}))
+          if names:
+              raise SystemExit('Retired presence/typing tables remain after migration 0086.')
+          PY_TABLES
       - name: Two-minute sample of presence routes and cron invocations
         run: |
           python3 - <<'PY'

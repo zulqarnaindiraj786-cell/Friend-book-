@@ -1,10 +1,19 @@
-import { commentsAPI, reactorsAPI, commentSelect, normalized, legacyCommentCount, legacyCommentCountsStatement, legacyPage } from './comment-api.js';
+import { commentsAPI, reactorsAPI, commentSelect, normalized, legacyCommentCount, legacyCommentCountsStatement, legacyCommentCountsWithCandidatesStatement, legacyPage } from './comment-api.js';
+import { legacyEpoch, legacyNoCandidates, rememberLegacyNoCandidates } from './legacy-comment-negative-cache.js';
 import { requestAccountReads } from './app-documents.js';
 import { authorizePost } from './firebase-post-access.js';
 const json = (body, status = 200) => Response.json(body, {
   status, headers: { 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' },
 });
 const types = new Set(['like', 'love', 'haha', 'wow', 'sad', 'angry']);
+async function stableEventId(prefix,fields) {
+  const encoder=new TextEncoder(),digest=new Uint8Array(await crypto.subtle.digest('SHA-256',
+    new Uint8Array(fields.flatMap(value=>{const bytes=encoder.encode(value);return [bytes.length>>>24,(bytes.length>>>16)&255,(bytes.length>>>8)&255,bytes.length&255,...bytes];}))));
+  return prefix+[...digest].map(byte=>byte.toString(16).padStart(2,'0')).join('');
+}
+const reactionNotificationId=(actor,recipient,type,resource)=>stableEventId('action_',[actor,recipient,type,resource]);
+const commentNotificationId=(actor,recipient,type,resource,commentId)=>stableEventId('comment_',
+  [actor,recipient,type==='reply'?'reply':'comment',resource,commentId]);
 function identifier(value) {
   const id = decodeURIComponent(value);
   if (!id || new TextEncoder().encode(id).length > 1500 || /[\/\x00-\x1f]/.test(id) || ['.', '..'].includes(id)) throw Error();
@@ -36,6 +45,9 @@ const reactionTypesSql = `COALESCE((SELECT json_group_array(json_object('type', 
       FROM (SELECT type, total FROM friendbook_cf_reaction_totals WHERE resource = ?2 AND total > 0 ORDER BY type) s), '[]')`;
 
 // Shared by explicit post details and the bounded Home response; no writes here.
+// Evaluate the visible count once in a non-flattened one-row subquery. If no
+// visible canonical comments exist, do not scan their removed/blocked history
+// merely to discover an empty two-comment preview. Legacy previews stay separate.
 function engagementStatement(db, resource, uid, blocked, useTotals = true) {
   // Seek each blocked author instead of scanning the resource's entire comment
   // history to subtract a usually tiny subset. DISTINCT prevents double counts.
@@ -44,23 +56,30 @@ function engagementStatement(db, resource, uid, blocked, useTotals = true) {
         ON c.resource=?2 AND c.uid=blocked.value
       LEFT JOIN friendbook_cf_comment_details d ON d.resource=c.resource AND d.id=c.id
       WHERE COALESCE(d.removed,0)=0)`;
-  const count = useTotals ? `COALESCE((SELECT total FROM friendbook_cf_visible_comment_totals WHERE resource=?2),0)
-        ${blocked.length ? `- ${blockedCount}` : ''}` : `(SELECT COUNT(*) FROM friendbook_cf_comments c
+  const storedTotal = `COALESCE((SELECT total FROM friendbook_cf_visible_comment_totals WHERE resource=?2),0)`;
+  // A known zero visible total cannot contain a visible blocked comment.
+  // Skip scanning removed history for every blocked author in that case.
+  // LIMIT prevents flattening/re-evaluating the totals lookup.
+  const count = useTotals ? (blocked.length ? `(SELECT CASE WHEN visible_total=0 THEN 0
+        ELSE visible_total - ${blockedCount} END FROM (SELECT ${storedTotal} AS visible_total LIMIT 1))`
+        : storedTotal) : `(SELECT COUNT(*) FROM friendbook_cf_comments c
       LEFT JOIN friendbook_cf_comment_details d ON d.resource=c.resource AND d.id=c.id
       WHERE c.resource=?2 AND COALESCE(d.removed,0)=0
         AND c.uid NOT IN (SELECT value FROM json_each(?3)))`;
   return db.prepare(`SELECT
     ${reactionTypesSql} AS types_json,
-    ${count} AS total_comments,
-    COALESCE((SELECT json_group_array(json_object(
+    engagement_count.total_comments AS total_comments,
+    CASE WHEN engagement_count.total_comments > 0 THEN COALESCE((SELECT json_group_array(json_object(
       'id', p.id, 'resource', p.resource, 'uid', p.uid, 'text', p.text, 'parent_id', p.parent_id,
       'created_at', p.created_at, 'historical_unattributed', p.historical_unattributed,
       'created_at_known', p.created_at_known, 'media_url', p.media_url, 'mentions', p.mentions,
       'name', p.name, 'photo', p.photo, 'edited', p.edited, 'removed', p.removed,
-      'likes', p.likes, 'mine', p.mine
-    )) FROM (${commentSelect.replace('r.uid=?', 'r.uid=?1')} WHERE c.resource = ?2 AND COALESCE(d.removed, 0) = 0
+      'likes', COALESCE(json_extract(p.reaction_summary,'$.likes'),0)+COALESCE(p.historical_unattributed,0),
+      'mine', json_extract(p.reaction_summary,'$.mine')
+    )) FROM (${commentSelect} WHERE c.resource = ?2 AND COALESCE(d.removed, 0) = 0
       AND c.uid NOT IN (SELECT value FROM json_each(?3))
-      ORDER BY c.created_at DESC, c.id DESC LIMIT 2) p), '[]') AS preview_json`)
+      ORDER BY c.created_at DESC, c.id DESC LIMIT 2) p), '[]') ELSE '[]' END AS preview_json
+    FROM (SELECT ${count} AS total_comments LIMIT 1) engagement_count`)
     .bind(uid, resource, JSON.stringify(blocked || []));
 }
 
@@ -74,8 +93,8 @@ export async function engagementSummary(db, resource, uid, owner, blocked = [], 
     }
   };
   const legacySummary = async () => {
-    const count = preloaded ? preloaded.count : await legacyCommentCount(db,resource,blocked);
-    return {count,preview:count ? await legacyPage(db,resource,uid,blocked,[Number.MAX_SAFE_INTEGER,'']) : []};
+    const count=preloaded?preloaded.count:await legacyCommentCount(db,resource,blocked);
+    return {count,preview:count ? await legacyPage(db,resource,uid,blocked,[Number.MAX_SAFE_INTEGER,''],null,2) : []};
   };
   const [combined,legacy] = await Promise.all([preloaded ? preloaded.canonical : canonicalSummary(),legacySummary()]);
   const typesList = JSON.parse(combined?.types_json || '[]');
@@ -91,23 +110,62 @@ export async function engagementSummary(db, resource, uid, owner, blocked = [], 
 }
 
 export const MAX_FEED_ENGAGEMENT_PAGE = 20;
+// Production D1 rejects ten UNION ALL terms; five were verified against the
+// live engine. Keep all chunks in the same D1 batch/snapshot.
+const LEGACY_COUNT_CHUNK_SIZE = 5;
 
 // A small authorized Home page can fetch summary rows in one D1 round trip.
 // Preserve the existing individual read path for incomplete schemas and failures.
-export async function batchEngagementReads(db, resources, uid, blocked) {
+export async function batchEngagementReads(db, resources, uid, blocked, cacheScope = null) {
   if (resources.length < 2 || resources.length > MAX_FEED_ENGAGEMENT_PAGE || typeof db.batch !== 'function') return new Map();
-  try {
-    const rows=await db.batch([
-      ...resources.map(resource=>engagementStatement(db,resource,uid,blocked)),
-      legacyCommentCountsStatement(db,resources,blocked),
-    ]);
-    const counts=rows.at(-1)?.results;
-    if(rows.length!==resources.length+1 || rows.some(row=>row.success===false)
-        || rows.slice(0,-1).some(row=>!row.results?.[0]) || !counts || counts.length!==resources.length)return new Map();
-    const bySlot=new Map(counts.map(row=>[row.slot,row.n]));
-    if(bySlot.size!==resources.length || resources.some((_,i)=>!bySlot.has(i)))return new Map();
-    return new Map(resources.map((resource,i)=>[resource,{canonical:rows[i].results[0],count:Number(bySlot.get(i))||0}]));
-  } catch { return new Map(); }
+  // Each validation uses a *new* primary-first session: after a concurrent
+  // external write, a later read on the original session could otherwise hit
+  // a replica that has only caught up to the first epoch's bookmark.
+  const freshEpoch=async()=>{
+    if(!cacheScope || typeof cacheScope.withSession!=='function')return null;
+    try {return await legacyEpoch(cacheScope.withSession('first-primary'));}
+    catch {return null;}
+  };
+  const read=async(useHints)=>{
+    const epoch=useHints?await freshEpoch():null;
+    const missing=resources.filter(resource=>!legacyNoCandidates(cacheScope,resource,epoch));
+    const withCandidates=Boolean(epoch) && missing.length>0;
+    const statements=[...resources.map(resource=>engagementStatement(db,resource,uid,blocked))];
+    const chunks=[];
+    for(let offset=0;offset<missing.length;offset+=LEGACY_COUNT_CHUNK_SIZE){
+      const chunk=missing.slice(offset,offset+LEGACY_COUNT_CHUNK_SIZE);chunks.push(chunk);
+      statements.push(withCandidates?legacyCommentCountsWithCandidatesStatement(db,chunk,blocked):legacyCommentCountsStatement(db,chunk,blocked));
+    }
+    const rows=await db.batch(statements);
+    // A concurrent root-comment write between the epoch read and this batch
+    // invalidates all skipped counts. Retry the original complete batch.
+    if(epoch && missing.length<resources.length && await freshEpoch()!==epoch)
+      throw Error('Legacy comment epoch changed during batch');
+    if(rows.length!==resources.length+chunks.length || rows.some(row=>row.success===false)
+        || rows.slice(0,resources.length).some(row=>!row.results?.[0]))return new Map();
+    const countsByResource=new Map(resources.map(resource=>[resource,0]));
+    const negatives=[];
+    for(let ci=0;ci<chunks.length;ci++){
+      const chunk=chunks[ci],counts=rows[resources.length+ci]?.results;
+      if(!counts || counts.length!==chunk.length)return new Map();
+      const bySlot=new Map(counts.map(row=>[row.slot,row]));
+      if(bySlot.size!==chunk.length || chunk.some((_,i)=>!bySlot.has(i)))return new Map();
+      for(let i=0;i<chunk.length;i++){
+        const row=bySlot.get(i),count=Number(row.n)||0;
+        countsByResource.set(chunk[i],count);
+        if(withCandidates && row.has_candidates===0 && Number.isSafeInteger(row.n) && row.n===0)negatives.push(chunk[i]);
+      }
+    }
+    for(const resource of negatives)rememberLegacyNoCandidates(cacheScope,resource,epoch);
+    return new Map(resources.map((resource,i)=>[resource,{canonical:rows[i].results[0],count:countsByResource.get(resource)}]));
+  };
+  try { return await read(!!cacheScope); }
+  catch {
+    // Older schema or an unavailable optional hint must keep the exact original
+    // grouped-count path, without masking failure of its actual reads.
+    if(cacheScope)try {return await read(false);} catch { /* existing fallback below */ }
+    return new Map();
+  }
 }
 
 export async function interactions(request, env, identity, match, authorize = authorizePost) {
@@ -146,6 +204,21 @@ export async function interactions(request, env, identity, match, authorize = au
     if (kind === 'reactors') return await reactorsAPI(request,db,resource,context);
     if (kind === 'comments') {
       context.reactionTotals=async()=>JSON.parse((await db.prepare(`SELECT ${reactionTypesSql} AS types_json`).bind(identity.uid,resource).first()).types_json);
+      context.commentNotifications=async(commentId,replyTo)=>{
+        if(!data.notify)return [];
+        const recipients=[];
+        if(context.owner && context.owner!==identity.uid)recipients.push({to:context.owner,type:collection==='posts'?'comment':'reel_comment',text:`${context.name||''} commented on your ${collection==='posts'?'post':'reel'}`});
+        if(replyTo && replyTo!==identity.uid && replyTo!==context.owner)recipients.push({to:replyTo,type:collection==='posts'?'reply':'reel_comment_reply',text:`${context.name||''} replied to your comment`});
+        const createdAt=Date.now(),events=[];
+        for(const recipient of recipients){
+          const eventType=recipient.type.includes('reply')?'reply':'comment';
+          const eventId=await commentNotificationId(identity.uid,recipient.to,eventType,resource,commentId);
+          events.push({id:eventId,toUserId:recipient.to,fromUserId:identity.uid,fromUserName:context.name||'',
+            fromUserPhotoUrl:context.photo||'',type:recipient.type,...(collection==='reels'?{contentType:'reel'}:{}),
+            text:recipient.text,postId:id,isRead:false,createdAt});
+        }
+        return events;
+      };
       return await commentsAPI(request,db,identity,resource,data,context);
     }
     if (kind === 'reactions') {
@@ -157,7 +230,10 @@ export async function interactions(request, env, identity, match, authorize = au
         // with the reaction when the user performs a fresh action.
         const writes = [
           db.prepare(`INSERT INTO friendbook_cf_reactions(resource,uid,type,updated_at)
-            VALUES (?,?,?,?) ON CONFLICT(resource,uid) DO UPDATE SET type=excluded.type,updated_at=excluded.updated_at
+            SELECT ?1,?2,?3,?4 WHERE ?3 IS NOT NULL
+              OR EXISTS (SELECT 1 FROM friendbook_cf_reactions WHERE resource=?1 AND uid=?2)
+              OR EXISTS (SELECT 1 FROM friendbook_cf_reaction_history WHERE resource=?1 AND uid=?2 AND timestamp_known=0)
+            ON CONFLICT(resource,uid) DO UPDATE SET type=excluded.type,updated_at=excluded.updated_at
             WHERE friendbook_cf_reactions.type IS NOT excluded.type OR EXISTS (
               SELECT 1 FROM friendbook_cf_reaction_history h WHERE h.resource=excluded.resource AND h.uid=excluded.uid AND h.timestamp_known=0
             )`)
@@ -167,12 +243,35 @@ export async function interactions(request, env, identity, match, authorize = au
             .bind(resource, identity.uid)
         ];
         if (new URL(request.url).searchParams.get('response') === 'reaction') {
-          // One D1 batch: the acknowledgement cannot fail in a separate comment read
-          // after committing the reaction. Older clients still receive the full summary.
-          const results = await db.batch([...writes, db.prepare(`SELECT ${reactionTypesSql} AS types_json`)
-            .bind(identity.uid, resource)]);
-          return json({ reactionOnly: true, owner: context.owner,
-            types: JSON.parse(results[2].results[0].types_json) });
+          // The optional inbox event is committed in this same D1 batch as the
+          // absolute reaction. The server derives its recipient and sender from
+          // the authorized resource/request, never from client-supplied identity.
+          const notificationId=new URL(request.url).searchParams.get('notify')==='1'
+            && context.owner && context.owner!==identity.uid
+            ? await reactionNotificationId(identity.uid,context.owner,
+                collection==='posts'?'like':'reel_like',id) : null;
+          const notificationTime=Date.now();
+          const notification=notificationId?{
+            toUserId:context.owner,fromUserId:identity.uid,fromUserName:context.name||'',
+            fromUserPhotoUrl:context.photo||'',type:collection==='posts'?'like':'reel_like',
+            ...(collection==='reels'?{contentType:'reel'}:{}),
+            text:`${context.name||''} liked your ${collection==='posts'?'post':'reel'}`,
+            postId:id,isRead:false,createdAt:notificationTime,
+          }:null;
+          const batch=[...writes,db.prepare(`SELECT ${reactionTypesSql} AS types_json`).bind(identity.uid,resource)];
+          if(notificationId){
+            const path=`notifications/${notificationId}`,serialized=JSON.stringify(notification);
+            batch.push(db.prepare(`INSERT INTO friendbook_cf_firestore_documents(path,parent_path,collection_id,doc_id,owner_uid,document_json,create_time,update_time)
+              SELECT ?, 'notifications','notifications',?,?, ?,?,? WHERE NOT EXISTS
+                (SELECT 1 FROM friendbook_cf_firestore_documents WHERE path=?)`)
+              .bind(path,notificationId,identity.uid,serialized,notificationTime,notificationTime,path));
+          }
+          const results=await db.batch(batch);
+          const created=Boolean(notificationId && (results[3]?.meta?.changes??results[3]?.changes)===1);
+          return json({reactionOnly:true,owner:context.owner,
+            types:JSON.parse(results[2].results[0].types_json),
+            ...(notificationId?{notificationId:created?notificationId:null,notificationCreated:created,
+              notification:created?{...notification,id:notificationId}:null}:{})});
         }
         await db.batch(writes);
       }

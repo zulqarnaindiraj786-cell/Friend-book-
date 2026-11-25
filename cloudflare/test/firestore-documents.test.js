@@ -2244,12 +2244,13 @@ test('ads config permits limited authenticated reads and guarded admin-only writ
  const db={prepare(q){const s=sql.prepare(q);return{bind(...args){return{run:async()=>s.run(...args),all:async()=>({results:s.all(...args)}),first:async()=>s.get(...args)||null};}};},async batch(stmts){sql.exec('BEGIN');try{for(const s of stmts)await s.run();sql.exec('COMMIT');}catch(e){sql.exec('ROLLBACK');throw e;}}};
  const app=createWorker(async t=>t),env={DB:db,FIREBASE_PROJECT_ID:'friendbook-test',PAYMENT_ADMIN_UIDS:'admin'};
  const call=(uid,path,method='GET',body)=>app.fetch(new Request('https://example.test'+path,{method,headers:{authorization:`Bearer ${uid}`,'content-type':'application/json'},...(body?{body:JSON.stringify(body)}:{})}),env);
- const data={appId:'ca-app',feed_native_unit_v3:'feed',reels_native_unit_v3:'reel',ads_enabled_v3:true,websiteUrl:'https://example.test',appAdsTxtUrl:'https://example.test/app-ads.txt',updatedBy:'admin',updatedAt:{__fieldValue:'serverTimestamp'}};
+ const data={appId:'ca-app',feed_native_unit_v3:'feed',reels_native_unit_v3:'reel',ads_enabled_v3:true,quota_saver_v1:true,websiteUrl:'https://example.test',appAdsTxtUrl:'https://example.test/app-ads.txt',updatedBy:'admin',updatedAt:{__fieldValue:'serverTimestamp'}};
  assert.equal((await call('alice','/v1/firestore/document?path=config/ads','PUT',{data})).status,403);
  assert.equal((await call('admin','/v1/firestore/document?path=config/ads','PUT',{data:{...data,secret:'no'}})).status,400);
+ assert.equal((await call('admin','/v1/firestore/document?path=config/ads','PUT',{data:{...data,quota_saver_v1:'true'}})).status,400);
  assert.equal((await call('admin','/v1/firestore/document?path=config/ads','PUT',{data,merge:true})).status,200);
  sql.prepare("UPDATE friendbook_cf_firestore_documents SET document_json=json_set(document_json,'$.privateLegacy','secret') WHERE path='config/ads'").run();
- const read=await call('alice','/v1/firestore/document?path=config/ads');assert.equal(read.status,200);const body=await read.json();assert.equal(body.data.feed_native_unit_v3,'feed');assert.equal(body.data.privateLegacy,undefined);
+ const read=await call('alice','/v1/firestore/document?path=config/ads');assert.equal(read.status,200);const body=await read.json();assert.equal(body.data.feed_native_unit_v3,'feed');assert.equal(body.data.quota_saver_v1,true);assert.equal(body.data.privateLegacy,undefined);
  assert.equal((await call('alice','/v1/firestore/document?path=config/secret')).status,403);
  assert.equal((await call('alice','/v1/firestore/query','POST',{parent:'config'})).status,403);
  assert.equal((await call('admin','/v1/firestore/document?path=config/ads','PATCH',{fields:{ads_enabled_v3:false}})).status,403);
@@ -2753,13 +2754,17 @@ test('direct calls authorize both call participants, reject forged transitions a
  sql.exec(readFileSync(new URL('../migrations/0048_direct_chat_calls.sql',import.meta.url),'utf8'));
  const insert=sql.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)');
  for (const uid of ['alice','bob','eve']) insert.run('users/'+uid,'users','users',uid,uid,JSON.stringify({displayName:uid}),1,1);
- const db={prepare(q){const stmt=sql.prepare(q);return{bind(...a){return{run:async()=>stmt.run(...a),first:async()=>stmt.get(...a)||null};}};},
+ const profileReads=[];
+ const db={prepare(q){const stmt=sql.prepare(q);return{bind(...a){return{run:async()=>stmt.run(...a),first:async()=>{if(q.includes('FROM friendbook_cf_firestore_documents') && String(a[0]).startsWith('users/'))profileReads.push(a[0]);return stmt.get(...a)||null;}};}};},
    async batch(statements){sql.exec('BEGIN');try{for(const s of statements) await s.run();sql.exec('COMMIT');}catch(e){sql.exec('ROLLBACK');throw e;}}};
  const worker=createWorker(async token=>token),env={DB:db,FIREBASE_PROJECT_ID:'test'};
- const send=(uid,action,callId='first',callType='video')=>worker.fetch(new Request('https://example.test/v1/chat/call',{
+ const send=(uid,action,callId='first',callType='video')=>{profileReads.length=0;return worker.fetch(new Request('https://example.test/v1/chat/call',{
    method:'POST',headers:{authorization:`Bearer ${uid}`,'content-type':'application/json'},
-   body:JSON.stringify({chatId:'alice_bob',callId,action,peerId:'bob',callType})}),env);
- let r=await send('alice','start');assert.equal(r.status,200,await r.text());
+   body:JSON.stringify({chatId:'alice_bob',callId,action,peerId:'bob',callType})}),env);};
+ let r=await send('alice','start');assert.equal(r.status,200,await r.clone().text());
+ assert.equal((await r.json()).callerName,'alice');
+ assert.equal(profileReads.filter(p=>p==='users/alice').length,1,'gate, call ACL and caller label share one request snapshot');
+ assert.equal(profileReads.filter(p=>p==='users/bob').length,1,'peer profile stays fresh');
  assert.equal(await authorizeCallMedia(db,'alice_bob','first','alice'),null);
  assert.equal((await send('alice','accept')).status,403);
  assert.equal((await send('eve','accept')).status,403);
@@ -2770,12 +2775,15 @@ test('direct calls authorize both call participants, reject forged transitions a
  assert.equal((await send('alice','start','other')).status,409);
  assert.equal((await send('alice','end')).status,200);
  assert.equal(await authorizeCallMedia(db,'alice_bob','first','alice'),null);
- assert.equal((await send('alice','start','second','voice')).status,200);
+ sql.prepare('UPDATE friendbook_cf_firestore_documents SET document_json=? WHERE path=?').run(JSON.stringify({displayName:'Renamed caller',photoUrl:'https://example.test/avatar'}),'users/alice');
+ const second=await send('alice','start','second','voice');assert.equal(second.status,200);
+ const secondBody=await second.json();assert.equal(secondBody.callerName,'Renamed caller');assert.equal(secondBody.callerPhoto,'https://example.test/avatar');
  assert.equal((await send('alice','end','first')).status,409);
  assert.equal((await send('bob','accept','second','voice')).status,200);
  assert.equal(await authorizeCallMedia(db,'alice_bob','second','bob'),'voice');
  sql.prepare('UPDATE friendbook_cf_firestore_documents SET document_json=? WHERE path=?').run('{"blocked":["bob"]}','users/alice');
  assert.equal(await authorizeCallMedia(db,'alice_bob','second','bob'),null);
+ assert.equal((await send('alice','start','third')).status,403,'next HTTP request sees the new block');
  sql.close();
 });
 
@@ -3302,5 +3310,105 @@ test('indexed friendship guards reject racing historical duplicates without part
   assert.equal(JSON.parse(sql.prepare("SELECT document_json FROM friendbook_cf_firestore_documents WHERE path='users/alice'").get().document_json).friendsCount,1);
   sql.prepare("DELETE FROM friendbook_cf_documents WHERE path='friends/race'").run();
   assert.equal((await call(remove)).status,200);
+  sql.close();
+});
+
+test('Search ordered people head bounds common prefix reads instead of loading every match', async () => {
+  const sql=new DatabaseSync(':memory:');
+  for(const ddl of [resourcesSchema,appSchema,schema,
+    readFileSync(new URL('../migrations/0053_people_name_prefix.sql',import.meta.url),'utf8'),
+    readFileSync(new URL('../migrations/0061_legacy_people_cursor_prefix.sql',import.meta.url),'utf8')])sql.exec(ddl);
+  const put=sql.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)');
+  put.run('users/viewer','users','users','viewer','viewer','{"displayName":"Viewer"}',1,1);
+  for(let i=0;i<2000;i++){
+    const id=`u${String(i).padStart(4,'0')}`;
+    put.run(`users/${id}`,'users','users',id,id,JSON.stringify({displayName:`Am${String(i).padStart(4,'0')}`}),1,1);
+  }
+  let prefixRows=0;const plans=[];
+  const db={prepare(q){const stmt=sql.prepare(q);return{bind(...args){return{
+    first:async()=>stmt.get(...args)||null,
+    all:async()=>{const rows=stmt.all(...args);if(q.includes('idx_cf_users_display_name')){
+      prefixRows+=rows.length;plans.push(...sql.prepare('EXPLAIN QUERY PLAN '+q).all(...args).map(row=>row.detail));
+    }return{results:rows};},
+  };}};}};
+  const response=await createWorker(async token=>token).fetch(new Request('https://example.test/v1/firestore/query',{
+    method:'POST',headers:{authorization:'Bearer viewer','content-type':'application/json'},body:JSON.stringify({
+      parent:'users',orderBy:[{field:'displayName',direction:'ASCENDING'}],startAt:['Am'],endAt:['Am\uf8ff'],limit:10,
+    }),
+  }),{DB:db,FIREBASE_PROJECT_ID:'test'});
+  assert.equal(response.status,200);
+  assert.deepEqual((await response.json()).documents.map(doc=>doc.id),Array.from({length:10},(_,i)=>`u${String(i).padStart(4,'0')}`));
+  assert.equal(prefixRows,10,'first head must not materialize all 2000 matching profiles');
+  assert.match(plans.join('\n'),/SEARCH .*USING INDEX idx_cf_users_display_name/);
+});
+
+test('canonical content GET authorizes the same fresh root once and retains privacy and block checks', async () => {
+  for(const root of ['posts','reels','stories']) {
+    const sql=new DatabaseSync(':memory:');
+    for(const ddl of [resourcesSchema,appSchema,schema])sql.exec(ddl);
+    const put=sql.prepare('INSERT OR REPLACE INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)');
+    const seed=(parent,id,data)=>put.run(`${parent}/${id}`,parent,parent,id,id,JSON.stringify(data),1,1);
+    seed('users','viewer',{displayName:'Viewer'});seed('users','author',{displayName:'Author'});
+    let rootReads=0;
+    const db={prepare(q){const stmt=sql.prepare(q);return{bind(...args){return{
+      first:async()=>{if(q.includes('friendbook_cf_firestore_documents') && q.includes('WHERE path') && args[0]===`${root}/p`)rootReads++;return stmt.get(...args)||null;},
+      all:async()=>({results:stmt.all(...args)}),
+    };}};}};
+    const read=async(actor,expected)=>{
+      rootReads=0;
+      const response=await createWorker(async token=>token).fetch(new Request(`https://example.test/v1/firestore/document?path=${root}/p`,{
+        headers:{authorization:`Bearer ${actor}`},
+      }),{DB:db,FIREBASE_PROJECT_ID:'test'});
+      assert.equal(response.status,expected,`${root} ${actor}`);
+      assert.equal(rootReads,1,'GET must not re-read the same canonical content for ACL');
+      return response;
+    };
+    seed(root,'p',{authorId:'author',privacy:'Public',content:'visible'});
+    assert.equal((await (await read('viewer',200)).json()).data.content,'visible');
+    seed(root,'p',{authorId:'author',privacy:'Only me'});
+    await read('viewer',403);await read('author',200);
+    seed(root,'p',{authorId:'author',privacy:'Public'});
+    seed('users','author',{displayName:'Author',blocked:['viewer']});await read('viewer',403);
+    seed('users','author',{displayName:'Author',banned:true});await read('viewer',403);
+  }
+});
+
+test('exact friendship probes seek pairs instead of repeatedly reading the actor graph',async()=>{
+  const sql=new DatabaseSync(':memory:');
+  for(const ddl of [resourcesSchema,appSchema,schema,
+    readFileSync(new URL('../migrations/0027_friend_participant_indexes.sql',import.meta.url),'utf8'),
+    readFileSync(new URL('../migrations/0092_friend_exact_pair_seek.sql',import.meta.url),'utf8')])sql.exec(ddl);
+  const put=sql.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)');
+  put.run('users/actor','users','users','actor','actor','{}',1,1);
+  for(let i=0;i<5000;i++){
+    const id=`f${String(i).padStart(4,'0')}`,other=`u${String(i).padStart(4,'0')}`;
+    put.run(`friends/${id}`,'friends','friends',id,'actor',JSON.stringify({participants:i%2?['actor',other]:[other,'actor']}),1,1);
+  }
+  put.run('friends/duplicate','friends','friends','duplicate','actor',JSON.stringify({participants:['actor','u0001']}),1,1);
+  put.run('friends/thirdparty','friends','friends','thirdparty','x',JSON.stringify({participants:['x','y']}),1,1);
+  put.run('friends/long','friends','friends','long','actor',JSON.stringify({participants:['actor','u0001','extra']}),1,1);
+  let candidates=0;const plans=[];
+  const db={prepare(q){const stmt=sql.prepare(q);return{bind(...args){return{
+    first:async()=>stmt.get(...args)||null,
+    all:async()=>{const rows=stmt.all(...args);if(q.includes('FROM json_each(?1) pair CROSS JOIN')){
+      candidates+=rows.length;plans.push(...sql.prepare('EXPLAIN QUERY PLAN '+q).all(...args).map(row=>row.detail));
+    }return{results:rows};},
+  };}};}};
+  const app=createWorker(async token=>token),env={DB:db,FIREBASE_PROJECT_ID:'test'};
+  const query=async(filters)=>{
+    const response=await app.fetch(new Request('https://example.test/v1/firestore/query',{
+      method:'POST',headers:{authorization:'Bearer actor','content-type':'application/json'},
+      body:JSON.stringify({parent:'friends',filters,limit:20}),
+    }),env);
+    assert.equal(response.status,200);return(await response.json()).documents.map(doc=>doc.id).sort();
+  };
+  const pairFilter={field:'participants',op:'in',value:[['actor','u0001'],['u0002','actor'],['actor','u0001'],['x','y']]};
+  assert.deepEqual(await query([pairFilter]),['duplicate','f0001','f0002']);
+  assert.equal(candidates,4,'only matching-prefix rows, including one long-array rejection, are loaded');
+  assert.match(plans.join('\n'),/SEARCH f USING INDEX idx_cf_friend_exact_pair \(<expr>=\? AND <expr>=\?\)/);
+  const all=await query([{field:'participants',op:'array-contains',value:'actor'}]);
+  assert.ok(all.length>0,'ordinary friend list remains available');
+  assert.deepEqual(await query([{field:'participants',op:'==',value:['x','y']}]),[]);
+  assert.deepEqual(await query([{field:'participants',op:'==',value:['actor','u0001']}]),['duplicate','f0001']);
   sql.close();
 });

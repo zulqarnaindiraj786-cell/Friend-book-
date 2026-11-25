@@ -5,7 +5,7 @@ name: Read-only D1 quota audit
 on:
   workflow_dispatch:
   push:
-    branches: [arena/7c7ddb7b-friend-book]
+    branches: [arena/b52bc74d-friend-book]
     paths: [.github/workflows/d1-quota-audit.yml]
 permissions: {}
 jobs:
@@ -42,6 +42,19 @@ jobs:
               if result.get('errors'):
                   msg=result['errors'][0].get('message','Unknown GraphQL error')
                   raise SystemExit('Analytics query rejected: '+re.sub(r'[^a-zA-Z0-9 _.:,-]','',msg)[:200])
+              if metric=='rowsRead':
+                  aggregate=q.replace('limit:60, orderBy:[sum_%s_DESC]'%metric,'limit:1').replace('dimensions { query } ','')
+                  req=urllib.request.Request('https://api.cloudflare.com/client/v4/graphql',data=json.dumps({'query':aggregate}).encode(),headers={'Authorization':'Bearer '+os.environ['CF_TOKEN'],'Content-Type':'application/json'})
+                  with urllib.request.urlopen(req,timeout=25) as r: total=json.load(r)
+                  if total.get('errors'): raise SystemExit('Window aggregate unavailable; no changes made')
+                  accounts=total['data']['viewer']['accounts']
+                  if len(accounts)!=1: raise SystemExit('Window account unavailable')
+                  groups=accounts[0]['d1QueriesAdaptiveGroups']
+                  if len(groups)>1: raise SystemExit('Unexpected window aggregation')
+                  values=groups[0] if groups else None
+                  if values is not None and (any(type(values['sum'].get(k)) is not int or values['sum'][k]<0 for k in ('rowsRead','rowsWritten')) or type(values.get('count')) is not int or values['count']<0):
+                      raise SystemExit('Invalid window totals')
+                  print('::notice::Window totals '+json.dumps({'window':label,'start':fmt(start),'end':fmt(end),'adaptive_totals':values,'caveat':'Delayed adaptive query dataset; not device attribution, account billing or guaranteed rate'},sort_keys=True))
               print('Top by '+metric)
               for account in result['data']['viewer']['accounts']:
                   printed=0
@@ -83,6 +96,9 @@ jobs:
                       if re.search(r'\bON\s+CONFLICT\b',sql,re.I): flags.append('upsert')
                       if re.search(r'\bINSERT\s+INTO\s+friendbook_cf_documents\s*\(',sql,re.I) and re.search(r'\bON\s+CONFLICT\s*\(\s*path\s*\)',sql,re.I): flags.append('shared-mirror-upsert')
                       if re.search(r'\bRETURNING\b',sql,re.I): flags.append('returning')
+                      if re.search(r'\bidx_cf_friend_participant_0\b',sql,re.I): flags.append('indexed-friend-candidates')
+                      if re.search(r'\bidx_cf_friend_guard_exceptions\b',sql,re.I): flags.append('transactional-malformed-probe')
+                      if re.search(r'\bidx_cf_legacy_pending_duplicate_pair\b',sql,re.I): flags.append('pending-pair-index')
                       if re.search(r'\bfriendbook_cf_social_guards\b',sql,re.I): flags.append('guard')
                       if re.search(r'\bfriendbook_cf_chat_participants\b',sql,re.I): flags.append('chat-members')
                       if re.search(r'\bfriendbook_cf_firestore_documents\b',sql,re.I) and re.search(r'\bfriendbook_cf_documents\b',sql,re.I): flags.append('both-stores')

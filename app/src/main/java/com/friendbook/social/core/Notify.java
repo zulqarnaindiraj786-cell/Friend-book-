@@ -13,16 +13,26 @@ import java.util.Map;
 
 /** Writes realtime notifications and official friendbook Team messages (with Crown-F emblem). */
 public class Notify {
+    // Stable event ACKs are a bounded process-local optimization. Server create
+    // remains authoritative after eviction/restart; failures allow demanded retry after 2s.
+    private static final android.util.LruCache<java.util.List<String>,Boolean> ACKED_EVENTS=new android.util.LruCache<>(512);
+    private static final android.util.LruCache<java.util.List<String>,Long> FAILED_EVENTS=new android.util.LruCache<>(256);
+    // Pending operations share one write; there is no scheduled retry.
+    private static final java.util.Set<java.util.List<String>> PENDING_EVENTS =
+            java.util.Collections.synchronizedSet(new java.util.HashSet<>());
 
     public static void send(String toUid, String type, String text) {
         send(toUid, type, text, null);
     }
+
+    private static final ActionRequestFlights<java.util.List<String>,Void> FOLLOW_ACTIONS=new ActionRequestFlights<>();
 
     /** Commit both sides before creating a follow notification / calling the push gateway. */
     public static com.google.android.gms.tasks.Task<Void> follow(String toUid, boolean following) {
         String me = Fb.uid();
         if (me == null || toUid == null || toUid.isEmpty() || me.equals(toUid))
             return com.google.android.gms.tasks.Tasks.forException(new IllegalArgumentException("Invalid follow target"));
+        return FOLLOW_ACTIONS.run(java.util.Arrays.asList(me,toUid,Boolean.toString(following)),()->{
         WriteBatch batch = Fb.db().batch();
         batch.set(Fb.db().collection("users").document(toUid),
                 Fb.map("followers", following ? FieldValue.arrayUnion(me) : FieldValue.arrayRemove(me)), SetOptions.merge());
@@ -31,10 +41,21 @@ public class Notify {
         return batch.commit().addOnSuccessListener(v -> {
             if (following && me.equals(Fb.uid())) send(toUid, "follow", "started following you");
         }).addOnFailureListener(e -> android.util.Log.w("FriendBookPush", "Follow write failed; no push sent"));
+        });
     }
 
     /** Creates a notification doc. Silently skips self-notifications except security login alerts. */
     public static void send(String toUid, String type, String text, @Nullable String postId) {
+        sendInternal(toUid,type,text,postId,null);
+    }
+
+    /** Stable saved-comment identity prevents replay callbacks creating new inbox rows. */
+    public static void sendForComment(String toUid,String type,String text,String collection,String postId,String commentId) {
+        String eventKey=NotificationEventKey.forComment(Fb.uid(),toUid,type,collection+"/"+postId,commentId);
+        sendInternal(toUid,type,text,postId,eventKey);
+    }
+
+    private static void sendInternal(String toUid,String type,String text,@Nullable String postId,@Nullable String savedEventKey) {
         String me = Fb.uid();
         if (me == null || toUid == null || toUid.isEmpty()) {
             com.friendbook.social.push.PushTrace.stage("notification_skipped", "reason=missing_actor_or_receiver"); return;
@@ -58,22 +79,53 @@ public class Notify {
         if (postId != null) n.put("postId", postId);
         n.put("isRead", false);
         n.put("createdAt", FieldValue.serverTimestamp());
-        String eventKey=NotificationEventKey.forAction(me,toUid,type,postId);
+        String eventKey=savedEventKey!=null?savedEventKey:NotificationEventKey.forAction(me,toUid,type,postId);
         if (eventKey != null) {
+            java.util.List<String> pendingKey=java.util.Arrays.asList(me,eventKey);
+            if(ACKED_EVENTS.get(pendingKey)!=null)return;
+            Long failedAt=FAILED_EVENTS.get(pendingKey);
+            if(failedAt!=null && android.os.SystemClock.elapsedRealtime()-failedAt<2_000L)return;
+            if(!PENDING_EVENTS.add(pendingKey))return;
+            try {
             DocumentReference ref=Fb.db().collection("notifications").document(eventKey);
             ref.create(n).addOnSuccessListener(v -> {
+                ACKED_EVENTS.put(pendingKey,true);FAILED_EVENTS.remove(pendingKey);
                 if (me.equals(Fb.uid())) com.friendbook.social.push.FCMPush.notification(ref.getId(), n);
             }).addOnFailureListener(e -> {
-                if (!(e instanceof com.friendbook.social.d1.documents.D1DocumentStoreException)
-                        || ((com.friendbook.social.d1.documents.D1DocumentStoreException)e).getCode()
-                        != com.friendbook.social.d1.documents.D1DocumentStoreException.Code.ALREADY_EXISTS)
+                boolean exists=e instanceof com.friendbook.social.d1.documents.D1DocumentStoreException
+                        && ((com.friendbook.social.d1.documents.D1DocumentStoreException)e).getCode()
+                        == com.friendbook.social.d1.documents.D1DocumentStoreException.Code.ALREADY_EXISTS;
+                if(exists){ACKED_EVENTS.put(pendingKey,true);FAILED_EVENTS.remove(pendingKey);}
+                else {
+                    FAILED_EVENTS.put(pendingKey,android.os.SystemClock.elapsedRealtime());
                     com.friendbook.social.push.PushTrace.failure("notification_write_failed", e);
-            });
+                }
+            }).addOnCompleteListener(task -> PENDING_EVENTS.remove(pendingKey));
+            } catch(RuntimeException error) {
+                PENDING_EVENTS.remove(pendingKey);
+                throw error;
+            }
         } else Fb.db().collection("notifications").add(n).addOnSuccessListener(ref -> {
             com.friendbook.social.push.PushTrace.stage("notification_write_ok", "event="
                     + com.friendbook.social.push.PushTrace.id(ref.getId()));
             if (me.equals(Fb.uid())) com.friendbook.social.push.FCMPush.notification(ref.getId(), n);
         }).addOnFailureListener(e -> com.friendbook.social.push.PushTrace.failure("notification_write_failed", e));
+    }
+
+    /** Queue push for a notification already atomically persisted with its D1 action. */
+    public static void pushCommitted(String id,Map<String,Object> notification) {
+        if(id==null || id.isEmpty() || notification==null)return;
+        Object target=notification.get("toUserId");
+        if(target==null)return;
+        com.friendbook.social.push.FCMPush.notification(id,notification);
+    }
+    public static void pushCommittedEvents(org.json.JSONObject response) {
+        if(response==null)return;
+        org.json.JSONArray events=response.optJSONArray("notifications");if(events==null)return;
+        for(int i=0;i<events.length();i++)try{
+            org.json.JSONObject event=events.getJSONObject(i);
+            pushCommitted(event.optString("id",""),D1Client.map(event));
+        }catch(org.json.JSONException ignored){}
     }
 
     /**

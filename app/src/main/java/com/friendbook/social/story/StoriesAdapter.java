@@ -241,6 +241,14 @@ public class StoriesAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
             h.textPrev.setText(latest.caption == null || latest.caption.isEmpty() ? "Aa" : latest.caption);
             int bg = latest.bgColor != 0 ? latest.bgColor : Ui.BLUE;
             h.textPrev.setBackground(Ui.round(c, bg, 14));
+        } else if ("video".equals(latest.mediaType)) {
+            // Never pass the video URL to Glide: frame extraction downloads the MP4.
+            String poster=com.friendbook.social.reels.ReelVideoCache.deriveThumbUrl(latest.mediaUrl, "");
+            h.img.setVisibility(poster.isEmpty()?View.GONE:View.VISIBLE);
+            h.textPrev.setVisibility(poster.isEmpty()?View.VISIBLE:View.GONE);
+            h.textPrev.setText("▶ Tap to watch");
+            h.textPrev.setBackground(Ui.round(c, Ui.BLUE, 14));
+            if (!poster.isEmpty()) Ui.img(c, h.img, poster);
         } else {
             h.textPrev.setVisibility(View.GONE);
             h.img.setVisibility(View.VISIBLE);

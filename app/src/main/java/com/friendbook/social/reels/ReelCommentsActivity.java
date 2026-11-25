@@ -39,7 +39,10 @@ public class ReelCommentsActivity extends Activity implements CommentsAdapter.Ho
     private androidx.swiperefreshlayout.widget.SwipeRefreshLayout commentSwipe;
     private CommentsAdapter adapter;
     private CommentsEngine.Handle commentsHandle;
-    private boolean initialLoaded;
+    private boolean initialLoaded,commentsScreenStarted;
+    private String commentsActor;
+    private boolean currentCommentsActor(){return commentsActor!=null && java.util.Objects.equals(commentsActor,Fb.uid());}
+    private boolean visibleCommentsScreen(){return commentsScreenStarted && currentCommentsActor() && !isFinishing() && !isDestroyed();}
     private TextView olderCommentsButton;
     private EditText input;
     private TextView sendBtn, replyChip, countHeader;
@@ -50,6 +53,7 @@ public class ReelCommentsActivity extends Activity implements CommentsAdapter.Ho
     @Override
     protected void onCreate(Bundle b) {
         super.onCreate(b);
+        commentsActor=Fb.uid();
         Ui.statusBarLight(this);
         reelId = getIntent().getStringExtra("reel_id");
         author = getIntent().getStringExtra("author");
@@ -85,7 +89,7 @@ public class ReelCommentsActivity extends Activity implements CommentsAdapter.Ho
         olderCommentsButton=older;
         older.setPadding(Ui.dp(this,8),Ui.dp(this,8),Ui.dp(this,8),Ui.dp(this,8));
         older.setOnClickListener(v -> {
-            if(commentsHandle==null) return;
+            if(commentsHandle==null || !visibleCommentsScreen()) return;
             if(!commentsHandle.error.isEmpty()) Ui.toast(this,commentsHandle.error);
             if(commentsHandle.hasMore()) commentsHandle.loadMore(); else Ui.toast(this,"All comments loaded");
             updateCommentPager();
@@ -195,6 +199,9 @@ public class ReelCommentsActivity extends Activity implements CommentsAdapter.Ho
     @Override
     protected void onStart() {
         super.onStart();
+        if(!currentCommentsActor()){finish();return;}
+        commentsScreenStarted=true;
+        if(commentsHandle!=null)commentsHandle.resume();
         if (!initialLoaded) {
             loadComments();
         }
@@ -230,8 +237,15 @@ public class ReelCommentsActivity extends Activity implements CommentsAdapter.Ho
 
     @Override
     protected void onStop() {
+        commentsScreenStarted=false;
+        if(commentsHandle!=null)commentsHandle.pause();
         super.onStop();
         if (isFinishing() && commentsHandle != null) commentsHandle.remove();
+    }
+
+    @Override protected void onDestroy(){
+        if(commentsHandle!=null){commentsHandle.remove();commentsHandle=null;}
+        super.onDestroy();
     }
 
     @Override
@@ -256,6 +270,7 @@ public class ReelCommentsActivity extends Activity implements CommentsAdapter.Ho
     }
 
     private void send() {
+        if(!visibleCommentsScreen())return;
         if (busy) return;
         if (!com.friendbook.social.core.Admin.checkNotSuspended(this)) return;
         String text = input.getText().toString().trim();
@@ -271,16 +286,19 @@ public class ReelCommentsActivity extends Activity implements CommentsAdapter.Ho
         input.setText("");
 
         Models.Comment local = CommentsEngine.sendComment(collection, reelId, commentsKey, text, "", parentId, mentions,
-                (ok, errMsg) -> {
-                    if (ok) {
-                        if (author != null && !me.equals(author)) {
-                            Notify.send(author, "reel_comment", Fb.myName() + " commented on your reel", reelId);
+                new CommentsEngine.PostCallback() {
+                    @Override public void onSaved(String commentId) {
+                        if(!currentCommentsActor())return;
+                        if (!com.friendbook.social.core.D1Client.enabled(collection) && author != null && !me.equals(author)) {
+                            Notify.sendForComment(author, "reel_comment", Fb.myName() + " commented on your reel", collection,reelId,commentId);
                         }
-                        if (replyTarget != null && !me.equals(replyTarget.authorId)) {
-                            Notify.send(replyTarget.authorId, "reel_comment_reply", Fb.myName() + " replied to your comment", reelId);
+                        if (!com.friendbook.social.core.D1Client.enabled(collection) && replyTarget != null && !me.equals(replyTarget.authorId)
+                                && !java.util.Objects.equals(replyTarget.authorId,author)) {
+                            Notify.sendForComment(replyTarget.authorId, "reel_comment_reply", Fb.myName() + " replied to your comment", collection,reelId,commentId);
                         }
-                    } else {
-                        Ui.toast(ReelCommentsActivity.this, errMsg != null ? errMsg : "Failed to post comment");
+                    }
+                    @Override public void onComplete(boolean ok,String errMsg) {
+                        if(!ok && visibleCommentsScreen())Ui.toast(ReelCommentsActivity.this, errMsg != null ? errMsg : "Failed to post comment");
                     }
                 });
 

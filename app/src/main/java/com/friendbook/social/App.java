@@ -55,6 +55,9 @@ public class App extends Application implements SensorEventListener {
     public void onCreate() {
         super.onCreate();
         instance = this;
+        // Remove previously saved local Loop Trace data once, without recording anything new.
+        if (!getSharedPreferences("local_loop_trace", MODE_PRIVATE).getAll().isEmpty())
+            deleteSharedPreferences("local_loop_trace");
         com.friendbook.social.core.SoundEffects.warmUp(this);
         com.friendbook.social.core.FastCache.init(this);
         Fb.init(this);
@@ -77,8 +80,14 @@ public class App extends Application implements SensorEventListener {
                     timeHandler.postDelayed(timeTick, 30_000L);
                 }
                 resumedCount++;
-                if (resumedCount==1 && android.os.SystemClock.elapsedRealtime()-backgroundSince>=3000L)
-                    com.friendbook.social.d1.documents.D1DocumentStore.getInstance().refreshOnForeground();
+                if (resumedCount==1) {
+                    // Resume lifecycle-owned reads and listeners even after a brief
+                    // transition between activities, without polling in background.
+                    com.friendbook.social.d1.documents.ForegroundReadScope.resume();
+                    com.friendbook.social.d1.documents.D1DocumentStore.getInstance().resumeDeferredListeners();
+                    if (android.os.SystemClock.elapsedRealtime()-backgroundSince>=3000L)
+                        com.friendbook.social.d1.documents.D1DocumentStore.getInstance().refreshOnForeground();
+                }
                 com.friendbook.social.core.SoundEffects.warmUp(App.this);
             }
             @Override public void onActivityPaused(Activity a) {

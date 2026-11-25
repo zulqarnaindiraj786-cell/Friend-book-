@@ -1,0 +1,39 @@
+name: Apply bounded pending-request index
+on:
+  push:
+    branches: [arena/b52bc74d-friend-book]
+    paths:
+      - '.github/workflows/pending-request-seek.yml'
+      - 'scripts/admin/apply_pending_request_seek.py'
+      - 'scripts/tests/test_duplicate_request_seek.py'
+      - 'cloudflare/migrations/0088_pending_duplicate_request_seek.sql'
+permissions:
+  contents: read
+concurrency:
+  group: friendbook-cloudflare-production
+  cancel-in-progress: false
+jobs:
+  additive-index:
+    if: contains(github.event.head_commit.message, '[apply-pending-seek]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npm test
+      - name: Validate unchanged cleanup and schema locally
+        run: |
+          python3 -m unittest discover -s scripts/tests
+          python3 cloudflare/test/schema_test.py
+          python3 cloudflare/test/migration_test.py
+          python3 cloudflare/test/index_plan_test.py
+      - name: Apply only additive index and compare production query-plan costs
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: python3 scripts/admin/apply_pending_request_seek.py --apply-additive-index
+
+# Owner-requested bounded additive-index rollout; guarded by the workflow preflight.

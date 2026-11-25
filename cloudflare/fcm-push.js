@@ -226,31 +226,36 @@ export async function drainBroadcastPush(env, now = Date.now(), send = sendToDev
   await Promise.all(Array.from({length:Math.min(8,results.length)},async()=>{
     while (cursor<results.length) {
       const row=results[cursor++];
-      const id=row.notification_id;
-      if (row.created_at<now-86400000 || row.attempts>=8) {
-        await db.prepare('DELETE FROM friendbook_cf_broadcast_push WHERE notification_id=? AND next_attempt_at=?')
-          .bind(id,row.next_attempt_at).run();
-        continue;
-      }
-      const next=now+Math.min(3600000,300000*2**Math.min(row.attempts,4));
-      const claim=await db.prepare(`UPDATE friendbook_cf_broadcast_push SET attempts=attempts+1,next_attempt_at=?
-        WHERE notification_id=? AND next_attempt_at=? RETURNING notification_id`).bind(next,id,row.next_attempt_at).first();
-      if (!claim) continue;
-      const discard=()=>db.prepare('DELETE FROM friendbook_cf_broadcast_push WHERE notification_id=? AND next_attempt_at=?').bind(id,next).run();
-      const note=await d1Doc(db,`notifications/${id}`);
-      if (!note || note.fromUserId!=='friendbook_team' || note.type!=='announcement' || note.toUserId!==row.recipient_uid) {
-        // Do not send without a matching persisted inbox event; stale jobs expire.
-        continue;
-      }
-      const target=row.recipient_uid, event=`notification_${id}`;
+      // One failed lease/expiry/delete must not retire a worker slot or let
+      // the drain resolve/reject while other recipients are still pending.
+      // Leave that row under its existing lease/backoff for a later cron.
       try {
-        const result=await send(env,db,'friendbook_team',target,{
-          type:'message',notificationId:id,chatId:`team_${target}`,isGroup:'false',
-          toUserId:target,fromUserId:'friendbook_team',eventId:event,title:'friendbook Team',
-          body:String(note.text || (note.mediaType==='video'?'Sent a video':'Sent a photo')).slice(0,500),
-        },event);
-        if (result.status===200 || result.status===409) await discard();
-      } catch { /* Retry on the next due maintenance run. */ }
+        const id=row.notification_id;
+        if (row.created_at<now-86400000 || row.attempts>=8) {
+          await db.prepare('DELETE FROM friendbook_cf_broadcast_push WHERE notification_id=? AND next_attempt_at=?')
+            .bind(id,row.next_attempt_at).run();
+          continue;
+        }
+        const next=now+Math.min(3600000,300000*2**Math.min(row.attempts,4));
+        const claim=await db.prepare(`UPDATE friendbook_cf_broadcast_push SET attempts=attempts+1,next_attempt_at=?
+          WHERE notification_id=? AND next_attempt_at=? RETURNING notification_id`).bind(next,id,row.next_attempt_at).first();
+        if (!claim) continue;
+        const discard=()=>db.prepare('DELETE FROM friendbook_cf_broadcast_push WHERE notification_id=? AND next_attempt_at=?').bind(id,next).run();
+        const note=await d1Doc(db,`notifications/${id}`);
+        if (!note || note.fromUserId!=='friendbook_team' || note.type!=='announcement' || note.toUserId!==row.recipient_uid) {
+          // Do not send without a matching persisted inbox event; stale jobs expire.
+          continue;
+        }
+        const target=row.recipient_uid, event=`notification_${id}`;
+        try {
+          const result=await send(env,db,'friendbook_team',target,{
+            type:'message',notificationId:id,chatId:`team_${target}`,isGroup:'false',
+            toUserId:target,fromUserId:'friendbook_team',eventId:event,title:'friendbook Team',
+            body:String(note.text || (note.mediaType==='video'?'Sent a video':'Sent a photo')).slice(0,500),
+          },event);
+          if (result.status===200 || result.status===409) await discard();
+        } catch { /* Retry on the next due maintenance run. */ }
+      } catch { /* Isolated row failure; keep draining the bounded due page. */ }
     }
   }));
 }

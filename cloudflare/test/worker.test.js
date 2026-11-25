@@ -76,13 +76,18 @@ test('real RSA verification rejects wrong project, issuer, expiry, signature and
   const other = await generateKeyPair('RS256');
   await assert.rejects(verifyFirebaseToken(await sign({}, other.privateKey), claims.aud, keys));
 });
-test('retired routes do not access D1', async () => {
+test('retired presence routes and profile heartbeat avoid D1', async () => {
   let reads=0;
   const app=createWorker(async () => 'verified-user');
   const env={FIREBASE_PROJECT_ID:'friendbook-17551', DB:{prepare(){reads++; throw Error('unexpected D1');}}};
   for (const route of ['/v1/presence/me','/v1/presence/contact/peer','/v1/presence/typing/room','/v1/presence/socket'])
     assert.equal((await call(route,env,{Authorization:'Bearer test'},'GET',app)).status,404);
-  assert.equal(reads,0);
+  const heartbeat={fields:{isOnline:true,isActive:true,showActiveStatus:true,lastSeenMs:Date.now(),lastSeen:{__fieldValue:'serverTimestamp'}}};
+  const response=await app.fetch(new Request('https://example.invalid/v1/firestore/document?path=users/verified-user',{
+    method:'PATCH',headers:{Authorization:'Bearer test','content-type':'application/json'},body:JSON.stringify(heartbeat)}),env);
+  assert.equal(response.status,200);
+  assert.deepEqual(await response.json(),{ok:true,retired:true});
+  assert.equal(reads,0,'old status heartbeat must not read account/profile rows');
 });
 
 test('Android public config keeps only its public boolean and rejects missing settings', async () => {

@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
 import { readFileSync } from 'node:fs';
-import { fullFriendCandidates, indexedFriendCandidates, friendshipCandidates, friendshipDuplicateGuard, malformedFriendProbe } from '../friendship-candidates.js';
+import { fullFriendCandidates, indexedFriendCandidates, canonicalFullFriendCandidates, canonicalIndexedFriendCandidates, friendshipCandidates, friendshipDuplicateGuard, malformedFriendProbe, malformedCanonicalFriendProbe } from '../friendship-candidates.js';
 
 const migration = n => readFileSync(new URL(`../migrations/${n}`, import.meta.url), 'utf8');
 const wrap = sql => ({prepare(q) { const stmt=sql.prepare(q); return {bind(...a) { return {all:async()=>({results:stmt.all(...a)})}; }}; }});

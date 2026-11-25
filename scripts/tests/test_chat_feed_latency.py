@@ -72,6 +72,6 @@ class ChatFeedLatencyTest(unittest.TestCase):
         home = (ROOT / 'main/HomeFragment.java').read_text()
         section = home.split('FastCache.NetTier tier = FastCache.netTier(a);', 1)[1].split('rv.setBackgroundColor', 1)[0]
         for marker in ('NET_2G', 'NET_3G', 'Prefs.dataSaver(a)', 'Prefs.turbo2g(a)',
-                       'setItemPrefetchEnabled(!constrainedFeed)',
-                       'dy>0 && isResumed() && !isHidden()', 'getItemCount()-2', 'loadMore()'):
+                       'setItemPrefetchEnabled(false)',
+                       'dy>0 && isResumed() && !isHidden()', 'getItemCount()-2', 'loadMore(true)'):
             self.assertIn(marker, section)

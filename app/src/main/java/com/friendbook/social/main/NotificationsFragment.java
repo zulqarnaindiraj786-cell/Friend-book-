@@ -34,9 +34,21 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
-/** Notifications tab: realtime list, unread highlight, mark-all-read, deep links. */
+/** On-demand notifications: cached pages, unread highlight, explicit mark-all-read, deep links. */
 public class NotificationsFragment extends Fragment {
 
+    private static final int PAGE_SIZE = 10;
+    private static final int MARK_READ_BATCH_SIZE = 10;
+    private final java.util.Set<String> pendingReadIds=new java.util.HashSet<>();
+    private boolean markingAll,markAllWriteInFlight,notificationsStarted;
+    private int pageGeneration;
+    private final java.util.Set<String> failedReadIds=new java.util.HashSet<>();
+    private final java.util.Set<String> confirmedReadIds=new java.util.HashSet<>();
+    private boolean activeNotifications(String actor,int generation){
+        return notificationsStarted && isAdded() && !isHidden() && adapter!=null
+                && generation==pageGeneration && java.util.Objects.equals(actor,Fb.uid());
+    }
+    private int markReadGeneration;
     private NotifAdapter adapter;
     private com.friendbook.social.core.CursorPager pager;
     private androidx.swiperefreshlayout.widget.SwipeRefreshLayout swipe;
@@ -51,6 +63,9 @@ public class NotificationsFragment extends Fragment {
     @Nullable
     @Override
     public View onCreateView(LayoutInflater inf, ViewGroup container, Bundle b) {
+        if(!java.util.Objects.equals(loadedActor,Fb.uid())){
+            data.clear();confirmedReadIds.clear();failedReadIds.clear();pendingReadIds.clear();
+        }
         android.app.Activity a = getActivity();
         LinearLayout root = Ui.col(a);
         root.setBackgroundColor(Ui.bg(a));
@@ -79,7 +94,7 @@ public class NotificationsFragment extends Fragment {
         cup.leftMargin = Ui.dp(a, 8);
         chips.addView(chipUnread, cup);
         root.addView(chips);
-        moreButton=Ui.tvBold(a,"Load 20 more",14,Ui.BLUE);
+        moreButton=Ui.tvBold(a,"Load 10 more",14,Ui.BLUE);
         moreButton.setOnClickListener(v->{if(pager!=null)pager.next();});
         TextView refresh=Ui.tvBold(a,"Refresh notifications",13,Ui.BLUE);
         refresh.setOnClickListener(v->startPages());refresh.setVisibility(View.GONE);
@@ -90,17 +105,26 @@ public class NotificationsFragment extends Fragment {
         root.addView(empty);
 
         RecyclerView rv = new RecyclerView(a);
-        rv.setLayoutManager(new LinearLayoutManager(a));
+        LinearLayoutManager layout=new LinearLayoutManager(a);
+        layout.setItemPrefetchEnabled(false);
+        rv.setLayoutManager(layout);
         rv.setItemAnimator(null);
         rv.setItemViewCacheSize(20);
         adapter = new NotifAdapter();
         rv.setAdapter(adapter);
-        com.friendbook.social.core.NearEndPaging.attach(rv,()->{if(pager!=null)pager.next();});
+        com.friendbook.social.core.ScrollPageGate pageGate=new com.friendbook.social.core.ScrollPageGate();
+        rv.addOnScrollListener(new RecyclerView.OnScrollListener() {
+            @Override public void onScrolled(RecyclerView list,int dx,int dy) {
+                if(dy>0 && isResumed() && !isHidden()
+                        && list.getScrollState()!=RecyclerView.SCROLL_STATE_IDLE
+                        && pageGate.shouldLoad(dy,layout.findLastVisibleItemPosition()>=adapter.getItemCount()-1,adapter.getItemCount())
+                        && pager!=null) pager.next();
+            }
+        });
         swipe = new androidx.swiperefreshlayout.widget.SwipeRefreshLayout(a);
         swipe.setColorSchemeColors(Ui.BLUE);
         swipe.addView(rv);
         swipe.setOnRefreshListener(() -> {
-            initialLoaded = false;
             startPages(true);
         });
         root.addView(swipe, new LinearLayout.LayoutParams(-1, 0, 1));
@@ -110,7 +134,7 @@ public class NotificationsFragment extends Fragment {
         List<Models.Notif> cached = com.friendbook.social.core.FastCache.getNotifications();
         if (!cached.isEmpty()) {
             data.clear();
-            data.addAll(cached.subList(0,Math.min(20,cached.size())));
+            data.addAll(cached.subList(0,Math.min(PAGE_SIZE,cached.size())));
             empty.setVisibility(View.GONE);
             adapter.notifyDataSetChanged();
         }
@@ -120,8 +144,11 @@ public class NotificationsFragment extends Fragment {
     /** ⚡ 0.0ms Optimistic mark-all-read on in-memory & disk-cached notifications. */
     public void markAllReadOptimisticNow() {
         for (Models.Notif n : data) {
-            n.isRead = true;
+            n.isRead = true;confirmedReadIds.add(n.id);
         }
+        List<Models.Notif> cached=com.friendbook.social.core.FastCache.getNotifications();
+        for(Models.Notif n:cached){n.isRead=true;confirmedReadIds.add(n.id);}
+        com.friendbook.social.core.FastCache.saveNotifications(cached);
         if (unreadOnly) {
             data.clear();
         } else if (!data.isEmpty()) {
@@ -134,19 +161,64 @@ public class NotificationsFragment extends Fragment {
     private void markAllReadReal() {
         // Only the explicit "Mark all read" button invokes this operation.
         String me = Fb.uid();
-        if (me == null) return;
-        Fb.db().collection("notifications").whereEqualTo("toUserId", me).whereEqualTo("isRead", false)
-                .limit(450).get().addOnSuccessListener(snap -> {
-                    if (!me.equals(Fb.uid()) || snap == null || snap.isEmpty()) return;
+        if (me == null || markingAll || markAllWriteInFlight || !notificationsStarted || !isAdded() || isHidden()) return;
+        if(!com.friendbook.social.core.InteractionCooldown.acquire(me,"notifications-mark-all"))return;
+        markingAll=true;
+        markUnreadBatch(me, ++markReadGeneration, null);
+    }
+
+    private void markUnreadBatch(String me, int generation, DocumentSnapshot cursor) {
+        // All rows are touched only for this explicit operation, never for opening the tab.
+        if (!isAdded() || isHidden() || !me.equals(Fb.uid()) || generation!=markReadGeneration) {
+            markingAll=false;return;
+        }
+        com.friendbook.social.d1.documents.Query unread=Fb.db().collection("notifications")
+                .whereEqualTo("toUserId", me).whereEqualTo("isRead", false)
+                .orderBy("createdAt",com.friendbook.social.d1.documents.Query.Direction.DESCENDING);
+        // Keyset continuation avoids repeatedly scanning the already-marked prefix.
+        if(cursor!=null)unread=unread.startAfter(cursor);
+        final android.os.Handler handler=new android.os.Handler(android.os.Looper.getMainLooper());
+        final Runnable deadline=()->{
+            if(generation!=markReadGeneration || !markingAll || markAllWriteInFlight)return;
+            markReadGeneration++;markingAll=false;
+            if(notificationsStarted && isAdded() && !isHidden() && me.equals(Fb.uid()) && getActivity()!=null)
+                Ui.toast(getActivity(),"Mark read is taking too long. Tap to retry.");
+        };
+        handler.postDelayed(deadline,20_000L);
+        unread.limit(MARK_READ_BATCH_SIZE).get(com.friendbook.social.d1.documents.Source.SERVER).addOnSuccessListener(snap -> {
+                    handler.removeCallbacks(deadline);
+                    if (!notificationsStarted || !isAdded() || isHidden() || !me.equals(Fb.uid()) || generation!=markReadGeneration) return;
+                    if (snap == null) { markingAll=false;return; }
+                    if (snap.isEmpty()) { finishMarkAll(me,generation);return; }
                     com.friendbook.social.d1.documents.WriteBatch batch = Fb.db().batch();
                     for (DocumentSnapshot d : snap) batch.update(d.getReference(), "isRead", true);
+                    markAllWriteInFlight=true;
                     batch.commit().addOnSuccessListener(v -> {
-                        if (!me.equals(Fb.uid())) return;
-                        markAllReadOptimisticNow();
-                        MainActivity.clearNotificationsBadgeNow();
-                        if (snap.size() == 450) markAllReadReal();
-                    });
-                });
+                        markAllWriteInFlight=false;
+                        if (!notificationsStarted || !isAdded() || isHidden() || !me.equals(Fb.uid()) || generation!=markReadGeneration) return;
+                        if (snap.size() == MARK_READ_BATCH_SIZE) markUnreadBatch(me,generation,snap.getDocuments().get(snap.size()-1));
+                        else finishMarkAll(me,generation);
+                    }).addOnFailureListener(error -> {markAllWriteInFlight=false;markAllFailed(generation);});
+                }).addOnFailureListener(error -> {handler.removeCallbacks(deadline);markAllFailed(generation);});
+    }
+
+    private void finishMarkAll(String me,int generation) {
+        if (!me.equals(Fb.uid()) || generation!=markReadGeneration) return;
+        markingAll=false;
+        markAllReadOptimisticNow();
+        MainActivity.clearNotificationsBadgeNow();
+        // The unread pager must not keep old unread cursors after a successful bulk action.
+        // Repaint acknowledged rows locally. A refresh here would immediately
+        // re-read the collection that this explicit operation just scanned.
+        if(unreadOnly && pager!=null){pager.close();pager=null;initialLoaded=false;}
+        if(unreadOnly && moreButton!=null){moreButton.setText("All loaded");moreButton.setEnabled(false);}
+    }
+
+    private void markAllFailed(int generation) {
+        if (generation!=markReadGeneration) return;
+        markingAll=false;
+        if (notificationsStarted && isAdded() && !isHidden() && getActivity()!=null)
+            Ui.toast(getActivity(),"Couldn't mark all read. Tap to retry.");
     }
 
     @Override
@@ -162,7 +234,7 @@ public class NotificationsFragment extends Fragment {
 
     @Override
     public void onStart() {
-        super.onStart();
+        super.onStart();notificationsStarted=true;
         if (!isHidden()) {
             MainActivity.clearNotificationsBadgeNow();
         }
@@ -174,29 +246,47 @@ public class NotificationsFragment extends Fragment {
     }
     private void startPages() { startPages(false); }
     private void startPages(boolean full) {
+        String me=Fb.uid();
+        if(me==null || !notificationsStarted || !isAdded() || isHidden() || adapter==null)return;
+        boolean sameActor=java.util.Objects.equals(loadedActor,me);
+        if(sameActor && initialLoaded && pager!=null && (!full || pager.isLoading())){
+            if(swipe!=null && !pager.isLoading())swipe.setRefreshing(false);
+            return;
+        }
+        if(full && !com.friendbook.social.core.InteractionCooldown.acquire(me,"notifications-refresh")){
+            if(swipe!=null)swipe.setRefreshing(false);return;
+        }
         stopPages();
-        String me=Fb.uid();if(me==null)return;
-        if (loadedActor != null && !me.equals(loadedActor)) { data.clear(); adapter.notifyDataSetChanged(); }
+        if(!sameActor){
+            data.clear();failedReadIds.clear();confirmedReadIds.clear();pendingReadIds.clear();adapter.notifyDataSetChanged();
+        }
+        if(full)failedReadIds.clear();
+        final int generation=pageGeneration;
         loadedActor = me;
         initialLoaded = true;
         com.friendbook.social.d1.documents.Query query=Fb.db().collection("notifications").whereEqualTo("toUserId",me);
         if(unreadOnly)query=query.whereEqualTo("isRead",false);
         query = query.orderBy("createdAt", com.friendbook.social.d1.documents.Query.Direction.DESCENDING);
-        pager=new com.friendbook.social.core.CursorPager(query,20,"notifications:"+unreadOnly,(docs,more,loading,error)->{
-            android.app.Activity act=getActivity();if(act==null || adapter==null)return;
+        pager=new com.friendbook.social.core.CursorPager(query,PAGE_SIZE,"notifications:"+unreadOnly,(docs,more,loading,error)->{
+            if(!activeNotifications(me,generation))return;
+            android.app.Activity act=getActivity();if(act==null)return;
             if(loading){moreButton.setText("Loading…");moreButton.setEnabled(false);return;}
             if(swipe!=null)swipe.setRefreshing(false);
             List<Models.Notif> next=new ArrayList<>();
-            for(DocumentSnapshot doc:docs){Models.Notif n=Models.Notif.fromDoc(doc);if(allowedByPrefs(act,n.type))next.add(n);}
+            for(DocumentSnapshot doc:docs){
+                Models.Notif n=Models.Notif.fromDoc(doc);
+                if(confirmedReadIds.contains(n.id))n.isRead=true;
+                if((!unreadOnly || !n.isRead) && allowedByPrefs(act,n.type))next.add(n);
+            }
             next.sort(java.util.Comparator.comparingLong((Models.Notif n)->n.createdAt).reversed().thenComparing(n->n.id,java.util.Comparator.reverseOrder()));
             if (!next.isEmpty() || error.isEmpty()) adapter.replace(next);
             if(!unreadOnly)com.friendbook.social.core.FastCache.saveNotifications(data);
             empty.setText(error.isEmpty() ? "No notifications yet.\nLikes, comments and friend requests appear here." : error);
             empty.setVisibility(data.isEmpty()?View.VISIBLE:View.GONE);
-            moreButton.setText(!error.isEmpty()?"Retry notifications":more?"Load 20 more":"All loaded");
+            moreButton.setText(!error.isEmpty()?"Retry notifications":more?"Load 10 more":"All loaded");
             moreButton.setEnabled(!loading && (more || !error.isEmpty()));
         });
-        if(full)pager.startFullRefresh(); else pager.startDelta();
+        if(full)pager.refreshOnDemand(); else pager.startCachedForForeground(60_000L);
     }
 
     private void setUnreadOnly(boolean on) {
@@ -238,18 +328,47 @@ public class NotificationsFragment extends Fragment {
 
     @Override
     public void onStop() {
+        notificationsStarted=false;
         super.onStop();
         stopPages();
         initialLoaded = false;
     }
 
     private void stopPages() {
+        pageGeneration++;markReadGeneration++;markingAll=false;
         if(pager!=null){pager.close();pager=null;}
     }
 
+    @Override public void onDestroyView(){
+        notificationsStarted=false;stopPages();
+        adapter=null;swipe=null;moreButton=null;empty=null;chipAll=null;chipUnread=null;
+        super.onDestroyView();
+    }
+
     private void open(Models.Notif n) {
-        if (!n.isRead) {
-            Fb.db().collection("notifications").document(n.id).update("isRead", true);
+        final String actor=Fb.uid();final int generation=pageGeneration;
+        if(n==null || n.id==null || !activeNotifications(actor,generation) || !java.util.Objects.equals(loadedActor,actor))return;
+        if(!com.friendbook.social.core.InteractionCooldown.acquire(actor,"notification-open:"+n.id))return;
+        if (!n.isRead && !confirmedReadIds.contains(n.id) && !failedReadIds.contains(n.id) && pendingReadIds.add(n.id)) {
+            Fb.db().collection("notifications").document(n.id).update("isRead", true)
+                    .addOnSuccessListener(ignored -> {
+                        pendingReadIds.remove(n.id);
+                        if (!java.util.Objects.equals(actor,Fb.uid()) || !java.util.Objects.equals(loadedActor,actor)) return;
+                        confirmedReadIds.add(n.id);
+                        n.isRead=true;
+                        for(Models.Notif current:data)if(n.id.equals(current.id))current.isRead=true;
+                        List<Models.Notif> cached=com.friendbook.social.core.FastCache.getNotifications();
+                        for(Models.Notif current:cached)if(n.id.equals(current.id))current.isRead=true;
+                        com.friendbook.social.core.FastCache.saveNotifications(cached);
+                        if(!activeNotifications(actor,generation))return;
+                        if (unreadOnly) { data.removeIf(current->n.id.equals(current.id));if(pager!=null)pager.forget(n.id); }
+                        else com.friendbook.social.core.FastCache.saveNotifications(data);
+                        if(adapter!=null)adapter.notifyDataSetChanged();
+                        if(empty!=null)empty.setVisibility(data.isEmpty()?View.VISIBLE:View.GONE);
+                    }).addOnFailureListener(error -> {
+                        pendingReadIds.remove(n.id);
+                        if(java.util.Objects.equals(actor,Fb.uid()) && java.util.Objects.equals(loadedActor,actor))failedReadIds.add(n.id);
+                    });
         }
         android.app.Activity a = getActivity();
         if (a == null) return;
@@ -403,7 +522,9 @@ public class NotificationsFragment extends Fragment {
             if (isTeam) {
                 com.friendbook.social.core.Icons.setTickBadge(h.tick, "gold", false);
             } else {
-                com.friendbook.social.core.TickCache.attach(h.tick, n.fromUserId);
+                // Cosmetic badges must never launch profile requests from RecyclerView bind.
+                com.friendbook.social.core.Icons.setTickBadge(h.tick,
+                        com.friendbook.social.core.TickCache.peek(n.fromUserId),false);
             }
             String displaySender = isTeam ? "friendbook Team" : n.fromUserName;
             SpannableStringBuilder sb = new SpannableStringBuilder();

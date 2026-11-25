@@ -23,6 +23,8 @@ public final class CursorPager {
     private List<DocumentSnapshot> observedHead=Collections.emptyList();
     private boolean receivedObserved;
     private boolean more=true,loading,closed,serverReceived;
+    private boolean reuseExactPages;
+    private ForegroundReadScope initialForegroundScope;
     private int requestGeneration;
     private final android.os.Handler timeoutHandler=new android.os.Handler(android.os.Looper.getMainLooper());
     private Runnable timeout;
@@ -32,17 +34,44 @@ public final class CursorPager {
     public void start() { start(false); }
     public void startDelta() { startLocal(0,false); }
     public void startFullRefresh() { startLocal(0,true); }
+    /** Cache-first explicit list: no background revalidation; writes invalidate exact query pages. */
+    public void startOnDemand() { reuseExactPages=true; startLocal(Long.MAX_VALUE,true); }
+    public void refreshOnDemand() { reuseExactPages=true; startFullRefresh(); }
     public void startCachedDay() { startLocal(24*60*60*1000L,true); }
+    /** Short exact-query reuse across search terms over the same recent posts. */
+    public void startCachedFor(long maxAgeMs) { startLocal(Math.max(0L,maxAgeMs),true); }
+    /** Screen-owned initial page; scrolling and explicit retries remain user reads. */
+    public void startCachedForForeground(long maxAgeMs) {
+        if(!active() || loading)return;
+        if(initialForegroundScope!=null)initialForegroundScope.close();
+        initialForegroundScope=new ForegroundReadScope();
+        startLocal(QuotaSaver.automaticPageMaxAge(Math.max(0L,maxAgeMs)),true);
+    }
     private void startLocal(long maxAgeMs,boolean full) {
         if(!active() || loading)return;
         loading=true;
         final int request=++requestGeneration;
+        final ForegroundReadScope automaticScope=maxAgeMs>0 ? initialForegroundScope : null;
+        timeout=()->{
+            if(!active() || !loading || request!=requestGeneration)return;
+            if(automaticScope!=null && !com.friendbook.social.App.isForeground()) {
+                // Do not time out a read that is deliberately waiting for resume.
+                automaticScope.whenForeground().addOnSuccessListener(ignored->{
+                    if(active() && loading && request==requestGeneration)timeoutHandler.postDelayed(timeout,20000L);
+                });
+                return;
+            }
+            requestGeneration++;loading=false;
+            if(automaticScope!=null)automaticScope.close();
+            emit("Loading is taking too long. Tap to retry.");
+        };
+        timeoutHandler.postDelayed(timeout,20000L);
         Query head=query.limit(size);
         head.get(Source.CACHE).addOnCompleteListener(cache -> {
             if(!active() || request!=requestGeneration)return;
             QuerySnapshot cached=cache.isSuccessful()?cache.getResult():null;
             if(cached!=null && maxAgeMs>0 && head.hasFreshLocalPage(maxAgeMs)) {
-                loading=false;
+                timeoutHandler.removeCallbacks(timeout);loading=false;
                 for(DocumentSnapshot doc:cached)records.put(doc.getId(),doc);
                 if(!cached.isEmpty())cursor=cached.getDocuments().get(cached.size()-1);
                 more=cached.size()==size;
@@ -55,13 +84,21 @@ public final class CursorPager {
                 more=cached.size()==size;
                 loading=false;emit("");loading=true;
             } else emit("");
-            (full ? head.get(Source.SERVER) : head.refreshCachedHead(cached)).addOnSuccessListener(page -> {
+            // Rendering cached rows may close/replace this pager or change the
+            // account. Do not start a stale network request after that callback.
+            if(!active() || request!=requestGeneration)return;
+            // Initial cache-first loads still require a network response on a
+            // miss, but may share that exact in-flight operation. Only an
+            // explicit refresh (zero max age) forces an independent read.
+            (full ? (automaticScope!=null ? head.getAutomatic(automaticScope)
+                    : head.get(maxAgeMs>0 ? Source.DEFAULT : Source.SERVER))
+                    : head.refreshCachedHead(cached)).addOnSuccessListener(page -> {
                 if(!active() || request!=requestGeneration)return;
-                loading=false;
+                timeoutHandler.removeCallbacks(timeout);loading=false;
                 acceptObservedFirstPage(page);
             }).addOnFailureListener(error -> {
                 if(!active() || request!=requestGeneration)return;
-                loading=false;emit("Couldn't refresh. Pull down to retry.");
+                timeoutHandler.removeCallbacks(timeout);loading=false;emit("Couldn't refresh. Pull down to retry.");
             });
         });
     }
@@ -119,9 +156,10 @@ public final class CursorPager {
         Query page=query;if(cursor!=null)page=page.startAfter(cursor);
         timeout=()->{if(active() && loading && request==requestGeneration){requestGeneration++;loading=false;emit("Loading is taking too long. Tap to retry.");}};
         timeoutHandler.postDelayed(timeout,20000L);
-        page.limit(size).get().addOnSuccessListener(result -> {
+        Query bounded=page.limit(size);
+        (reuseExactPages ? bounded.getCachedOrFetch(false) : bounded.get()).addOnSuccessListener(result -> {
             if(!active() || request!=requestGeneration)return;timeoutHandler.removeCallbacks(timeout);loading=false;
-            boolean offline=result.getMetadata().isFromCache();
+            boolean offline=result.getMetadata().isFromCache() && !reuseExactPages;
             if(!offline)serverReceived=true;
             if(!offline)more=result.size()==size;
             // An offline cache can be incomplete or empty; it cannot prove that
@@ -151,5 +189,7 @@ public final class CursorPager {
     }
     public void forget(String id){records.remove(id);CACHE.remove(key);}
     public boolean hasMore(){return more;}
-    public void close(){closed=true;requestGeneration++;if(timeout!=null)timeoutHandler.removeCallbacks(timeout);}
+    public boolean isLoading(){return loading;}
+    public void close(){closed=true;requestGeneration++;if(timeout!=null)timeoutHandler.removeCallbacks(timeout);
+        if(initialForegroundScope!=null){initialForegroundScope.close();initialForegroundScope=null;}}
 }

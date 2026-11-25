@@ -57,8 +57,11 @@ import java.util.Set;
  */
 public class HomeFragment extends Fragment implements FeedAdapter.Host {
 
-    private static final int PAGE = 20;
-    private static final int FEATURED_REELS_PAGE = 20;
+    private static final int PAGE = 10;
+    private boolean forceSections;
+    private boolean discoveryRefresh;
+    private boolean headerRequested;
+    private String headerRequestedActor;
     private static final long NOTE_TTL_MS = 24L * 3600_000L;
 
     private FeedAdapter adapter;
@@ -66,7 +69,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
     private SwipeRefreshLayout swipe;
     private TextView freshPill;
     private LinearLayout notesRow;
-    private ListenerRegistration storiesReg, friendsReg, livesReg;
+    private ListenerRegistration storiesReg;
     private DocumentSnapshot lastDoc;
     private boolean moreAvailable = true;
     private boolean loadingPosts, loadedPosts;
@@ -77,11 +80,55 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
     private final List<Models.Reel> featuredReels=new ArrayList<>();
     private final Map<String,DocumentSnapshot> loadedStoryDocs=new java.util.LinkedHashMap<>();
     private int feedGeneration;
+    private com.friendbook.social.d1.documents.ForegroundReadScope feedReadScope,homeReadScope,pageReadScope;
     private long lastFeedFetch, lastFeedWriteVersion;
     private final android.os.Handler engagementHandler=new android.os.Handler(android.os.Looper.getMainLooper());
     private static final long HOME_SECONDARY_MAX_WAIT_MS = 3000L;
     private Runnable pendingHomeSecondary;
     private boolean homeStarted;
+    private int homeReadGeneration;
+    private boolean activeHomeRead(String actor,int generation){
+        return generation==homeReadGeneration && homeStarted && !isHidden() && isAdded()
+                && rv!=null && adapter!=null && java.util.Objects.equals(actor,Fb.uid());
+    }
+    private void invalidateHomeReads(){
+        homeReadGeneration++;friendFactsGeneration++;friendFactsPending.clear();friendFactsFailed.clear();
+        cancelFriendFactScopes();
+        cancelHomeSecondary();engagementHandler.removeCallbacksAndMessages(null);
+        feedGeneration++;loadingPosts=false;
+        if(feedReadScope!=null){feedReadScope.close();feedReadScope=null;}
+        closePageReadScope();
+        storyGeneration++;loadingStories=false;
+        if(homeReadScope!=null){homeReadScope.close();homeReadScope=null;}
+        // A canceled first story page must be retryable on the next visible entry.
+        if(storyCursor==null && loadedStoryDocs.isEmpty())storyQuery=null;
+        if(notesInFlight){notesInFlight=false;notesReadAt=-com.friendbook.social.core.OnDemandLoads.PYMK_CACHE_MS;}
+        headerRequested=false;
+    }
+
+    private void prepareFeedAccount(){
+        String actor=Fb.uid();
+        if(feedAccount!=null && !java.util.Objects.equals(feedAccount,actor)){
+            invalidateHomeReads();
+            loadedPosts=false;pageError=false;moreAvailable=true;lastDoc=null;feedQuery=null;
+            lastPostDocs.clear();loadedPostIds.clear();sessionOrderIds.clear();cfPosts.clear();
+            storyQuery=null;storyCursor=null;loadedStoryDocs.clear();storyGroups.clear();storyIds.clear();
+            storiesActor=null;moreStories=true;
+            friendGraphActor=null;friendIds.clear();friendFactsChecked.clear();friendFactsPending.clear();friendFactsFailed.clear();
+            if(actor!=null)friendIds.add(actor);
+            noteUsers.clear();pymkCandidates.clear();notesActor=null;notesLoaded=false;notesInFlight=false;
+            notesReadAt=-com.friendbook.social.core.OnDemandLoads.PYMK_CACHE_MS;
+            featuredReels.clear();featuredReelsActor=null;featuredReelsLoaded=false;featuredReelsLoading=false;
+            headerRequestedActor=null;forceReRank=true;
+            if(adapter!=null){
+                adapter.setPosts(Collections.emptyList());adapter.setStories(Collections.emptyList());
+                adapter.setPymk(Collections.emptyList());adapter.setFeaturedReels(Collections.emptyList());adapter.setLives(Collections.emptyList());
+            }
+            if(notesRow!=null)notesRow.removeAllViews();
+            if(notesScroll!=null)notesScroll.setVisibility(View.GONE);
+        }
+        feedAccount=actor;
+    }
 
     private void cancelHomeSecondary() {
         if (pendingHomeSecondary != null) engagementHandler.removeCallbacks(pendingHomeSecondary);
@@ -98,12 +145,17 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
     private Query feedQuery, storyQuery;
     private DocumentSnapshot storyCursor;
     private boolean loadingStories, moreStories;
-    private long lastStoryFetch;
+    private long lastStoryFetch,storyQueryAnchor;
     private String storiesActor,friendGraphActor;
     private int storyGeneration;
     private final Set<String> storyIds=new HashSet<>();
     private final Set<String> loadedPostIds = new HashSet<>();
     private final Set<String> friendIds = new HashSet<>();
+    private final Map<String,Long> friendFactsChecked=new HashMap<>();
+    private final Set<String> friendFactsPending=new HashSet<>(),friendFactsFailed=new HashSet<>();
+    private final Set<com.friendbook.social.d1.documents.ForegroundReadScope> friendFactScopes=new HashSet<>();
+    private int friendFactsGeneration;
+    private static final long FRIEND_FACT_TTL_MS=300_000L;
     private final Map<String, StoriesAdapter.Group> storyGroups = new HashMap<>();
     private final List<Models.User> noteUsers = new ArrayList<>();
     /** Locks post ordering during active browsing so clicking Like/Comment NEVER jumps posts up or down! */
@@ -120,6 +172,8 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
     @Nullable
     @Override
     public View onCreateView(LayoutInflater inf, ViewGroup container, Bundle b) {
+        cancelHomeSecondary();headerRequested=false;headerRequestedActor=null;
+        prepareFeedAccount();
         android.app.Activity a = getActivity();
         LinearLayout root = Ui.col(a);
         root.setBackgroundColor(Ui.bg(a));
@@ -136,8 +190,8 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         final boolean constrainedFeed = tier == FastCache.NetTier.NET_2G
                 || tier == FastCache.NetTier.NET_3G || Prefs.dataSaver(a) || Prefs.turbo2g(a);
         // Avoid offscreen binds (and their image requests) competing with the first visible cards.
-        lm.setItemPrefetchEnabled(!constrainedFeed);
-        lm.setInitialPrefetchItemCount(constrainedFeed ? 1 : 6);
+        lm.setItemPrefetchEnabled(false);
+        lm.setInitialPrefetchItemCount(0);
         rv.setLayoutManager(lm);
         rv.setItemAnimator(null); // zero jank / zero blink on realtime updates
         rv.setItemViewCacheSize(constrainedFeed ? 8 : 24);
@@ -148,12 +202,15 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         rv.addOnScrollListener(new RecyclerView.OnScrollListener() {
             @Override public void onScrolled(RecyclerView view,int dx,int dy) {
                 adapter.refreshFeedBannerVisibility();
+                if (!headerRequested && homeStarted && !isHidden()
+                        && ((LinearLayoutManager)view.getLayoutManager()).findFirstVisibleItemPosition()==0)
+                    startVisibleHomeContent();
                 LinearLayoutManager manager=(LinearLayoutManager)view.getLayoutManager();
-                // Start one five-post page only after the user scrolls the last
+                // Start one ten-post page only after the user scrolls the last
                 // post into view. The last adapter row is the paging footer.
                 if(dy>0 && isResumed() && !isHidden() && view.getScrollState()!=RecyclerView.SCROLL_STATE_IDLE
                         && !pageError && manager!=null && adapter.getItemCount()>2
-                        && manager.findLastVisibleItemPosition()>=adapter.getItemCount()-2) loadMore();
+                        && manager.findLastVisibleItemPosition()>=adapter.getItemCount()-2) loadMore(true);
             }
         });
         rv.setBackgroundColor(Ui.bg(a));
@@ -161,7 +218,9 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         // ⚡ 0.0ms INSTANT FIRST PAINT FROM RAM / DISK SNAPSHOT (ranked immediately via friendbook FeedAlgorithm!)
         List<Models.Post> cachedFeed = FastCache.getFeed();
         if (!cachedFeed.isEmpty()) {
-            List<Models.Post> initialRanked = rankAccordingToMode(a, cachedFeed.subList(0,Math.min(PAGE,cachedFeed.size())));
+            List<Models.Post> initialVisible=new ArrayList<>();
+            for(Models.Post post:cachedFeed.subList(0,Math.min(PAGE,cachedFeed.size())))if(post!=null && visible(post))initialVisible.add(post);
+            List<Models.Post> initialRanked = rankAccordingToMode(a, initialVisible);
             sessionOrderIds.clear();
             for (Models.Post p : initialRanked) {
                 if (p != null && p.id != null) sessionOrderIds.add(p.id);
@@ -219,15 +278,30 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
     private void refreshWithFriendbookAlgorithm(boolean scrollTop, boolean explicitUserRefresh) {
         android.app.Activity a = getActivity();
         if (a == null) return;
+        if(loadingPosts){updatePagingUi();return;}
+        if(explicitUserRefresh && !com.friendbook.social.core.InteractionCooldown.acquire(Fb.uid(),"feed-refresh"))return;
         if (freshPill != null) freshPill.setVisibility(View.GONE);
         forceReRank = true;
+        if (explicitUserRefresh && adapter!=null) adapter.resetAuthorLookupAttempts();
+        if(explicitUserRefresh){
+            friendFactsGeneration++;friendFactsChecked.clear();friendFactsPending.clear();friendFactsFailed.clear();
+            cancelFriendFactScopes();
+            friendIds.clear();if(Fb.uid()!=null)friendIds.add(Fb.uid());
+        }
         FeedAlgorithm.nextRefreshGeneration(a);
         applyFilterOnCachedFeed();
         if (adapter != null) adapter.refreshSponsoredAds();
-        // An explicit pull/Home refresh supersedes an in-flight older page via feedGeneration.
-        loadingPosts=false;startPostsQuery(true);
+        // Pull/Home joins the current UI load; it must not supersede a pending page.
+        startPostsQuery(explicitUserRefresh);
         // A user-initiated refresh is the only path allowed to re-read suggestions.
-        if (explicitUserRefresh) loadNotesUsers(true);
+        headerRequested=false;
+        forceSections = explicitUserRefresh;
+        discoveryRefresh = explicitUserRefresh;
+        if (explicitUserRefresh) {
+            storiesActor=null;
+            getActivity().getSharedPreferences("fb_prefs", 0).edit()
+                    .remove("storyAnchor:" + Fb.uid()).apply();
+        }
         // Refresh posts without invalidating unrelated sections or their reuse windows.
         if (adapter != null) adapter.advanceFeaturedReelRotation();
         startVisibleHomeContent();
@@ -241,6 +315,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         int firstPos = lm != null ? lm.findFirstVisibleItemPosition() : 0;
         if (firstPos <= 1) {
             if (adapter.getPosts().isEmpty()) applyFilterOnCachedFeed();
+            refreshPostsIfNeeded();
         } else if (freshPill != null) {
             freshPill.setVisibility(View.GONE);
         }
@@ -278,7 +353,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         super.onHiddenChanged(hidden);
         if (adapter != null) adapter.setFeedBannersVisible(homeStarted && !hidden);
         if (hidden) {
-            cancelHomeSecondary();
+            invalidateHomeReads();
             stopHomeWatchers();
         } else if (adapter != null && isResumed()) {
             refreshPostsIfNeeded();
@@ -287,16 +362,24 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
     }
 
     private void refreshPostsIfNeeded() {
-        // A warm tab return must not replace loaded older pages with the first five.
+        // onStart and the Activity's onResume can run before the Application
+        // has marked the process foreground. The posted fragment resume below
+        // will retry once that lifecycle transition is complete.
+        if (!isResumed() || !com.friendbook.social.App.isForeground()) return;
+        // Returning to Home alone is not new data. Keep an already loaded head
+        // until a local/push invalidation or an explicit refresh asks for one.
+        if (loadedPosts && java.util.Objects.equals(feedAccount,Fb.uid())
+                && lastFeedWriteVersion == Fb.db().postWriteVersion()) return;
+        // A warm tab return must not replace loaded older pages with the first ten.
         if (loadedPosts && java.util.Objects.equals(feedAccount,Fb.uid()) && rv!=null
                 && rv.getLayoutManager() instanceof LinearLayoutManager) {
             LinearLayoutManager layout=(LinearLayoutManager)rv.getLayoutManager();
             if (loadedPostIds.size()>PAGE || rv.getScrollState()!=RecyclerView.SCROLL_STATE_IDLE
                     || layout.findFirstVisibleItemPosition()>1) return;
         }
-        if (!isHidden() && (!loadedPosts || lastFeedWriteVersion != Fb.db().postWriteVersion()
-                || !java.util.Objects.equals(feedAccount, Fb.uid())
-                || android.os.SystemClock.elapsedRealtime() - lastFeedFetch >= 120_000L)) restartPostsListener();
+        // Re-enter the shared cache-first path on return. Within two minutes
+        // this performs no HTTP; stale data stays visible while the head refreshes.
+        if (!isHidden()) restartPostsListener();
     }
 
     public void onLiteModeChanged() {
@@ -445,7 +528,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
     }
 
     private String notesActor;
-    private long notesReadAt = -120_000L;
+    private long notesReadAt = -com.friendbook.social.core.OnDemandLoads.PYMK_CACHE_MS;
     private boolean notesLoaded;
     private boolean notesInFlight;
 
@@ -539,11 +622,12 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
     }
 
     private void loadNotesUsers(boolean forced) {
+        final int readGeneration=homeReadGeneration;
         String actor = Fb.uid();
         if (actor == null) return;
         if (!actor.equals(notesActor)) {
             notesActor = actor;
-            notesReadAt = -120_000L;
+            notesReadAt = -com.friendbook.social.core.OnDemandLoads.PYMK_CACHE_MS;
             notesLoaded = false;
             restorePymkFromCache(actor);
         }
@@ -559,10 +643,13 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         if (notesInFlight) return;
         notesInFlight = true;
         notesReadAt = attempt;
-        // Notes need up to 30 users; reuse the first ten for Home suggestions.
-        Fb.db().collection("users").limit(30).get().addOnSuccessListener(snap -> {
+        // Fetch only the visible suggestion-card window, and reuse it for Notes.
+        // A forced user refresh stays explicit; automatic discovery is owned by Home.
+        Query suggestions=Fb.db().collection("users").limit(3);
+        (forced ? suggestions.getCachedOrFetch(true)
+                : suggestions.getCachedOrFetchAutomatic(homeReadScope(),Long.MAX_VALUE)).addOnSuccessListener(snap -> {
+            if (!activeHomeRead(actor,readGeneration) || notesReadAt != attempt) return;
             notesInFlight = false;
-            if (!isAdded() || !actor.equals(Fb.uid()) || notesReadAt != attempt) return;
             if (snap == null || (snap.getMetadata().isFromCache() && snap.isEmpty())) return;
             notesLoaded = true;
             noteUsers.clear();
@@ -582,7 +669,9 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
             persistPymk(actor);
             renderNotesRow();
             renderPymk();
-        }).addOnFailureListener(e -> notesInFlight = false);
+        }).addOnFailureListener(e -> {
+            if(activeHomeRead(actor,readGeneration) && notesReadAt==attempt)notesInFlight=false;
+        });
     }
 
     /** friendbook 525 feed sort & filter strip: Top / Most Recent / Favorites / Photos / Videos / Marketplace / Text. */
@@ -605,9 +694,8 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
                 Prefs.setFeedFilter(a, key);
                 if ("recent".equals(key)) Prefs.setFeedSort(a, "recent");
                 else if ("all".equals(key)) Prefs.setFeedSort(a, "top");
-                // Instant 0ms filter apply over cached feed first, then live sync!
+                // Filters operate on the loaded session; they must not reset its cursor.
                 applyFilterOnCachedFeed();
-                restartPostsListener();
                 View parent = (View) v.getParent().getParent().getParent();
                 if (parent instanceof LinearLayout) {
                     ((LinearLayout) parent).removeViewAt(0);
@@ -646,14 +734,9 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
     @Override
     public void onStart() {
         super.onStart();
-        homeStarted=true;
+        homeStarted=true;prepareFeedAccount();
         if (adapter != null) adapter.setFeedBannersVisible(!isHidden());
         FastCache.addReactionObserver(reactionObserver);
-        refreshPostsIfNeeded();
-        if (!isHidden()) {
-            if (adapter != null) adapter.advanceFeaturedReelRotation();
-            startVisibleHomeContent();
-        }
         com.friendbook.social.core.AdsConfig.setChangeListener((id, en) -> {
             if (adapter != null) adapter.setAdsConfig(id, en);
         });
@@ -662,51 +745,97 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
     }
 
     @Override
+    public void onResume() {
+        super.onResume();
+        // Run after the Activity's resumed callback updates App.isForeground().
+        engagementHandler.post(() -> {
+            if (!homeStarted || !isResumed() || !isAdded() || isHidden()
+                    || !com.friendbook.social.App.isForeground()) return;
+            refreshPostsIfNeeded();
+            if (adapter != null) adapter.advanceFeaturedReelRotation();
+            startVisibleHomeContent();
+        });
+    }
+
+    @Override
     public void onStop() {
         homeStarted=false;
         if (adapter != null) adapter.setFeedBannersVisible(false);
         super.onStop();
-        cancelHomeSecondary();
+        invalidateHomeReads();
         FastCache.removeReactionObserver(reactionObserver);
-        feedGeneration++; loadingPosts=false; storyGeneration++; loadingStories=false;
         if (storiesReg != null) storiesReg.remove();
         stopHomeWatchers();
         com.friendbook.social.core.AdsConfig.setChangeListener(null);
     }
 
+    @Override public void onDestroyView(){
+        invalidateHomeReads();homeStarted=false;
+        if(rv!=null)rv.setAdapter(null);
+        rv=null;adapter=null;swipe=null;notesRow=null;notesScroll=null;freshPill=null;
+        super.onDestroyView();
+    }
+
     private void startVisibleHomeContent() {
+        if (!isResumed() || !com.friendbook.social.App.isForeground()) return;
         cancelHomeSecondary();
         final String actor = Fb.uid();
-        if (actor == null) return;
+        if (!com.friendbook.social.core.HomeSectionReadPolicy.shouldStart(
+                actor,headerRequestedActor,headerRequested,forceSections)) return;
         pendingHomeSecondary = () -> {
             pendingHomeSecondary = null;
-            if (!homeStarted || !isAdded() || isHidden() || !actor.equals(Fb.uid())) return;
+            if (!homeStarted || !isResumed() || !com.friendbook.social.App.isForeground()
+                    || !isAdded() || isHidden() || !actor.equals(Fb.uid())) return;
+            if (!(rv.getLayoutManager() instanceof LinearLayoutManager)
+                    || ((LinearLayoutManager)rv.getLayoutManager()).findFirstVisibleItemPosition()>0) return;
+            headerRequested=true;headerRequestedActor=actor;
             startHomeWatchers();
             startStoriesListener();
-            loadFeaturedReelsForHome();
-            loadNotesUsers();
+            // Reels metadata comes from posts already loaded; no unseen discovery query.
+            featuredReels.clear();
+            for (Models.Post post : adapter.getPosts())
+                if ("video".equals(post.mediaType)) addFeaturedReelCandidate(Models.Reel.fromVideoPost(post));
+            adapter.setFeaturedReels(featuredReels);
+            restorePymkFromCache(actor);
+            renderPymk();
+            forceSections=false;
         };
         // Let the main feed take the first network turn. A one-shot deadline
         // still lets secondary sections load when the feed is slow or offline.
         engagementHandler.postDelayed(pendingHomeSecondary, loadingPosts ? HOME_SECONDARY_MAX_WAIT_MS : 0L);
     }
 
+    @Override public void onDiscoveryVisible() {
+        if (!homeStarted || isHidden() || !isAdded()) return;
+        loadNotesUsers(discoveryRefresh);
+        discoveryRefresh=false;
+    }
+
+    private com.friendbook.social.d1.documents.ForegroundReadScope homeReadScope() {
+        if(homeReadScope==null)homeReadScope=new com.friendbook.social.d1.documents.ForegroundReadScope();
+        return homeReadScope;
+    }
+
     private void startHomeWatchers() {
-        if (friendsReg == null) startFriendsListener();
-        if (livesReg == null) startLivesListener();
+        startFriendsListener();
+        startLivesListener();
     }
 
     private void stopHomeWatchers() {
-        if (friendsReg != null) { friendsReg.remove(); friendsReg = null; }
-        if (livesReg != null) { livesReg.remove(); livesReg = null; }
+
     }
 
     // ---------- 🔴 active lives strip ----------
     private void startLivesListener() {
-        livesReg = Fb.db().collection("lives")
-                .whereEqualTo("status", "live")
-                .limit(25)
-                .addSnapshotListener((snap, err) -> {
+        final String actor=Fb.uid();final int readGeneration=homeReadGeneration;
+        // QUOTA: live rooms refresh on Home open. A listener here re-read all 25 rows on every
+        // host heartbeat while anything was live.
+        Query livesQuery=Fb.db().collection("lives")
+                .whereEqualTo("status", "live").limit(3);
+        (forceSections ? livesQuery.getCachedOrFetch(true)
+                : livesQuery.getCachedOrFetchAutomatic(homeReadScope(),Long.MAX_VALUE))
+                .addOnSuccessListener((snap) -> {
+                    if (!activeHomeRead(actor,readGeneration)) return;
                     List<Map<String, Object>> lives = new ArrayList<>();
                     long now = System.currentTimeMillis();
                     if (snap != null) {
@@ -728,94 +857,129 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
                 });
     }
 
-    // ---------- friends (for privacy filtering) ----------
+    // Resolve only authors/candidates in submitted visible pages; never download a
+    // 500-row friend graph to decide the audience of a ten-post feed.
     private void startFriendsListener() {
-        String me = Fb.uid();
-        if (me == null) return;
-        if(!java.util.Objects.equals(friendGraphActor,me)){friendIds.clear();friendIds.add(me);friendGraphActor=me;}
-        friendsReg = Fb.db().collection("friends").whereArrayContains("participants", me)
-                .limit(com.friendbook.social.core.OnDemandLoads.FRIEND_GRAPH_LIMIT)
-                .addSnapshotListener((snap, err) -> {
-                    if(snap==null || !java.util.Objects.equals(me,Fb.uid()) || !isAdded())return;
-                    friendIds.clear();
-                    friendIds.add(me);
-                    if (snap != null) {
-                        for (DocumentSnapshot d : snap) {
-                            List<String> parts = Models.ChatRoom.fromDoc(d).participants;
-                            for (String p : parts) if (!p.equals(me)) friendIds.add(p);
-                        }
-                    }
-                    renderPymk();renderLoadedStories();
-                    // The first feed page may arrive before the friendship graph.
-                    // Reapply visibility once membership is known instead of hiding
-                    // friends-only posts until a later manual refresh.
-                    if (loadedPosts && loadedPostIds.size()<=PAGE && !lastPostDocs.isEmpty()) {
-                        if (sessionOrderIds.isEmpty()) forceReRank=true;
-                        consumePostsSnapshot(lastPostDocs,false);
-                    }
-                });
+        String me=Fb.uid();if(me==null)return;
+        if(!java.util.Objects.equals(friendGraphActor,me)){
+            friendGraphActor=me;friendIds.clear();friendIds.add(me);
+            friendFactsChecked.clear();friendFactsPending.clear();friendFactsFailed.clear();
+            cancelFriendFactScopes();
+        }
+        List<String> ids=new ArrayList<>();
+        List<Models.Post> cached=FastCache.getFeed();
+        for(Models.Post post:cached.subList(0,Math.min(PAGE,cached.size())))addPostFriendDemand(ids,post);
+        for(DocumentSnapshot doc:lastPostDocs)addPostFriendDemand(ids,doc);
+        for(DocumentSnapshot doc:loadedStoryDocs.values())addStoryFriendDemand(ids,doc);
+        for(Models.User user:pymkCandidates)ids.add(user.uid);
+        resolveVisibleFriends(ids);
     }
+
+    private void addPostFriendDemand(List<String> ids,Models.Post post){
+        if(post!=null && "Friends".equalsIgnoreCase(post.privacy))ids.add(post.authorId);
+    }
+    private void addPostFriendDemand(List<String> ids,DocumentSnapshot doc){
+        if(doc!=null && "Friends".equalsIgnoreCase(com.friendbook.social.core.Format.strOr(doc.getData(),"privacy","Public")))
+            ids.add(com.friendbook.social.core.Format.str(doc.getData(),"authorId"));
+    }
+    private void addStoryFriendDemand(List<String> ids,DocumentSnapshot doc){
+        if(doc==null)return;
+        Models.Story story=Models.Story.fromDoc(doc);
+        if(story.expired())return;
+        String author=story.authorId;
+        boolean following=Fb.me!=null && Fb.me.following.contains(author);
+        boolean blocked=Fb.me!=null && Fb.me.blocked.contains(author);
+        boolean muted=getActivity()!=null && Prefs.isStoryAuthorMuted(getActivity(),author);
+        if(com.friendbook.social.core.StoryAudience.needsFriendship(Fb.uid(),author,story.privacy,following,blocked,muted))ids.add(author);
+    }
+
+    private void cancelFriendFactScopes() {
+        List<com.friendbook.social.d1.documents.ForegroundReadScope> pending=new ArrayList<>(friendFactScopes);
+        friendFactScopes.clear();
+        for(com.friendbook.social.d1.documents.ForegroundReadScope scope:pending)scope.close();
+    }
+
+    private void finishFriendFactScope(com.friendbook.social.d1.documents.ForegroundReadScope scope) {
+        friendFactScopes.remove(scope);scope.close();
+    }
+
+    private void resolveVisibleFriends(java.util.Collection<String> candidates) {
+        if(candidates==null || candidates.isEmpty())return;
+        final String me=Fb.uid();final int homeToken=homeReadGeneration, factsToken=friendFactsGeneration;
+        if(me==null || !activeHomeRead(me,homeToken))return;
+        if(!java.util.Objects.equals(friendGraphActor,me)){
+            friendGraphActor=me;friendIds.clear();friendIds.add(me);
+            friendFactsChecked.clear();friendFactsPending.clear();friendFactsFailed.clear();
+            cancelFriendFactScopes();
+        }
+        long now=android.os.SystemClock.elapsedRealtime();
+        java.util.LinkedHashSet<String> needed=new java.util.LinkedHashSet<>();
+        for(String id:candidates){
+            if(id==null || id.isEmpty() || id.equals(me))continue;
+            if(!com.friendbook.social.core.FriendCandidatePages.validUid(id)){friendFactsFailed.add(id);continue;}
+            Long checked=friendFactsChecked.get(id);
+            if(checked!=null && now>=checked && now-checked<FRIEND_FACT_TTL_MS)continue;
+            if(checked!=null){friendFactsChecked.remove(id);friendIds.remove(id);}
+            if(!friendFactsPending.contains(id) && !friendFactsFailed.contains(id))needed.add(id);
+        }
+        for(List<String> ids:Ui.chunks(new ArrayList<>(needed),10)){
+            friendFactsPending.addAll(ids);
+            com.friendbook.social.d1.documents.ForegroundReadScope scope=new com.friendbook.social.d1.documents.ForegroundReadScope();
+            friendFactScopes.add(scope);
+            Runnable deadline=new Runnable(){ @Override public void run(){
+                if(factsToken!=friendFactsGeneration || !activeHomeRead(me,homeToken) || !friendFactsPending.containsAll(ids))return;
+                if(!com.friendbook.social.App.isForeground()) {
+                    // Waiting for foreground is not an HTTP timeout. Rearm only
+                    // after resume, and cancel with this visible-content demand.
+                    scope.whenForeground().addOnSuccessListener(ignored->{
+                        if(factsToken==friendFactsGeneration && activeHomeRead(me,homeToken) && friendFactsPending.containsAll(ids))
+                            engagementHandler.postDelayed(this,20_000L);
+                    });
+                    return;
+                }
+                friendFactsPending.removeAll(ids);friendFactsFailed.addAll(ids);finishFriendFactScope(scope);
+            }};
+            engagementHandler.postDelayed(deadline,20_000L);
+            Fb.db().friendshipFactsAutomatic(ids,scope).addOnSuccessListener(facts->{
+                engagementHandler.removeCallbacks(deadline);finishFriendFactScope(scope);
+                if(factsToken!=friendFactsGeneration || !activeHomeRead(me,homeToken) || !friendFactsPending.containsAll(ids))return;
+                friendFactsPending.removeAll(ids);
+                if(facts==null || facts.size()!=ids.size() || !facts.keySet().containsAll(ids)){
+                    friendFactsFailed.addAll(ids);return;
+                }
+                long checkedAt=android.os.SystemClock.elapsedRealtime();
+                for(String id:ids){
+                    Boolean isFriend=facts.get(id);
+                    if(isFriend==null){friendFactsFailed.add(id);continue;}
+                    if(isFriend)friendIds.add(id);else friendIds.remove(id);
+                    friendFactsChecked.put(id,checkedAt);
+                }
+                renderPymk();renderLoadedStories();
+                if(!lastPostDocs.isEmpty())consumePostsSnapshot(lastPostDocs,loadedPosts);
+                else if(adapter!=null)applyFilterOnCachedFeed();
+            }).addOnFailureListener(error->{
+                engagementHandler.removeCallbacks(deadline);finishFriendFactScope(scope);
+                if(factsToken!=friendFactsGeneration || !activeHomeRead(me,homeToken) || !friendFactsPending.containsAll(ids))return;
+                friendFactsPending.removeAll(ids);friendFactsFailed.addAll(ids);
+            });
+        }
+    }
+
+    private boolean hasFreshFriendFact(String id){
+        if(id==null || !java.util.Objects.equals(friendGraphActor,Fb.uid()))return false;
+        Long checked=friendFactsChecked.get(id);long now=android.os.SystemClock.elapsedRealtime();
+        return checked!=null && now>=checked && now-checked<FRIEND_FACT_TTL_MS;
+    }
+    private boolean isConfirmedFriend(String id){return hasFreshFriendFact(id) && friendIds.contains(id);}
 
     private void renderPymk(){
         List<Models.User> rows=new ArrayList<>();
+        List<String> candidateIds=new ArrayList<>();for(Models.User user:pymkCandidates)candidateIds.add(user.uid);
+        resolveVisibleFriends(candidateIds);
         if(java.util.Objects.equals(notesActor,Fb.uid())) for(Models.User u:pymkCandidates)
-            if(u.uid!=null && !u.uid.equals(Fb.uid()) && !u.deactivated && !friendIds.contains(u.uid)
+            if(u.uid!=null && hasFreshFriendFact(u.uid) && !u.uid.equals(Fb.uid()) && !u.deactivated && !friendIds.contains(u.uid)
                     && (Fb.me==null || !Fb.me.blocked.contains(u.uid)))rows.add(u);
         if(adapter!=null && getActivity()!=null)adapter.setPymk(FeedAlgorithm.rankPymk(getActivity(),rows,10));
-    }
-
-    /** Loads featured Reels once on Home open so the one-time Reels Showcase Card after Post #1 shows a real Reel preview. */
-    private void loadFeaturedReelsForHome() {
-        if (adapter == null) return;
-        final String actor=Fb.uid();
-        if(actor==null)return;
-        if(!actor.equals(featuredReelsActor)){
-            featuredReelsActor=actor;
-            featuredReels.clear();featuredReelsLoading=false;featuredReelsLoaded=false;
-            adapter.setFeaturedReels(featuredReels);
-        }
-        if (featuredReelsLoaded) {
-            adapter.setFeaturedReels(featuredReels);
-            return;
-        }
-        if (featuredReelsLoading) return;
-        featuredReelsLoading = true;
-        // 1. Seed immediately from any cached video posts in FastCache so Frame #1 has a Reel ready
-        for (Models.Post p : FastCache.getFeed()) {
-            if (p != null && "video".equals(p.mediaType) && p.mediaUrl != null && !p.mediaUrl.isEmpty()) {
-                addFeaturedReelCandidate(Models.Reel.fromVideoPost(p));
-            }
-        }
-        if (!featuredReels.isEmpty()) {
-            adapter.setFeaturedReels(featuredReels);
-        }
-        // The canonical D1 query merges old rows; an independent mirror read is redundant.
-        Fb.db().collection("reels").orderBy("createdAt", Query.Direction.DESCENDING).limit(FEATURED_REELS_PAGE)
-                .get(Source.CACHE)
-                .addOnSuccessListener(cacheSnap -> {
-                    if (!isAdded() || !actor.equals(Fb.uid()) || cacheSnap == null) return;
-                    boolean changed = false;
-                    for (DocumentSnapshot d : cacheSnap.getDocuments()) {
-                        if (Boolean.TRUE.equals(d.getBoolean("safetyFlagged"))) continue;
-                        if (addFeaturedReelCandidate(Models.Reel.fromDoc(d))) changed = true;
-                    }
-                    if (changed && adapter != null) adapter.setFeaturedReels(featuredReels);
-                });
-        Fb.db().collection("reels").orderBy("createdAt", Query.Direction.DESCENDING).limit(FEATURED_REELS_PAGE)
-                .get()
-                .addOnSuccessListener(snap -> {
-                    if(!actor.equals(Fb.uid()) || !actor.equals(featuredReelsActor))return;
-                    featuredReelsLoading = false;
-                    featuredReelsLoaded = true;
-                    if (!isAdded() || snap == null) return;
-                    boolean changed = false;
-                    for (DocumentSnapshot d : snap.getDocuments()) {
-                        if (Boolean.TRUE.equals(d.getBoolean("safetyFlagged"))) continue;
-                        if (addFeaturedReelCandidate(Models.Reel.fromDoc(d))) changed = true;
-                    }
-                    if (changed && adapter != null) adapter.setFeaturedReels(featuredReels);
-                })
-                .addOnFailureListener(err -> {if(actor.equals(featuredReelsActor))featuredReelsLoading=false;});
     }
 
     private boolean addFeaturedReelCandidate(Models.Reel r) {
@@ -843,7 +1007,12 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
     }
 
     private void startPostsQuery(boolean forceReload) {
+        if(!homeStarted || isHidden() || adapter==null)return;
         final int generation=++feedGeneration;
+        closePageReadScope();
+        if(feedReadScope!=null)feedReadScope.close();
+        feedReadScope=forceReload ? null : new com.friendbook.social.d1.documents.ForegroundReadScope();
+        final com.friendbook.social.d1.documents.ForegroundReadScope automaticScope=feedReadScope;
         final DocumentSnapshot previousCursor=lastDoc;
         final boolean previousMore=moreAvailable;
         final boolean sameAccount=java.util.Objects.equals(feedAccount,Fb.uid());
@@ -858,14 +1027,22 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         final long writeVersion=Fb.db().postWriteVersion();
         final long requestedAt=android.os.SystemClock.elapsedRealtime();
         // A queued or stalled request must not leave pull-to-refresh spinning forever.
-        engagementHandler.postDelayed(()->{
-            if(generation!=feedGeneration || !java.util.Objects.equals(actor,Fb.uid()) || !isAdded() || !loadingPosts)return;
+        Runnable deadline=new Runnable(){ @Override public void run(){
+            if(generation!=feedGeneration || !java.util.Objects.equals(actor,Fb.uid()) || !isAdded() || !homeStarted || isHidden() || !loadingPosts)return;
+            if(automaticScope!=null && !com.friendbook.social.App.isForeground()) {
+                // Foreground-deferred work has not necessarily reached the network yet.
+                automaticScope.whenForeground().addOnSuccessListener(ignored->{
+                    if(generation==feedGeneration && java.util.Objects.equals(actor,Fb.uid()) && isAdded() && homeStarted && !isHidden() && loadingPosts)
+                        engagementHandler.postDelayed(this,20000L);
+                });
+                return;
+            }
             // Unlock Retry while allowing a late result until a newer request starts.
             loadingPosts=false;pageError=true;updatePagingUi();releaseHomeSecondary();
-        },20000L);
-        final boolean[] usedDelta={false};
+        }};
+        engagementHandler.postDelayed(deadline,20000L);
         java.util.function.Consumer<com.friendbook.social.d1.documents.QuerySnapshot> apply = snapshot -> {
-            if(generation!=feedGeneration || !java.util.Objects.equals(actor,Fb.uid()) || !isAdded()) return;
+            if(generation!=feedGeneration || !java.util.Objects.equals(actor,Fb.uid()) || !isAdded() || !homeStarted || isHidden()) return;
             if(snapshot.getMetadata().isFromCache() && sameAccount && (!loadedPostIds.isEmpty() || snapshot.isEmpty())) {
                 lastDoc=previousCursor;moreAvailable=previousMore;
                 loadingPosts=false;loadedPosts=true;pageError=true;updatePagingUi();releaseHomeSecondary();return;
@@ -876,28 +1053,14 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
                 lastFeedFetch=android.os.SystemClock.elapsedRealtime();
                 lastFeedWriteVersion=writeVersion;
             }
-            final boolean delta=usedDelta[0];
-            final boolean preserveTail=delta && sameAccount && previousCursor!=null;
             List<DocumentSnapshot> results=new ArrayList<>(snapshot.getDocuments());
-            if(delta){
-                java.util.LinkedHashMap<String,DocumentSnapshot> merged=new java.util.LinkedHashMap<>();
-                for(DocumentSnapshot doc:results)merged.put(doc.getId(),doc);
-                if(preserveTail)for(DocumentSnapshot doc:lastPostDocs)merged.putIfAbsent(doc.getId(),doc);
-                results=new ArrayList<>(merged.values());
-                // New IDs are prepended without re-ranking the visible older pages.
-                List<String> order=new ArrayList<>();
-                for(DocumentSnapshot doc:results)if(!loadedPostIds.contains(doc.getId()) && !sessionOrderIds.contains(doc.getId()))order.add(doc.getId());
-                order.addAll(sessionOrderIds);
-                sessionOrderIds.clear();sessionOrderIds.addAll(order);
-            }
             loadedPostIds.clear();
             for(DocumentSnapshot doc:results) {
                 loadedPostIds.add(doc.getId());
                 com.friendbook.social.post.D1Reactions.seedFeed(getActivity(),doc,requestedAt);
             }
-            moreAvailable=preserveTail ? previousMore : offline || snapshot.size()==PAGE;
-            if(preserveTail)lastDoc=previousCursor;
-            else if(!offline && !snapshot.isEmpty()) lastDoc=snapshot.getDocuments().get(snapshot.size()-1);
+            moreAvailable=offline || snapshot.size()==PAGE;
+            if(!offline && !snapshot.isEmpty()) lastDoc=snapshot.getDocuments().get(snapshot.size()-1);
             // The cached first paint should not lock the first authoritative D1 page
             // into chronological order. Keep the session lock for live refreshes mid-scroll.
             if (sessionOrderIds.isEmpty()) forceReRank=true;
@@ -911,17 +1074,37 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
             releaseHomeSecondary();
             // Keep cached posts and the inline retry; do not issue a second query on network failure.
         };
-        if(forceReload)first.get(Source.SERVER).addOnSuccessListener(apply::accept).addOnFailureListener(failed::accept);
-        else first.get(Source.CACHE).addOnCompleteListener(cache -> {
-            if(generation!=feedGeneration || !java.util.Objects.equals(actor,Fb.uid()) || !isAdded())return;
-            com.friendbook.social.d1.documents.QuerySnapshot saved=cache.isSuccessful()?cache.getResult():null;
-            usedDelta[0]=saved!=null && !saved.isEmpty();
-            if(usedDelta[0] && adapter!=null && adapter.getPosts().isEmpty()) {
+        com.friendbook.social.core.FeedHeadReads.load(first,forceReload,automaticScope,
+                ()->generation==feedGeneration && java.util.Objects.equals(actor,Fb.uid()) && isAdded() && homeStarted && !isHidden(),
+                (saved,reusable)->{
+            if(reusable){
+                applyReusableFeedHead(saved,previousCursor,previousMore,writeVersion,requestedAt);
+                return;
+            }
+            if(adapter!=null && adapter.getPosts().isEmpty()){
                 for(DocumentSnapshot doc:saved.getDocuments())com.friendbook.social.post.D1Reactions.seedFeed(getActivity(),doc,requestedAt);
                 consumePostsSnapshot(saved.getDocuments(),false);
             }
-            first.refreshCachedHead(saved).addOnSuccessListener(apply::accept).addOnFailureListener(failed::accept);
-        });
+        },apply,failed);
+    }
+
+    private void applyReusableFeedHead(com.friendbook.social.d1.documents.QuerySnapshot saved,
+            DocumentSnapshot previousCursor,boolean previousMore,long writeVersion,long requestedAt){
+        // Cache head reuse must not discard pages fetched before a stopped/interrupted request.
+        boolean keepTail=previousCursor!=null && lastPostDocs.size()>PAGE;
+        if(keepTail){lastDoc=previousCursor;moreAvailable=previousMore;}
+        else {
+            loadedPostIds.clear();
+            for(DocumentSnapshot doc:saved){
+                loadedPostIds.add(doc.getId());
+                com.friendbook.social.post.D1Reactions.seedFeed(getActivity(),doc,requestedAt);
+            }
+            lastDoc=saved.isEmpty()?null:saved.getDocuments().get(saved.size()-1);
+            moreAvailable=saved.size()==PAGE;
+            consumePostsSnapshot(saved.getDocuments(),false);
+        }
+        loadingPosts=false;loadedPosts=true;pageError=false;lastFeedWriteVersion=writeVersion;
+        updatePagingUi();releaseHomeSecondary();
     }
 
     private void setPostsKeepingScroll(List<Models.Post> posts) {
@@ -945,6 +1128,10 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         android.app.Activity a2 = getActivity();
         String filter = a2 == null ? "all" : Prefs.feedFilter(a2);
         if (docs != null) lastPostDocs = new ArrayList<>(docs);
+        List<String> visibleAuthors=new ArrayList<>();
+        if(docs!=null)for(DocumentSnapshot doc:docs)addPostFriendDemand(visibleAuthors,doc);
+        for(Models.Post post:cfPosts)addPostFriendDemand(visibleAuthors,post);
+        resolveVisibleFriends(visibleAuthors);
         List<Models.Post> allVisible = new ArrayList<>();
         List<Models.Post> filtered = new ArrayList<>();
         java.util.Set<String> seenIds = new java.util.HashSet<>();
@@ -974,7 +1161,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
             allVisible.add(p);
             if (matchesFilter(p, filter)) filtered.add(p);
         }
-        if (persistCache && !allVisible.isEmpty()) {
+        if (persistCache) {
             FastCache.saveFeed(a2, allVisible);
         }
 
@@ -1067,35 +1254,52 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         }
         if (p.authorId.equals(me)) return true;
         if ("Only me".equalsIgnoreCase(p.privacy)) return false;
-        if ("Friends".equalsIgnoreCase(p.privacy)) return friendIds.contains(p.authorId);
+        if ("Friends".equalsIgnoreCase(p.privacy)) return isConfirmedFriend(p.authorId);
         return true;
     }
 
     // ---------- stories ----------
-    private void startStoriesListener() {
+    private void startStoriesListener() { startStoriesListener(true); }
+
+    private void startStoriesListener(boolean automatic) {
         String actor=Fb.uid();
         if(actor==null)return;
+        long now=System.currentTimeMillis();
         if(actor.equals(storiesActor) && storyQuery!=null){
             if(loadingStories)return;
-            if(android.os.SystemClock.elapsedRealtime()-lastStoryFetch<120_000L){renderLoadedStories();return;}
+            if(!forceSections && com.friendbook.social.core.StoryWindowPolicy.fresh(storyQueryAnchor,now)){
+                renderLoadedStories();return;
+            }
         }
         storiesActor=actor;
         if(storiesReg!=null) { storiesReg.remove(); storiesReg=null; }
         storyGeneration++; loadingStories=false; moreStories=true; storyCursor=null;
-        storyQuery=Fb.db().collection("stories").whereGreaterThan("expiresAt",Timestamp.now())
+        android.content.SharedPreferences prefs=getActivity().getSharedPreferences("fb_prefs",0);
+        long previous=prefs.getLong("storyAnchor:"+actor,0L);
+        long anchor=com.friendbook.social.core.StoryWindowPolicy.anchor(previous,now);
+        if(anchor!=previous)prefs.edit().putLong("storyAnchor:"+actor,anchor).apply();
+        storyQueryAnchor=anchor;
+        storyQuery=Fb.db().collection("stories").whereGreaterThan("expiresAt",new Timestamp(new java.util.Date(anchor)))
                 .orderBy("expiresAt",Query.Direction.ASCENDING);
-        loadMoreStories();
+        loadMoreStories(automatic);
     }
 
     @Override public boolean hasMoreStories() { return moreStories; }
-    @Override public void loadMoreStories() {
+    @Override public void loadMoreStories() { loadMoreStories(false); }
+    private void loadMoreStories(boolean automatic) {
+        if(!homeStarted || isHidden())return;
         if(loadingStories || !moreStories || storyQuery==null) return;
+        if(!com.friendbook.social.core.StoryWindowPolicy.fresh(storyQueryAnchor,System.currentTimeMillis())){
+            startStoriesListener(automatic);return;
+        }
         loadingStories=true; final int generation=storyGeneration; final String actor=Fb.uid();
         final boolean first=storyCursor==null;
-        Query page=first?storyQuery:storyQuery.startAfter(storyCursor);
-        page.limit(10).get().addOnSuccessListener(snapshot -> {
-            if(generation!=storyGeneration || !java.util.Objects.equals(actor,Fb.uid()) || !isAdded()) return;
-            loadingStories=false;lastStoryFetch=android.os.SystemClock.elapsedRealtime(); moreStories=snapshot.size()==10;
+        Query page=(first?storyQuery:storyQuery.startAfter(storyCursor)).limit(3);
+        long maxAge=com.friendbook.social.core.StoryWindowPolicy.REUSE_MS;
+        (automatic && !forceSections ? page.getCachedOrFetchAutomatic(homeReadScope(),maxAge)
+                : page.getCachedOrFetch(forceSections,maxAge)).addOnSuccessListener(snapshot -> {
+            if(generation!=storyGeneration || !java.util.Objects.equals(actor,Fb.uid()) || !isAdded() || !homeStarted || isHidden()) return;
+            loadingStories=false;lastStoryFetch=android.os.SystemClock.elapsedRealtime(); moreStories=snapshot.size()==3;
             if(first)loadedStoryDocs.clear();
             if(!snapshot.isEmpty())storyCursor=snapshot.getDocuments().get(snapshot.size()-1);
             for(DocumentSnapshot doc:snapshot)loadedStoryDocs.put(doc.getId(),doc);
@@ -1109,11 +1313,14 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
 
     private boolean storyAllowed(Models.Story story){
         return !story.expired() && com.friendbook.social.core.StoryAudience.visible(Fb.uid(),story.authorId,story.privacy,
-                java.util.Objects.equals(friendGraphActor,Fb.uid()) && friendIds.contains(story.authorId),Fb.me!=null && Fb.me.following.contains(story.authorId),
+                isConfirmedFriend(story.authorId),Fb.me!=null && Fb.me.following.contains(story.authorId),
                 Fb.me!=null && Fb.me.blocked.contains(story.authorId),getActivity()!=null && Prefs.isStoryAuthorMuted(getActivity(),story.authorId));
     }
     private void renderLoadedStories(){
-        if(getActivity()==null || adapter==null || (loadingStories && loadedStoryDocs.isEmpty()))return;storyGroups.clear();storyIds.clear();
+        if(getActivity()==null || adapter==null || (loadingStories && loadedStoryDocs.isEmpty()))return;
+        List<String> authors=new ArrayList<>();for(DocumentSnapshot doc:loadedStoryDocs.values())addStoryFriendDemand(authors,doc);
+        resolveVisibleFriends(authors);
+        storyGroups.clear();storyIds.clear();
         for(DocumentSnapshot doc:loadedStoryDocs.values()){
             Models.Story story=Models.Story.fromDoc(doc);if(!storyAllowed(story))continue;storyIds.add(story.id);
             StoriesAdapter.Group group=storyGroups.get(story.authorId);
@@ -1164,27 +1371,48 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         startActivity(i);
     }
 
-    @Override
-    public void loadMore() {
-        if(loadingPosts)return;
+    private void closePageReadScope() {
+        if(pageReadScope!=null){pageReadScope.close();pageReadScope=null;}
+    }
+
+    @Override public void loadMore() { loadMore(false); }
+
+    private void loadMore(boolean automatic) {
+        if(!homeStarted || isHidden() || loadingPosts)return;
         if(lastDoc==null){if(pageError)restartPostsListener();return;}
         if(!moreAvailable || feedQuery==null){
             return;
         }
+        final boolean explicitRetry=!automatic && pageError;
         pageError=false;loadingPosts=true;updatePagingUi();
         final int generation=++feedGeneration; final String actor=feedAccount;
-        engagementHandler.postDelayed(()->{
-            if(generation!=feedGeneration || !java.util.Objects.equals(actor,Fb.uid()) || !isAdded() || !loadingPosts)return;
-            feedGeneration++;loadingPosts=false;pageError=true;updatePagingUi();
-        },20000L);
-        final long requestedAt=android.os.SystemClock.elapsedRealtime();
-        feedQuery.startAfter(lastDoc).limit(PAGE).get().addOnSuccessListener(snapshot -> {
-            if(generation!=feedGeneration || !java.util.Objects.equals(actor,Fb.uid()) || !isAdded()) return;
-            loadingPosts=false;
-            // Partial cache results cannot prove we reached the end or move the server cursor.
-            if(snapshot.getMetadata().isFromCache()){
-                pageError=true;updatePagingUi();return;
+        closePageReadScope();
+        pageReadScope=automatic ? new com.friendbook.social.d1.documents.ForegroundReadScope() : null;
+        final com.friendbook.social.d1.documents.ForegroundReadScope scope=pageReadScope;
+        Runnable deadline=new Runnable(){ @Override public void run(){
+            if(generation!=feedGeneration || !java.util.Objects.equals(actor,Fb.uid()) || !isAdded() || !homeStarted || isHidden() || !loadingPosts)return;
+            if(scope!=null && !com.friendbook.social.App.isForeground()){
+                scope.whenForeground().addOnSuccessListener(ignored->{
+                    if(generation==feedGeneration && java.util.Objects.equals(actor,Fb.uid()) && isAdded() && homeStarted && !isHidden() && loadingPosts)
+                        engagementHandler.postDelayed(this,20000L);
+                });
+                return;
             }
+            feedGeneration++;loadingPosts=false;pageError=true;closePageReadScope();updatePagingUi();
+        }};
+        engagementHandler.postDelayed(deadline,20000L);
+        final long requestedAt=android.os.SystemClock.elapsedRealtime();
+        Query pageQuery=feedQuery.startAfter(lastDoc).limit(PAGE);
+        // A cached/offline page cannot advance the authoritative cursor. A
+        // retry must bypass that same cached page or it would fail forever.
+        (automatic ? pageQuery.getCachedOrFetchAutomatic(scope,Long.MAX_VALUE)
+                : explicitRetry ? pageQuery.get(Source.SERVER) : pageQuery.getCachedOrFetch(false)).addOnSuccessListener(snapshot -> {
+            if(generation!=feedGeneration || !java.util.Objects.equals(actor,Fb.uid()) || !isAdded() || !homeStarted || isHidden()) return;
+            engagementHandler.removeCallbacks(deadline);closePageReadScope();loadingPosts=false;
+            if(snapshot.getMetadata().isFromCache()){
+                pageError=true;updatePagingUi();return; // Keep authoritative cursor for explicit retry.
+            }
+            // getCachedOrFetch returns a complete exact-query page, not a partial document cache.
             moreAvailable=snapshot.size()==PAGE;
             if(!snapshot.isEmpty()) lastDoc=snapshot.getDocuments().get(snapshot.size()-1);
             List<Models.Post> page=new ArrayList<>();
@@ -1195,7 +1423,14 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
                 com.friendbook.social.post.D1Reactions.seedFeed(getActivity(),doc,requestedAt);
                 Models.Post post=Models.Post.fromDoc(doc);
                 com.friendbook.social.post.D1Reactions.hydrate(post);
-                if(Boolean.TRUE.equals(doc.getBoolean("safetyFlagged"))) continue;
+                if(Boolean.TRUE.equals(doc.getBoolean("safetyFlagged"))){
+                    com.friendbook.social.core.ContentSafetyEngine.autoDeleteContent(getActivity(),"posts",post.id,post.authorId,
+                            "policy_violation","Safety flagged post",null);
+                    continue;
+                }
+                String mediaCheck=(post.mediaUrls!=null && !post.mediaUrls.isEmpty())?post.mediaUrls.get(0):post.mediaUrl;
+                if(com.friendbook.social.core.ContentSafetyEngine.checkAndAutoDeleteIfTextUnsafe(
+                        getActivity(),"posts",post.id,post.authorId,post.content,mediaCheck,null))continue;
                 if(visible(post) && matchesFilter(post,filter)) page.add(post);
             }
             page = rankAccordingToMode(getActivity(), page);
@@ -1206,8 +1441,9 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
             // Also refresh footer on empty/filtered final pages. No automatic drain loop.
             if (page.isEmpty()) adapter.notifyDataSetChanged();
         }).addOnFailureListener(error -> {
-            if(generation!=feedGeneration) return;
-            loadingPosts=false;pageError=true;updatePagingUi();
+            if(generation!=feedGeneration || !java.util.Objects.equals(actor,Fb.uid())
+                    || !homeStarted || isHidden() || !isAdded())return;
+            engagementHandler.removeCallbacks(deadline);closePageReadScope();loadingPosts=false;pageError=true;updatePagingUi();
         });
     }
 
@@ -1269,7 +1505,6 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
             if ("recent".equals(key)) Prefs.setFeedSort(a, "recent");
             else if ("all".equals(key)) Prefs.setFeedSort(a, "top");
             applyFilterOnCachedFeed();
-            restartPostsListener();
             Ui.toast(a, "Showing: " + labels[idx]);
         });
     }

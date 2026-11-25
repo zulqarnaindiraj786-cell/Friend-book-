@@ -18,6 +18,18 @@ public final class FCMPush {
         // Title/body are previews only: the gateway verifies and derives the final payload from Firestore.
         invoke(target.toString(), title, text, data);
     }
+    /** Queue a persisted inbox event and expose WorkManager's durable-enqueue acknowledgement. */
+    static androidx.work.Operation enqueueNotificationDurable(String actor,String id,Map<String,Object> n) throws Exception {
+        Object target=n.get("toUserId");if(target==null)throw new IllegalArgumentException("Missing notification recipient");
+        String name=String.valueOf(n.get("fromUserName")),text=String.valueOf(n.get("text"));
+        String title=text.startsWith(name+" ")?text:name+" "+text;
+        JSONObject data=new JSONObject().put("notificationId",id).put("type",n.get("type"));
+        JSONObject body=new JSONObject().put("action","send").put("target_user_id",target.toString())
+                .put("receiverId",target.toString()).put("title",title).put("body",text).put("data",data);
+        androidx.work.Operation operation=PushDeliveryWorker.enqueueAcknowledged(body,false,actor);
+        if(operation==null)throw new IllegalStateException("Account changed before enqueue");
+        return operation;
+    }
     public static void bulkMention(String postId,String commentId) {
         try { PushDeliveryWorker.enqueue(new JSONObject().put("action","bulk_mention")
                 .put("post_id",postId).put("comment_id",commentId==null?"":commentId)

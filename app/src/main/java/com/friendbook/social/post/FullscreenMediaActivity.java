@@ -98,7 +98,7 @@ public class FullscreenMediaActivity extends Activity {
                 vv.start();
                 return true;
             });
-            vv.setVideoURI(Uri.parse(stream));
+            vv.setVideoURI(com.friendbook.social.core.MediaDiskCache.uriForPlayback(this, stream)); // STEP 6: play from disk cache
             vv.setOnPreparedListener(mp -> { mp.setLooping(true); vv.start(); });
         } else {
             final ImageView iv = new ImageView(this);

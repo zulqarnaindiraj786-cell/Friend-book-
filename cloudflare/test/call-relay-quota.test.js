@@ -1,3 +1,4 @@
+import {callAccountsAllowed,readCallProfile} from '../call-access.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {DatabaseSync} from 'node:sqlite';
@@ -14,7 +15,7 @@ function fixture(){
  sql.prepare('INSERT INTO friendbook_cf_chat_calls(chat_id,call_id,status,expires_at) VALUES (?,?,?,?)').run('room','call','connected',Date.now()+60_000);
  const reads=[];
  const db={prepare(q){const s=sql.prepare(q);return {bind(...a){return {first:async()=>{reads.push(a[0]);return s.get(...a)||null;}};}};}};
- return {sql,reads,relay:new CallRelay({}, {DB:db})};
+ return {sql,reads,db,relay:new CallRelay({}, {DB:db})};
 }
 
 test('call rechecks each account once per renewal, without weakening revocation',async t=>{
@@ -44,4 +45,17 @@ test('call rechecks each account once per renewal, without weakening revocation'
  assert.equal(await allow('alice'),'video','canonical peer keeps working');
  f.sql.prepare("UPDATE friendbook_cf_chat_calls SET status='ended' WHERE call_id='call'").run();
  assert.equal(await allow('alice'),null,'ended call rejected immediately on recheck');
+});
+
+
+test('signaling profile promises coalesce only in the supplied request map',async t=>{
+ const f=fixture();t.after(()=>f.sql.close());
+ const reads=new Map();
+ assert.deepEqual(await Promise.all([callAccountsAllowed(f.db,'alice','bob',reads),callAccountsAllowed(f.db,'bob','alice',reads)]),[true,true]);
+ assert.equal(f.reads.length,2,'both current profiles read once, even with parallel checks');
+ assert.equal((await readCallProfile(f.db,'alice',reads)).displayName.stringValue,'Alice');
+ assert.equal(f.reads.length,2,'caller label reuses the same checked profile');
+ f.sql.prepare('UPDATE friendbook_cf_firestore_documents SET document_json=? WHERE path=?').run(JSON.stringify({blocked:['bob']}),'users/alice');
+ assert.equal(await callAccountsAllowed(f.db,'alice','bob',new Map()),false,'new request observes block');
+ assert.equal(await callAccountsAllowed(f.db,'alice','bob'),false,'default path remains uncached for media checks');
 });

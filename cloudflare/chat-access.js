@@ -9,9 +9,16 @@ function unpack(raw) {
   }
   return out;
 }
-export async function loadChat(db, chatId) {
-  let row = await db.prepare('SELECT document_json FROM friendbook_cf_firestore_documents WHERE path = ?').bind(`chats/${chatId}`).first();
-  if (!row) row = await db.prepare('SELECT document_json FROM friendbook_cf_documents WHERE path = ?').bind(`chats/${chatId}`).first();
+export async function loadChat(db, chatId, requestRoomReads) {
+  // Caller-owned request-local map only. Cache the pending promise as well so
+  // parallel message ACL checks do not each issue the same room lookup.
+  if (requestRoomReads) {
+    if (!requestRoomReads.has(chatId)) requestRoomReads.set(chatId, loadChat(db, chatId));
+    return requestRoomReads.get(chatId);
+  }
+  // Mirrors may be stale or mirror-only. They must never authorize a room,
+  // and a missing canonical room must not incur a second lookup.
+  const row = await db.prepare('SELECT document_json FROM friendbook_cf_firestore_documents WHERE path = ?').bind(`chats/${chatId}`).first();
   if (!row) return null;
   return unpack(JSON.parse(row.document_json));
 }
@@ -25,13 +32,13 @@ function chatIdFor(path, data) {
   if (parts[0] === 'messages' && parts.length === 2) return typeof data?.chatId === 'string' ? data.chatId : '';
   return null;
 }
-export async function chatReadAllowed(db,path,uid,data) {
+export async function chatReadAllowed(db,path,uid,data,requestRoomReads) {
   const id=chatIdFor(path,data);
   if (id === null) return true;
   if (!id) return false;
   // A legacy app-table mirror can be stale. Always consult the canonical room before
   // authorizing its root document as well as nested messages.
-  return member(await loadChat(db,id),uid);
+  return member(await loadChat(db,id,requestRoomReads),uid);
 }
 const equal=(a,b)=>JSON.stringify(a)===JSON.stringify(b);
 const validId=x=>typeof x==='string' && x.length>0 && x.length<=128 && !/[\/\x00-\x1f]/.test(x);

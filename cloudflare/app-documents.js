@@ -1,3 +1,4 @@
+import { writeAttribution } from './write-attribution.js';
 import { canReadPayment, isPaymentAdmin } from './payment-access.js';
 import { canReadFriendRequest, friendshipReadView, groupReadView, trustedGroupOwner } from './social-access.js';
 import { supportedDocumentPath, supportedCollectionPath, contentReadAllowed, contentWriteAllowed } from './document-policy.js';
@@ -167,22 +168,29 @@ export async function appDocuments(request, env, identity) {
         SELECT path,doc_id,document_json,update_time AS updated_at,1 AS canonical FROM friendbook_cf_firestore_documents
           WHERE collection_id='chats' AND parent_path='chats'
         ORDER BY updated_at DESC LIMIT ?`).bind(limit).all() : await env.DB.prepare(`
-        SELECT doc_id,document_json,update_time AS updated_at FROM friendbook_cf_firestore_documents
+        SELECT path,doc_id,document_json,update_time AS updated_at,1 AS canonical FROM friendbook_cf_firestore_documents
           WHERE parent_path=?1 ORDER BY updated_at DESC LIMIT ?2`).bind(collection,limit).all();
       let documents = [];
+      const requestRoomReads = new Map();
+      const canonicalContentReads = new Map();
       for (const row of rows?.results || []) {
         const docPath = `${collection}/${row.doc_id}`;
-        const currentChat = collection==='chats' && row.canonical===1 && row.path===docPath && validSegment(row.doc_id);
-        const current = currentChat || joinedRoot ? row : await canonicalRoot(env.DB, docPath, row);
+        const canonicalSnapshot = row.canonical===1 && row.path===docPath && validSegment(row.doc_id);
+        const currentChat = collection==='chats' && canonicalSnapshot;
+        if(canonicalSnapshot && ['posts','reels','stories'].includes(collection))
+          canonicalContentReads.set(docPath,toFirestoreFields(row.document_json));
+        // The list query already loaded this exact canonical root. Avoid an
+        // additional lookup per row; content ACLs below still run unchanged.
+        const current = canonicalSnapshot || joinedRoot ? row : await canonicalRoot(env.DB, docPath, row);
         const doc = toPlainDocument(current.document_json, row.doc_id);
         if (doc && (collection !== 'payments' || canReadPayment(env,uid,doc)) && (collection !== 'friend_requests' || canReadFriendRequest(uid,doc)) && canReadNotification(`${collection}/${row.doc_id}`, uid, doc)) {
           const view = collection === 'groups' ? groupReadView(uid,doc,await trustedGroupOwner(env.DB,`${collection}/${row.doc_id}`)) : collection === 'friends' ? friendshipReadView(uid,doc) : profileReadView(`${collection}/${row.doc_id}`, uid, doc, isPaymentAdmin(env,uid));
-          if (view !== null && (currentChat ? storedChatMember(current.document_json,uid) : await chatReadAllowed(env.DB,docPath,uid,doc))) documents.push(view);
+          if (view !== null && (currentChat ? storedChatMember(current.document_json,uid) : await chatReadAllowed(env.DB,docPath,uid,doc,requestRoomReads))) documents.push(view);
         }
       }
       if (['posts','reels','stories','lives'].includes(collection)) {
         const userReads = requestAccountReads(identity);
-        const allowed = await Promise.all(documents.map(doc => contentReadAllowed(env.DB,uid,`${collection}/${doc.id}`,userReads)));
+        const allowed = await Promise.all(documents.map(doc => contentReadAllowed(env.DB,uid,`${collection}/${doc.id}`,userReads,false,canonicalContentReads.get(`${collection}/${doc.id}`))));
         documents = documents.filter((_doc, index) => allowed[index]);
       }
       return json({ collection, documents });
@@ -211,7 +219,11 @@ export async function appDocuments(request, env, identity) {
       const current = await readPreferredDocumentJson(env.DB,docPath);
       if (!current) return json({ error: 'Not found' }, 404);
       const document = toPlainDocument(current.document_json, docId);
-      if (!(await contentReadAllowed(env.DB, uid, docPath,requestAccountReads(identity)))) return json({error:'Forbidden'},403);
+      // This route also reads canonical storage directly. Authorize the exact
+      // raw content snapshot returned, never a client body or projected view.
+      const canonicalFields=['posts','reels','stories'].includes(collection)
+        ? toFirestoreFields(current.document_json) : undefined;
+      if (!(await contentReadAllowed(env.DB, uid, docPath,requestAccountReads(identity),false,canonicalFields))) return json({error:'Forbidden'},403);
       if (collection === 'payments' && !canReadPayment(env,uid,document)) return json({error:'Forbidden'},403);
       if (collection === 'friend_requests' && !canReadFriendRequest(uid,document)) return json({error:'Forbidden'},403);
       if (!canReadNotification(docPath, uid, document)) return json({ error: 'Forbidden' }, 403);
@@ -238,7 +250,11 @@ export async function appDocuments(request, env, identity) {
     if (['users','posts','reels','events','pages','lives'].includes(collection)) {
       // Older clients use /v1/docs. Share the guarded canonical mutation with
       // newer clients so concurrent edits and relationship changes are not lost.
-      const data={...incoming,updatedAt:now};
+      // Profile revisions use canonical update_time. Injecting a new JSON
+      // updatedAt here turned identical profile saves into real writes,
+      // defeating existing no-op/mirror-repair checks. Retain historical
+      // timestamp behavior for content/event/page clients.
+      const data=collection==='users' ? {...incoming} : {...incoming,updatedAt:now};
       delete data.id;
       const {firestoreDocuments}=await import('./firestore-documents.js');
       const forwarded=new Request(`${url.origin}/v1/firestore/document?path=${encodeURIComponent(docPath)}`,{
@@ -260,7 +276,7 @@ export async function appDocuments(request, env, identity) {
       const existingRow = await env.DB.prepare(
         'SELECT owner_uid, document_json FROM friendbook_cf_firestore_documents WHERE path = ?'
       ).bind(docPath).first();
-      const currentRow = await canonicalRoot(env.DB, docPath, existingRow);
+      const currentRow = existingRow;
       const existingPlain = currentRow ? (toPlainDocument(currentRow.document_json, docId) || {}) : {};
       const merged = { ...existingPlain, ...incoming, id: docId };
       if (!notificationWriteAllowed(docPath, uid, currentRow ? existingPlain : null, merged) || !profileWriteAllowed(docPath, uid, currentRow ? existingPlain : null, merged) || !(await chatWriteAllowed(env.DB, docPath, uid, currentRow ? existingPlain : null, merged)) || !contentWriteAllowed(docPath, uid, currentRow ? existingPlain : null, merged)) return json({ error: 'Forbidden' }, 403);
@@ -270,7 +286,7 @@ export async function appDocuments(request, env, identity) {
       const serialized = JSON.stringify(merged);
       if (serialized.length > 95_000) return json({ error: 'Document too large' }, 413);
       const appWrite = env.DB.prepare(
-        `INSERT INTO friendbook_cf_documents(path, collection, doc_id, owner_uid, document_json, updated_at)
+        `INSERT INTO friendbook_cf_documents AS ${writeAttribution('legacy',docPath)}(path, collection, doc_id, owner_uid, document_json, updated_at)
          VALUES (?, ?, ?, ?, ?, ?)
          ON CONFLICT(path) DO UPDATE SET
            owner_uid = excluded.owner_uid,
@@ -280,7 +296,7 @@ export async function appDocuments(request, env, identity) {
       const firestoreDoc = { ...merged };
       delete firestoreDoc.id;
       const firestoreWrite = env.DB.prepare(
-        `INSERT INTO friendbook_cf_firestore_documents(path, parent_path, collection_id, doc_id, owner_uid, document_json, create_time, update_time)
+        `INSERT INTO friendbook_cf_firestore_documents AS ${writeAttribution('legacy',docPath)}(path, parent_path, collection_id, doc_id, owner_uid, document_json, create_time, update_time)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(path) DO UPDATE SET owner_uid=excluded.owner_uid, document_json=excluded.document_json, update_time=excluded.update_time`
       ).bind(docPath, collection, collection, docId, ownerUid, JSON.stringify(firestoreDoc),

@@ -309,6 +309,8 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
     private static final int REQ_PK_GUEST_PERMS = 703;
     private final Runnable pollPkRoom = this::refreshCloudPk;
     private boolean pkPollPending;
+    private boolean liveScreenStarted, liveRelayReady;
+    private String liveActor;
     private ListenerRegistration liveDocReg;
     private ListenerRegistration chatColReg;
     private ListenerRegistration pkBattleReg;
@@ -348,7 +350,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
      * repeating heartbeat: a closed or idle app must not write on a timer.
      */
     private void publishHostHeartbeat() {
-        if (isEnded || !isHost || !isLiveStarted || liveId == null) return;
+        if (isEnded || !isHost || !isLiveStarted || liveId == null || !java.util.Objects.equals(liveActor,Fb.uid())) return;
         Map<String, Object> hb = new HashMap<>();
         hb.put("lastHeartbeatMs", System.currentTimeMillis());
         hb.put("viewerIds", new ArrayList<>(activeViewerIds));
@@ -362,6 +364,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         com.friendbook.social.core.Ui.statusBar(getWindow(), 0xFF000000);
 
+        liveActor = Fb.uid();
         liveId = getIntent().getStringExtra("live_id");
         hostId = getIntent().getStringExtra("host_id");
         // SAFETY FIX: Never close silently! Empty live_id always launches Host Pre-Live Studio.
@@ -1407,7 +1410,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
                 engine.startBroadcasting(true);
                 engine.startSpeakerPlayback();
                 uiHandler.post(durationTicker);
-                publishHostHeartbeat();
+                // The initial live document already contains this heartbeat and audience.
                 postSystemChat(hostNameStr + " started a live video & voice broadcast!");
                 notifyFollowersGoingLive();
             });
@@ -1443,10 +1446,11 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
     private void openLiveRelay(boolean publish, Runnable ready) {
         liveRelay = new LiveRelayClient(new LiveRelayClient.Listener() {
             @Override public void ready() {
-                if (!isFinishing() && !isEnded) {
+                if (!isFinishing() && !isDestroyed() && !isEnded && java.util.Objects.equals(liveActor,Fb.uid())) {
+                    liveRelayReady=true;
                     ready.run();
                     uiHandler.removeCallbacks(pollPkRoom);
-                    uiHandler.post(pollPkRoom);
+                    if(liveScreenStarted)uiHandler.post(pollPkRoom);
                 }
             }
             @Override public void packet(String kind, String data, long seq) {
@@ -1549,7 +1553,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
     // ==================== FIRESTORE ROOM & CHAT REALTIME LISTENERS ====================
 
     private void attachRoomListeners() {
-        if (liveId == null) return;
+        if (liveId == null || !liveScreenStarted || !java.util.Objects.equals(liveActor,Fb.uid()) || liveDocReg != null || chatColReg != null) return;
 
         liveDocReg = Fb.db().collection("lives").document(liveId)
                 .addSnapshotListener((snap, err) -> {
@@ -1728,6 +1732,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
     private final com.friendbook.social.core.RealtimeSoundGate giftSoundGate = new com.friendbook.social.core.RealtimeSoundGate(System.currentTimeMillis());
     private void onChatSnapshot(List<DocumentSnapshot> docs, boolean fromCache) {
         boolean soundEligible = giftSoundGate.begin(fromCache);
+        Set<String> viewersBeforeSnapshot = new HashSet<>(activeViewerIds);
         List<ChatItem> visibleMessages = new ArrayList<>();
         for (DocumentSnapshot d : docs) {
             Map<String, Object> m = d.getData();
@@ -1755,15 +1760,14 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
             }
 
             if ("join".equals(type)) {
-                if (!uid.isEmpty() && activeViewerIds.add(uid)) {
+                if (LiveViewerEvents.apply(activeViewerIds, uid, true, isNewPacket)) {
                     totalUniqueViewers++;
-                    // A real viewer change is the moment the room document needs
-                    // the new list; no timer writes it later.
-                    publishHostHeartbeat();
+                    // Publish the final membership once below, not one write per
+                    // packet in a replayed or batched snapshot.
                 }
                 visibleMessages.add(new ChatItem(id, uid, name, photo, text, "join"));
             } else if ("leave".equals(type)) {
-                if (activeViewerIds.remove(uid)) publishHostHeartbeat();
+                LiveViewerEvents.apply(activeViewerIds, uid, false, isNewPacket);
             } else if ("reaction".equals(type)) {
                 if (isNewPacket) {
                     if (!uid.equals(Fb.uid())) {
@@ -1830,6 +1834,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
                 visibleMessages.add(new ChatItem(id, uid, name, photo, text, type));
             }
         }
+        if (!viewersBeforeSnapshot.equals(activeViewerIds)) publishHostHeartbeat();
         chatAdapter.setItems(visibleMessages);
         if (!visibleMessages.isEmpty()) {
             chatRv.scrollToPosition(visibleMessages.size() - 1);
@@ -2263,7 +2268,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
     private void sendHeartLike() {
         spawnFloatingEmoji("heart");
         spawnFloatingEmoji("heart");
-        if (liveId == null || isEnded) return;
+        if (!allowLiveReaction()) return;
         Map<String, Object> r = new HashMap<>();
         r.put("type", "reaction");
         r.put("uid", Fb.uid());
@@ -2279,7 +2284,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
             return;
         }
         spawnFloatingEmoji(emoji);
-        if (liveId == null || isEnded) return;
+        if (!allowLiveReaction()) return;
         Map<String, Object> r = new HashMap<>();
         r.put("type", "reaction");
         r.put("uid", Fb.uid());
@@ -2287,6 +2292,13 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
         r.put("text", emoji);
         r.put("createdAtMs", System.currentTimeMillis());
         Fb.db().collection("lives").document(liveId).collection("chat").add(r);
+    }
+
+    /** Preserve local feedback but bound reaction writes across all emoji taps. */
+    private boolean allowLiveReaction() {
+        return liveScreenStarted && liveId!=null && !isEnded && liveActor!=null
+                && java.util.Objects.equals(liveActor,Fb.uid())
+                && com.friendbook.social.core.InteractionCooldown.acquire(liveActor,"live-reaction:"+liveId);
     }
 
     private void spawnFloatingEmoji(String emoji) {
@@ -2897,6 +2909,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
     private void followHostNow() {
         String me = Fb.uid();
         if (me == null || hostId == null || hostId.equals(me)) return;
+        if(!com.friendbook.social.core.InteractionCooldown.disableBriefly(followHostBtn))return;
         Notify.follow(hostId, true).addOnSuccessListener(v -> {
             if (!me.equals(Fb.uid())) return;
             if (followHostBtn != null) {
@@ -3015,12 +3028,12 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
     }
 
     private void refreshCloudPk() {
-        if (isEnded || isFinishing() || isDestroyed() || liveId == null || pkPollPending) return;
+        if (!liveScreenStarted || !java.util.Objects.equals(liveActor,Fb.uid()) || isEnded || isFinishing() || isDestroyed() || liveId == null || pkPollPending) return;
         pkPollPending = true;
         final String room = liveId;
         cloudPk(Fb.map("action", "room", "room", room)).addOnCompleteListener(task -> {
             pkPollPending = false;
-            if (isEnded || isFinishing() || isDestroyed() || !room.equals(liveId)) return;
+            if (!liveScreenStarted || !java.util.Objects.equals(liveActor,Fb.uid()) || isEnded || isFinishing() || isDestroyed() || !room.equals(liveId)) return;
             if (task.isSuccessful()) {
                 org.json.JSONObject battle = task.getResult();
                 if ("active".equals(battle.optString("status"))) applyCloudPk(battle);
@@ -3477,9 +3490,26 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
     }
 
     @Override
+    protected void onStart() {
+        super.onStart();
+        if(liveActor==null || !java.util.Objects.equals(liveActor,Fb.uid())){finish();return;}
+        liveScreenStarted=true;
+        if(liveRelayReady && isLiveStarted && !isEnded){
+            attachRoomListeners();
+            uiHandler.removeCallbacks(pollPkRoom);
+            uiHandler.post(pollPkRoom);
+        }
+    }
+
+    @Override
     protected void onStop() {
+        // Remove hidden-screen D1 observers before foreground/push invalidations.
+        liveScreenStarted=false;
+        uiHandler.removeCallbacks(pollPkRoom);
+        if(liveDocReg!=null){liveDocReg.remove();liveDocReg=null;}
+        if(chatColReg!=null){chatColReg.remove();chatColReg=null;}
         // Leaving the screen is the last event that must reach the room document.
-        publishHostHeartbeat();
+        if(!isFinishing() && java.util.Objects.equals(liveActor,Fb.uid()))publishHostHeartbeat();
         super.onStop();
     }
 
@@ -3494,7 +3524,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
             try { rtdbStreamRef.removeEventListener(rtdbStreamListener); } catch (Throwable ignored) { }
         }
 
-        if (isHost && isLiveStarted && !isEnded && liveId != null) {
+        if (java.util.Objects.equals(liveActor,Fb.uid()) && liveActor!=null && isHost && isLiveStarted && !isEnded && liveId != null) {
             Map<String, Object> endMap = new HashMap<>();
             endMap.put("status", "ended");
             endMap.put("endedAt", FieldValue.serverTimestamp());
@@ -3503,7 +3533,7 @@ public class LiveActivity extends Activity implements LiveStreamEngine.Listener 
             endMap.put("liveFrameB64", "");
             endMap.put("audioB64", "");
             Fb.db().collection("lives").document(liveId).update(endMap);
-        } else if (!isHost && viewerCountJoined && liveId != null) {
+        } else if (java.util.Objects.equals(liveActor,Fb.uid()) && liveActor!=null && !isHost && viewerCountJoined && liveId != null) {
             viewerCountJoined = false;
             Fb.db().collection("lives").document(liveId)
                     .update("viewers", FieldValue.increment(-1));

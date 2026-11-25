@@ -35,6 +35,8 @@ public final class PushFanoutWorker extends Worker {
         String uid = getInputData().getString("uid");
         if (uid == null || !uid.equals(Fb.uid())) return Result.success();
         String id = getInputData().getString("document");
+        if(id==null || id.isEmpty())return Result.failure();
+        FanoutCheckpoint checkpoint=null;
         try {
             if ("chat".equals(getInputData().getString("kind"))) {
                 DocumentSnapshot chat = Tasks.await(Fb.db().collection("chats").document(id)
@@ -49,19 +51,21 @@ public final class PushFanoutWorker extends Worker {
                     FCMPush.invoke((String) member, Fb.myName(), "New message", data);
                 }
             } else if ("friend_post".equals(getInputData().getString("kind"))) {
+                checkpoint=new FanoutCheckpoint(getApplicationContext(),uid,id,System.currentTimeMillis());
                 DocumentSnapshot post = Tasks.await(Fb.db().collection("posts").document(id)
                         .get(Source.SERVER), 20, TimeUnit.SECONDS);
-                if (!post.exists() || !uid.equals(post.getString("authorId"))) return Result.failure();
+                if (!post.exists() || !uid.equals(post.getString("authorId"))) {checkpoint.clear();return Result.failure();}
                 QuerySnapshot friends = Tasks.await(Fb.db().collection("friends")
                         .whereArrayContains("participants", uid).get(Source.SERVER), 20, TimeUnit.SECONDS);
-                Set<String> recipients = new HashSet<>();
+                Set<String> recipients = new TreeSet<>();
                 for (DocumentSnapshot friend : friends) {
                     Object members = friend.get("participants");
                     if (members instanceof List) for (Object m : (List<?>) members)
                         if (m instanceof String && !uid.equals(m)) recipients.add((String) m);
                 }
                 for (String to : recipients) {
-                    if (!uid.equals(Fb.uid())) return Result.success();
+                    if (!uid.equals(Fb.uid())) {checkpoint.clear();return Result.success();}
+                    if(checkpoint.completed(to))continue;
                     // Stable document/event ID makes replay safe if a partial fan-out is retried.
                     DocumentReference ref = Fb.db().collection("notifications")
                             .document("friend_post_" + id + "_" + to);
@@ -78,14 +82,21 @@ public final class PushFanoutWorker extends Worker {
                         if (!(cause instanceof D1DocumentStoreException)
                                 || ((D1DocumentStoreException) cause).getCode()!=D1DocumentStoreException.Code.ALREADY_EXISTS) throw e;
                     }
-                    if (!uid.equals(Fb.uid())) return Result.success();
-                    FCMPush.notification(ref.getId(), n);
+                    if (!uid.equals(Fb.uid())) {checkpoint.clear();return Result.success();}
+                    Operation enqueue=FCMPush.enqueueNotificationDurable(uid,ref.getId(),n);
+                    enqueue.getResult().get(20,TimeUnit.SECONDS);
+                    if (!uid.equals(Fb.uid())) {checkpoint.clear();return Result.success();}
+                    checkpoint.markQueued(to);
                 }
+                checkpoint.clear();checkpoint=null;
             } else return Result.failure();
             return Result.success();
         } catch (Exception e) {
             android.util.Log.w("FriendBookPush", "Recipient lookup pending: " + e.getClass().getSimpleName());
-            return getRunAttemptCount() < 8 ? Result.retry() : Result.failure();
+            if(!uid.equals(Fb.uid())){if(checkpoint!=null)checkpoint.clear();return Result.success();}
+            boolean retry=FanoutRetryPolicy.shouldRetry(e,getRunAttemptCount());
+            if(checkpoint!=null){if(retry)checkpoint.flush();else checkpoint.clear();}
+            return retry ? Result.retry() : Result.failure();
         }
     }
 }

@@ -59,6 +59,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         default boolean hasPageError(){return false;}
         default void onPostDeleted(String id) { }
         default void openFindFriends() { }
+        default void onDiscoveryVisible() { }
         default void openReelsTab(Models.Reel featuredReel) { }
         default void loadMoreStories() { }
         default boolean hasMoreStories() { return false; }
@@ -72,6 +73,16 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     // Fetch a missing author at most once per adapter/account; recycled rows must not
     // launch a network request on every bind.
     private final Set<String> requestedAuthors = new HashSet<>();
+    /** Explicit user retry only: a missing/offline author must not cause a bind/request loop. */
+    private int authorReadGeneration;
+    public void resetAuthorLookupAttempts() { authorReadGeneration++; requestedAuthors.clear(); }
+    private boolean authorLookupsEnabled=true;
+    /** Local-only previews and stopped owners must not start author queries. */
+    public void setAuthorLookupsEnabled(boolean enabled) {
+        if(authorLookupsEnabled==enabled)return;
+        authorLookupsEnabled=enabled;
+        if(!enabled)resetAuthorLookupAttempts();
+    }
     private List<StoriesAdapter.Group> storyGroups = new ArrayList<>();
     public boolean showHeader = true;
     public boolean showFooter = true;
@@ -92,7 +103,16 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         feedBanners.show(holder.feedBanner, holder.bannerPostId, anchor);
     }
 
+    private View discoveryViewport;
+    private void requestVisibleDiscovery() {
+        android.graphics.Rect rect=new android.graphics.Rect();
+        if (host!=null && discoveryViewport!=null && discoveryViewport.isShown()
+                && discoveryViewport.getGlobalVisibleRect(rect) && rect.height()>0)
+            host.onDiscoveryVisible();
+    }
+
     public void refreshFeedBannerVisibility() {
+        requestVisibleDiscovery();
         if (feedBanners != null) feedBanners.refreshVisibleSlots();
     }
 
@@ -112,6 +132,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     }
 
     @Override public void onDetachedFromRecyclerView(@NonNull RecyclerView recyclerView) {
+        resetAuthorLookupAttempts();
         com.friendbook.social.core.AdsConfig.removePlacementListener(nativePlacementListener);
         super.onDetachedFromRecyclerView(recyclerView);
     }
@@ -151,7 +172,35 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         return position;
     }
 
+    /** Hydrate only submitted pages, never RecyclerView rendering. Missing names use one query per ten IDs. */
+    private void hydrateMissingAuthors(List<Models.Post> page) {
+        if(!authorLookupsEnabled || page==null || page.stream().noneMatch(p->p!=null && !p.isPagePost()
+                && p.authorId!=null && !p.authorId.isEmpty()
+                && (p.authorName==null || p.authorName.isEmpty())))return;
+        final String actor=Fb.uid();
+        final int generation=authorReadGeneration;
+        if(actor==null)return;
+        List<String> ids=new ArrayList<>();
+        for(Models.Post p:page) {
+            if(p!=null && !p.isPagePost() && p.authorId!=null && !p.authorId.isEmpty()
+                    && (p.authorName==null || p.authorName.isEmpty())
+                    && com.friendbook.social.core.FastCache.getUser(p.authorId)==null
+                    && requestedAuthors.add(String.valueOf(actor) + ":" + p.authorId)) ids.add(p.authorId);
+        }
+        for(List<String> chunk:Ui.chunks(ids,10)) {
+            Fb.db().collection("users").whereIn(com.friendbook.social.d1.documents.FieldPath.documentId(),chunk)
+                    .limit(10).get().addOnSuccessListener(loaded->{
+                if(generation!=authorReadGeneration || !java.util.Objects.equals(actor, Fb.uid())
+                        || activity.isFinishing() || activity.isDestroyed())return;
+                for(com.friendbook.social.d1.documents.DocumentSnapshot doc:loaded)
+                    com.friendbook.social.core.FastCache.putUser(Models.User.fromDoc(doc));
+                if(!loaded.isEmpty())notifyDataSetChanged();
+            });
+        }
+    }
+
     public void setPosts(List<Models.Post> list) {
+        hydrateMissingAuthors(list);
         list = uniquePosts(list, new java.util.HashSet<>());
         // ⚡ Anti-Jump In-Place Diff: if post IDs & order are identical, NEVER call notifyDataSetChanged()!
         if (!posts.isEmpty() && posts.size() == list.size()) {
@@ -289,6 +338,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     }
 
     public void addPosts(List<Models.Post> list) {
+        hydrateMissingAuthors(list);
         if (list == null || list.isEmpty()) return;
         java.util.Set<String> existing=new java.util.HashSet<>();
         for(Models.Post post:posts)existing.add(post.id);
@@ -649,6 +699,8 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             return;
         }
         vh.firstPostDiscoveryBox.setVisibility(View.VISIBLE);
+        discoveryViewport=vh.firstPostDiscoveryBox;
+        discoveryViewport.post(this::requestVisibleDiscovery);
 
         // 1. Bind Facebook-Style "People You May Know" horizontal cards
         vh.firstPostPymkRow.removeAllViews();
@@ -950,15 +1002,6 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         boolean hasFeeling = p.feeling != null && !p.feeling.isEmpty();
         Models.User author = pagePost || p.authorId == null ? null
                 : com.friendbook.social.core.FastCache.getUser(p.authorId);
-        String actor = Fb.uid();
-        if (!pagePost && p.authorId != null && !p.authorId.isEmpty()
-                && requestedAuthors.add(String.valueOf(actor) + ":" + p.authorId)) {
-            final String requestKey=String.valueOf(actor) + ":" + p.authorId;
-            Fb.getUserFresh(p.authorId).addOnSuccessListener(loaded -> {
-                if (loaded == null) { requestedAuthors.remove(requestKey); return; }
-                if (java.util.Objects.equals(actor, Fb.uid()) && !activity.isFinishing()) notifyDataSetChanged();
-            });
-        }
         String photo = pagePost && p.pagePhoto != null && !p.pagePhoto.isEmpty() ? p.pagePhoto
                 : author != null && author.photoUrl != null && !author.photoUrl.isEmpty() ? author.photoUrl : p.authorPhoto;
         Ui.avatar(c, vh.avatar, photo);
@@ -1016,6 +1059,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         });
         vh.name.setOnClickListener(prof);
         vh.like.setOnClickListener(v -> {
+            if(!com.friendbook.social.core.InteractionCooldown.disableBriefly(v))return;
             Ui.haptic(v);
             Reactions.tapLike(c, p);
             renderReactionBar(c, vh, p,
@@ -1927,6 +1971,8 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     }
 
     private void shareToFeedDialog(Models.Post p) {
+        final String actor=Fb.uid();
+        if(actor==null)return;
         Context c = activity;
         LinearLayout box = Ui.col(c);
         Ui.pad(box, 18, 10, 18, 0);
@@ -1936,6 +1982,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                 .setTitle("Share to your feed")
                 .setView(box)
                 .setPositiveButton("Share now", (d, w) -> {
+                    if(!java.util.Objects.equals(actor,Fb.uid()))return;
                     String baseId = p.sharedFromId != null && !p.sharedFromId.isEmpty() ? p.sharedFromId : p.id;
                     Map<String, Object> m = Fb.map(
                             "authorId", Fb.uid(),
@@ -1956,13 +2003,36 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                             "sharedFromMediaUrl", p.sharedFromId != null && !p.sharedFromId.isEmpty() ? p.sharedFromMediaUrl : (p.mediaUrl == null ? "" : p.mediaUrl),
                             "sharedFromMediaType", p.sharedFromId != null && !p.sharedFromId.isEmpty() ? p.sharedFromMediaType : p.mediaType,
                             "createdAt", FieldValue.serverTimestamp());
-                    Fb.db().collection("posts").add(m);
-                    Fb.db().collection("posts").document(p.id).update("shares", FieldValue.increment(1));
-                    Notify.send(p.authorId, "share", "shared your post", p.id);
-                    Ui.toast(c, "Shared to your feed ✓");
+                    submitFeedShare(actor,p,m);
                 })
                 .setNegativeButton("Cancel", null)
                 .show();
+    }
+
+    private static final Set<String> pendingFeedShares=java.util.Collections.synchronizedSet(new HashSet<>());
+    private void submitFeedShare(String actor,Models.Post post,Map<String,Object> data){
+        if(actor==null || post==null || post.id==null || !java.util.Objects.equals(actor,Fb.uid()))return;
+        final String key=actor+":"+post.id;
+        if(!com.friendbook.social.core.InteractionCooldown.acquire(actor,"feed-share:"+post.id)
+                || !pendingFeedShares.add(key))return;
+        com.friendbook.social.d1.documents.D1DocumentStore db=Fb.db();
+        com.friendbook.social.d1.documents.CollectionReference postsRef=db.collection("posts");
+        com.friendbook.social.d1.documents.WriteBatch batch=db.batch();
+        batch.set(postsRef.document(),data);
+        batch.update(postsRef.document(post.id),"shares",FieldValue.increment(1));
+        batch.commit().addOnCompleteListener(task->{
+            pendingFeedShares.remove(key);
+            if(!java.util.Objects.equals(actor,Fb.uid()))return;
+            if(task.isSuccessful()){
+                post.shares++;
+                Notify.send(post.authorId,"share","shared your post",post.id);
+                if(!activity.isFinishing() && !activity.isDestroyed()){
+                    notifyDataSetChanged();Ui.toast(activity,"Shared to your feed ✓");
+                }
+            }else if(!activity.isFinishing() && !activity.isDestroyed()){
+                Ui.toast(activity,"Couldn't share. Please try again.");
+            }
+        });
     }
 
     private void speakPost(String content) {
@@ -2096,20 +2166,15 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             // 2. Tall Vertical Rounded Story Cards Rail SECOND (108dp × 190dp + "Find friends" card)
             RecyclerView rail = new RecyclerView(c);
             rail.setBackgroundColor(Ui.card(c));
-            rail.setLayoutManager(new LinearLayoutManager(c, RecyclerView.HORIZONTAL, false));
+            LinearLayoutManager storyLayout=new LinearLayoutManager(c, RecyclerView.HORIZONTAL, false);
+            storyLayout.setItemPrefetchEnabled(false);
+            rail.setLayoutManager(storyLayout);
             Ui.pad(rail, 8, 8, 8, 8);
             storiesAdapter = new StoriesAdapter();
             rail.setAdapter(storiesAdapter);
             col.addView(rail, new LinearLayout.LayoutParams(-1, Ui.dp(c, 206)));
             moreStories=Ui.tvBold(c,"More stories ›",13,Ui.BLUE);
             Ui.pad(moreStories,12,8,12,8); col.addView(moreStories);
-            rail.addOnScrollListener(new RecyclerView.OnScrollListener() {
-                @Override public void onScrolled(RecyclerView view,int dx,int dy) {
-                    LinearLayoutManager manager=(LinearLayoutManager)view.getLayoutManager();
-                    if(dx>0 && manager!=null && manager.findLastVisibleItemPosition()>=storiesAdapter.getItemCount()-2
-                            && host!=null && host.hasMoreStories()) host.loadMoreStories();
-                }
-            });
 
             View gap = new View(c);
             gap.setBackgroundColor(Ui.bg(c));

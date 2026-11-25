@@ -20,7 +20,7 @@ public final class CloudflareHttp {
             .followRedirects(false).followSslRedirects(false).retryOnConnectionFailure(false)
             .addNetworkInterceptor(chain -> {
                 Response response = chain.proceed(chain.request());
-                // OkHttp otherwise follows a 503 with Retry-After: 0 even with transport retries disabled.
+                // Prevent OkHttp's implicit 503 Retry-After replay.
                 return response.code() == 503 ? response.newBuilder().removeHeader("Retry-After").build() : response;
             })
             .connectTimeout(15, TimeUnit.SECONDS).readTimeout(30, TimeUnit.SECONDS)
