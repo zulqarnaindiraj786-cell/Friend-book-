@@ -37,7 +37,7 @@ function fullMigrationFixture(){
  return {sql,db,queries};
 }
 
-test('canonical mode skips mirror insert/upsert/update, but keeps canonical writes and reads',async()=>{
+test('canonical mode skips all mirror DML and rejects mirror reads, but keeps canonical writes and reads',async()=>{
  const f=fixture(),db=canonicalDocumentWriteDb(f.db);
  try{
   await db.batch([
@@ -53,20 +53,24 @@ test('canonical mode skips mirror insert/upsert/update, but keeps canonical writ
   await db.prepare('UPDATE OR ABORT friendbook_cf_documents AS old SET document_json=? WHERE path=?').bind('changed','users/a').run();
   assert.equal(f.sql.prepare('SELECT count(*) n FROM friendbook_cf_documents').get().n,0);
   assert.equal((await db.prepare('SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?').bind('users/a').first()).document_json,'canonical');
+  assert.throws(()=>db.prepare('SELECT document_json FROM friendbook_cf_documents WHERE path=?'),/Legacy document mirror reads are disabled/);
+  assert.throws(()=>db.prepare('WITH legacy AS (SELECT path FROM friendbook_cf_documents) SELECT * FROM legacy'),/Legacy document mirror reads are disabled/);
   assert.equal(f.db.batches,1,'the mixed batch sends only canonical DML to the underlying binding');
  }finally{f.sql.close();}
 });
 
-test('delete cleanup is preserved and mode is explicitly opt-in',async()=>{
+test('canonical mode suppresses legacy deletes and default mode remains compatibility opt-in',async()=>{
  const f=fixture();
  try{
   f.sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?)').run('users/a','legacy');
   const defaultEnv={DB:f.db};assert.equal(canonicalDocumentWriteEnv(defaultEnv),defaultEnv);
   const env=canonicalDocumentWriteEnv({DB:f.db,DOCUMENT_MIRROR_MODE:'canonical'});
   await env.DB.prepare('DELETE FROM friendbook_cf_documents WHERE path=?').bind('users/a').run();
-  assert.equal(f.sql.prepare('SELECT count(*) n FROM friendbook_cf_documents').get().n,0);
+  assert.equal(f.sql.prepare('SELECT count(*) n FROM friendbook_cf_documents').get().n,1,'old mirror rows remain untouched until migration');
   await env.DB.withSession('first-primary').prepare('INSERT INTO friendbook_cf_documents VALUES (?,?)').bind('users/b','legacy').run();
-  assert.equal(f.sql.prepare('SELECT count(*) n FROM friendbook_cf_documents').get().n,0);
+  assert.equal(f.sql.prepare('SELECT count(*) n FROM friendbook_cf_documents').get().n,1);
+  await defaultEnv.DB.prepare('DELETE FROM friendbook_cf_documents WHERE path=?').bind('users/a').run();
+  assert.equal(f.sql.prepare('SELECT count(*) n FROM friendbook_cf_documents').get().n,0,'compatibility mode retains historical cleanup');
  }finally{f.sql.close();}
 });
 

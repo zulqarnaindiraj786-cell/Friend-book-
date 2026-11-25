@@ -1,5 +1,5 @@
-const LEGACY_TABLE = 'friendbook_cf_documents';
-const MIRROR_DML = /^\s*(INSERT(?:\s+OR\s+\w+)?\s+INTO|REPLACE\s+INTO|UPDATE(?:\s+OR\s+\w+)?\s+)\s*["`\[]?friendbook_cf_documents\b/i;
+const MIRROR_DML = /^\s*(INSERT(?:\s+OR\s+\w+)?\s+INTO|REPLACE\s+INTO|UPDATE(?:\s+OR\s+\w+)?\s+|DELETE\s+FROM)\s*["`\[]?friendbook_cf_documents\b/i;
+const MIRROR_READ = /^\s*(?:SELECT|WITH)\b[\s\S]*?\bfriendbook_cf_documents\b/i;
 
 function skippedStatement() {
   const result = Object.freeze({success:true,meta:Object.freeze({changes:0,rows_written:0})});
@@ -14,17 +14,21 @@ function skippedStatement() {
 }
 
 /**
- * Wrap a D1 binding for an explicitly staged canonical-write rollout.
- * Reads and deletes are unchanged; only legacy mirror INSERT/UPDATE statements
- * are omitted. Canonical writes in the same D1 batch remain atomic. This does
- * not make old mirror-only data safe to discard and is opt-in by design.
+ * Wrap a D1 binding for the canonical-only Worker rollout. Legacy mirror reads
+ * fail closed and legacy mirror INSERT/REPLACE/UPDATE/DELETE statements are
+ * omitted. Canonical writes in the same D1 batch remain atomic. The physical
+ * table is retained until a separate, verified retirement migration.
  */
 export function canonicalDocumentWriteDb(db) {
   if (!db || typeof db.prepare!=='function') throw new TypeError('D1 binding required');
   return new Proxy(db,{
     get(target,key){
       if (key==='__canonicalDocumentWrites') return true;
-      if (key==='prepare') return sql=>MIRROR_DML.test(String(sql))?skippedStatement():target.prepare.call(target,sql);
+      if (key==='prepare') return sql=>{
+        const text=String(sql);
+        if (MIRROR_READ.test(text)) throw new Error('Legacy document mirror reads are disabled in canonical mode');
+        return MIRROR_DML.test(text)?skippedStatement():target.prepare.call(target,sql);
+      };
       if (key==='batch') return async input=>{
         if (!Array.isArray(input)) return target.batch.call(target,input);
         const active=[], slots=[];
