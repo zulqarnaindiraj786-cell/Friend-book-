@@ -18,13 +18,13 @@ const KV_WINDOW = 300_000;
 const T0 = 1_700_000_000_000;
 
 /**
- * Fixture: Analytics Engine (the event store + the real count), Workers KV (the live snapshot) and
- * D1 (which the view path must NEVER write, and only ever reads as a last-resort seed). Every D1
+ * Fixture: Analytics Engine (the event store + the real count), Workers KV (live + immutable legacy snapshots) and
+ * D1 (which the view path must NEVER read or write). Every D1
  * statement and every AE event is recorded, and the AE query API is stubbed so a test decides what
  * Analytics Engine answers with - SQL TSV, GraphQL JSON, an error, or nothing at all.
  */
 function fixture({
-  withKv = true, kvSeed = null, withR2 = false, r2Seed = null,
+  withKv = true, kvSeed = null, kvLegacySeed = null, withR2 = false, r2Seed = null,
   withAe = true, aeToken = true, sql = null, graphql = null,
 } = {}) {
   const d1 = new DatabaseSync(':memory:');
@@ -32,6 +32,7 @@ function fixture({
   const seenSql = [];
   const store = new Map();
   if (kvSeed) store.set('views:live:v1', JSON.stringify(kvSeed));
+  if (kvLegacySeed) store.set('views:legacy-seed:v1', JSON.stringify(kvLegacySeed));
   const kv = { reads: 0, writes: 0 };
   const r2Objects = new Map();
   const r2 = { reads: 0, writes: 0, keys: [] };
@@ -242,7 +243,7 @@ test('Analytics Engine uniq(uid) is the real count, and a fresh isolate re-bases
   clock += 1000;
   assert.equal((await call(f.env, { path: '/v1/views/reels/r2' }, now)).body.views, 1);
   assert.equal((await call(f.env, {}, now)).body.views, 2);
-  assert.equal(f.queries.selects, 0, 'AE replaced the D1 seed entirely');
+  assert.equal(f.queries.selects, 0, 'the view path never queries D1');
   assert.equal(f.queries.writes, 0);
   assert.ok(f.ae.sqlCalls.length >= 2, 'each isolate queried AE once on load');
 
@@ -300,7 +301,7 @@ test('a GraphQL-only account is served too, and a remembered variant is reused',
   const second = await call(f.env, {}, () => T0 + 1000);
   assert.equal(second.body.views, 7, 'a later isolate is served by GraphQL too');
   assert.equal(viewCounterState().aeVariant, 'graphql');
-  assert.equal(f.queries.selects, 0, 'AE answered, so the read-only D1 seed never ran');
+  assert.equal(f.queries.selects, 0, 'the view path never queries D1 even when AE answers');
   assert.equal(f.queries.writes, 0, 'and D1 was never written');
 });
 
@@ -328,23 +329,22 @@ test('without Analytics Engine the counters fall back to KV + memory, still with
     'with no AE the live total is the only record, so the snapshot keeps it');
 });
 
-test('the read-only D1 seed is a last resort and never writes', async t => {
+test('immutable historical KV seed restores legacy totals with zero D1 reads and writes', async t => {
   resetViewState();
-  const f = fixture({ kvSeed: null, sql: tsv([]) }); t.after(f.close);
+  const f = fixture({ kvSeed: null, kvLegacySeed: { 'reels/r1': 25 }, sql: tsv([]) }); t.after(f.close);
   f.d1.exec(readMigration(MIGRATIONS[0]));
-  f.d1.exec("INSERT INTO friendbook_cf_view_counters VALUES ('reels/r1', 25, 1)");
+  f.d1.exec("INSERT INTO friendbook_cf_view_counters VALUES ('reels/other', 77, 1)");
 
-  const seeded = await call(f.env, {}, () => T0);
-  assert.equal(seeded.body.views, 25, 'history AE and KV do not have is restored once, read-only');
-  assert.equal(f.queries.selects, 1);
-  assert.match(f.seenSql.join('\n'), /ORDER BY views DESC LIMIT \?/);
-  assert.equal(f.queries.writes, 0, 'no CREATE, no INSERT, no UPDATE: D1 writes stay at zero');
-  assert.deepEqual(JSON.parse(f.store.get('views:live:v1')), { 'reels/r1': 25 }, 'the seed is cached in KV');
+  const restored = await call(f.env, {}, () => T0);
+  assert.equal(restored.body.views, 25, 'legacy totals are restored from the immutable KV key');
+  assert.equal(f.queries.selects, 0, 'the view request never reads D1');
+  assert.equal(f.queries.writes, 0, 'the view request never writes D1');
+  assert.equal(f.kv.reads, 2, 'one live and one immutable-seed read per isolate');
 
   resetViewState();
   const later = await call(f.env, {}, () => T0 + 5000);
   assert.equal(later.body.views, 25);
-  assert.equal(f.queries.selects, 1, 'a later isolate never touches D1 again');
+  assert.equal(f.queries.selects, 0, 'a later isolate still never touches D1');
   assert.equal(f.queries.writes, 0);
 });
 
@@ -380,7 +380,7 @@ test('batched and top reads are served from memory with no storage call at all',
   const posts = await call(f.env, { path: '/v1/views?collection=posts', ids: 'p1' }, now);
   assert.deepEqual(posts.body.views, { p1: 4 });
   assert.equal(f.queries.writes, 0);
-  assert.equal(f.kv.reads, 1, 'one KV read for the whole isolate, not one per request');
+  assert.equal(f.kv.reads, 2, 'live + immutable legacy keys are read once each per isolate, not per request');
 });
 
 test('input validation, methods and auth fail closed with no event and no storage write', async t => {
@@ -482,7 +482,7 @@ test('when Workers KV is not bound, the R2 snapshot keeps the counts across isol
   assert.equal(afterRestart.body.views, 32, 'the count survived the isolate, it never went backwards');
   assert.equal(viewCounterState().snapshotStore, 'r2');
   assert.equal(f.queries.writes, 0, 'D1 is never written in any mode');
-  assert.equal(f.queries.selects, 0, 'and the snapshot meant no D1 seed read either');
+  assert.equal(f.queries.selects, 0, 'the view path still never queries D1');
 });
 
 test('Analytics Engine stays the truth over the R2 snapshot', async t => {

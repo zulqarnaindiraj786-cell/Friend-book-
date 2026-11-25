@@ -63,7 +63,7 @@ jobs:
           python3 cloudflare/test/schema_test.py
           python3 cloudflare/test/migration_test.py
           python3 cloudflare/test/index_plan_test.py
-          python3 -m unittest scripts.tests.test_fcm_claim_migration_gate scripts.tests.test_d1_account_usage_analytics scripts.tests.test_retired_table_preflight scripts.tests.test_verify_retired_drop scripts.tests.test_retired_migration_gate scripts.tests.test_canonical_inventory
+          python3 -m unittest scripts.tests.test_fcm_claim_migration_gate scripts.tests.test_d1_account_usage_analytics scripts.tests.test_retired_table_preflight scripts.tests.test_verify_retired_drop scripts.tests.test_retired_migration_gate scripts.tests.test_canonical_inventory scripts.tests.test_seed_views_kv
       - name: Verify Save Forever R2 configuration (no R2 object deletion)
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -424,6 +424,11 @@ jobs:
           test "$WHOAMI_STATUS" = 0 || { echo 'Cloudflare whoami failed; see diagnostics artifact.'; exit 1; }
           test "$D1_LIST_STATUS" = 0 || { echo 'Cloudflare D1 list failed; see diagnostics artifact.'; exit 1; }
           test "$MIGRATION_STATUS" = 0 || { echo 'Remote D1 migrations failed; see diagnostics artifact.'; exit 1; }
+
+      - name: Preserve historical view totals in KV before deployment (no request-path D1 reads)
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: python3 -m scripts.loadtest.seed_views_kv
 
       - name: Deploy Worker with existing database bindings
         env:

@@ -9,10 +9,10 @@
 //   Analytics Engine (binding AE, dataset friendbook_views) -> every view event + the real count
 //   Workers KV       (binding VIEWS, key views:live:v1)     -> live snapshot shared across isolates
 //   Worker memory    (this isolate)                         -> what a request is served from
-//   D1                                                      -> NOT WRITTEN. One bounded, read-only
-//                                                              emergency seed, and only when KV and
-//                                                              AE both have nothing at all, so the
-//                                                              numbers users already saw survive.
+//   D1                                                      -> NOT USED on a view request. A guarded
+//                                                              deployment preflight seeds KV once
+//                                                              from legacy totals before this path
+//                                                              is deployed.
 //
 // Routes (all require a verified Firebase ID token, resolved to `uid` by worker.js):
 //   POST /v1/views/{posts|reels}/{id}          -> { resource, views, counted, dedupe, storage }
@@ -88,6 +88,8 @@ const AE_GRAPHQL_QUERY = `query ($tag: string!, $since: datetime!, $until: datet
 /** One KV write of the aggregate key at most every 5 minutes -> <= 288 writes/day per isolate. */
 const KV_FLUSH_MS = 300_000;
 const KV_KEY = 'views:live:v1';
+/** Immutable one-time copy of historical D1 totals; never overwrites the live KV snapshot. */
+const LEGACY_KV_KEY = 'views:legacy-seed:v1';
 /**
  * Snapshot fallback for an account where Workers KV could not be bound to the Worker: ONE small JSON
  * object in the existing R2 bucket, under its own `views/` prefix. It never touches `videos/`, never
@@ -97,8 +99,6 @@ const KV_KEY = 'views:live:v1';
 const R2_SNAPSHOT_KEY = 'views/live/v1.json';
 /** Upper bound of the aggregate KV value; a bigger live set is served from AE + memory. */
 const KV_SNAPSHOT_LIMIT = 1000;
-/** Emergency, read-only D1 seed: only when KV and AE both have nothing. */
-const SEED_LIMIT = 500;
 /** Cache of "this uid already counted here", so repeats need no work at all. */
 const MAX_COUNTED_ENTRIES = 8000;
 const COUNTED_EVICT_BATCH = 1600;
@@ -112,9 +112,8 @@ const state = {
   aeUsable: false,
   aeVariant: null,        // the SQL/GraphQL shape that this account actually answers with
   lastAeRefreshAt: 0,
-  seedReads: 0,
   lastKvFlushAt: 0,
-  base: new Map(),        // resource -> historical high-water total (pre-AE, from KV or the seed)
+  base: new Map(),        // resource -> historical high-water total (pre-AE, from KV snapshots)
   aeBase: new Map(),      // resource -> last uniq(uid) reported by Analytics Engine
   sinceAe: new Map(),     // resource -> views counted in memory since the last AE refresh
   totals: new Map(),      // resource -> the number a request is served from
@@ -129,7 +128,6 @@ export function resetViewState() {
   state.aeUsable = false;
   state.aeVariant = null;
   state.lastAeRefreshAt = 0;
-  state.seedReads = 0;
   state.lastKvFlushAt = 0;
   state.base.clear();
   state.aeBase.clear();
@@ -148,7 +146,6 @@ export function viewCounterState() {
     aeVariant: state.aeVariant,
     kvUsable: state.kvUsable,
     snapshotStore: state.snapshotStore,
-    seedReads: state.seedReads,
     counted: state.counted.size,
   };
 }
@@ -427,8 +424,8 @@ async function maybeFlush(env, resource, now, ctx) {
 
 /**
  * Loads the live totals once per isolate: Analytics Engine first (the real, de-duplicated count),
- * then the KV snapshot for history AE does not have, and only if BOTH are empty one bounded,
- * read-only D1 seed so numbers users already saw are never lost. D1 is never written.
+ * then the KV snapshot for history AE does not have. D1 is never read or written on this path;
+ * historical totals are copied to KV by a guarded deployment preflight before rollout.
  */
 async function ensureLoaded(env, nowMs = Date.now) {
   if (state.loaded) return;
@@ -452,32 +449,27 @@ async function ensureLoaded(env, nowMs = Date.now) {
             }
             state.kvUsable = true;
             state.snapshotStore = store;
-            // The snapshot was just read: start the write window here, so a busy isolate does not
-            // rewrite the very value it just loaded.
+          }
+          if (store === 'kv') {
+            // Independent immutable key avoids a seed-vs-live-write race during deployment.
+            const legacy = await env.VIEWS.get(LEGACY_KV_KEY, { type: 'json', cacheTtl: 60 });
+            if (legacy && typeof legacy === 'object') {
+              for (const [resource, total] of Object.entries(legacy)) {
+                if (typeof resource === 'string') absorb(resource, total);
+              }
+              state.kvUsable = true;
+              state.snapshotStore = 'kv';
+            }
+          }
+          if (stored || (store === 'kv' && state.kvUsable)) {
+            // A snapshot was just read: start the write window here so a busy isolate does not
+            // rewrite data immediately after loading it.
             state.lastKvFlushAt = seededAt;
           }
         } catch { state.kvUsable = false; }
       }
       await refreshFromAe(env, seededAt);
       rebuildTotals(new Set([...state.base.keys(), ...state.aeBase.keys()]));
-      if (state.totals.size === 0 && env?.DB) {
-        // Last resort, read-only, once per isolate at most: restores the pre-Analytics-Engine
-        // history. This is the ONLY D1 statement left in the view path, and it writes nothing.
-        try {
-          const rows = await env.DB.prepare(
-            'SELECT resource, views FROM friendbook_cf_view_counters ORDER BY views DESC LIMIT ?',
-          ).bind(SEED_LIMIT).all();
-          const seeded = [];
-          for (const row of rows?.results ?? []) {
-            if (typeof row.resource !== 'string') continue;
-            absorb(row.resource, row.views);
-            seeded.push(row.resource);
-          }
-          state.seedReads += 1;
-          rebuildTotals(seeded);
-        } catch { /* no D1 here: AE + KV + memory still count real views */ }
-        if (snapshotStore(env)) await flushKv(env, seededAt, true);
-      }
       state.loaded = true;
     })();
   }
