@@ -28,6 +28,28 @@ jobs:
             code=$(curl -sS -o /dev/null -w '%{http_code}' "$BASE$path" || echo 000)
             echo "::notice::$path -> $code"
           done
+      - name: Diagnose deployed Worker health without writing user data
+        run: |
+          for path in /health /health/r2 /v1/me /v1/presence/me; do
+            file=$(mktemp)
+            status=$(curl -sS --max-time 20 -o "$file" -w '%{http_code}' "$BASE$path" || echo 000)
+            echo "::notice::${path} HTTP ${status}"
+            python3 - "$path" "$status" "$file" <<'PY_HEALTH'
+          import json, pathlib, sys
+          path, status, file = sys.argv[1:]
+          raw = pathlib.Path(file).read_text(errors='replace')
+          try: body = json.loads(raw)
+          except Exception: body = {'body_prefix': raw[:300]}
+          if path == '/health':
+              summary = {k: body.get(k) for k in ('ok','d1InteractionsEnabled','views')}
+          elif path == '/health/r2':
+              summary = {k: body.get(k) for k in ('ok','r2Bound','videoR2Enabled')}
+          else:
+              summary = {'error': body.get('error') if isinstance(body, dict) else None}
+          print('::notice::safe response '+json.dumps({'path':path,'status':status,'body':summary},sort_keys=True))
+          PY_HEALTH
+            rm -f "$file"
+          done
       - name: The migration list still shows 0086 unapplied
         run: |
           npx --yes wrangler@4.157.0 d1 migrations list friendbook-db --remote > migrations.log 2>&1 || true
