@@ -15,7 +15,7 @@ class PkAndInboxCacheTest(unittest.TestCase):
     def test_notification_head_is_cache_first_and_one_server_query(self):
         notifications = (JAVA / 'main/NotificationsFragment.java').read_text()
         start = notifications.split('private void startPages(boolean full)', 1)[1].split('private void setUnreadOnly', 1)[0]
-        self.assertIn('pager.startCachedForForeground(900_000L)', start)
+        self.assertIn('pager.startCachedForForeground(60_000L)', start)
         self.assertIn('pager.refreshOnDemand()', start)
         pager=(JAVA/'core/CursorPager.java').read_text().split('public void startDelta()',1)[1].split('public void startObserved()',1)[0]
         self.assertLess(pager.index('get(Source.CACHE)'),pager.index('refreshCachedHead(cached)'))
