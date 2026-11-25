@@ -16,4 +16,7 @@ def inspect(query):
  return {'mirror_table_absent':True,'rollback_snapshot_present':True,'schema_retained':True,'snapshot_rows':counts[0]['n'],'rows_read':meta.get('rows_read')}
 if __name__=='__main__':
  try:print('::notice:: Canonical mirror retirement '+json.dumps(inspect(remote_query),sort_keys=True))
- except Exception as e:raise SystemExit('Canonical mirror retirement verification failed: '+type(e).__name__)
+ except Exception as e:
+  allowed={'Legacy application mirror still exists','Rollback snapshot or schema metadata missing','Invalid rollback snapshot count','Original schema not retained'}
+  message=str(e) if str(e) in allowed else type(e).__name__
+  raise SystemExit('Canonical mirror retirement verification failed: '+message)
