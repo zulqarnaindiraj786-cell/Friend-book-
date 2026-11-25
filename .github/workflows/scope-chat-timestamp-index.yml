@@ -45,3 +45,5 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: python3 scripts/admin/scope_chat_timestamp_index.py --apply-reviewed-replacement
+
+# Owner-requested rollout; bounded live-data and cost gates are mandatory.
