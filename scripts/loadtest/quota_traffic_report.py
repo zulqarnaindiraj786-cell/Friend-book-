@@ -255,6 +255,11 @@ def safe_shape(sql):
     if aliases:result['recognized_aliases']=aliases
     if set(('sampled','legacy_only')) <= set(aliases) and set(('canonical_documents','legacy_mirror')) <= set(tables):
         result['redacted_inventory_structure']=redacted_inventory_structure(sql)
+    if result['operation']=='SELECT' and set(tables)=={'canonical_documents','legacy_mirror'}:
+        # High-volume mirror readers are the key physical-retirement blocker.
+        # Emit only the fixed-vocabulary SQL grammar so query families can be
+        # matched to diagnostics without exposing arbitrary columns/identifiers.
+        result['redacted_mirror_select_structure']=redacted_inventory_structure(sql)
     if result['operation']=='SELECT' and not (set(tables)&{'canonical_documents','legacy_mirror','comments','reactions'}):
         result['redacted_unmapped_select_structure']=redacted_inventory_structure(sql)
     # Help attribute a high-volume otherwise unrecognized canonical SELECT.
