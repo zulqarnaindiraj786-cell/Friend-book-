@@ -175,7 +175,7 @@ jobs:
           fi
           if [ "$GITHUB_REF" = refs/heads/arena/b52bc74d-friend-book ]; then
             printf '%s\n' "$pending" > "$RUNNER_TEMP/b52-pending-migrations.txt"
-            python3 - <<'PY_PENDING'
+            python3 - "$RUNNER_TEMP/b52-pending-migrations.txt" <<'PY_PENDING'
           import pathlib, re, sys
           text = pathlib.Path(sys.argv[1]).read_text(errors='replace')
           found = sorted(set(re.findall(r'(\d{4}_[A-Za-z0-9_]+\.sql)', text)))
