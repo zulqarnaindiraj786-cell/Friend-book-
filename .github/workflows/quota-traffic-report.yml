@@ -1,3 +1,4 @@
+# Read-only post-rollout audit trigger: 2026-11-25; no production writes or app traffic.
 # Owner-requested current read/write breakdown; analytics only, no load or deployment.
 # Post D1-safe comment batching rollout: analytics only.
 # Refresh production ranking after app-wide demand fixes; distinguish quiet windows from representative use.
