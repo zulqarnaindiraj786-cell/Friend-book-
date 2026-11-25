@@ -84,22 +84,28 @@ export function legacyCommentCountsWithCandidatesStatement(db,resources,blocked=
   // indexes. The old OR predicate scanned the whole comments partition once
   // per candidate batch; keeping requested resources outermost makes each
   // route a bounded index lookup. UNION deduplicates multi-key legacy rows.
+  // Keep the UNION's deduplication key narrow. The route indexes identify
+  // candidate paths; fetching document_json in every UNION arm forces repeated
+  // table-row reads for documents matching more than one historical key. Join
+  // each distinct path back to the document table once, after deduplication.
   const candidates=`quota_comment_candidates_0 AS MATERIALIZED (
-    SELECT q.slot,q.resource,a.path,a.doc_id,a.document_json
+    SELECT q.slot,a.path
     FROM requested q CROSS JOIN friendbook_cf_firestore_documents a INDEXED BY idx_cf_canonical_comment_page_post
     WHERE a.parent_path='comments' AND ${legacyField('postId')}=q.post_id
     UNION
-    SELECT q.slot,q.resource,a.path,a.doc_id,a.document_json
+    SELECT q.slot,a.path
     FROM requested q CROSS JOIN friendbook_cf_firestore_documents a INDEXED BY idx_cf_canonical_comment_page_post_legacy
     WHERE a.parent_path='comments' AND ${legacyField('post_id')}=q.post_id
     UNION
-    SELECT q.slot,q.resource,a.path,a.doc_id,a.document_json
+    SELECT q.slot,a.path
     FROM requested q CROSS JOIN friendbook_cf_firestore_documents a INDEXED BY idx_cf_canonical_comment_page_resource
     WHERE a.parent_path='comments' AND ${legacyField('resource')}=q.resource
   )`;
   const selects=resources.map((_,i)=>`SELECT ${i} AS slot,
-    (SELECT COUNT(*) FROM quota_comment_candidates_0 a WHERE a.slot=${i}
-      AND ${legacyRowGuard('?1',`(SELECT resource FROM requested WHERE slot=${i})`)}) AS n,
+    (SELECT COUNT(*) FROM quota_comment_candidates_0 q
+      JOIN friendbook_cf_firestore_documents a ON a.path=q.path
+      WHERE q.slot=${i}
+        AND ${legacyRowGuard('?1',`(SELECT resource FROM requested WHERE slot=${i})`)}) AS n,
     EXISTS(SELECT 1 FROM quota_comment_candidates_0 WHERE slot=${i}) AS has_candidates`);
   return db.prepare(`WITH requested(slot,resource,post_id) AS (VALUES ${requested.join(',')}), ${candidates}
     ${selects.join(' UNION ALL ')}`).bind(...bindings);
