@@ -1,4 +1,4 @@
-# Read-only, bounded aggregate diagnostics; no document identities in logs.
+# Read-only, bounded aggregate diagnostics and semantic parity preflight; no document identities or content in logs.
 name: Canonical coverage inventory
 on:
   workflow_dispatch:
@@ -26,4 +26,5 @@ jobs:
           set -e
           python3 scripts/loadtest/d1_account_usage_analytics.py --notification-inspection-budget
           python3 -m scripts.loadtest.canonical_inventory --full
+          python3 scripts/loadtest/canonical_semantic_inventory.py
           python3 scripts/loadtest/d1_account_usage_analytics.py --notification-inspection-budget
