@@ -289,14 +289,14 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
                     });
                     return;
                 }
-                checkingUsers.removeAll(ids);failedCandidates.addAll(ids);requestRender();
+                checkingUsers.removeAll(ids);failedCandidates.addAll(ids);if(empty!=null)requestRender();
             }};
             frameHandler.postDelayed(deadline,20000L);
             com.google.android.gms.tasks.Task<java.util.Map<String,Boolean>> friends=Fb.db().friendshipFactsAutomatic(ids,scope);
             friends.addOnSuccessListener(a->{
                 if(!current(token,me) || !checkingUsers.containsAll(ids))return;
                 if(a==null || a.size()!=ids.size() || !a.keySet().containsAll(ids) || a.containsValue(null)){
-                    frameHandler.removeCallbacks(deadline);checkingUsers.removeAll(ids);failedCandidates.addAll(ids);requestRender();return;
+                    frameHandler.removeCallbacks(deadline);checkingUsers.removeAll(ids);failedCandidates.addAll(ids);if(empty!=null)requestRender();return;
                 }
                 List<String> requestIds=new ArrayList<>();
                 for(String candidate:ids){
@@ -307,7 +307,7 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
                 // pending inbound/outbound requests for that UID cannot affect UI.
                 if(requestIds.isEmpty()){
                     frameHandler.removeCallbacks(deadline);checkingUsers.removeAll(ids);
-                    checkedCandidates.addAll(ids);candidatesCheckedAt=android.os.SystemClock.elapsedRealtime();requestRender();return;
+                    checkedCandidates.addAll(ids);candidatesCheckedAt=android.os.SystemClock.elapsedRealtime();if(empty!=null)requestRender();return;
                 }
                 com.friendbook.social.d1.documents.Query receivedQuery=Fb.db().collection("friend_requests")
                         .whereEqualTo("toUid",me).whereIn("fromUid",requestIds).whereEqualTo("status","pending").limit(10);
@@ -323,18 +323,18 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
                     // A saturated request page cannot prove a missing request is absent.
                     if(incomingRows.getMetadata().isFromCache() || outgoingRows.getMetadata().isFromCache()
                             || incomingRows.size()==10 || outgoingRows.size()==10){
-                        failedCandidates.addAll(ids);requestRender();return;
+                        failedCandidates.addAll(ids);if(empty!=null)requestRender();return;
                     }
                     for(DocumentSnapshot doc:incomingRows)candidateIncoming.add(doc.getString("fromUid"));
                     for(DocumentSnapshot doc:outgoingRows)candidateOutgoing.add(doc.getString("toUid"));
-                    checkedCandidates.addAll(ids);candidatesCheckedAt=android.os.SystemClock.elapsedRealtime();requestRender();
+                    checkedCandidates.addAll(ids);candidatesCheckedAt=android.os.SystemClock.elapsedRealtime();if(empty!=null)requestRender();
                 }).addOnFailureListener(error->{
                     frameHandler.removeCallbacks(deadline);
-                    if(current(token,me) && checkingUsers.containsAll(ids)){checkingUsers.removeAll(ids);failedCandidates.addAll(ids);requestRender();}
+                    if(current(token,me) && checkingUsers.containsAll(ids)){checkingUsers.removeAll(ids);failedCandidates.addAll(ids);if(empty!=null)requestRender();}
                 });
             }).addOnFailureListener(error->{
                 frameHandler.removeCallbacks(deadline);
-                if(current(token,me) && checkingUsers.containsAll(ids)){checkingUsers.removeAll(ids);failedCandidates.addAll(ids);requestRender();}
+                if(current(token,me) && checkingUsers.containsAll(ids)){checkingUsers.removeAll(ids);failedCandidates.addAll(ids);if(empty!=null)requestRender();}
             });
         }
     }
