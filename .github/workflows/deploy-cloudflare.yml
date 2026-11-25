@@ -200,7 +200,7 @@ jobs:
               '0105_retire_legacy_document_mirror.sql',
           ]
           if len(found) > len(expected) or found != expected[len(expected)-len(found):]:
-              print(f'Pending migrations are not a suffix of the reviewed 0088–0104 rollout: {found!r}', file=sys.stderr)
+              print(f'Pending migrations are not a suffix of the reviewed 0088–0105 rollout: {found!r}', file=sys.stderr)
               raise SystemExit(1)
           if found:
               print('Remaining migrations are a reviewed suffix of 0088–0104; only those will be applied.')
