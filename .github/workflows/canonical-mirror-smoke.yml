@@ -1,0 +1,40 @@
+name: Canonical document mirror production smoke
+on:
+  workflow_dispatch:
+    inputs:
+      confirm_production_smoke:
+        description: 'Create disposable Firebase identities and synthetic D1 records, then clean them up'
+        type: boolean
+        default: false
+        required: true
+  push:
+    branches: [arena/b52bc74d-friend-book]
+    paths:
+      - '.github/workflows/canonical-mirror-smoke.yml'
+      - 'scripts/loadtest/canonical_mirror_smoke.mjs'
+permissions:
+  contents: read
+concurrency:
+  group: canonical-mirror-production-smoke
+  cancel-in-progress: false
+jobs:
+  smoke:
+    if: (github.event_name == 'workflow_dispatch' && inputs.confirm_production_smoke == true) || (github.event_name == 'push' && contains(github.event.head_commit.message, '[canonical-mirror-smoke]'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Validate smoke harness syntax
+        run: node --check scripts/loadtest/canonical_mirror_smoke.mjs
+      - name: Run disposable-account canonical route smoke and verified cleanup
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          WORKER_URL: https://rough-firefly-dd7b.zulqarnaindiraj786.workers.dev
+          FIREBASE_PROJECT_ID: friendbook-17551
+        run: |
+          set -euo pipefail
+          export FIREBASE_API_KEY="$(python3 -c 'import json; print(json.load(open("app/google-services.json"))["client"][1]["api_key"][0]["current_key"])')"
+          node scripts/loadtest/canonical_mirror_smoke.mjs
