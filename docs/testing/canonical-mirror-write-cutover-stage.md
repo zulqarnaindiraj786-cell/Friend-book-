@@ -14,13 +14,15 @@ A deployment preflight transfers any historical view totals from D1 into an immu
 
 These are local Worker/SQLite tests, not production account interactions or proof of per-device behavior.
 
-## Remaining gate before physical table retirement
+## Production verification and remaining gate
 
-Do not add/apply a DROP migration until all of the following are observed after deploying the stronger canonical guard:
+The stronger canonical guard was deployed successfully by workflow run `45573010735` (successful retry), including the read-only Worker/D1 connectivity check. A manual analytics-only audit `45576914707` observed the 5-minute window 08:25:55–08:30:55 UTC: 11 query records, 41,897 D1 rows read and 1,508 written. Its reported top-priority shapes were canonical post operations; no legacy-mirror query appeared among those shapes. This output is aggregated and shape-prioritized, not a complete zero-query certificate, and the interval is short and may not represent normal account/device usage. An earlier overlapping window reported one legacy-mirror SELECT during the deployment interval. Longer windows include pre-deployment traffic and must not be attributed solely to the new Worker.
 
-1. Sanitized production D1 query telemetry shows no mirror reads or writes over a sufficiently representative post-deploy window; existing report windows are delayed/overlapping and the 07:55 UTC five-minute sample still showed one legacy-mirror read.
-2. Follow, chat/group membership, and friend-request create/accept/retry/unfriend scenarios are exercised against isolated, disposable production test accounts with cleanup and no real-user data mutation.
-3. The remaining direct legacy-table references are inventoried and shown unreachable in canonical mode; deployment/build diagnostics must not be mistaken for app traffic.
-4. A separately reviewed migration removes the table only after those gates, with a rollback/restore plan that cannot resurrect stale friendship or membership state.
+Before physical table retirement, all of the following remain required:
 
-Until those gates pass: keep the physical mirror table, do not claim it is fully retired, do not claim production behavior is stale-state-free, and do not merge or drop data based only on aggregate counts.
+1. A sufficiently representative post-deploy telemetry period with no legacy-mirror reads or writes across the complete available query set, not merely the top-ranked annotations.
+2. Follow/unfollow, chat/group membership, and friend-request create/accept/retry/unfriend scenarios exercised using isolated disposable production test accounts, with cleanup and no real-user data mutation. No such account/device smoke suite has yet been run.
+3. A full caller/rollback review. Static app references still include compatibility-mode SQL templates, while canonical mode routes through `canonicalDocumentWriteEnv` and the D1 prepare/batch wrapper; compatibility mode still depends on the mirror. The source scan found no Worker `DB.exec()`/`DB.dump()` bypass, but static review and local route tests are not proof that every production caller is exercised.
+4. A separately reviewed DROP migration and tested restore plan that cannot resurrect stale friendship or membership state.
+
+Until these gates pass, retain the physical mirror table and compatibility rollback path. Do not claim the mirror is fully retired or production behavior is stale-state-free, and do not drop data based only on aggregate counts.
