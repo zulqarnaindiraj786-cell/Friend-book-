@@ -21,7 +21,7 @@ class CanonicalInventoryTest(unittest.TestCase):
         workflow=(root/'.github/workflows/deploy-cloudflare.yml').read_text()
         config=(root/'wrangler.toml').read_text()
         self.assertIn("'0104_retire_legacy_derived_index_triggers.sql'",workflow)
-        self.assertIn("python3 scripts/loadtest/canonical_inventory.py --require-no-legacy-only",workflow)
+        self.assertIn("python3 -m scripts.loadtest.canonical_inventory --require-no-legacy-only",workflow)
         import re
         self.assertRegex(workflow,r'grep -q .*DOCUMENT_MIRROR_MODE.*canonical.*wrangler\.toml')
         self.assertIn('DOCUMENT_MIRROR_MODE = "canonical"',config)

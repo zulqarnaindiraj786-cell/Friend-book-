@@ -220,7 +220,7 @@ jobs:
             # Take a full bounded legacy-vs-canonical snapshot first and fail closed
             # if any legacy-only records remain or the inventory cap is reached.
             set -o pipefail
-            python3 scripts/loadtest/canonical_inventory.py --require-no-legacy-only 2>&1 | tee -a "$log"
+            python3 -m scripts.loadtest.canonical_inventory --require-no-legacy-only 2>&1 | tee -a "$log"
             inventory_status=${PIPESTATUS[0]}
             set +o pipefail
             if [ "$inventory_status" -ne 0 ]; then
