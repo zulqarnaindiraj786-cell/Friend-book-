@@ -2087,19 +2087,20 @@ public class ReelsFragment extends Fragment {
                 if (target.likes <= 0 || isReelReactionInFlight(target.id)) return;
                 final String targetId = target.id;
                 final String readActor = Fb.uid();
-                if (!LegacyReactionReadGate.begin(readActor,targetId,
-                        android.os.SystemClock.elapsedRealtime())) return;
+                final Object readToken = LegacyReactionReadGate.begin(readActor,targetId,
+                        android.os.SystemClock.elapsedRealtime());
+                if (readToken == null) return;
                 Fb.db().collection("posts").document(targetId).collection("reactions")
                         .limit(200)
                         .get()
                         .addOnSuccessListener(snap -> {
                             if (snap == null) {
-                                LegacyReactionReadGate.failure(readActor,targetId);
+                                LegacyReactionReadGate.failure(readActor,targetId,readToken);
                                 return;
                             }
                             boolean stillCurrent = readActor != null && readActor.equals(Fb.uid());
                             boolean reactionTapInFlight = isReelReactionInFlight(targetId);
-                            LegacyReactionReadGate.success(readActor,targetId,
+                            LegacyReactionReadGate.success(readActor,targetId,readToken,
                                     snap.isEmpty() && stillCurrent && !reactionTapInFlight,
                                     android.os.SystemClock.elapsedRealtime());
                             if (!stillCurrent || reactionTapInFlight) return;
