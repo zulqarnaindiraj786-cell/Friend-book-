@@ -76,7 +76,17 @@ def main():
         with requests.Session() as session:
             session.headers['Authorization'] = 'Bearer ' + token
             already_seeded = False
-            try:
+            mirror_retired = False
+            retirement = cloudflare(
+                session, 'POST', '/d1/database/' + DATABASE + '/query',
+                {'sql': "SELECT COUNT(*) AS n FROM sqlite_master WHERE type='table' AND name='friendbook_cf_documents_retired_backup'", 'params': []},
+            )
+            if not isinstance(retirement, list) or not retirement or not retirement[0].get('results'):
+                raise RuntimeError('D1 mirror-retirement state could not be verified; refusing legacy bootstrap')
+            mirror_retired = retirement[0]['results'][0].get('n') == 1
+            if mirror_retired:
+                already_seeded = True
+            else:
                 has_docs = cloudflare(
                     session,
                     'POST',
@@ -84,10 +94,11 @@ def main():
                     {'sql': 'SELECT 1 AS ready FROM friendbook_cf_documents LIMIT 1', 'params': []},
                 )
                 already_seeded = bool(isinstance(has_docs, list) and has_docs and has_docs[0].get('results'))
-            except Exception:
-                already_seeded = False
             if not already_seeded:
-                for migration in ('0001_additive_profiles.sql', '0009_additive_video_processing.sql', '0011_additive_app_documents.sql'):
+                migrations = ('0001_additive_profiles.sql', '0009_additive_video_processing.sql')
+                if not mirror_retired:
+                    migrations += ('0011_additive_app_documents.sql',)
+                for migration in migrations:
                     sql_text = Path('cloudflare/migrations/' + migration).read_text()
                     for stmt in statements(sql_text):
                         upper = stmt.upper()
