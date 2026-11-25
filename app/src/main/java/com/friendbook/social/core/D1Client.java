@@ -34,9 +34,25 @@ public final class D1Client {
         return request(collection,id,kind,method,body,query,false);
     }
     public static Task<JSONObject> requestInteractive(String collection,String id,String kind,String method,JSONObject body){
-        String query="reactions".equals(kind) && "PUT".equals(method)
+        boolean reactionWrite="reactions".equals(kind) && "PUT".equals(method);
+        String query=reactionWrite
                 ? (body!=null && body.optBoolean("notify",false) ? "?response=reaction&notify=1" : "?response=reaction") : null;
-        return request(collection,id,kind,method,body,query,true);
+        // `notify` is a client-side hint for the query string, not part of the
+        // reactions API body (which accepts only `type`). Sending it in JSON
+        // made the Worker reject every like/reaction PUT as invalid.
+        JSONObject payload=reactionWrite && body!=null && body.has("notify") ? withoutNotify(body) : body;
+        return request(collection,id,kind,method,payload,query,true);
+    }
+    static JSONObject withoutNotify(JSONObject body){
+        JSONObject copy=new JSONObject();
+        try{
+            java.util.Iterator<String> keys=body.keys();
+            while(keys.hasNext()){
+                String key=keys.next();
+                if(!"notify".equals(key))copy.put(key,body.get(key));
+            }
+            return copy;
+        }catch(JSONException error){throw new IllegalArgumentException("Invalid interactive request body",error);}
     }
     private static final ProfileReadFlights<List<String>,String> READ_OPERATIONS=new ProfileReadFlights<>();
     static void invalidateResourceReads(ProfileReadFlights<List<String>,String> reads,String collection,String id) {
