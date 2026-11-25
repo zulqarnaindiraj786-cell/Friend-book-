@@ -9,10 +9,12 @@ CAP = 5001
 # reached the result is explicitly incomplete; do not use it for cutover.
 FULL_CAP = 25001
 SQL = '''WITH sample AS MATERIALIZED (
-  SELECT path, collection FROM friendbook_cf_documents ORDER BY path LIMIT ?
+  SELECT path, collection, owner_uid, document_json FROM friendbook_cf_documents ORDER BY path LIMIT ?
 )
 SELECT sample.collection AS collection, COUNT(*) AS sampled,
-       SUM(CASE WHEN f.path IS NULL THEN 1 ELSE 0 END) AS legacy_only
+       SUM(CASE WHEN f.path IS NULL THEN 1 ELSE 0 END) AS legacy_only,
+       SUM(CASE WHEN f.path IS NOT NULL AND (f.owner_uid IS NOT sample.owner_uid
+                    OR f.document_json IS NOT sample.document_json) THEN 1 ELSE 0 END) AS content_mismatch
 FROM sample LEFT JOIN friendbook_cf_firestore_documents f ON f.path=sample.path
 GROUP BY sample.collection'''
 ALLOWED = {'users', 'posts', 'reels', 'stories', 'chats', 'messages', 'friends',
@@ -32,13 +34,15 @@ def inspect(query, cap=CAP):
         raise ValueError('D1 read accounting unavailable')
     collections = {}
     for row in rows:
-        sampled, missing = row.get('sampled'), row.get('legacy_only')
-        if type(sampled) is not int or type(missing) is not int or not 0 <= missing <= sampled <= cap:
+        sampled, missing, mismatch = row.get('sampled'), row.get('legacy_only'), row.get('content_mismatch')
+        if (type(sampled) is not int or type(missing) is not int or type(mismatch) is not int
+                or not 0 <= missing <= sampled <= cap or not 0 <= mismatch <= sampled - missing):
             raise ValueError('Invalid inventory')
         name = row.get('collection') if row.get('collection') in ALLOWED else 'other'
-        entry = collections.setdefault(name, {'sampled': 0, 'legacy_only': 0})
+        entry = collections.setdefault(name, {'sampled': 0, 'legacy_only': 0, 'content_mismatch': 0})
         entry['sampled'] += sampled
         entry['legacy_only'] += missing
+        entry['content_mismatch'] += mismatch
     total = sum(x['sampled'] for x in collections.values())
     if total > cap:
         raise ValueError('Invalid inventory size')

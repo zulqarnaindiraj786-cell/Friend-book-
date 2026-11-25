@@ -7,9 +7,9 @@ class CanonicalInventoryTest(unittest.TestCase):
     def setUp(self):
         self.db = sqlite3.connect(':memory:')
         self.db.row_factory = sqlite3.Row
-        self.db.executescript('CREATE TABLE friendbook_cf_documents(path TEXT PRIMARY KEY,collection TEXT);'
+        self.db.executescript('CREATE TABLE friendbook_cf_documents(path TEXT PRIMARY KEY,collection TEXT,owner_uid TEXT,document_json TEXT);'
                               'CREATE INDEX idx_friendbook_cf_documents_collection_updated ON friendbook_cf_documents(collection);'
-                              'CREATE TABLE friendbook_cf_firestore_documents(path TEXT PRIMARY KEY);')
+                              'CREATE TABLE friendbook_cf_firestore_documents(path TEXT PRIMARY KEY,owner_uid TEXT,document_json TEXT);')
         self.addCleanup(self.db.close)
 
     def query(self, sql, params):
@@ -30,22 +30,22 @@ class CanonicalInventoryTest(unittest.TestCase):
         self.assertIn('DOCUMENT_MIRROR_MODE = "dual"',config)
 
     def test_only_unshadowed_paths_count_and_unknown_names_are_aggregated(self):
-        self.db.executemany('INSERT INTO friendbook_cf_documents VALUES (?,?)',
-                            [('users/a','users'),('users/b','users'),('posts/a','posts'),('x/a','private')])
-        self.db.execute("INSERT INTO friendbook_cf_firestore_documents VALUES ('users/a')")
+        self.db.executemany('INSERT INTO friendbook_cf_documents(path,collection,owner_uid,document_json) VALUES (?,?,?,?)',
+                            [('users/a','users','a','{}'),('users/b','users','b','{}'),('posts/a','posts','a','{}'),('x/a','private','a','{}')])
+        self.db.execute("INSERT INTO friendbook_cf_firestore_documents VALUES ('users/a','a','{}')")
         result = inspect(self.query)
-        self.assertEqual(result['collections']['users'], {'sampled':2,'legacy_only':1})
-        self.assertEqual(result['collections']['other'], {'sampled':1,'legacy_only':1})
+        self.assertEqual(result['collections']['users'], {'sampled':2,'legacy_only':1,'content_mismatch':0})
+        self.assertEqual(result['collections']['other'], {'sampled':1,'legacy_only':1,'content_mismatch':0})
         self.assertNotIn('private', str(result))
         self.assertFalse(result['truncated'])
         users = inspect_users(self.query)
         self.assertEqual((users['sampled'], users['legacy_only'], users['truncated']), (2,1,False))
 
     def test_cutover_gate_requires_full_zero_legacy_only_inventory(self):
-        self.db.executemany('INSERT INTO friendbook_cf_documents VALUES (?,?)',
-                            [('users/a','users'),('posts/p','posts')])
-        self.db.executemany('INSERT INTO friendbook_cf_firestore_documents VALUES (?)',
-                            [('users/a',),('posts/p',)])
+        self.db.executemany('INSERT INTO friendbook_cf_documents(path,collection,owner_uid,document_json) VALUES (?,?,?,?)',
+                            [('users/a','users','a','{}'),('posts/p','posts','p','{}')])
+        self.db.executemany('INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?)',
+                            [('users/a','a','{}'),('posts/p','p','{}')])
         result=inspect(self.query,FULL_CAP)
         self.assertIs(require_complete_canonical(result),result)
         incomplete=dict(result,truncated=True)
@@ -56,9 +56,17 @@ class CanonicalInventoryTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'Legacy-only users'):
             require_complete_canonical({'sampled':1,'legacy_only':1,'truncated':False})
 
+    def test_inventory_detects_canonical_content_divergence_without_exposing_content(self):
+        self.db.execute("INSERT INTO friendbook_cf_documents VALUES ('users/a','users','a','{\\\"name\\\":\\\"old\\\"}')")
+        self.db.execute("INSERT INTO friendbook_cf_firestore_documents VALUES ('users/a','a','{\\\"name\\\":\\\"new\\\"}')")
+        result=inspect(self.query)
+        self.assertEqual(result['collections']['users']['legacy_only'],0)
+        self.assertEqual(result['collections']['users']['content_mismatch'],1)
+        self.assertNotIn('old',str(result));self.assertNotIn('new',str(result))
+
     def test_truncation_is_explicit_and_invalid_metadata_fails(self):
-        self.db.executemany('INSERT INTO friendbook_cf_documents VALUES (?,?)',
-                            [(f'users/{i:05}', 'users') for i in range(CAP+1)])
+        self.db.executemany('INSERT INTO friendbook_cf_documents(path,collection,owner_uid,document_json) VALUES (?,?,?,?)',
+                            [(f'users/{i:05}', 'users', 'uid', '{}') for i in range(CAP+1)])
         result = inspect(self.query)
         self.assertEqual(result['sampled'], CAP)
         self.assertTrue(result['truncated'])
