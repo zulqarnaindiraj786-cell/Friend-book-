@@ -195,14 +195,15 @@ jobs:
               '0100_interaction_state_cover.sql',
               '0101_legacy_comment_epoch.sql',
               '0102_remove_legacy_notification_recipient.sql',
+              '0103_comment_reaction_covering_index.sql',
           ]
           if len(found) > len(expected) or found != expected[len(expected)-len(found):]:
-              print(f'Pending migrations are not a suffix of the reviewed 0088–0102 rollout: {found!r}', file=sys.stderr)
+              print(f'Pending migrations are not a suffix of the reviewed 0088–0103 rollout: {found!r}', file=sys.stderr)
               raise SystemExit(1)
           if found:
-              print('Remaining migrations are a reviewed suffix of 0088–0102; only those will be applied.')
+              print('Remaining migrations are a reviewed suffix of 0088–0103; only those will be applied.')
           else:
-              print('Reviewed 0088–0102 migrations are already applied; no D1 migration will run.')
+              print('Reviewed 0088–0103 migrations are already applied; no D1 migration will run.')
           PY_PENDING
             status=$?
             if [ "$status" -ne 0 ]; then
@@ -210,6 +211,22 @@ jobs:
               echo "whoami_status=$whoami_status" >> "$GITHUB_OUTPUT"
               echo "d1_list_status=$d1_list_status" >> "$GITHUB_OUTPUT"
               echo 'migration_status=reviewed-set-mismatch' >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          fi
+          if printf '%s\n' "$pending" | grep -q '0103_comment_reaction_covering_index.sql'; then
+            # The new covering index scans reaction rows during construction.
+            # Proceed only when the account-wide delayed quota sample leaves a
+            # conservative reserve; if analytics is unavailable the migration stays pending.
+            set -o pipefail
+            python3 scripts/loadtest/d1_account_usage_analytics.py --preflight-budget 2>&1 | tee -a "$log"
+            preflight_status=${PIPESTATUS[0]}
+            set +o pipefail
+            if [ "$preflight_status" -ne 0 ]; then
+              echo 'Comment reaction index quota preflight failed; no migration attempted.' | tee -a "$log"
+              echo "whoami_status=$whoami_status" >> "$GITHUB_OUTPUT"
+              echo "d1_list_status=$d1_list_status" >> "$GITHUB_OUTPUT"
+              echo 'migration_status=comment-reaction-index-preflight-failed' >> "$GITHUB_OUTPUT"
               exit 0
             fi
           fi
