@@ -27,10 +27,10 @@ def diff(query):
  return result
 
 def inspect(query):
- rows,meta=query("SELECT name FROM sqlite_master WHERE type='table' AND name IN (?,?,?) ORDER BY name",('friendbook_cf_documents','friendbook_cf_documents_retired_backup','friendbook_cf_documents_retired_backup_schema'))
+ rows,meta=query("SELECT name FROM sqlite_master WHERE type='table' AND name IN (?,?,?,?) ORDER BY name",('friendbook_cf_documents','friendbook_cf_documents_retired_backup','friendbook_cf_documents_retired_backup_schema','friendbook_cf_documents_reappeared_0106'))
  names={r.get('name') for r in rows}
  if 'friendbook_cf_documents' in names:raise ValueError('Legacy application mirror still exists')
- required={'friendbook_cf_documents_retired_backup','friendbook_cf_documents_retired_backup_schema'}
+ required={'friendbook_cf_documents_retired_backup','friendbook_cf_documents_retired_backup_schema','friendbook_cf_documents_reappeared_0106'}
  if not required<=names:raise ValueError('Rollback snapshot or schema metadata missing')
  counts,_=query('SELECT COUNT(*) AS n FROM friendbook_cf_documents_retired_backup',())
  if len(counts)!=1 or type(counts[0].get('n')) is not int:raise ValueError('Invalid rollback snapshot count')

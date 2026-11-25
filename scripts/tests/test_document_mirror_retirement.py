@@ -20,6 +20,16 @@ class RetirementTest(unittest.TestCase):
   with self.assertRaises(ValueError):restore(query)
   # Rehearse a table reappearing after 0105: 0106 re-verifies exact parity to
   # the retained snapshot, then enforces DROP again.
+  # Re-created rows can differ from the original snapshot (the D1 setup
+  # bootstrap may seed a partial staging subset). 0106 archives those rows
+  # verbatim before removing only the application-facing table.
+  db.execute('UPDATE friendbook_cf_documents SET document_json=?,updated_at=0 WHERE path=?',('{"uid":"updated"}','users/test'))
+  db.execute('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)',('posts/reappeared','posts','reappeared','owner','{"id":"reappeared"}',0))
+  db.commit()
   db.executescript((mdir/'0106_enforce_document_mirror_retirement.sql').read_text())
   self.assertIsNone(db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='friendbook_cf_documents'").fetchone())
+  self.assertEqual(db.execute('SELECT COUNT(*) FROM friendbook_cf_documents_reappeared_0106').fetchone()[0],2)
+  self.assertEqual(db.execute("SELECT document_json FROM friendbook_cf_documents_reappeared_0106 WHERE path='users/test'").fetchone()[0],'{"uid":"updated"}')
+  self.assertEqual(db.execute('SELECT COUNT(*) FROM friendbook_cf_documents_retired_backup').fetchone()[0],1)
+  self.assertEqual(db.execute("SELECT document_json FROM friendbook_cf_documents_retired_backup WHERE path='users/test'").fetchone()[0],'{"uid":"test"}')
 if __name__=='__main__':unittest.main()
