@@ -39,9 +39,6 @@ test('Watch/Reels mediaType pages read only matching post candidates and retain 
         },
         run:async()=>stmt.run(...args),
       };}};
-    },
-    async batch(statements){
-      return sql.exec('BEGIN'), await Promise.all(statements.map(async statement=>({results:await statement.all()})));
     }
   };
   const app=createWorker(async token=>token),env={DB:db,FIREBASE_PROJECT_ID:'test'};
