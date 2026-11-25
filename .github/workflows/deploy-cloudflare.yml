@@ -225,6 +225,9 @@ jobs:
             fi
             python3 -m unittest scripts.tests.test_document_mirror_retirement -v
             python3 scripts/loadtest/d1_account_usage_analytics.py --preflight-budget
+            if printf '%s\n' "$pending" | grep -q '0106_enforce_document_mirror_retirement.sql'; then
+              python3 -m scripts.loadtest.verify_canonical_mirror_retirement --diff
+            fi
           fi
           if grep -q '^DOCUMENT_MIRROR_MODE = "canonical"$' wrangler.toml && printf '%s\n' "$pending" | grep -q '0104_retire_legacy_derived_index_triggers.sql'; then
             # The full bounded coverage scan is required for the one-time canonical cutover only.
