@@ -7,7 +7,7 @@ name: Analytics-only quota traffic report
 on:
   workflow_dispatch:
   push:
-    branches: [arena/b52bc74d-friend-book]
+    branches: [main, arena/b52bc74d-friend-book]
     paths:
       - '.github/workflows/quota-traffic-report.yml'
       - 'scripts/loadtest/quota_traffic_report.py'
