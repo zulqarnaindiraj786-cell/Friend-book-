@@ -23,6 +23,12 @@ public class LegacyReactionReadGateTest {
         assertTrue(LegacyReactionReadGate.begin("actor-empty","post-empty",18000L));
     }
 
+    @Test public void nonEmptySuccessAllowsFreshModelToReconcileAgain() {
+        assertTrue(LegacyReactionReadGate.begin("actor-nonempty","post-nonempty",3500L));
+        LegacyReactionReadGate.success("actor-nonempty","post-nonempty",false,3500L);
+        assertTrue(LegacyReactionReadGate.begin("actor-nonempty","post-nonempty",3501L));
+    }
+
     @Test public void failuresAreRetryableImmediately() {
         assertTrue(LegacyReactionReadGate.begin("actor-fail","post-fail",4000L));
         LegacyReactionReadGate.failure("actor-fail","post-fail");
