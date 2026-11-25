@@ -63,7 +63,7 @@ jobs:
           python3 cloudflare/test/schema_test.py
           python3 cloudflare/test/migration_test.py
           python3 cloudflare/test/index_plan_test.py
-          python3 -m unittest scripts.tests.test_fcm_claim_migration_gate scripts.tests.test_d1_account_usage_analytics scripts.tests.test_retired_table_preflight scripts.tests.test_verify_retired_drop scripts.tests.test_retired_migration_gate scripts.tests.test_canonical_inventory scripts.tests.test_seed_views_kv
+          python3 -m unittest scripts.tests.test_fcm_claim_migration_gate scripts.tests.test_d1_account_usage_analytics scripts.tests.test_retired_table_preflight scripts.tests.test_verify_retired_drop scripts.tests.test_retired_migration_gate scripts.tests.test_canonical_inventory scripts.tests.test_seed_views_kv scripts.tests.test_document_mirror_retirement
       - name: Verify Save Forever R2 configuration (no R2 object deletion)
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -381,6 +381,13 @@ jobs:
             if [ "$?" -ne 0 ] || ! python3 scripts/loadtest/fcm_claim_migration_gate.py schema "$schema"; then
               echo 'FCM bridge schema verification failed; old Worker remains deployed.' | tee -a "$log"
               migration_status='fcm-schema-check-failed'
+            fi
+          fi
+          if [ "$migration_status" = 0 ] && grep -q '^DOCUMENT_MIRROR_MODE = "canonical"$' wrangler.toml; then
+            python3 -m scripts.loadtest.verify_canonical_mirror_retirement 2>&1 | tee -a "$log"
+            if [ "${PIPESTATUS[0]}" -ne 0 ]; then
+              echo 'Canonical mirror retirement schema/backup verification failed; no Worker deployment attempted.' | tee -a "$log"
+              migration_status='canonical-mirror-verification-failed'
             fi
           fi
           echo "whoami_status=$whoami_status" >> "$GITHUB_OUTPUT"
