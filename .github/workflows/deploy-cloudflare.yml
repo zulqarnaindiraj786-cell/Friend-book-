@@ -700,21 +700,28 @@ jobs:
           path: d1-feed-coverage.json
       - name: Verify read-only Worker and D1 connectivity
         run: |
-          curl --fail --silent --show-error --max-time 30 --retry 4 --retry-all-errors --retry-delay 3 \
-            https://rough-firefly-dd7b.zulqarnaindiraj786.workers.dev/health -o /tmp/friendbook-health.json
-          curl --fail --silent --show-error --max-time 30 --retry 4 --retry-all-errors --retry-delay 3 \
-            https://rough-firefly-dd7b.zulqarnaindiraj786.workers.dev/health/r2 -o /tmp/friendbook-health-r2.json
+          for item in health health-r2; do
+            path=/health
+            [ "$item" = health-r2 ] && path=/health/r2
+            if ! curl --fail --silent --show-error --max-time 30 --retry 4 --retry-all-errors --retry-delay 3 \
+              "https://rough-firefly-dd7b.zulqarnaindiraj786.workers.dev$path" -o "/tmp/friendbook-$item.json"; then
+              echo "Health endpoint $path failed; sanitized response follows:"
+              cat "/tmp/friendbook-$item.json" 2>/dev/null || true
+              exit 1
+            fi
+          done
           python3 - <<'PY'
           import json
           with open('/tmp/friendbook-health.json') as f:
               health = json.load(f)
-              assert health.get('ok') is True, 'Worker/D1 health check failed'
-              assert health.get('d1InteractionsEnabled') is True, 'Worker D1 interaction gate is not enabled'
-              views = health.get('views') or {}
-              assert views.get('kv') is True, 'Live Worker VIEWS KV binding is not active'
           with open('/tmp/friendbook-health-r2.json') as f:
               r2 = json.load(f)
-              assert r2.get('ok') is True and r2.get('r2Bound') is True and r2.get('videoR2Enabled') is True, 'Worker/R2 health check failed'
+          print('Sanitized health flags:', json.dumps({'health': health, 'r2': r2}, sort_keys=True))
+          assert health.get('ok') is True, 'Worker/D1 health check failed'
+          assert health.get('d1InteractionsEnabled') is True, 'Worker D1 interaction gate is not enabled'
+          views = health.get('views') or {}
+          assert views.get('kv') is True, 'Live Worker VIEWS KV binding is not active'
+          assert r2.get('ok') is True and r2.get('r2Bound') is True and r2.get('videoR2Enabled') is True, 'Worker/R2 health check failed'
           print('Worker health + read-only D1 SELECT 1 + R2 bucket head check passed. No user data was written.')
           PY
           code=$(curl --silent --show-error --max-time 30 -o /tmp/friendbook-auth.json -w '%{http_code}' \
