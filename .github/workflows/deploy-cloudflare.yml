@@ -197,6 +197,7 @@ jobs:
               '0102_remove_legacy_notification_recipient.sql',
               '0103_comment_reaction_covering_index.sql',
               '0104_retire_legacy_derived_index_triggers.sql',
+              '0105_retire_legacy_document_mirror.sql',
           ]
           if len(found) > len(expected) or found != expected[len(expected)-len(found):]:
               print(f'Pending migrations are not a suffix of the reviewed 0088–0104 rollout: {found!r}', file=sys.stderr)
@@ -214,6 +215,15 @@ jobs:
               echo 'migration_status=reviewed-set-mismatch' >> "$GITHUB_OUTPUT"
               exit 0
             fi
+          fi
+          if printf '%s\n' "$pending" | grep -q '0105_retire_legacy_document_mirror.sql'; then
+            if [[ "$HEAD_COMMIT_MESSAGE" != *'[drop-canonical-mirror]'* ]] || ! grep -q '^DOCUMENT_MIRROR_MODE = "canonical"$' wrangler.toml; then
+              echo 'Canonical mirror retirement requires explicit commit authorization and canonical mode; no migration attempted.' | tee -a "$log"
+              echo 'migration_status=canonical-mirror-retirement-not-authorized' >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            python3 -m unittest scripts.tests.test_document_mirror_retirement -v
+            python3 scripts/loadtest/d1_account_usage_analytics.py --preflight-budget
           fi
           if grep -q '^DOCUMENT_MIRROR_MODE = "canonical"$' wrangler.toml && printf '%s\n' "$pending" | grep -q '0104_retire_legacy_derived_index_triggers.sql'; then
             # The full bounded coverage scan is required for the one-time canonical cutover only.

@@ -99,7 +99,8 @@ async function main(){
       // Exact random test paths only. This is the emergency cleanup after route tests.
       try{
         await d1(`DELETE FROM friendbook_cf_firestore_documents WHERE path IN (${marks})`,paths);
-        await d1(`DELETE FROM friendbook_cf_documents WHERE path IN (${marks})`,paths);
+        const mirror=await d1("SELECT name FROM sqlite_master WHERE type='table' AND name='friendbook_cf_documents'");
+        if(mirror.results.length)await d1(`DELETE FROM friendbook_cf_documents WHERE path IN (${marks})`,paths);
         if(a&&b){const [low,high]=[a.uid,b.uid].sort();await d1('DELETE FROM friendbook_cf_trusted_friendships WHERE uid_low=? AND uid_high=?',[low,high]);}
         const remaining=await d1(`SELECT COUNT(*) AS n FROM friendbook_cf_firestore_documents WHERE path IN (${marks})`,paths);
         d1CleanupOk=remaining.results?.[0]?.n===0;
