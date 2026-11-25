@@ -38,3 +38,5 @@ jobs:
 # Refresh after the group-page backend rollout; activity may be quiet and windows overlap.
 # Refresh after the story-page backend rollout; analytics-only and not a daily certificate.
 # Post-Home-head backend rollout refresh; delayed analytics are not matched-session proof.
+
+# Post-deployment quota snapshot; analytics-only and no application load.
