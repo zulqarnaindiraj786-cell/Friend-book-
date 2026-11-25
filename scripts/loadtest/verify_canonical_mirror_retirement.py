@@ -11,7 +11,7 @@ def diff(query):
  (SELECT COUNT(*) FROM friendbook_cf_documents_retired_backup) snapshot_rows,
  (SELECT COUNT(*) FROM friendbook_cf_documents c LEFT JOIN friendbook_cf_documents_retired_backup b ON b.path=c.path WHERE b.path IS NULL) current_only,
  (SELECT COUNT(*) FROM friendbook_cf_documents_retired_backup b LEFT JOIN friendbook_cf_documents c ON c.path=b.path WHERE c.path IS NULL) snapshot_only,
- (SELECT COUNT(*) FROM friendbook_cf_documents c JOIN friendbook_cf_documents_retired_backup b ON b.path=c.path WHERE c.collection IS NOT b.collection OR c.doc_id IS NOT b.doc_id OR c.owner_uid IS NOT b.owner_uid OR c.document_json IS NOT b.document_json OR c.updated_at IS NOT b.updated_at) changed_rows''')
+ (SELECT COUNT(*) FROM friendbook_cf_documents c JOIN friendbook_cf_documents_retired_backup b ON b.path=c.path WHERE c.collection IS NOT b.collection OR c.doc_id IS NOT b.doc_id OR c.owner_uid IS NOT b.owner_uid OR c.document_json IS NOT b.document_json OR c.updated_at IS NOT b.updated_at) changed_rows''',())
  if len(rows)!=1 or any(type(rows[0].get(k)) is not int for k in ('current_rows','snapshot_rows','current_only','snapshot_only','changed_rows')):raise ValueError('invalid aggregate diff')
  result={**rows[0],'rows_read':meta.get('rows_read')}
  print('::notice:: Canonical mirror snapshot diff '+json.dumps(result,sort_keys=True))
