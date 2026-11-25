@@ -23,7 +23,7 @@ class CanonicalInventoryTest(unittest.TestCase):
         self.assertIn("'0104_retire_legacy_derived_index_triggers.sql'",workflow)
         self.assertIn("python3 -m scripts.loadtest.canonical_inventory --require-no-legacy-only",workflow)
         inventory_workflow=(root/'.github/workflows/canonical-inventory.yml').read_text()
-        self.assertIn('python3 scripts/loadtest/canonical_semantic_inventory.py',inventory_workflow)
+        self.assertIn('python3 -m scripts.loadtest.canonical_semantic_inventory',inventory_workflow)
         self.assertIn("printf '%s\\n' \"$pending\" | grep -q '0104_retire_legacy_derived_index_triggers.sql'",workflow)
         self.assertIn('skipping repeated full D1 scan',workflow)
         import re
