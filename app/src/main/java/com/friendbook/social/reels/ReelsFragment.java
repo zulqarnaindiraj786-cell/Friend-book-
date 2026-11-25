@@ -1342,7 +1342,14 @@ public class ReelsFragment extends Fragment {
                     return true;
                 });
                 likeCount.setOnClickListener(v -> {
-                    if (reel != null) Reactions.showReelReactors(a, reel);
+                    final Models.Reel target=reel;
+                    if (target == null) return;
+                    final String actor=Fb.uid();
+                    hydrateLegacyPostReelReactionsIfNeeded(target, () -> {
+                        if (actor!=null && actor.equals(Fb.uid()) && reel==target
+                                && a!=null && !a.isFinishing() && !a.isDestroyed())
+                            Reactions.showReelReactors(a,target);
+                    });
                 });
 
                 View.OnClickListener openCommentsListener = v -> {
@@ -1542,7 +1549,6 @@ public class ReelsFragment extends Fragment {
                 renderCreatorAndCaption();
                 renderCounts();
                 refreshEngagement();
-                hydrateLegacyPostReelReactionsIfNeeded(r);
 
                 if (sameVideo) {
                     if (autoPlayNow) play();
@@ -2079,23 +2085,34 @@ public class ReelsFragment extends Fragment {
                 releasePlayerOnly();
             }
 
-            /** Reconciles subcollection reactions (`posts/{id}/reactions`) for legacy Video Posts with empty `reactionsMap`. */
-            private void hydrateLegacyPostReelReactionsIfNeeded(final Models.Reel target) {
-                if (target == null || !target.isFromPost || target.id == null || target.id.isEmpty()) return;
-                if(com.friendbook.social.core.D1Client.enabled(target.isFromPost?"posts":"reels"))return;
-                if (target.reactions != null && !target.reactions.isEmpty()) return;
-                if (target.likes <= 0 || isReelReactionInFlight(target.id)) return;
+            /** Loads legacy reactor identities only when the viewer explicitly opens the reactor sheet. */
+            private void hydrateLegacyPostReelReactionsIfNeeded(final Models.Reel target,
+                                                                 final Runnable onReady) {
+                if (target == null || !target.isFromPost || target.id == null || target.id.isEmpty()) {
+                    if(onReady!=null)onReady.run();
+                    return;
+                }
+                if(com.friendbook.social.core.D1Client.enabled("posts")
+                        || (target.reactions != null && !target.reactions.isEmpty())
+                        || target.likes <= 0 || isReelReactionInFlight(target.id)) {
+                    if(onReady!=null)onReady.run();
+                    return;
+                }
                 final String targetId = target.id;
                 final String readActor = Fb.uid();
                 final Object readToken = LegacyReactionReadGate.begin(readActor,targetId,
                         android.os.SystemClock.elapsedRealtime());
-                if (readToken == null) return;
+                if (readToken == null) {
+                    if(onReady!=null)onReady.run();
+                    return;
+                }
                 Fb.db().collection("posts").document(targetId).collection("reactions")
                         .limit(200)
                         .get()
                         .addOnSuccessListener(snap -> {
                             if (snap == null) {
                                 LegacyReactionReadGate.failure(readActor,targetId,readToken);
+                                if(onReady!=null && readActor!=null && readActor.equals(Fb.uid()))onReady.run();
                                 return;
                             }
                             boolean stillCurrent = readActor != null && readActor.equals(Fb.uid());
@@ -2117,19 +2134,19 @@ public class ReelsFragment extends Fragment {
                             }
                             target.reactions = loaded;
                             target.likedBy = uids;
-                            if (snap.size() < 200) {
-                                target.likes = loaded.size();
-                            } else {
-                                target.likes = Math.max(target.likes, loaded.size());
-                            }
+                            if (snap.size() < 200) target.likes = loaded.size();
+                            else target.likes = Math.max(target.likes, loaded.size());
                             if (reel != null && targetId.equals(reel.id)) {
                                 reel.reactions = loaded;
                                 reel.likedBy = uids;
                                 reel.likes = target.likes;
                                 renderCounts();
                             }
-                        }).addOnFailureListener(error ->
-                                LegacyReactionReadGate.failure(readActor,targetId,readToken));
+                            if(onReady!=null)onReady.run();
+                        }).addOnFailureListener(error -> {
+                            LegacyReactionReadGate.failure(readActor,targetId,readToken);
+                            if(onReady!=null && readActor!=null && readActor.equals(Fb.uid()))onReady.run();
+                        });
             }
 
             // Only explicit bind/resume/authoritative metadata refresh requests
