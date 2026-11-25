@@ -215,10 +215,11 @@ jobs:
               exit 0
             fi
           fi
-          if grep -q '^DOCUMENT_MIRROR_MODE = "canonical"$' wrangler.toml; then
-            # Mirror writes are disabled in the Worker shipped by this branch.
-            # Take a full bounded legacy-vs-canonical snapshot first and fail closed
-            # if any legacy-only records remain or the inventory cap is reached.
+          if grep -q '^DOCUMENT_MIRROR_MODE = "canonical"$' wrangler.toml && printf '%s\n' "$pending" | grep -q '0104_retire_legacy_derived_index_triggers.sql'; then
+            # The full bounded coverage scan is required for the one-time canonical cutover only.
+            # Migration 0104 removes the mirror-derived triggers and canonical mode disables mirror
+            # writes; repeating the 46k-row scan on every later deploy would consume quota without
+            # adding a new safety check. Never skip it while 0104 is still pending.
             set -o pipefail
             python3 -m scripts.loadtest.canonical_inventory --require-no-legacy-only 2>&1 | tee -a "$log"
             inventory_status=${PIPESTATUS[0]}
@@ -230,6 +231,8 @@ jobs:
               echo 'migration_status=canonical-coverage-preflight-failed' >> "$GITHUB_OUTPUT"
               exit 0
             fi
+          elif grep -q '^DOCUMENT_MIRROR_MODE = "canonical"$' wrangler.toml; then
+            echo 'Canonical inventory already passed and migration 0104 is applied; skipping repeated full D1 scan.' | tee -a "$log"
           fi
           if printf '%s\n' "$pending" | grep -q '0103_comment_reaction_covering_index.sql'; then
             # The new covering index scans reaction rows during construction.

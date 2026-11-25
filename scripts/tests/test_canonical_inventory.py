@@ -22,6 +22,8 @@ class CanonicalInventoryTest(unittest.TestCase):
         config=(root/'wrangler.toml').read_text()
         self.assertIn("'0104_retire_legacy_derived_index_triggers.sql'",workflow)
         self.assertIn("python3 -m scripts.loadtest.canonical_inventory --require-no-legacy-only",workflow)
+        self.assertIn("printf '%s\\n' \"$pending\" | grep -q '0104_retire_legacy_derived_index_triggers.sql'",workflow)
+        self.assertIn('skipping repeated full D1 scan',workflow)
         import re
         self.assertRegex(workflow,r'grep -q .*DOCUMENT_MIRROR_MODE.*canonical.*wrangler\.toml')
         self.assertIn('DOCUMENT_MIRROR_MODE = "canonical"',config)
