@@ -55,7 +55,7 @@ test('engagement summary binds the comment actor to parameter one, not an unboun
   const db=f.env.DB; const prepare=db.prepare; let summarySql='';
   db.prepare=function(sql){if(sql.includes('AS preview_json'))summarySql=sql;return prepare.call(this,sql);};
   assert.equal((await call(f.env,'reactions')).status,200);
-  assert.match(summarySql,/r\.uid=\?1\)/);
+  assert.match(summarySql,/r\.uid=\?1 THEN/);
   assert.doesNotMatch(summarySql,/\?(?![0-9])/,'D1 requires exactly three explicitly numbered bindings');
 });
 test('reaction retries set state without duplicate increments or trusting client actor', async t => {

@@ -4,15 +4,19 @@ const reply = (data, status = 200) => Response.json(data, { status, headers: { '
 const validId = id => typeof id === 'string' && /^[a-zA-Z0-9_-]{1,128}$/.test(id);
 const types = new Set(['like','love','haha','wow','sad','angry']);
 export const commentSelect = `SELECT c.*,COALESCE(l.unattributed_count,0) AS historical_unattributed,COALESCE(h.created_at_known,1) AS created_at_known,d.media_url,d.mentions,d.name,d.photo,d.edited,d.removed,
- (SELECT COUNT(*) FROM friendbook_cf_comment_reactions r WHERE r.resource=c.resource AND r.id=c.id AND r.type IS NOT NULL)+COALESCE(l.unattributed_count,0) AS likes,
- (SELECT type FROM friendbook_cf_comment_reactions r WHERE r.resource=c.resource AND r.id=c.id AND r.uid=?) AS mine
+ (SELECT json_object('likes',COUNT(CASE WHEN r.type IS NOT NULL THEN 1 END),
+   'mine',MAX(CASE WHEN r.uid=?1 THEN r.type END)) FROM friendbook_cf_comment_reactions r
+   WHERE r.resource=c.resource AND r.id=c.id) AS reaction_summary
  FROM friendbook_cf_comments c LEFT JOIN friendbook_cf_comment_details d ON d.resource=c.resource AND d.id=c.id
  LEFT JOIN friendbook_cf_comment_history h ON h.resource=c.resource AND h.id=c.id
  LEFT JOIN friendbook_cf_comment_legacy_aggregates l ON l.resource=c.resource AND l.id=c.id`;
 function dto(row, uid) {
-  return { ...row, authorId:row.uid,authorName:row.name || 'friendbook User',authorPhoto:row.photo || '',
+  let summary={};try{summary=JSON.parse(row.reaction_summary||'{}');}catch{}
+  const likes=Number.isFinite(Number(summary.likes))?Number(summary.likes)+(Number(row.historical_unattributed)||0):Number(row.likes)||0;
+  const mine=typeof summary.mine==='string'?summary.mine:row.mine||null;
+  return { ...row,likes,mine,authorId:row.uid,authorName:row.name || 'friendbook User',authorPhoto:row.photo || '',
     content:row.text,imageUrl:row.media_url || '',parentId:row.parent_id || '',createdAt:row.created_at_known===0?null:row.created_at,createdAtKnown:row.created_at_known!==0,
-    edited:!!row.edited,mentions:JSON.parse(row.mentions || '[]'), reactions:row.mine?{[uid]:row.mine}:{} };
+    edited:!!row.edited,mentions:JSON.parse(row.mentions || '[]'), reactions:mine?{[uid]:mine}:{} };
 }
 export function normalized(row, uid) { return dto(row,uid); }
 function legacyMillis(value) {
@@ -69,17 +73,29 @@ export function legacyCommentCountsStatement(db,resources,blocked=[]) {
 export function legacyCommentCountsWithCandidatesStatement(db,resources,blocked=[]) {
   if(!Array.isArray(resources) || resources.length<1 || resources.length>20)throw Error('Invalid count batch');
   const bindings=[JSON.stringify(blocked||[])];
-  const ctes=[],selects=[];
+  const requested=[],values=[];
   resources.forEach((resource,i)=>{
     const post=resource.slice(resource.indexOf('/')+1);
     bindings.push(resource,post);
-    const res=`?${2+i*2}`,id=`?${3+i*2}`,name=`quota_comment_candidates_${i}`;
-    ctes.push(`${name} AS MATERIALIZED (${legacyCandidatePaths(id,res)})`);
-    selects.push(`SELECT ${i} AS slot, (SELECT COUNT(*) FROM friendbook_cf_firestore_documents a
-      WHERE a.path IN (SELECT path FROM ${name}) AND ${legacyRowGuard('?1',res)}) AS n,
-      EXISTS(SELECT 1 FROM ${name}) AS has_candidates`);
+    const res=`?${2+i*2}`,id=`?${3+i*2}`;
+    requested.push(`(${i},${res},${id})`);
   });
-  return db.prepare(`WITH ${ctes.join(',')} ${selects.join(' UNION ALL ')}`).bind(...bindings);
+  // Scan the canonical comments partition once for the whole resource batch.
+  // The previous per-resource CTE ran three UNION scans for each item. This
+  // shared materialized candidate set preserves all three legacy field shapes
+  // and de-duplicates a document that contains more than one route key.
+  const candidates=`quota_comment_candidates_0 AS MATERIALIZED (
+    SELECT DISTINCT q.slot,q.resource,a.path,a.doc_id,a.document_json
+    FROM friendbook_cf_firestore_documents a CROSS JOIN requested q
+    WHERE a.parent_path='comments' AND (${legacyField('postId')}=q.post_id
+      OR ${legacyField('post_id')}=q.post_id OR ${legacyField('resource')}=q.resource)
+  )`;
+  const selects=resources.map((_,i)=>`SELECT ${i} AS slot,
+    (SELECT COUNT(*) FROM quota_comment_candidates_0 a WHERE a.slot=${i}
+      AND ${legacyRowGuard('?1',`(SELECT resource FROM requested WHERE slot=${i})`)}) AS n,
+    EXISTS(SELECT 1 FROM quota_comment_candidates_0 WHERE slot=${i}) AS has_candidates`);
+  return db.prepare(`WITH requested(slot,resource,post_id) AS (VALUES ${requested.join(',')}), ${candidates}
+    ${selects.join(' UNION ALL ')}`).bind(...bindings);
 }
 
 export async function legacyCommentCount(db,resource,blocked=[]) {

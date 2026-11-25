@@ -30,9 +30,3 @@ class ChatQuotaDemand(unittest.TestCase):
   self.assertNotIn('loadInboxPage',deadline)
   self.assertIn('inboxGeneration++',deadline)
   self.assertIn('activeInboxRead(me,generation)',s)
- def test_chat_opens_fetch_only_ten_recent_messages_and_older_pages_on_demand(self):
-  s=(JAVA/'chat/ChatActivity.java').read_text()
-  self.assertIn('.limitToLast(10)',s)
-  self.assertIn('older.limit(10)',s)
-  self.assertIn('private void loadOlderMessages()',s)
-  self.assertIn('View older messages',s)

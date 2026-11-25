@@ -24,7 +24,8 @@ test('candidate-aware counts exactly match the legacy evaluator for all route an
  const resources=Array.from({length:20},(_,i)=>`posts/p${i}`);resources.push('posts/empty_count','posts/["str"]','reels/p0');
  let plan='';const planDb={prepare(query){return {bind(...args){plan=f.sql.prepare('EXPLAIN QUERY PLAN '+query).all(...args).map(row=>row.detail).join('\n');return f.env.DB.prepare(query).bind(...args);}};}};
  await legacyCommentCountsWithCandidatesStatement(planDb,['posts/p0'],[]).all();
- for(const name of ['idx_cf_canonical_comment_page_post','idx_cf_canonical_comment_page_post_legacy','idx_cf_canonical_comment_page_resource'])assert.ok(plan.includes(name));
+ assert.equal((plan.match(/SEARCH a USING INDEX idx_friendbook_cf_firestore_parent/g)||[]).length,1,'all requested resources share one comments-partition scan');
+ assert.match(plan,/MATERIALIZE quota_comment_candidates_0/);
  for(const blocked of [[],['blocked','blocked']])for(let offset=0;offset<resources.length;offset+=10){
   const page=resources.slice(offset,offset+10),expected=await Promise.all(page.map(r=>legacyCommentCount(f.env.DB,r,blocked)));
   const rows=(await legacyCommentCountsWithCandidatesStatement(f.env.DB,page,blocked).all()).results;

@@ -74,8 +74,9 @@ function engagementStatement(db, resource, uid, blocked, useTotals = true) {
       'created_at', p.created_at, 'historical_unattributed', p.historical_unattributed,
       'created_at_known', p.created_at_known, 'media_url', p.media_url, 'mentions', p.mentions,
       'name', p.name, 'photo', p.photo, 'edited', p.edited, 'removed', p.removed,
-      'likes', p.likes, 'mine', p.mine
-    )) FROM (${commentSelect.replace('r.uid=?', 'r.uid=?1')} WHERE c.resource = ?2 AND COALESCE(d.removed, 0) = 0
+      'likes', COALESCE(json_extract(p.reaction_summary,'$.likes'),0)+COALESCE(p.historical_unattributed,0),
+      'mine', json_extract(p.reaction_summary,'$.mine')
+    )) FROM (${commentSelect} WHERE c.resource = ?2 AND COALESCE(d.removed, 0) = 0
       AND c.uid NOT IN (SELECT value FROM json_each(?3))
       ORDER BY c.created_at DESC, c.id DESC LIMIT 2) p), '[]') ELSE '[]' END AS preview_json
     FROM (SELECT ${count} AS total_comments LIMIT 1) engagement_count`)

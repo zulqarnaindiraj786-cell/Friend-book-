@@ -18,7 +18,7 @@ const FIELDS = ['path', 'parent_path', 'collection_id', 'doc_id', 'owner_uid', '
 const SAFE = new Set(['equivalent_root_only', 'facade_projection_diff']);
 // D1 rejects more than 100 bound variables per statement. Each guarded row
 // binds 13 values (8 canonical columns + 5 source guards), so seven rows fit.
-export 
+export
 
 // Keyset page over one collection. The composite index (collection, updated_at)
 // avoids a table scan; the NOT EXISTS probe is answered by the canonical

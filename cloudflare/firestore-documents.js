@@ -316,6 +316,21 @@ export async function readRow(db, path) {
   return normalizeRootStorageRow(await readRootStorageRow(db,path));
 }
 
+// Batch pre-reads for generic Firestore write batches. Preserve the exact row
+// shape and canonical-root marker used by readRow(), while replacing one D1
+// round trip per operation with bounded IN queries (D1 bind ceiling: 100).
+export async function readRows(db, paths) {
+  const unique=[...new Set((paths||[]).filter(path=>typeof path==='string' && path.length>0))];
+  const result=new Map(unique.map(path=>[path,null]));
+  for(let offset=0;offset<unique.length;offset+=80){
+    const chunk=unique.slice(offset,offset+80),marks=chunk.map(()=>'?').join(',');
+    const rows=await db.prepare(`SELECT path,parent_path,collection_id,doc_id,owner_uid,document_json,create_time,update_time
+      FROM friendbook_cf_firestore_documents WHERE path IN (${marks})`).bind(...chunk).all();
+    for(const row of rows.results||[])result.set(row.path,isRootDocument(row.path)?normalizeRootStorageRow(row):row);
+  }
+  return result;
+}
+
 // Only the trusted Worker entry point creates this request-local snapshot.
 export async function readProfileMutationSnapshot(db,uid) {
   const accountRow=await readRootStorageRow(db,`users/${uid}`);
@@ -1270,7 +1285,10 @@ async function feedEngagement(db, env, uid, body, docs, requestUserReads) {
   if (body?.feedEngagement!==true || body.parent!=='posts' || !Number.isInteger(body.limit)
       || body.limit<1 || body.limit>MAX_FEED_ENGAGEMENT_PAGE || env.D1_INTERACTIONS_ENABLED!=='true' || !docs.length) return docs;
   try {
-    const resources=docs.map(d=>`posts/${d.id}`);
+    const enrichCount=Number.isInteger(body.feedEngagementLimit) && body.feedEngagementLimit>0
+      ? Math.min(Number.isInteger(body.limit) && body.limit>0 ? body.limit : docs.length,body.feedEngagementLimit,docs.length) : docs.length;
+    const pageDocs=docs.slice(0,enrichCount);
+    const resources=pageDocs.map(d=>`posts/${d.id}`);
     const stateRows=async()=>{
       const slots=resources.map(()=>'?').join(',');
       const read=index=>db.prepare(`SELECT resource,state FROM friendbook_cf_interaction_resources ${index} WHERE resource IN (${slots})`).bind(...resources).all();
@@ -1292,7 +1310,7 @@ async function feedEngagement(db, env, uid, body, docs, requestUserReads) {
     const primarySessions=typeof env.DB.withSession==='function';
     const summaryDb=primarySessions?env.DB.withSession('first-primary'):db;
     const preloaded=await batchEngagementReads(summaryDb,resources.filter(resource=>!stateByResource.get(resource) || stateByResource.get(resource)==='verified'),uid,blocked,primarySessions?env.DB:null);
-    return await mapBounded(docs,3,async doc=>{
+    const enriched=await mapBounded(pageDocs,3,async doc=>{
       const resource=`posts/${doc.id}`;
       const state=stateByResource.get(resource);
       if (state && state!=='verified') return doc;
@@ -1311,6 +1329,8 @@ async function feedEngagement(db, env, uid, body, docs, requestUserReads) {
       }
       catch { return doc; } // A summary failure must not hide an authorized post.
     });
+    const byId=new Map(enriched.map(doc=>[doc.id,doc]));
+    return docs.map(doc=>byId.get(doc.id)||doc);
   } catch { return docs; }
 }
 
@@ -3929,20 +3949,11 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0, ct
       catch { return json({error:'Friendship changed or unavailable'},409); }
     }
     // Pre-read existing docs so FieldValue transforms resolve against current state.
-    const cache = new Map();
-    // Chat sends carry exactly two independent pre-reads (message and room).
-    // Keep large generic batches sequential to avoid flooding D1.
+    // Batch them by path instead of issuing one D1 statement per operation.
     const paths=[...new Set(ops.map(op=>op?.path).filter(Boolean))];
-    const room=paths.find(p=>typeof p==='string' && /^chats\/[^/]+$/.test(p));
-    try {
-      if (ops.length===2 && paths.length===2 && room && paths.some(p=>typeof p==='string'
-          && p.startsWith(`${room}/messages/`) && splitPath(p)?.length===4)) {
-        const rows=await Promise.all(paths.map(p=>readRow(db,p)));
-        paths.forEach((p,i)=>cache.set(p,rows[i]));
-      } else {
-        for (const p of paths) cache.set(p,await readRow(db,p));
-      }
-    } catch { return json({ error: 'Read unavailable' }, 503); }
+    let cache;
+    try { cache=await readRows(db,paths); }
+    catch { return json({ error: 'Read unavailable' }, 503); }
     // Compute final docs in memory, then write atomically via D1 batch.
     const finalDocs = new Map(); // path -> {doc|null(deleted), existingRow}
     const order = [];

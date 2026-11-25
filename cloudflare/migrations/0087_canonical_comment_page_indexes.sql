@@ -36,4 +36,3 @@ CREATE INDEX IF NOT EXISTS idx_cf_canonical_comment_page_resource ON friendbook_
   THEN CAST(json_extract(document_json,'$.createdAt') AS INTEGER) ELSE -1 END),
   doc_id
 ) WHERE parent_path='comments';
-

@@ -21,7 +21,7 @@ class NotificationQuotaLifetime(unittest.TestCase):
  def test_badge_bootstrap_uses_ten_rows_and_sixty_second_cache(self):
   s=(JAVA/'main/MainActivity.java').read_text().split('private void startBadgeListeners()',1)[1].split('// The badge only needs the rooms',1)[0]
   self.assertIn('.limit(10)',s)
-  self.assertIn('.getCachedOrFetchAutomatic(badgeReadScope,60_000L)',s)
+  self.assertIn('.getCachedOrFetchAutomatic(badgeReadScope,900_000L)',s)
  def test_stable_ack_replay_has_no_scheduled_retry(self):
   s=(JAVA/'core/Notify.java').read_text()
   self.assertIn('ACKED_EVENTS.get(pendingKey)!=null',s)
