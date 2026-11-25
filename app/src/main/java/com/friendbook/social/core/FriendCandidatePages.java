@@ -14,6 +14,16 @@ public final class FriendCandidatePages {
         for(String other:candidates){pairs.add(Arrays.asList(actor,other));pairs.add(Arrays.asList(other,actor));}
         return pairs;
     }
+    /** Only candidates not already confirmed as friends need pending-request probes. */
+    public static List<String> requestCheckCandidates(List<String> candidates,Map<String,Boolean> facts){
+        if(candidates==null || candidates.isEmpty() || candidates.size()>10 || facts==null
+                || facts.size()!=candidates.size() || !facts.keySet().containsAll(candidates) || facts.containsValue(null)
+                || new HashSet<>(candidates).size()!=candidates.size())
+            throw new IllegalArgumentException("Incomplete friendship facts");
+        List<String> result=new ArrayList<>();
+        for(String candidate:candidates)if(!Boolean.TRUE.equals(facts.get(candidate)))result.add(candidate);
+        return result;
+    }
     public static boolean canOfferRequest(boolean verified,boolean friend,boolean incoming,boolean outgoing){
         return verified && !friend && !incoming && !outgoing;
     }

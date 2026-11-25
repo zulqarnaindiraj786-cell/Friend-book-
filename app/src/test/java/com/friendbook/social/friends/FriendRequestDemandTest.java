@@ -91,22 +91,16 @@ public class FriendRequestDemandTest {
    pending.setResult(null);Shadows.shadowOf(Looper.getMainLooper()).idle();for(int i=0;i<100;i++)f.primary(row);verify(doc,times(1)).delete();verify(requests,never()).whereEqualTo(anyString(),any());
   }
  }
- @Test public void candidateChecksStayScopedAndDoNotTimeoutWhileBackgrounded()throws Exception{
+ @Test public void candidateChecksAreCoalescedAndWaitForFriendFactsBeforeRequestReads()throws Exception{
   try(MockedStatic<Fb> fb=mockStatic(Fb.class);MockedStatic<com.friendbook.social.App> app=mockStatic(com.friendbook.social.App.class)){
    fb.when(Fb::uid).thenReturn("candidate-actor");app.when(com.friendbook.social.App::isForeground).thenReturn(false);
-   FriendsFragment f=fragment("candidate-actor");Models.User u=new Models.User();u.uid="candidate";((List<Models.User>)field("suggestions").get(f)).add(u);
+   FriendsFragment f=fragment("candidate-actor");field("empty").set(f,null);Models.User u=new Models.User();u.uid="candidate";((List<Models.User>)field("suggestions").get(f)).add(u);
    D1DocumentStore db=mock(D1DocumentStore.class);fb.when(Fb::db).thenReturn(db);
    TaskCompletionSource<Map<String,Boolean>> facts=new TaskCompletionSource<>();when(db.friendshipFactsAutomatic(anyList(),any(ForegroundReadScope.class))).thenReturn(facts.getTask());
-   CollectionReference requests=mock(CollectionReference.class);Query received=mock(Query.class),sent=mock(Query.class);when(db.collection("friend_requests")).thenReturn(requests);
-   when(requests.whereEqualTo("toUid","candidate-actor")).thenReturn(received);when(requests.whereEqualTo("fromUid","candidate-actor")).thenReturn(sent);
-   when(received.whereIn(eq("fromUid"),anyList())).thenReturn(received);when(sent.whereIn(eq("toUid"),anyList())).thenReturn(sent);
-   when(received.whereEqualTo("status","pending")).thenReturn(received);when(sent.whereEqualTo("status","pending")).thenReturn(sent);
-   when(received.limit(10)).thenReturn(received);when(sent.limit(10)).thenReturn(sent);
-   when(received.getAutomatic(any(ForegroundReadScope.class))).thenReturn(new TaskCompletionSource<QuerySnapshot>().getTask());when(sent.getAutomatic(any(ForegroundReadScope.class))).thenReturn(new TaskCompletionSource<QuerySnapshot>().getTask());
    java.lang.reflect.Method check=FriendsFragment.class.getDeclaredMethod("checkCandidates",String.class,int.class);check.setAccessible(true);
    for(int i=0;i<100;i++)check.invoke(f,"candidate-actor",0);
    ForegroundReadScope scope=(ForegroundReadScope)field("sectionReadScope").get(f);
-   verify(db,times(1)).friendshipFactsAutomatic(anyList(),eq(scope));verify(received,times(1)).getAutomatic(scope);verify(sent,times(1)).getAutomatic(scope);
+   verify(db,times(1)).friendshipFactsAutomatic(anyList(),eq(scope));verify(db,never()).collection("friend_requests");
    Shadows.shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofSeconds(21));
    assertTrue(((Set<?>)field("checkingUsers").get(f)).contains("candidate"));assertFalse(((Set<?>)field("failedCandidates").get(f)).contains("candidate"));
    java.lang.reflect.Method close=FriendsFragment.class.getDeclaredMethod("closePage",boolean.class);close.setAccessible(true);close.invoke(f,false);

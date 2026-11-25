@@ -269,7 +269,7 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
         }
     }
 
-    /** Resolve only NEW visible candidates, in <=10-user batches, not a scan of all friendships. */
+    /** Resolve only NEW visible candidates, in <=10-user batches; skip request probes for confirmed friends. */
     private void checkCandidates(String me,int token){
         if(!current(token,me))return;
         java.util.LinkedHashSet<String> uncheckedSet=new java.util.LinkedHashSet<>();
@@ -289,24 +289,51 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
                     });
                     return;
                 }
-                checkingUsers.removeAll(ids);failedCandidates.addAll(ids);requestRender();
+                checkingUsers.removeAll(ids);failedCandidates.addAll(ids);if(empty!=null)requestRender();
             }};
             frameHandler.postDelayed(deadline,20000L);
             com.google.android.gms.tasks.Task<java.util.Map<String,Boolean>> friends=Fb.db().friendshipFactsAutomatic(ids,scope);
-            com.google.android.gms.tasks.Task<com.friendbook.social.d1.documents.QuerySnapshot> received=Fb.db().collection("friend_requests").whereEqualTo("toUid",me).whereIn("fromUid",ids).whereEqualTo("status","pending").limit(10).getAutomatic(scope);
-            com.google.android.gms.tasks.Task<com.friendbook.social.d1.documents.QuerySnapshot> sent=Fb.db().collection("friend_requests").whereEqualTo("fromUid",me).whereIn("toUid",ids).whereEqualTo("status","pending").limit(10).getAutomatic(scope);
-            com.google.android.gms.tasks.Tasks.whenAllSuccess(friends,received,sent).addOnSuccessListener(results->{
+            friends.addOnSuccessListener(a->{
+                if(!current(token,me) || !checkingUsers.containsAll(ids))return;
+                List<String> requestIds;
+                try{requestIds=com.friendbook.social.core.FriendCandidatePages.requestCheckCandidates(ids,a);}
+                catch(IllegalArgumentException invalidFacts){
+                    frameHandler.removeCallbacks(deadline);checkingUsers.removeAll(ids);failedCandidates.addAll(ids);if(empty!=null)requestRender();return;
+                }
+                for(String candidate:ids)if(!requestIds.contains(candidate))candidateFriends.add(candidate);
+                // A confirmed friend is never offered a request, so checking
+                // pending inbound/outbound requests for that UID cannot affect UI.
+                if(requestIds.isEmpty()){
+                    frameHandler.removeCallbacks(deadline);checkingUsers.removeAll(ids);
+                    checkedCandidates.addAll(ids);candidatesCheckedAt=android.os.SystemClock.elapsedRealtime();if(empty!=null)requestRender();return;
+                }
+                com.friendbook.social.d1.documents.Query receivedQuery=Fb.db().collection("friend_requests")
+                        .whereEqualTo("toUid",me).whereIn("fromUid",requestIds).whereEqualTo("status","pending").limit(10);
+                com.friendbook.social.d1.documents.Query sentQuery=Fb.db().collection("friend_requests")
+                        .whereEqualTo("fromUid",me).whereIn("toUid",requestIds).whereEqualTo("status","pending").limit(10);
+                com.google.android.gms.tasks.Task<com.friendbook.social.d1.documents.QuerySnapshot> received=receivedQuery.getAutomatic(scope);
+                com.google.android.gms.tasks.Task<com.friendbook.social.d1.documents.QuerySnapshot> sent=sentQuery.getAutomatic(scope);
+                com.google.android.gms.tasks.Tasks.whenAllSuccess(received,sent).addOnSuccessListener(results->{
+                    frameHandler.removeCallbacks(deadline);
+                    if(!current(token,me) || !checkingUsers.containsAll(ids))return;checkingUsers.removeAll(ids);
+                    com.friendbook.social.d1.documents.QuerySnapshot incomingRows=(com.friendbook.social.d1.documents.QuerySnapshot)results.get(0);
+                    com.friendbook.social.d1.documents.QuerySnapshot outgoingRows=(com.friendbook.social.d1.documents.QuerySnapshot)results.get(1);
+                    // A saturated request page cannot prove a missing request is absent.
+                    if(incomingRows.getMetadata().isFromCache() || outgoingRows.getMetadata().isFromCache()
+                            || incomingRows.size()==10 || outgoingRows.size()==10){
+                        failedCandidates.addAll(ids);if(empty!=null)requestRender();return;
+                    }
+                    for(DocumentSnapshot doc:incomingRows)candidateIncoming.add(doc.getString("fromUid"));
+                    for(DocumentSnapshot doc:outgoingRows)candidateOutgoing.add(doc.getString("toUid"));
+                    checkedCandidates.addAll(ids);candidatesCheckedAt=android.os.SystemClock.elapsedRealtime();if(empty!=null)requestRender();
+                }).addOnFailureListener(error->{
+                    frameHandler.removeCallbacks(deadline);
+                    if(current(token,me) && checkingUsers.containsAll(ids)){checkingUsers.removeAll(ids);failedCandidates.addAll(ids);if(empty!=null)requestRender();}
+                });
+            }).addOnFailureListener(error->{
                 frameHandler.removeCallbacks(deadline);
-                if(!current(token,me) || !checkingUsers.containsAll(ids))return;checkingUsers.removeAll(ids);
-                @SuppressWarnings("unchecked") java.util.Map<String,Boolean> a=(java.util.Map<String,Boolean>)results.get(0);
-                com.friendbook.social.d1.documents.QuerySnapshot b=(com.friendbook.social.d1.documents.QuerySnapshot)results.get(1),c=(com.friendbook.social.d1.documents.QuerySnapshot)results.get(2);
-                // A saturated request page cannot prove a missing request is absent.
-                if(a==null || a.size()!=ids.size() || !a.keySet().containsAll(ids) || a.containsValue(null)
-                        || b.getMetadata().isFromCache() || c.getMetadata().isFromCache() || b.size()==10 || c.size()==10){failedCandidates.addAll(ids);requestRender();return;}
-                for(String id:ids)if(Boolean.TRUE.equals(a.get(id)))candidateFriends.add(id);
-                for(DocumentSnapshot doc:b)candidateIncoming.add(doc.getString("fromUid"));for(DocumentSnapshot doc:c)candidateOutgoing.add(doc.getString("toUid"));
-                checkedCandidates.addAll(ids);candidatesCheckedAt=android.os.SystemClock.elapsedRealtime();requestRender();
-            }).addOnFailureListener(error->{frameHandler.removeCallbacks(deadline);if(current(token,me) && checkingUsers.containsAll(ids)){checkingUsers.removeAll(ids);failedCandidates.addAll(ids);requestRender();}});
+                if(current(token,me) && checkingUsers.containsAll(ids)){checkingUsers.removeAll(ids);failedCandidates.addAll(ids);if(empty!=null)requestRender();}
+            });
         }
     }
 
