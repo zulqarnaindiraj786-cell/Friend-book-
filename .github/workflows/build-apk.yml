@@ -88,7 +88,7 @@ jobs:
         run: |
           test -f app/google-services.json && echo "google-services.json found" || (echo "::error::app/google-services.json is missing" && exit 1)
           grep -q "ca-app-pub-3387480177023669~1513026594" app/src/main/AndroidManifest.xml || (echo "::error::Missing real AdMob APPLICATION_ID in AndroidManifest.xml" && exit 1)
-          if grep -rq "3940256099942544" app/; then
+          if grep -Rrq --exclude-dir=build "3940256099942544" app/src app/build.gradle; then
             echo "::error::Test AdMob ID detected in app/ — forbidden in production build!"
             exit 1
           fi
