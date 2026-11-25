@@ -4,6 +4,7 @@ import static org.junit.Assert.*;
 import org.junit.Test;
 
 public class LegacyReactionReadGateTest {
+    // JVM-only regression coverage; this quota change does not authorize release packaging.
     @Test public void overlappingBindsShareOneRead() {
         int started=0;
         for(int i=0;i<100;i++) if(LegacyReactionReadGate.begin("actor-overlap","post-overlap",1000L)) started++;
