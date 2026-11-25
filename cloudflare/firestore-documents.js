@@ -786,14 +786,31 @@ async function readCollectionRows(db, parent, uid, filters, spec, env) {
   }
   // Only hard-coded root/field pairs can be interpolated into SQL. Privacy
   // filtering still happens after candidate selection, before the page limit.
-  const indexedFields={posts:['groupId','authorId'],reels:['authorId'],stories:['authorId'],pages:['ownerId'],referrals:['refBy']};
+  const indexedFields={posts:['groupId','authorId','mediaType'],reels:['authorId'],stories:['authorId'],pages:['ownerId'],referrals:['refBy']};
   const indexedField=(Object.hasOwn(indexedFields,parent)?indexedFields[parent]:[]).find(field=>
     Array.isArray(filters) && filters.some(f=>f?.field===field && f.op==='==' && typeof f.value==='string'));
   if (indexedField) {
     const value=filters.find(f=>f.field===indexedField && f.op==='==' && typeof f.value==='string').value;
-    const canonical=await db.prepare(`SELECT path,parent_path,collection_id,doc_id,owner_uid,document_json,create_time,update_time FROM friendbook_cf_firestore_documents
-      WHERE parent_path='${parent}' AND json_extract(document_json,'$.${indexedField}')=?`).bind(value).all();
-    return [...(canonical?.results || [])];
+    if(parent==='posts' && indexedField==='mediaType') {
+      // Watch/Reels pages filter posts by mediaType and then paginate in the
+      // existing JS evaluator. Seek only matching canonical video posts here;
+      // do not add a SQL LIMIT because privacy filtering must happen before
+      // the caller's page limit, and preserve all cursor/order semantics.
+      try {
+        const canonical=await db.prepare(`SELECT path,parent_path,collection_id,doc_id,owner_uid,document_json,create_time,update_time
+          FROM friendbook_cf_firestore_documents INDEXED BY idx_cf_posts_media_type
+          WHERE parent_path='posts' AND json_extract(document_json,'$.mediaType')=?`).bind(value).all();
+        return [...(canonical?.results || [])];
+      } catch(error) {
+        if(!/no such index: idx_cf_posts_media_type/.test(String(error)))throw error;
+        // During a rolling deployment, an old schema keeps the original
+        // complete evaluator below rather than silently returning a partial page.
+      }
+    } else {
+      const canonical=await db.prepare(`SELECT path, parent_path, collection_id, doc_id, owner_uid, document_json, create_time, update_time FROM friendbook_cf_firestore_documents
+        WHERE parent_path='${parent}' AND json_extract(document_json,'$.${indexedField}')=?`).bind(value).all();
+      return [...(canonical?.results || [])];
+    }
   }
   if (parent === 'notifications') {
     const unread = Array.isArray(filters) && filters.some(f=>f.field==='isRead' && f.op==='==' && f.value===false);
