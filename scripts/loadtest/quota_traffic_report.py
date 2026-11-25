@@ -149,7 +149,7 @@ def category(sql):
 def redacted_inventory_structure(sql):
     # Diagnostic grammar from a fixed vocabulary, NOT raw SQL. Literals,
     # arbitrary identifiers, numeric values and comments never pass through.
-    vocabulary=set("resource views friendbook_cf_view_counters event_key created_at friendbook_cf_fcm_device_claims friendbook_cf_chat_participants chat_path uid friendbook_cf_trusted_friendships uid_low uid_high friend_path select count sum coalesce case when then else end as from where and or not is null left join on indexed by limit order group having asc desc with materialized exists distinct in sampled legacy_only path collection parent_path doc_id document_json owner_uid updated_at update_time sample l f s a friendbook_cf_documents friendbook_cf_firestore_documents idx_friendbook_cf_documents_collection_updated idx_friendbook_cf_firestore_parent".split())
+    vocabulary=set("resource views friendbook_cf_view_counters event_key created_at friendbook_cf_fcm_device_claims friendbook_cf_chat_participants chat_path uid friendbook_cf_trusted_friendships uid_low uid_high friend_path select count sum coalesce case when then else end as from where and or not is null left join on indexed by limit order group having asc desc with materialized exists distinct in sampled legacy_only path collection parent_path doc_id document_json owner_uid updated_at update_time sample l f s a friendbook_cf_documents friendbook_cf_firestore_documents idx_friendbook_cf_documents_collection_updated idx_friendbook_cf_firestore_parent insert update delete returning set values conflict do nothing excluded json_type json_extract instr length char glob union all recursive filter over partition by cast typeof replace substr lower upper printf coalesce ifnull iif raise abort rollback begin commit temp temporary trigger references check primary key unique collate integer real text blob nulls first last current_timestamp".split())
     pattern=r"'(?:''|[^'])*'|\"(?:\"\"|[^\"])*\"|`[^`]*`|\[[^\]]*\]|--[^\n]*|/\*[\s\S]*?\*/|\?[0-9]*|[A-Za-z_][A-Za-z0-9_]*|[0-9]+(?:\.[0-9]+)?|<>|!=|<=|>=|[^\s]"
     vocabulary.update(('rowid','_rowid_','offset','friendbook_cf_presence','friendbook_cf_presence_sessions',
         'friendbook_cf_presence_sessions_fullcopy','friendbook_cf_presence_sessions_copy',
@@ -262,6 +262,12 @@ def safe_shape(sql):
     # this describes query structure, not an actor or source attribution.
     if result['operation']=='SELECT' and tables==['canonical_documents'] and not features and not roots:
         result['redacted_unmapped_canonical_structure']=redacted_inventory_structure(sql)
+    # The large posts spike was a commented/compound canonical statement, so
+    # its first token was not a recognized operation. Expose only the same
+    # fixed-vocabulary grammar when BOTH anti-join and JSON predicates are
+    # present on canonical posts; never expose SQL literals or identifiers.
+    if tables==['canonical_documents'] and 'posts' in roots and {'anti_join','json_field_predicate'} <= set(features):
+        result['redacted_posts_anti_join_structure']=redacted_inventory_structure(sql)
     return result
 
 
@@ -330,7 +336,7 @@ def priority_shape_notices(windows):
             for offset in range(0,len(selected),2):
                 shapes=[dict(shape) for shape in selected[offset:offset+2]]
                 for shape in shapes:
-                    for key in ('redacted_inventory_structure','redacted_unmapped_canonical_structure','redacted_unmapped_select_structure'):
+                    for key in ('redacted_inventory_structure','redacted_unmapped_canonical_structure','redacted_unmapped_select_structure','redacted_posts_anti_join_structure'):
                         if key in shape:shape[key]=shape[key][:700]
                 lines.append('Sanitized priority shapes '+json.dumps({
                     'minutes':window['minutes'],'end':window['end'],'ranked_by':metric,

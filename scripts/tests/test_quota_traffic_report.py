@@ -89,6 +89,27 @@ class TrafficReport(unittest.TestCase):
             self.assertNotIn(secret.lower(),json.dumps(shape).lower())
         self.assertNotIn('redacted_unmapped_canonical_structure',p.safe_shape("SELECT * FROM friendbook_cf_firestore_documents WHERE path='secret'"))
 
+    def test_posts_anti_join_structure_is_allowlisted_and_private(self):
+        sql="""/* PRIVATE_COMMENT */ WITH candidates AS MATERIALIZED (
+          SELECT path, document_json FROM friendbook_cf_firestore_documents
+          WHERE parent_path='posts' AND json_extract(document_json,'$.secret') IS NOT NULL
+        ), cleanup AS (
+          DELETE FROM friendbook_cf_firestore_documents
+          WHERE parent_path='posts' AND NOT EXISTS (
+            SELECT 1 FROM candidates WHERE candidates.path=friendbook_cf_firestore_documents.path
+          ) AND json_extract(document_json,'$.privateField')='PRIVATE_VALUE'
+          RETURNING path
+        ) SELECT count(*) FROM cleanup"""
+        shape=p.safe_shape(sql)
+        self.assertIn('anti_join',shape['features'])
+        self.assertIn('json_field_predicate',shape['features'])
+        grammar=shape['redacted_posts_anti_join_structure']
+        for token in ('with','materialized','delete','not exists','returning','json_extract'):
+            self.assertIn(token,grammar)
+        for secret in ('PRIVATE_COMMENT','PRIVATE_VALUE','privateField','secret'):
+            self.assertNotIn(secret.lower(),json.dumps(shape).lower())
+        self.assertNotIn(sql,json.dumps(shape))
+
     def test_scan_family_only_accepts_exact_fixed_worker_aliases(self):
         for suffix in ('','_count','_recent','_name','_stars','_membership','_filtered','_page','_list'):
             q="SELECT path FROM friendbook_cf_firestore_documents AS quota_root_users"+suffix+" WHERE parent_path=?"
