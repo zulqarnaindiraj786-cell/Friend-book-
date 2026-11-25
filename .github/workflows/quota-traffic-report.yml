@@ -40,3 +40,5 @@ jobs:
 # Post-Home-head backend rollout refresh; delayed analytics are not matched-session proof.
 
 # Post-deployment quota snapshot; analytics-only and no application load.
+
+# Follow-up steady-state snapshot after code rollout.
