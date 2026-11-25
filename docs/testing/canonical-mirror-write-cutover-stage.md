@@ -18,6 +18,8 @@ These are local Worker/SQLite tests, not production account interactions or proo
 
 The stronger canonical guard was deployed successfully by workflow run `45573010735` (successful retry), including the read-only Worker/D1 connectivity check. A manual analytics-only audit `45576914707` observed the 5-minute window 08:25:55–08:30:55 UTC: 11 query records, 41,897 D1 rows read and 1,508 written. Its reported top-priority shapes were canonical post operations; no legacy-mirror query appeared among those shapes. This output is aggregated and shape-prioritized, not a complete zero-query certificate, and the interval is short and may not represent normal account/device usage. An earlier overlapping window reported one legacy-mirror SELECT during the deployment interval. Longer windows include pre-deployment traffic and must not be attributed solely to the new Worker.
 
+A new full, bounded, read-only content inventory (workflow `45578093389`) sampled all 11,564 mirror rows with no truncation and found zero paths missing from the canonical store. It also found 10,491 rows whose raw `owner_uid` or serialized `document_json` differs between the two stores. This may reflect intentional representation/write divergence, but has not been semantically reconciled. Therefore path coverage alone is not enough to authorize dropping the mirror, and the raw mismatches must be explained with a privacy-preserving, domain-aware comparison before removal.
+
 Before physical table retirement, all of the following remain required:
 
 1. A sufficiently representative post-deploy telemetry period with no legacy-mirror reads or writes across the complete available query set, not merely the top-ranked annotations.
