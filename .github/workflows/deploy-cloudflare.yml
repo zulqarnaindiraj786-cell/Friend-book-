@@ -866,3 +866,25 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: '92f3d04598822de2e49e14561218d090'
         run: node cloudflare/report-views-ae.mjs
+  build_diagnostics:
+    if: github.event_name == 'push' && contains(github.event.head_commit.message, '[build-diagnose]')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch exact Cloudflare Workers Build log
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: '92f3d04598822de2e49e14561218d090'
+          WORKERS_BUILD_ID: '06d6767d-56ae-404a-aca2-f54832d62e9e'
+        run: |
+          node --input-type=module <<'JS'
+          const token=process.env.CLOUDFLARE_API_TOKEN;
+          if (!token) throw new Error('Cloudflare token secret unavailable to workflow');
+          const url=`https://api.cloudflare.com/client/v4/accounts/${process.env.CLOUDFLARE_ACCOUNT_ID}/builds/builds/${process.env.WORKERS_BUILD_ID}/logs`;
+          const response=await fetch(url,{headers:{Authorization:`Bearer ${token}`,Accept:'application/json'}});
+          const raw=await response.text();
+          let payload; try { payload=JSON.parse(raw); } catch { payload={raw:raw.slice(0,3000)}; }
+          const redact=value=>String(value).split(token).join('[REDACTED_TOKEN]');
+          const logs=(payload?.result?.lines||[]).map(x=>Array.isArray(x)?x.at(-1):x).map(redact).slice(-180).join('\n');
+          console.log(JSON.stringify({httpStatus:response.status,success:payload.success,errors:payload.errors,logs:logs||redact(JSON.stringify(payload))},null,2));
+          if (!response.ok || payload.success===false) process.exitCode=1;
+          JS
