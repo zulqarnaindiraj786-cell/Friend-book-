@@ -35,3 +35,5 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: python3 scripts/admin/apply_pending_request_seek.py --apply-additive-index
+
+# Owner-requested bounded additive-index rollout; guarded by the workflow preflight.
