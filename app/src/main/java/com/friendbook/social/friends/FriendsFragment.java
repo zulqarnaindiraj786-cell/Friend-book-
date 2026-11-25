@@ -269,8 +269,7 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
         }
     }
 
-    /** Resolve only NEW visible candidates, in <=10-user batches, not a scan of all friendships. */
-    /** Resolve friendship first; pending-request reads are unnecessary for existing friends. */
+    /** Resolve only NEW visible candidates, in <=10-user batches; skip request probes for confirmed friends. */
     private void checkCandidates(String me,int token){
         if(!current(token,me))return;
         java.util.LinkedHashSet<String> uncheckedSet=new java.util.LinkedHashSet<>();
@@ -282,12 +281,6 @@ public class FriendsFragment extends Fragment implements UsersAdapter.Handler {
         for(int offset=0;offset<unchecked.size();offset+=10){
             final List<String> ids=new ArrayList<>(unchecked.subList(offset,Math.min(offset+10,unchecked.size())));checkingUsers.addAll(ids);
             final com.friendbook.social.d1.documents.ForegroundReadScope scope=sectionReadScope();
-            Runnable fail=()->{
-                frameHandler.removeCallbacks(deadlineHolder[0]);
-                if(current(token,me) && checkingUsers.containsAll(ids)){
-                    checkingUsers.removeAll(ids);failedCandidates.addAll(ids);requestRender();
-                }
-            };
             Runnable deadline=new Runnable(){@Override public void run(){
                 if(!current(token,me) || !checkingUsers.containsAll(ids))return;
                 if(!com.friendbook.social.App.isForeground()){
