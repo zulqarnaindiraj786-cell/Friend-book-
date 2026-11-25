@@ -2,7 +2,7 @@
 name: Deploy FriendBook Cloudflare Worker (D1 ON)
 on:
   push:
-    branches: [main, 'arena/15a53658-friend-book', 'arena/f6bf61bd-friend-book', 'arena/7c7ddb7b-friend-book']
+    branches: [main, 'arena/15a53658-friend-book', 'arena/f6bf61bd-friend-book', 'arena/7c7ddb7b-friend-book', 'arena/b52bc74d-friend-book']
     paths:
       - 'worker.js'
       - 'wrangler.toml'
@@ -26,7 +26,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   deploy:
-    if: (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/arena/15a53658-friend-book' || github.ref == 'refs/heads/arena/f6bf61bd-friend-book' || (github.ref == 'refs/heads/arena/7c7ddb7b-friend-book' && github.event_name == 'push' && contains(github.event.head_commit.message, '[deploy-cloudflare-production]'))) && !contains(github.event.head_commit.message, '[no-deploy]')
+    if: (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/arena/15a53658-friend-book' || github.ref == 'refs/heads/arena/f6bf61bd-friend-book' || (github.ref == 'refs/heads/arena/7c7ddb7b-friend-book' && github.event_name == 'push' && contains(github.event.head_commit.message, '[deploy-cloudflare-production]')) || (github.ref == 'refs/heads/arena/b52bc74d-friend-book' && github.event_name == 'push' && contains(github.event.head_commit.message, '[deploy-cloudflare-production]'))) && !contains(github.event.head_commit.message, '[no-deploy]')
     runs-on: ubuntu-latest
     timeout-minutes: 360
     steps:
@@ -170,6 +170,43 @@ jobs:
               echo "whoami_status=$whoami_status" >> "$GITHUB_OUTPUT"
               echo "d1_list_status=$d1_list_status" >> "$GITHUB_OUTPUT"
               echo 'migration_status=retired-table-preflight-failed' >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          fi
+          if [ "$GITHUB_REF" = refs/heads/arena/b52bc74d-friend-book ]; then
+            printf '%s\n' "$pending" > "$RUNNER_TEMP/b52-pending-migrations.txt"
+            python3 - <<'PY_PENDING'
+          import pathlib, re, sys
+          text = pathlib.Path(sys.argv[1]).read_text(errors='replace')
+          found = sorted(set(re.findall(r'(\d{4}_[A-Za-z0-9_]+\.sql)', text)))
+          expected = [
+              '0088_pending_duplicate_request_seek.sql',
+              '0089_remove_redundant_global_owner_index.sql',
+              '0090_scope_chat_timestamp_index.sql',
+              '0091_chat_activity_seek.sql',
+              '0092_friend_exact_pair_seek.sql',
+              '0093_remove_redundant_notification_recipient.sql',
+              '0094_friend_membership_facts.sql',
+              '0095_video_post_page.sql',
+              '0096_group_post_page.sql',
+              '0097_story_expiry_exceptions.sql',
+              '0098_story_author_page.sql',
+              '0099_feed_high_rank_exceptions.sql',
+              '0100_interaction_state_cover.sql',
+              '0101_legacy_comment_epoch.sql',
+              '0102_remove_legacy_notification_recipient.sql',
+          ]
+          if found != expected:
+              print(f'Unexpected pending migration set for reviewed rollout: {found!r}', file=sys.stderr)
+              raise SystemExit(1)
+          print('Reviewed migration set matches all individually preflighted 0088–0102 DDL.')
+          PY_PENDING
+            status=$?
+            if [ "$status" -ne 0 ]; then
+              echo 'Migration set differs from exact reviewed rollout; no migration attempted.' | tee -a "$log"
+              echo "whoami_status=$whoami_status" >> "$GITHUB_OUTPUT"
+              echo "d1_list_status=$d1_list_status" >> "$GITHUB_OUTPUT"
+              echo 'migration_status=reviewed-set-mismatch' >> "$GITHUB_OUTPUT"
               exit 0
             fi
           fi
