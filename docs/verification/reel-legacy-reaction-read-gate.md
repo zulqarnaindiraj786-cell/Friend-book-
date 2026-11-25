@@ -1,0 +1,7 @@
+# Reel legacy reaction fallback read gate
+
+`ReelsFragment` has a compatibility path for post-backed Reels in non-D1 mode: when a post has a positive legacy likes count but no embedded `reactionsMap`, it fetches up to 200 documents from `posts/{id}/reactions` to reconstruct the display. ViewPager bind/rebind can invoke the path repeatedly for the same actor and post.
+
+The new in-memory `LegacyReactionReadGate` coalesces overlapping reads by `(actor, postId)`. A successful empty result is suppressed for 15 seconds because it cannot fill the display and the legacy count may remain stale. A non-empty result is not negatively cached; it can be reconciled again on a later explicit bind. Failures remain immediately retryable on a later bind. Flights time out after 20 seconds, stale callbacks cannot finish a replacement flight, and both maps are bounded to 256 LRU entries. Account changes use a distinct key; invalid/signed-out actor IDs do not start reads.
+
+This leaves the existing authorization, `D1Client` bypass, 200-row compatibility cap, positive-reaction behavior, and reaction mutation paths unchanged. It is a source-level reduction in repeated empty-result/overlap reads, not a change to billed row counts per successful query and not a measured daily saving. No unique-user or usage attribution is available from this client-side gate. No APK has been installed or tested on a device in this change.
