@@ -20,6 +20,7 @@ jobs:
     # work must not build signed packages without a new explicit authorization.
     if: >-
       (github.ref != 'refs/heads/arena/b52bc74d-friend-book' ||
+       github.event_name == 'workflow_dispatch' ||
        contains(github.event.head_commit.message, '[owner-authorized-android-build]')) &&
       (github.event_name != 'push' ||
        (!contains(github.event.head_commit.message, '[no-release]') &&
@@ -269,7 +270,7 @@ jobs:
           retention-days: 7
 
       - name: Publish owner-requested signed test candidate (not Latest)
-        if: github.ref == 'refs/heads/arena/b52bc74d-friend-book' && contains(github.event.head_commit.message, '[signed-candidate]')
+        if: github.ref == 'refs/heads/arena/b52bc74d-friend-book' && (github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[signed-candidate]'))
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
