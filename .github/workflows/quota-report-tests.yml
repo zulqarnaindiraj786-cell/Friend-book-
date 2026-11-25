@@ -6,6 +6,12 @@ on:
       - '.github/workflows/quota-report-tests.yml'
       - 'scripts/loadtest/quota_traffic_report.py'
       - 'scripts/tests/test_quota_traffic_report.py'
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/quota-report-tests.yml'
+      - 'scripts/loadtest/quota_traffic_report.py'
+      - 'scripts/tests/test_quota_traffic_report.py'
 permissions:
   contents: read
 jobs:
