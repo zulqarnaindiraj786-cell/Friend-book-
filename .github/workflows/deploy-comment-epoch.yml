@@ -84,3 +84,5 @@ jobs:
             /tmp/quota-rollout-before.json
             /tmp/quota-preview-replay.json
           retention-days: 7
+
+# Owner-requested rollout; epoch transaction and rollback checks remain mandatory.
