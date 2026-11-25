@@ -104,6 +104,13 @@ def maintenance_shapes():
         template=re.search(r'(?:export )?const '+name+r' = `([^`]+)`;',source)
         if template and '${' not in template.group(1):
             known[normalize_shape(template.group(1))]='known_legacy_root_inventory'
+    # The canonical semantic inventory deliberately reads both stores in
+    # bounded pages. Attribute only its exact reviewed query template so an
+    # audit run is not mistaken for an application mirror caller.
+    semantic=(Path(__file__).resolve().parent/'canonical_semantic_inventory.mjs').read_text()
+    page_query=re.search(r"query\(`(SELECT m\.path AS path,[^`]+LIMIT \?)`\s*,\s*\[cursor,pageSize\]\)",semantic)
+    if page_query and '${' not in page_query.group(1):
+        known[normalize_shape(page_query.group(1))]='exact_canonical_semantic_inventory_template'
     # Read constants via AST, never import maintenance modules (imports can
     # initialize remote clients). Only these reviewed SQL constants qualify.
     templates={

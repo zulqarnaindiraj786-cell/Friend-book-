@@ -64,6 +64,17 @@ class TrafficReport(unittest.TestCase):
         self.assertEqual(p.category('INSERT INTO friendbook_cf_social_guards SELECT CASE WHEN NOT EXISTS(SELECT 1 FROM friendbook_cf_documents) THEN 1 END'),'application_or_unattributed')
         self.assertEqual(p.category('SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?'),'application_or_unattributed')
 
+    def test_canonical_semantic_inventory_query_is_exactly_attributed(self):
+        source=(ROOT/'scripts/loadtest/canonical_semantic_inventory.mjs').read_text()
+        start=source.index('query(`SELECT m.path AS path,')+len('query(`')
+        end=source.index('`',start)
+        sql=source[start:end]
+        self.assertIn('LIMIT ?',sql)
+        self.assertEqual(p.category(sql),'exact_canonical_semantic_inventory_template')
+        self.assertEqual(p.category(sql.replace('LIMIT ?','LIMIT 999')),'application_or_unattributed')
+        report=p.summarize_shapes([{'sum':{'rowsRead':123,'rowsWritten':0},'count':1,'dimensions':{'query':sql}}],'rowsRead')
+        self.assertEqual(report['observed_top_shape_subtotals'],{'exact_canonical_semantic_inventory_template':123})
+
     def test_private_sql_never_appears_in_report_or_total(self):
         sql="SELECT document_json FROM friendbook_cf_firestore_documents WHERE parent_path='users' AND path='users/PRIVATE_USER_123'"
         row={'sum':{'rowsRead':12,'rowsWritten':0},'count':3,'dimensions':{'query':sql}}
