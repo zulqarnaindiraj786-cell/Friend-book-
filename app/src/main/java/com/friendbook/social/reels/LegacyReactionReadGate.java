@@ -1,7 +1,6 @@
 package com.friendbook.social.reels;
 
 import java.util.LinkedHashMap;
-import java.util.Map;
 
 /**
  * Coalesces the legacy Firebase fallback read used by Reel cards.
@@ -25,27 +24,34 @@ final class LegacyReactionReadGate {
         @Override public int hashCode() { return 31*actor.hashCode()+document.hashCode(); }
     }
 
-    private static final LinkedHashMap<Key,Long> IN_FLIGHT = new LinkedHashMap<>(32,0.75f,true);
+    private static final class Flight {
+        final long startedAt;
+        Flight(long startedAt) { this.startedAt=startedAt; }
+    }
+
+    private static final LinkedHashMap<Key,Flight> IN_FLIGHT = new LinkedHashMap<>(32,0.75f,true);
     private static final LinkedHashMap<Key,Long> EMPTY_UNTIL = new LinkedHashMap<>(32,0.75f,true);
 
     private LegacyReactionReadGate() {}
 
-    static synchronized boolean begin(String actor,String document,long now) {
-        if (actor==null || actor.isEmpty() || document==null || document.isEmpty()) return false;
+    static synchronized Object begin(String actor,String document,long now) {
+        if (actor==null || actor.isEmpty() || document==null || document.isEmpty()) return null;
         Key key=new Key(actor,document);
-        Long started=IN_FLIGHT.get(key);
-        if (started!=null && now-started<FLIGHT_TIMEOUT_MS) return false;
+        Flight current=IN_FLIGHT.get(key);
+        if (current!=null && now-current.startedAt<FLIGHT_TIMEOUT_MS) return null;
         IN_FLIGHT.remove(key);
         Long until=EMPTY_UNTIL.get(key);
-        if (until!=null && now<until) return false;
+        if (until!=null && now<until) return null;
         EMPTY_UNTIL.remove(key);
-        IN_FLIGHT.put(key,now);
+        Flight flight=new Flight(now);
+        IN_FLIGHT.put(key,flight);
         trim(IN_FLIGHT);
-        return true;
+        return flight;
     }
 
-    static synchronized void success(String actor,String document,boolean empty,long now) {
+    static synchronized void success(String actor,String document,Object token,boolean empty,long now) {
         Key key=new Key(actor,document);
+        if (IN_FLIGHT.get(key)!=token) return;
         IN_FLIGHT.remove(key);
         if (empty) {
             EMPTY_UNTIL.put(key,now+EMPTY_RETRY_MS);
@@ -55,8 +61,9 @@ final class LegacyReactionReadGate {
         }
     }
 
-    static synchronized void failure(String actor,String document) {
-        IN_FLIGHT.remove(new Key(actor,document));
+    static synchronized void failure(String actor,String document,Object token) {
+        Key key=new Key(actor,document);
+        if (IN_FLIGHT.get(key)==token) IN_FLIGHT.remove(key);
     }
 
     private static <K,V> void trim(LinkedHashMap<K,V> map) {
