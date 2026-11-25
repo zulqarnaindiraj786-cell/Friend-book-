@@ -149,7 +149,13 @@ def inspect(query, page_size=PAGE):
 
 def main():
     result = inspect(remote_query)
-    print('::notice:: Privacy-preserving canonical semantic inventory ' + json.dumps(result, sort_keys=True))
+    collections = {name: row for name, row in result['collections'].items()
+        if row['canonical_missing'] or row['semantic_mismatch'] or row['owner_mismatch'] or row['malformed']}
+    summary = {key: result[key] for key in ('sampled', 'rows_read', 'truncated', 'page_size')}
+    summary['totals'] = {key: sum(row[key] for row in result['collections'].values())
+        for key in ('canonical_missing', 'semantic_match', 'semantic_mismatch', 'owner_match', 'owner_mismatch', 'malformed')}
+    summary['mismatch_collections'] = collections
+    print('::notice:: Privacy-preserving canonical semantic inventory ' + json.dumps(summary, sort_keys=True))
 
 
 if __name__ == '__main__':
