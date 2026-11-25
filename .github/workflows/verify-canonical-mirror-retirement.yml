@@ -1,0 +1,16 @@
+name: Verify canonical document mirror retirement
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check read-only verifier
+        run: python3 -m unittest scripts.tests.test_document_mirror_retirement
+      - name: Verify retired table absent and rollback snapshot retained (read-only)
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: python3 -m scripts.loadtest.verify_canonical_mirror_retirement
