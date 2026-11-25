@@ -2129,7 +2129,7 @@ public class ReelsFragment extends Fragment {
                                 renderCounts();
                             }
                         }).addOnFailureListener(error ->
-                                LegacyReactionReadGate.failure(readActor,targetId));
+                                LegacyReactionReadGate.failure(readActor,targetId,readToken));
             }
 
             // Only explicit bind/resume/authoritative metadata refresh requests
