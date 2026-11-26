@@ -78,4 +78,17 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    try:
+        main()
+    except ValueError as error:
+        message = str(error)
+        safe_prefixes = (
+            'Live resource bindings differ', 'D1 binding mismatch', 'R2 binding mismatch',
+            'Analytics binding mismatch', 'Durable Object binding mismatch',
+            'Live variable differs from reviewed configuration:', 'Cron mismatch',
+            'Post-deploy bindings differ', 'Rollback version unavailable',
+            'Worker metadata unavailable',
+        )
+        safe = message if any(message.startswith(prefix) for prefix in safe_prefixes) else 'Worker rollout preflight failed safely'
+        print('::error:: ' + safe)
+        raise SystemExit(1)
