@@ -59,7 +59,7 @@ jobs:
           database='e1c605ca-a50b-46c6-9deb-56dd1f70d163'
           sql='''WITH expected AS (
             SELECT resource,author_uid,COUNT(*) AS n
-            FROM friendbook_cf_legacy_comment_route_candidates GROUP BY resource,author_uid
+            FROM friendbook_cf_legacy_comment_route_sources GROUP BY resource,author_uid
           ), actual AS (
             SELECT resource,author_uid,comment_count AS n FROM friendbook_cf_legacy_comment_route_counts
           )
