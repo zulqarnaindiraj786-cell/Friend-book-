@@ -11,7 +11,7 @@ const pair=`(json_array_length(d.document_json,'$.participants')=2 AND ((json_ex
 
 test('indexed candidates preserve both friendship guard predicates and shadowing', async () => {
   const sql=new DatabaseSync(':memory:');
-  for(const n of ['0011_additive_app_documents.sql','0014_additive_firestore_documents.sql','0027_friend_participant_indexes.sql','0084_friend_guard_exceptions.sql']) sql.exec(migration(n));
+  for(const n of ['0011_additive_app_documents.sql','0014_additive_firestore_documents.sql','0027_friend_participant_indexes.sql','0084_friend_guard_exceptions.sql','0105_canonical_wrapped_friend_indexes.sql']) sql.exec(migration(n));
   const c=sql.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)');
   const l=sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)');
   const native=[[],['alice'],['alice','bob'],['bob','alice'],['eve','alice','bob'],['bob','eve','alice'],['eve','mallory'],{x:'alice',y:'bob'},'alice',null];
@@ -42,7 +42,7 @@ test('indexed candidates preserve both friendship guard predicates and shadowing
   sql.prepare("DELETE FROM friendbook_cf_firestore_documents WHERE path='friends/race'").run();
   assert.equal(sql.prepare(`SELECT path FROM (${indexedFriendCandidates}) WHERE path='friends/race'`).get(...selection.args),undefined);
   const plan=sql.prepare(`EXPLAIN QUERY PLAN SELECT * FROM (${indexedFriendCandidates})`).all(...selection.args).map(r=>r.detail).join('\n');
-  for(const name of ['idx_cf_friend_participant_0','idx_cf_friend_participant_1','idx_cf_friend_guard_exceptions','idx_cf_legacy_friend_participant_0','idx_cf_legacy_friend_participant_1','idx_cf_legacy_friend_guard_exceptions']) assert.match(plan,new RegExp(name));
+  for(const name of ['idx_cf_friend_participant_0','idx_cf_friend_participant_1','idx_cf_friend_wrapped_participant_0','idx_cf_friend_wrapped_participant_1','idx_cf_friend_guard_exceptions_v2','idx_cf_legacy_friend_participant_0','idx_cf_legacy_friend_participant_1','idx_cf_legacy_friend_guard_exceptions']) assert.match(plan,new RegExp(name));
   sql.close();
 });
 
@@ -57,10 +57,10 @@ test('malformed-row short-circuit mismatch uses transactional full-scan fallback
   c.run('friends/a','friends','friends','a','',JSON.stringify({participants:['alice','bob']}),0,0);
   const guard=candidates=>`SELECT EXISTS(SELECT 1 FROM (${candidates}) d WHERE ${duplicate}) AS found`;
   assert.throws(()=>sql.prepare(guard(fullFriendCandidates)).get('alice','bob','alice','bob'),/malformed JSON/);
-  assert.equal(sql.prepare(guard(indexedFriendCandidates)).get('alice','alice','alice','alice','alice','bob','alice','bob').found,1);
+  assert.equal(sql.prepare(guard(indexedFriendCandidates)).get('alice','alice','alice','alice','alice','alice','alice','bob','alice','bob').found,1);
   // The transactional guard must fall back to the original scan, including its
   // historical error behavior, rather than silently changing the outcome.
-  const safe=friendshipDuplicateGuard({sql:indexedFriendCandidates,args:['alice','alice','alice','alice']},'alice','bob');
+  const safe=friendshipDuplicateGuard({sql:indexedFriendCandidates,args:['alice','alice','alice','alice','alice','alice']},'alice','bob');
   assert.equal(sql.prepare(`SELECT ${malformedFriendProbe} AS dangerous`).get().dangerous,1);
   assert.throws(()=>sql.prepare(`SELECT ${safe.sql} AS allowed`).get(...safe.args),/malformed JSON/);
   sql.close();
@@ -95,11 +95,11 @@ test('transactional guard matches original across mixed rows, malformed envelope
       docs.push({mode,a,b});
     }
     assert.deepEqual(run(fast),run(full),`duplicate case ${round}: ${JSON.stringify(docs)}`);
-    for(const aggregate of [false,true]) assert.deepEqual(runPair(indexedFriendCandidates,fast.args.slice(4,8),aggregate),
+    for(const aggregate of [false,true]) assert.deepEqual(runPair(indexedFriendCandidates,fast.args.slice(4,10),aggregate),
       runPair(fullFriendCandidates,[],aggregate),`pair case ${round}: ${JSON.stringify(docs)}`);
   }
   const plan=sql.prepare(`EXPLAIN QUERY PLAN SELECT ${malformedFriendProbe}`).all().map(x=>x.detail).join('\n');
-  assert.match(plan,/idx_cf_friend_guard_exceptions/);
+  assert.match(plan,/idx_cf_friend_guard_exceptions_v2/);
   assert.match(plan,/idx_cf_legacy_friend_guard_exceptions/);
   // Invalid wrapped text behind a canonical shadow must not force a legacy leak.
   sql.exec('DELETE FROM friendbook_cf_firestore_documents;DELETE FROM friendbook_cf_documents');
@@ -147,7 +147,7 @@ test('candidate predicate matches historical shape permutations and shadow races
     for(const [predicate,args] of [[duplicate,['alice','bob','alice','bob']],[pair,['alice','bob','bob','alice','alice','bob','bob','alice']]]){
       const query=s=>`SELECT d.path FROM (${s}) d WHERE ${predicate} ORDER BY d.path`;
       const expected=capture(query(fullFriendCandidates),args);
-      const actual=capture(query(indexedFriendCandidates),['alice','alice','alice','alice',...args]);
+      const actual=capture(query(indexedFriendCandidates),['alice','alice','alice','alice','alice','alice',...args]);
       assert.deepEqual(actual,expected,`case ${i}: ${JSON.stringify({mode,d,shadow})}`);
     }
   }
