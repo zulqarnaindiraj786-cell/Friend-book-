@@ -3,7 +3,6 @@ package com.friendbook.social.core;
 import android.content.Context;
 
 import com.friendbook.social.models.Models;
-import com.friendbook.social.d1.documents.WriteBatch;
 
 /** Admin gating + tick/boost management. Owner: zulqarnaindiraj786@gmail.com */
 public class Admin {
@@ -187,18 +186,10 @@ public class Admin {
 
     /** Push the author's tick state onto their recent content so feed badges stay in sync. */
     private static void syncAuthorVerified(String uid, boolean value) {
-        String level = value ? null : "none"; // unknown level here; callers use syncAuthorTickLevel for the exact one
         String[] cols = {"posts", "comments", "reels", "stories"};
         for (String col : cols) {
-            Fb.db().collection(col).whereEqualTo("authorId", uid).limit(300).get()
-                    .addOnSuccessListener(snap -> {
-                        if (snap.isEmpty()) return;
-                        WriteBatch b = Fb.db().batch();
-                        for (com.friendbook.social.d1.documents.DocumentSnapshot d : snap)
-                            b.set(d.getReference(), Fb.map("authorVerified", value),
-                                    com.friendbook.social.d1.documents.SetOptions.merge());
-                        b.commit();
-                    });
+            QueryActions.updateMatching(Fb.db().collection(col).whereEqualTo("authorId", uid),
+                    Fb.map("authorVerified", value));
         }
     }
 
@@ -206,16 +197,8 @@ public class Admin {
     public static void syncAuthorTickLevel(String uid, String level) {
         String[] cols = {"posts", "comments", "reels", "stories"};
         for (String col : cols) {
-            Fb.db().collection(col).whereEqualTo("authorId", uid).limit(300).get()
-                    .addOnSuccessListener(snap -> {
-                        if (snap.isEmpty()) return;
-                        WriteBatch b = Fb.db().batch();
-                        for (com.friendbook.social.d1.documents.DocumentSnapshot d : snap)
-                            b.set(d.getReference(), Fb.map("authorTickLevel", level,
-                                            "authorVerified", Icons.tickRank(level) > 0),
-                                    com.friendbook.social.d1.documents.SetOptions.merge());
-                        b.commit();
-                    });
+            QueryActions.updateMatching(Fb.db().collection(col).whereEqualTo("authorId", uid),
+                    Fb.map("authorTickLevel", level, "authorVerified", Icons.tickRank(level) > 0));
         }
     }
 

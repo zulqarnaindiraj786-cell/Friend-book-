@@ -230,7 +230,9 @@ export async function interactions(request, env, identity, match, authorize = au
     }
     if (kind === 'reactions') {
       if (request.method === 'PUT') {
-        if (Object.keys(data).some(k => k !== 'type') || (data.type !== null && !types.has(data.type))) return json({ error: 'Invalid reaction' }, 400);
+        if (Object.keys(data).some(k => !['type','notify'].includes(k))
+            || (data.type !== null && !types.has(data.type))
+            || (data.notify !== undefined && typeof data.notify !== 'boolean')) return json({ error: 'Invalid reaction' }, 400);
         // Set desired state, not toggle: a retried request cannot double-increment.
         // Missing history already means a known timestamp to reactorsAPI. Keep
         // only legacy explicit unknown markers, and transition them atomically
@@ -253,7 +255,7 @@ export async function interactions(request, env, identity, match, authorize = au
           // The optional inbox event is committed in this same D1 batch as the
           // absolute reaction. The server derives its recipient and sender from
           // the authorized resource/request, never from client-supplied identity.
-          const notificationId=new URL(request.url).searchParams.get('notify')==='1'
+          const notificationId=(data.notify===true || new URL(request.url).searchParams.get('notify')==='1')
             && context.owner && context.owner!==identity.uid
             ? await reactionNotificationId(identity.uid,context.owner,
                 collection==='posts'?'like':'reel_like',id) : null;

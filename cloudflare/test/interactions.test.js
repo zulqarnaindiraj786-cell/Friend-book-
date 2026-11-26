@@ -65,6 +65,7 @@ test('reaction retries set state without duplicate increments or trusting client
   assert.deepEqual(data.types, [{ type: 'love', count: 1, mine: 1 }]);
   assert.equal((await call(f.env, 'reactions', 'PUT', { type: 'like', uid: 'victim' })).status, 400);
   assert.equal((await call(f.env, 'reactions', 'PUT', { type: 'unknown' })).status, 400);
+  assert.equal((await call(f.env, 'reactions', 'PUT', { type: 'like', notify: 'yes' })).status, 400);
   await call(f.env, 'reactions', 'PUT', { type: null });
   data = await (await call(f.env, 'reactions')).json(); assert.deepEqual(data.types, []);
   assert.equal(f.sql.prepare('SELECT COUNT(*) AS n FROM friendbook_cf_reactions').get().n, 1);
@@ -91,8 +92,8 @@ test('compact reaction writes acknowledge within the batch without reading comme
 test('reaction action atomically creates one authorized inbox event with its D1 batch',async t=>{
   const f=fixture();t.after(f.close);
   const authorize=async(_identity,_collection,_id,_unused,context)=>{Object.assign(context,{owner:'owner',name:'Liker',photo:'photo'});return true;};
-  const response=await call(f.env,'reactions','PUT',{type:'like'},
-    {query:'?response=reaction&notify=1',authorize});
+  const response=await call(f.env,'reactions','PUT',{type:'like',notify:true},
+    {query:'?response=reaction',authorize});
   assert.equal(response.status,200);
   const data=await response.json();
   assert.equal(data.notificationCreated,true);
@@ -102,8 +103,8 @@ test('reaction action atomically creates one authorized inbox event with its D1 
   assert.equal(f.sql.prepare("SELECT COUNT(*) n FROM friendbook_cf_firestore_documents WHERE parent_path='notifications'").get().n,1);
   assert.equal(f.sql.prepare("SELECT COUNT(*) n FROM friendbook_cf_documents WHERE collection='notifications'").get().n,0);
   const changes=f.sql.prepare('SELECT total_changes() n').get().n;
-  const retry=await call(f.env,'reactions','PUT',{type:'like'},
-    {query:'?response=reaction&notify=1',authorize});
+  const retry=await call(f.env,'reactions','PUT',{type:'like',notify:true},
+    {query:'?response=reaction',authorize});
   assert.equal((await retry.json()).notificationCreated,false);
   assert.equal(f.sql.prepare("SELECT COUNT(*) n FROM friendbook_cf_firestore_documents WHERE parent_path='notifications'").get().n,1);
   assert.equal(f.sql.prepare('SELECT total_changes() n').get().n,changes);
