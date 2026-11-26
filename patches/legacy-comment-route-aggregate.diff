@@ -213,7 +213,7 @@
 +const migration=name=>readFileSync(new URL(`../migrations/${name}.sql`,import.meta.url),'utf8');
 +function setup(t){
 + const f=fixture();t.after(f.close);
-+ for(const name of ['0032_legacy_comment_lookup','0087_canonical_comment_page_indexes','0101_legacy_comment_epoch','0108_legacy_comment_route_counts'])f.sql.exec(migration(name));
++ for(const name of ['0032_legacy_comment_lookup','0087_canonical_comment_page_indexes','0101_legacy_comment_epoch','0106_canonical_comment_shadow_epoch','0108_legacy_comment_route_counts'])f.sql.exec(migration(name));
 + return f;
 +}
 +async function cachedCount(db,resource,blocked=[]){
@@ -261,8 +261,8 @@
  const migration=n=>readFileSync(new URL(`../migrations/${n}.sql`,import.meta.url),'utf8');
  
  function setup(t){
-- const f=fixture();t.after(f.close);f.sql.exec(migration('0032_legacy_comment_lookup'));f.sql.exec(migration('0087_canonical_comment_page_indexes'));f.sql.exec(migration('0101_legacy_comment_epoch'));
-+ const f=fixture();t.after(f.close);f.sql.exec(migration('0032_legacy_comment_lookup'));f.sql.exec(migration('0087_canonical_comment_page_indexes'));f.sql.exec(migration('0101_legacy_comment_epoch'));f.sql.exec(migration('0108_legacy_comment_route_counts'));
+- const f=fixture();t.after(f.close);f.sql.exec(migration('0032_legacy_comment_lookup'));f.sql.exec(migration('0087_canonical_comment_page_indexes'));f.sql.exec(migration('0101_legacy_comment_epoch'));f.sql.exec(migration('0106_canonical_comment_shadow_epoch'));
++ const f=fixture();t.after(f.close);f.sql.exec(migration('0032_legacy_comment_lookup'));f.sql.exec(migration('0087_canonical_comment_page_indexes'));f.sql.exec(migration('0101_legacy_comment_epoch'));f.sql.exec(migration('0106_canonical_comment_shadow_epoch'));f.sql.exec(migration('0108_legacy_comment_route_counts'));
   return f;
  }
  
@@ -295,16 +295,16 @@
    else if(q.includes('COUNT(*) AS n FROM friendbook_cf_firestore_documents'))legacyQueries++;
    return base.prepare(q);
   },async batch(statements){batches++;if(inject){const callback=inject;inject=null;callback();}return base.batch(statements);}};
-@@ -127,7 +126,7 @@
-   f.sql.prepare("INSERT INTO friendbook_cf_interaction_resources VALUES (?, 'verified') ON CONFLICT(resource) DO UPDATE SET state='verified'").run(`posts/${id}`);
+@@ -160,7 +159,7 @@
   }
+  add.run('comments/legacy','comments','legacy','author',JSON.stringify({postId:'p1',authorId:'author',content:'old comment',createdAt:7}),1);
   let candidateQueries=0,primarySessions=0;
 - const base=f.env.DB,db={...base,withSession(mode){assert.equal(mode,'first-primary');primarySessions++;return this;},prepare(q){if(q.includes('quota_comment_candidates_'))candidateQueries++;return base.prepare(q);}};
 + const base=f.env.DB,db={...base,withSession(mode){assert.equal(mode,'first-primary');primarySessions++;return this;},prepare(q){if(q.includes('friendbook_cf_legacy_comment_route_counts'))candidateQueries++;return base.prepare(q);}};
   const app=createWorker(async token=>token),env={...f.env,DB:db,FIREBASE_PROJECT_ID:'test'};
   const body={parent:'posts',filters:[],orderBy:[{field:'createdAt',direction:'DESCENDING'}],limit:2,feedEngagement:true};
   async function request(){const response=await app.fetch(new Request('https://example.test/v1/firestore/query',{method:'POST',headers:{authorization:'Bearer user1','content-type':'application/json'},body:JSON.stringify(body)}),env);assert.equal(response.status,200,await response.clone().text());return (await response.json()).documents;}
-@@ -144,7 +143,7 @@
+@@ -178,7 +177,7 @@
   let grouped=0,batches=0,epochError=false;
   const db={...base,withSession(){return this;},prepare(q){
    if(epochError && q.includes('FROM friendbook_cf_legacy_comment_epoch WHERE id=1'))throw Error('unavailable');
@@ -313,13 +313,20 @@
    return base.prepare(q);
   },async batch(statements){batches++;return base.batch(statements);}};
   let result=await batchEngagementReads(db,resources,'user1',[],db);
-@@ -153,5 +152,5 @@
-  result=await batchEngagementReads(db,resources,'user1',[],db);
-  assert.equal(result.get('posts/p19').count,1);assert.equal(grouped,5);assert.equal(batches,2);
-  epochError=true;result=await batchEngagementReads(db,resources,'user1',[],db);
-- assert.equal(result.get('posts/p19').count,1);assert.equal(grouped,9);assert.equal(batches,3);
-+ assert.equal(result.get('posts/p19').count,1);assert.equal(grouped,5);assert.equal(batches,3);
- });
+--- a/cloudflare/test/feed-engagement-batch.test.js
++++ b/cloudflare/test/feed-engagement-batch.test.js
+@@ -13,9 +13,9 @@
+       assert.equal(statements.length,24);
+       return statements.map(({args,sql},i)=>{
+         if(i>=20) {
+-          assert.equal(args.length,11);
++          assert.equal(args.length,6);
+           assert.equal(args[0],'["blocked"]');
+-          assert.equal((sql.match(/COUNT\(\*\)/g)||[]).length,5);
++          assert.equal((sql.match(/SUM\(CASE WHEN c\.author_uid/g)||[]).length,1);
+           // Do not depend on a database preserving compound-result ordering.
+           return {results:Array.from({length:5},(_,slot)=>({slot,n:0})).reverse()};
+         }
 --- a/cloudflare/test/comment-epoch-smoke.test.js
 +++ b/cloudflare/test/comment-epoch-smoke.test.js
 @@ -7,14 +7,14 @@

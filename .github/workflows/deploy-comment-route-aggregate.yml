@@ -60,8 +60,11 @@ jobs:
           sql='''WITH expected AS (
             SELECT resource,author_uid,COUNT(*) AS n
             FROM friendbook_cf_legacy_comment_route_sources GROUP BY resource,author_uid
+            UNION ALL
+            SELECT resource,'' AS author_uid,COUNT(*) AS n
+            FROM friendbook_cf_legacy_comment_route_sources GROUP BY resource
           ), actual AS (
-            SELECT resource,author_uid,comment_count AS n FROM friendbook_cf_legacy_comment_route_counts WHERE author_uid<>''
+            SELECT resource,author_uid,comment_count AS n FROM friendbook_cf_legacy_comment_route_counts
           )
           SELECT CASE WHEN NOT EXISTS(SELECT resource,author_uid,n FROM expected EXCEPT SELECT resource,author_uid,n FROM actual)
             AND NOT EXISTS(SELECT resource,author_uid,n FROM actual EXCEPT SELECT resource,author_uid,n FROM expected)
