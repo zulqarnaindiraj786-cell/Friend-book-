@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
 import { readFileSync } from 'node:fs';
-import { fullFriendCandidates, indexedFriendCandidates, canonicalFullFriendCandidates, canonicalIndexedFriendCandidates, friendshipCandidates, friendshipDuplicateGuard, malformedFriendProbe, malformedCanonicalFriendProbe } from '../friendship-candidates.js';
+import { fullFriendCandidates, indexedFriendCandidates, canonicalFullFriendCandidates, canonicalIndexedFriendCandidates, friendshipCandidates, friendshipDuplicateGuard } from '../friendship-candidates.js';
 
 const migration = n => readFileSync(new URL(`../migrations/${n}`, import.meta.url), 'utf8');
 const wrap = sql => ({prepare(q) { const stmt=sql.prepare(q); return {bind(...a) { return {all:async()=>({results:stmt.all(...a)})}; }}; }});
@@ -46,23 +46,27 @@ test('indexed candidates preserve both friendship guard predicates and shadowing
   sql.close();
 });
 
-test('malformed-row short-circuit mismatch uses transactional full-scan fallback', () => {
-  // The real duplicate guard is EXISTS, not a full materialized SELECT. A
-  // matching pair can hide an invalid wrapped element when the indexed UNION
-  // visits rows in a different order. Do not treat this prototype as equivalent.
+test('malformed wrapped entries are scoped to the actor and safely ignored by duplicate guards', async() => {
   const sql=new DatabaseSync(':memory:');
   for(const n of ['0011_additive_app_documents.sql','0014_additive_firestore_documents.sql','0027_friend_participant_indexes.sql','0084_friend_guard_exceptions.sql']) sql.exec(migration(n));
   const c=sql.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)');
-  c.run('friends/z','friends','friends','z','',JSON.stringify({fields:{participants:{arrayValue:{values:['non-json']}}}}),0,0);
+  c.run('friends/z','friends','friends','z','',JSON.stringify({fields:{participants:{arrayValue:{values:[{stringValue:'alice'},{stringValue:'bob'},'non-json']}}}}),0,0);
   c.run('friends/a','friends','friends','a','',JSON.stringify({participants:['alice','bob']}),0,0);
-  const guard=candidates=>`SELECT EXISTS(SELECT 1 FROM (${candidates}) d WHERE ${duplicate}) AS found`;
-  assert.throws(()=>sql.prepare(guard(fullFriendCandidates)).get('alice','bob','alice','bob'),/malformed JSON/);
-  assert.equal(sql.prepare(guard(indexedFriendCandidates)).get('alice','alice','alice','alice','alice','bob','alice','bob').found,1);
-  // The transactional guard must fall back to the original scan, including its
-  // historical error behavior, rather than silently changing the outcome.
-  const safe=friendshipDuplicateGuard({sql:indexedFriendCandidates,args:['alice','alice','alice','alice']},'alice','bob');
-  assert.equal(sql.prepare(`SELECT ${malformedFriendProbe} AS dangerous`).get().dangerous,1);
-  assert.throws(()=>sql.prepare(`SELECT ${safe.sql} AS allowed`).get(...safe.args),/malformed JSON/);
+  const selection=await friendshipCandidates(wrap(sql),'alice',true);
+  const safe=friendshipDuplicateGuard(selection,'alice','bob');
+  assert.equal(sql.prepare(`SELECT ${safe.sql} AS allowed`).get(...safe.args).allowed,0,
+    'valid duplicates still block even when legacy envelopes also contain malformed elements');
+  sql.prepare("DELETE FROM friendbook_cf_firestore_documents WHERE path='friends/a'").run();
+  const noPair=await friendshipCandidates(wrap(sql),'alice',true);
+  const noPairGuard=friendshipDuplicateGuard(noPair,'alice','bob');
+  assert.equal(sql.prepare(`SELECT ${noPairGuard.sql} AS allowed`).get(...noPairGuard.args).allowed,0,
+    'the canonical duplicate at friends/z continues to block');
+  sql.prepare("DELETE FROM friendbook_cf_firestore_documents WHERE path='friends/z'").run();
+  c.run('friends/unrelated','friends','friends','unrelated','',JSON.stringify({fields:{participants:{arrayValue:{values:['non-json']}}}}),0,0);
+  const unrelated=await friendshipCandidates(wrap(sql),'alice',true);
+  const unrelatedGuard=friendshipDuplicateGuard(unrelated,'alice','bob');
+  assert.equal(sql.prepare(`SELECT ${unrelatedGuard.sql} AS allowed`).get(...unrelatedGuard.args).allowed,1,
+    'unrelated malformed history does not force a full graph scan');
   sql.close();
 });
 
@@ -72,7 +76,7 @@ test('transactional guard matches original across mixed rows, malformed envelope
   const c=sql.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)');
   const l=sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)');
   const full=friendshipDuplicateGuard({sql:fullFriendCandidates,args:[]},'alice','bob');
-  const fast=friendshipDuplicateGuard({sql:indexedFriendCandidates,args:['alice','alice','alice','alice']},'alice','bob');
+  const fast=friendshipDuplicateGuard({sql:indexedFriendCandidates,args:['alice','alice','alice','alice','alice','alice']},'alice','bob');
   const run=g=>{try{return {value:sql.prepare(`SELECT ${g.sql} AS allowed`).get(...g.args).allowed};}catch(e){return {error:/malformed JSON/i.test(String(e))?'malformed JSON':String(e)};}};
   const runPair=(candidates,args,aggregate)=>{try{
     const projection=aggregate?'count(*) AS n':'path';
@@ -95,17 +99,16 @@ test('transactional guard matches original across mixed rows, malformed envelope
       docs.push({mode,a,b});
     }
     assert.deepEqual(run(fast),run(full),`duplicate case ${round}: ${JSON.stringify(docs)}`);
-    for(const aggregate of [false,true]) assert.deepEqual(runPair(indexedFriendCandidates,fast.args.slice(4,8),aggregate),
+    for(const aggregate of [false,true]) assert.deepEqual(runPair(indexedFriendCandidates,fast.args.slice(4),aggregate),
       runPair(fullFriendCandidates,[],aggregate),`pair case ${round}: ${JSON.stringify(docs)}`);
   }
-  const plan=sql.prepare(`EXPLAIN QUERY PLAN SELECT ${malformedFriendProbe}`).all().map(x=>x.detail).join('\n');
+  const plan=sql.prepare(`EXPLAIN QUERY PLAN SELECT * FROM (${indexedFriendCandidates})`).all('alice','alice','alice','alice','alice','alice','alice','alice').map(x=>x.detail).join('\\n');
   assert.match(plan,/idx_cf_friend_guard_exceptions/);
   assert.match(plan,/idx_cf_legacy_friend_guard_exceptions/);
   // Invalid wrapped text behind a canonical shadow must not force a legacy leak.
   sql.exec('DELETE FROM friendbook_cf_firestore_documents;DELETE FROM friendbook_cf_documents');
   c.run('friends/s','friends','friends','s','',JSON.stringify({participants:['eve','mallory']}),0,0);
   l.run('friends/s','friends','s','',JSON.stringify({fields:{participants:{arrayValue:{values:['not-json']}}}}),0);
-  assert.equal(sql.prepare(`SELECT ${malformedFriendProbe} AS dangerous`).get().dangerous,0);
   assert.deepEqual(run(fast),run(full));
   sql.close();
 });
@@ -147,7 +150,7 @@ test('candidate predicate matches historical shape permutations and shadow races
     for(const [predicate,args] of [[duplicate,['alice','bob','alice','bob']],[pair,['alice','bob','bob','alice','alice','bob','bob','alice']]]){
       const query=s=>`SELECT d.path FROM (${s}) d WHERE ${predicate} ORDER BY d.path`;
       const expected=capture(query(fullFriendCandidates),args);
-      const actual=capture(query(indexedFriendCandidates),['alice','alice','alice','alice',...args]);
+      const actual=capture(query(indexedFriendCandidates),['alice','alice','alice','alice','alice','alice','alice','alice',...args]);
       assert.deepEqual(actual,expected,`case ${i}: ${JSON.stringify({mode,d,shadow})}`);
     }
   }

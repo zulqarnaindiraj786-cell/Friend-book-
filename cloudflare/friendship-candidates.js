@@ -18,6 +18,11 @@ const legacyPosition=i=>`(CASE WHEN json_type(a.document_json,'$.fields')='objec
   THEN json_extract(a.document_json,'$.fields.participants.arrayValue.values[${i}].stringValue')
   ELSE json_extract(a.document_json,'$.participants[${i}]') END)`;
 const shadow=`NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents f WHERE f.path=a.path)`;
+const actorInCandidates=(json,uid='?')=>`(
+  EXISTS (SELECT 1 FROM json_each(${json},'$.participants') p WHERE p.value=${uid})
+  OR EXISTS (SELECT 1 FROM json_each(${json},'$.fields.participants.arrayValue.values') p
+    WHERE json_valid(p.value)=1 AND json_extract(p.value,'$.stringValue')=${uid})
+)`;
 export const canonicalIndexedFriendCandidates=`
   SELECT path,document_json FROM (
   SELECT path,document_json FROM friendbook_cf_firestore_documents INDEXED BY idx_cf_friend_participant_0
@@ -25,7 +30,7 @@ export const canonicalIndexedFriendCandidates=`
   UNION SELECT path,document_json FROM friendbook_cf_firestore_documents INDEXED BY idx_cf_friend_participant_1
     WHERE parent_path='friends' AND json_extract(document_json,'$.participants[1]')=?
   UNION SELECT path,document_json FROM friendbook_cf_firestore_documents INDEXED BY idx_cf_friend_guard_exceptions
-    WHERE parent_path='friends' AND ${canonicalException}
+    WHERE parent_path='friends' AND ${canonicalException} AND ${actorInCandidates('document_json')}
   )`;
 export const indexedFriendCandidates=`
   ${canonicalIndexedFriendCandidates} UNION ALL SELECT path,document_json FROM (
@@ -34,7 +39,7 @@ export const indexedFriendCandidates=`
   UNION SELECT a.path,a.document_json FROM friendbook_cf_documents a INDEXED BY idx_cf_legacy_friend_participant_1
     WHERE a.collection='friends' AND ${legacyPosition(1)}=? AND ${shadow}
   UNION SELECT a.path,a.document_json FROM friendbook_cf_documents a INDEXED BY idx_cf_legacy_friend_guard_exceptions
-    WHERE a.collection='friends' AND ${legacyException} AND ${shadow}
+    WHERE a.collection='friends' AND ${legacyException} AND ${shadow} AND ${actorInCandidates('a.document_json')}
   )`;
 
 // The original duplicate guard can raise on malformed text within historical
@@ -42,34 +47,21 @@ export const indexedFriendCandidates=`
 // such a row. Detect dangerous unshadowed exceptions *inside the transaction*
 // and use the original full guard when any exist. Do not expose the malformed
 // value to json_extract during this probe.
-const dangerousWrappedRow=`EXISTS (SELECT 1 FROM json_each(a.document_json,'$.fields.participants.arrayValue.values') e
-  WHERE typeof(e.value)='text' AND json_valid(e.value)=0)`;
-export const malformedCanonicalFriendProbe=`EXISTS (
-  SELECT 1 FROM friendbook_cf_firestore_documents a INDEXED BY idx_cf_friend_guard_exceptions
-    WHERE a.parent_path='friends' AND ${canonicalException} AND ${dangerousWrappedRow}
-)`;
-export const malformedFriendProbe=`EXISTS (
-  SELECT 1 FROM friendbook_cf_firestore_documents a INDEXED BY idx_cf_friend_guard_exceptions
-    WHERE a.parent_path='friends' AND ${canonicalException} AND ${dangerousWrappedRow}
-  UNION ALL
-  SELECT 1 FROM friendbook_cf_documents a INDEXED BY idx_cf_legacy_friend_guard_exceptions
-    WHERE a.collection='friends' AND ${legacyException} AND ${shadow} AND ${dangerousWrappedRow}
-)`;
-const duplicateExists=candidates=>`EXISTS (SELECT 1 FROM (${candidates}) d WHERE (
+export const duplicateExists=candidates=>`EXISTS (SELECT 1 FROM (${candidates}) d WHERE (
   (EXISTS (SELECT 1 FROM json_each(d.document_json,'$.participants') WHERE value=?)
    AND EXISTS (SELECT 1 FROM json_each(d.document_json,'$.participants') WHERE value=?))
-  OR (EXISTS (SELECT 1 FROM json_each(d.document_json,'$.fields.participants.arrayValue.values') WHERE json_extract(value,'$.stringValue')=?)
-   AND EXISTS (SELECT 1 FROM json_each(d.document_json,'$.fields.participants.arrayValue.values') WHERE json_extract(value,'$.stringValue')=?))
+  OR (EXISTS (SELECT 1 FROM json_each(d.document_json,'$.fields.participants.arrayValue.values')
+      WHERE json_valid(value)=1 AND json_extract(value,'$.stringValue')=?)
+   AND EXISTS (SELECT 1 FROM json_each(d.document_json,'$.fields.participants.arrayValue.values')
+      WHERE json_valid(value)=1 AND json_extract(value,'$.stringValue')=?))
 ))`;
 export function friendshipDuplicateGuard(candidates,uid,other) {
   const pair=[uid,other,uid,other];
   const canonicalOnly=candidates.canonicalOnly===true;
   const full=canonicalOnly?canonicalFullFriendCandidates:fullFriendCandidates;
   const indexed=canonicalOnly?canonicalIndexedFriendCandidates:indexedFriendCandidates;
-  const malformed=canonicalOnly?malformedCanonicalFriendProbe:malformedFriendProbe;
   if(candidates.sql===fullFriendCandidates || candidates.sql===canonicalFullFriendCandidates) return {sql:`NOT ${duplicateExists(full)}`,args:pair};
-  return {sql:`CASE WHEN ${malformed} THEN NOT ${duplicateExists(full)}
-    ELSE NOT ${duplicateExists(indexed)} END`,args:[...pair,...candidates.args,...pair]};
+  return {sql:`NOT ${duplicateExists(indexed)}`,args:[...candidates.args,...pair]};
 }
 
 // Compile the complete candidate query even on an empty database. Missing
@@ -77,11 +69,12 @@ export function friendshipDuplicateGuard(candidates,uid,other) {
 export async function friendshipCandidates(db,uid,enabled=false,canonicalOnly=false) {
   const full=canonicalOnly?canonicalFullFriendCandidates:fullFriendCandidates;
   const indexed=canonicalOnly?canonicalIndexedFriendCandidates:indexedFriendCandidates;
-  const candidates=args=>({sql:args?indexed:full,args:args?(canonicalOnly?[uid,uid]:[uid,uid,uid,uid]):[],...(canonicalOnly?{canonicalOnly:true}:{})});
+  const indexedArgs=canonicalOnly?[uid,uid,uid,uid]:[uid,uid,uid,uid,uid,uid,uid,uid];
+  const candidates=args=>({sql:args?indexed:full,args:args?indexedArgs:[],...(canonicalOnly?{canonicalOnly:true}:{})});
   // The feature can be disabled for rollback without dropping indexes.
   if (!enabled) return candidates(false);
   try {
-    await db.prepare(`SELECT path FROM (${indexed}) LIMIT 0`).bind(...(canonicalOnly?[uid,uid]:[uid,uid,uid,uid])).all();
+    await db.prepare(`SELECT path FROM (${indexed}) LIMIT 0`).bind(...indexedArgs).all();
     return candidates(true);
   } catch(error) {
     if (!/no such index: idx_cf_(?:legacy_)?friend_(?:participant_[01]|guard_exceptions)/i.test(String(error?.message||error))) throw error;

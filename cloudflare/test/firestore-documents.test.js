@@ -3301,7 +3301,7 @@ test('indexed friendship guards reject racing historical duplicates without part
   // guard must detect them inside the transaction and retain the full scan's
   // malformed-JSON failure rather than relying on the earlier snapshot.
   for(const storage of ['canonical','legacy']) {
-    const bad={fields:{participants:{arrayValue:{values:['not-json']}}}};
+    const bad={fields:{participants:{arrayValue:{values:[{stringValue:'alice'},{stringValue:'bob'},'not-json']}}}};
     race=()=>storage==='canonical' ? put('friends/race',bad)
       : sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)').run('friends/race','friends','race','',JSON.stringify(bad),1);
     assert.equal((await call(accept)).status,409,storage);

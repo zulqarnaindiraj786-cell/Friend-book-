@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {DatabaseSync} from 'node:sqlite';
 import {readFileSync} from 'node:fs';
-import {canonicalFullFriendCandidates,canonicalIndexedFriendCandidates,friendshipCandidates,friendshipDuplicateGuard,malformedCanonicalFriendProbe} from '../friendship-candidates.js';
+import {canonicalFullFriendCandidates,canonicalIndexedFriendCandidates,friendshipCandidates,friendshipDuplicateGuard} from '../friendship-candidates.js';
 
 const migration=name=>readFileSync(new URL(`../migrations/${name}`,import.meta.url),'utf8');
 const wrap=sql=>({prepare(query){const stmt=sql.prepare(query);return{bind(...args){return{all:async()=>({results:stmt.all(...args)})};}};}});
@@ -23,7 +23,7 @@ test('canonical-only friend candidates ignore stale mirror-only rows but retain 
   mirror.run('friends/old','friends','old','',JSON.stringify({participants:['alice','bob']}),1);
   const selection=await friendshipCandidates(wrap(sql),'alice',true,true);
   assert.equal(selection.sql,canonicalIndexedFriendCandidates);
-  assert.deepEqual(selection.args,['alice','alice']);
+  assert.deepEqual(selection.args,['alice','alice','alice','alice']);
   assert.equal(selection.canonicalOnly,true);
   assert.doesNotMatch(selection.sql,/friendbook_cf_documents|idx_cf_legacy/);
   assert.equal(guard(sql,selection),0,'canonical duplicate remains denied');
@@ -34,14 +34,16 @@ test('canonical-only friend candidates ignore stale mirror-only rows but retain 
  }finally{sql.close();}
 });
 
-test('canonical-only malformed envelope fallback preserves the original fail-closed result',async()=>{
+test('canonical malformed participant entries are safely ignored but valid pair duplicates still block',async()=>{
  const {sql,canonical}=setup();
  try{
-  canonical.run('friends/bad','friends','friends','bad','',JSON.stringify({fields:{participants:{arrayValue:{values:['not-json']}}}}),1,1);
+  canonical.run('friends/bad','friends','friends','bad','',JSON.stringify({fields:{participants:{arrayValue:{values:[{stringValue:'alice'},{stringValue:'bob'},'not-json']}}}}),1,1);
   const selection=await friendshipCandidates(wrap(sql),'alice',true,true);
-  assert.equal(sql.prepare(`SELECT ${malformedCanonicalFriendProbe} dangerous`).get().dangerous,1);
-  const spec=friendshipDuplicateGuard(selection,'alice','bob');
-  assert.throws(()=>sql.prepare(`SELECT ${spec.sql} allowed`).get(...spec.args),/malformed JSON/);
+  assert.equal(guard(sql,selection),0,'a valid duplicate remains blocked even beside malformed historical entries');
+  sql.prepare("DELETE FROM friendbook_cf_firestore_documents WHERE path='friends/bad'").run();
+  canonical.run('friends/irrelevant','friends','friends','irrelevant','',JSON.stringify({fields:{participants:{arrayValue:{values:['not-json']}}}}),1,1);
+  const safe=await friendshipCandidates(wrap(sql),'alice',true,true);
+  assert.equal(guard(sql,safe),1,'unrelated malformed legacy history cannot force a graph-wide scan or reject acceptance');
  }finally{sql.close();}
 });
 
