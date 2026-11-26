@@ -1,6 +1,6 @@
 --- a/cloudflare/comment-api.js
 +++ b/cloudflare/comment-api.js
-@@ -73,42 +73,19 @@
+@@ -73,42 +73,24 @@
  export function legacyCommentCountsWithCandidatesStatement(db,resources,blocked=[]) {
    if(!Array.isArray(resources) || resources.length<1 || resources.length>20)throw Error('Invalid count batch');
    const bindings=[JSON.stringify(blocked||[])];
@@ -46,9 +46,14 @@
 +  // Pre-aggregated author counts are transactionally maintained by migration
 +  // 0108. A blocked set subtracts author buckets, rather than re-reading and
 +  // reparsing every legacy comment document on each feed request.
++  if(!blocked?.length) return db.prepare(`WITH requested(slot,resource) AS (VALUES ${requested.join(',')})
++    SELECT r.slot,COALESCE(c.comment_count,0) AS n,
++      CASE WHEN c.resource IS NULL THEN 0 ELSE 1 END AS has_candidates
++    FROM requested r LEFT JOIN friendbook_cf_legacy_comment_route_counts c
++      ON c.resource=r.resource AND c.author_uid=''`).bind(...bindings);
 +  return db.prepare(`WITH requested(slot,resource) AS (VALUES ${requested.join(',')})
 +    SELECT r.slot,
-+      COALESCE(SUM(CASE WHEN c.author_uid NOT IN (SELECT value FROM json_each(?1)) THEN c.comment_count ELSE 0 END),0) AS n,
++      COALESCE(SUM(CASE WHEN c.author_uid<>'' AND c.author_uid NOT IN (SELECT value FROM json_each(?1)) THEN c.comment_count ELSE 0 END),0) AS n,
 +      MAX(CASE WHEN c.resource IS NOT NULL THEN 1 ELSE 0 END) AS has_candidates
 +    FROM requested r LEFT JOIN friendbook_cf_legacy_comment_route_counts c ON c.resource=r.resource
 +    GROUP BY r.slot`).bind(...bindings);
@@ -57,7 +62,7 @@
  export async function legacyCommentCount(db,resource,blocked=[]) {
 --- /dev/null
 +++ b/cloudflare/migrations/0108_legacy_comment_route_counts.sql
-@@ -0,0 +1,114 @@
+@@ -0,0 +1,138 @@
 +-- Store only route, author and count metadata; never comment body/text. This
 +-- turns repeated historical JSON scans into bounded reads from author counts.
 +CREATE TABLE IF NOT EXISTS friendbook_cf_legacy_comment_route_sources (
@@ -106,6 +111,23 @@
 +INSERT INTO friendbook_cf_legacy_comment_route_counts(resource,author_uid,comment_count)
 + SELECT resource,author_uid,COUNT(*) FROM friendbook_cf_legacy_comment_route_sources GROUP BY resource,author_uid
 + ON CONFLICT(resource,author_uid) DO UPDATE SET comment_count=excluded.comment_count;
++-- The empty author key is reserved for the per-resource total; real route
++-- sources always have a non-empty author. Unblocked feed batches use one row
++-- per resource instead of reading every author bucket.
++INSERT INTO friendbook_cf_legacy_comment_route_counts(resource,author_uid,comment_count)
++ SELECT resource,'',COUNT(*) FROM friendbook_cf_legacy_comment_route_sources GROUP BY resource;
++CREATE TRIGGER IF NOT EXISTS cf_legacy_comment_route_total_insert
++AFTER INSERT ON friendbook_cf_legacy_comment_route_sources BEGIN
++ INSERT INTO friendbook_cf_legacy_comment_route_counts(resource,author_uid,comment_count)
++ VALUES(NEW.resource,'',1) ON CONFLICT(resource,author_uid) DO UPDATE SET comment_count=comment_count+1;
++END;
++CREATE TRIGGER IF NOT EXISTS cf_legacy_comment_route_total_delete
++AFTER DELETE ON friendbook_cf_legacy_comment_route_sources BEGIN
++ UPDATE friendbook_cf_legacy_comment_route_counts SET comment_count=comment_count-1
++  WHERE resource=OLD.resource AND author_uid='';
++ DELETE FROM friendbook_cf_legacy_comment_route_counts
++  WHERE resource=OLD.resource AND author_uid='' AND comment_count<=0;
++END;
 +
 +CREATE TRIGGER IF NOT EXISTS cf_legacy_comment_routes_insert
 +AFTER INSERT ON friendbook_cf_firestore_documents WHEN NEW.parent_path='comments'
@@ -158,6 +180,10 @@
 +  SELECT resource,author_uid,COUNT(*) FROM friendbook_cf_legacy_comment_route_sources
 +   WHERE resource=OLD.resource OR resource IN (SELECT resource FROM friendbook_cf_legacy_comment_route_candidates WHERE doc_id=OLD.id)
 +   GROUP BY resource,author_uid;
++ INSERT INTO friendbook_cf_legacy_comment_route_counts(resource,author_uid,comment_count)
++  SELECT resource,'',COUNT(*) FROM friendbook_cf_legacy_comment_route_sources
++   WHERE resource=OLD.resource OR resource IN (SELECT resource FROM friendbook_cf_legacy_comment_route_candidates WHERE doc_id=OLD.id)
++   GROUP BY resource;
 +END;
 +CREATE TRIGGER IF NOT EXISTS cf_legacy_comment_routes_canonical_update
 +AFTER UPDATE OF resource,id ON friendbook_cf_comments
@@ -171,6 +197,9 @@
 + INSERT INTO friendbook_cf_legacy_comment_route_counts(resource,author_uid,comment_count)
 +  SELECT resource,author_uid,COUNT(*) FROM friendbook_cf_legacy_comment_route_sources
 +   WHERE resource IN (OLD.resource,NEW.resource) GROUP BY resource,author_uid;
++ INSERT INTO friendbook_cf_legacy_comment_route_counts(resource,author_uid,comment_count)
++  SELECT resource,'',COUNT(*) FROM friendbook_cf_legacy_comment_route_sources
++   WHERE resource IN (OLD.resource,NEW.resource) GROUP BY resource;
 +END;
 --- /dev/null
 +++ b/cloudflare/test/legacy-comment-route-counts.test.js
@@ -184,7 +213,7 @@
 +const migration=name=>readFileSync(new URL(`../migrations/${name}.sql`,import.meta.url),'utf8');
 +function setup(t){
 + const f=fixture();t.after(f.close);
-+ for(const name of ['0032_legacy_comment_lookup','0087_canonical_comment_page_indexes','0101_legacy_comment_epoch','0106_canonical_comment_shadow_epoch','0108_legacy_comment_route_counts'])f.sql.exec(migration(name));
++ for(const name of ['0032_legacy_comment_lookup','0087_canonical_comment_page_indexes','0101_legacy_comment_epoch','0108_legacy_comment_route_counts'])f.sql.exec(migration(name));
 + return f;
 +}
 +async function cachedCount(db,resource,blocked=[]){
@@ -232,12 +261,12 @@
  const migration=n=>readFileSync(new URL(`../migrations/${n}.sql`,import.meta.url),'utf8');
  
  function setup(t){
-- const f=fixture();t.after(f.close);f.sql.exec(migration('0032_legacy_comment_lookup'));f.sql.exec(migration('0087_canonical_comment_page_indexes'));f.sql.exec(migration('0101_legacy_comment_epoch'));f.sql.exec(migration('0106_canonical_comment_shadow_epoch'));
-+ const f=fixture();t.after(f.close);f.sql.exec(migration('0032_legacy_comment_lookup'));f.sql.exec(migration('0087_canonical_comment_page_indexes'));f.sql.exec(migration('0101_legacy_comment_epoch'));f.sql.exec(migration('0106_canonical_comment_shadow_epoch'));f.sql.exec(migration('0108_legacy_comment_route_counts'));
+- const f=fixture();t.after(f.close);f.sql.exec(migration('0032_legacy_comment_lookup'));f.sql.exec(migration('0087_canonical_comment_page_indexes'));f.sql.exec(migration('0101_legacy_comment_epoch'));
++ const f=fixture();t.after(f.close);f.sql.exec(migration('0032_legacy_comment_lookup'));f.sql.exec(migration('0087_canonical_comment_page_indexes'));f.sql.exec(migration('0101_legacy_comment_epoch'));f.sql.exec(migration('0108_legacy_comment_route_counts'));
   return f;
  }
  
-@@ -24,15 +24,13 @@
+@@ -24,15 +24,14 @@
   const resources=Array.from({length:20},(_,i)=>`posts/p${i}`);resources.push('posts/empty_count','posts/["str"]','reels/p0');
   let plan='';const planDb={prepare(query){return {bind(...args){plan=f.sql.prepare('EXPLAIN QUERY PLAN '+query).all(...args).map(row=>row.detail).join('\n');return f.env.DB.prepare(query).bind(...args);}};}};
   await legacyCommentCountsWithCandidatesStatement(planDb,['posts/p0'],[]).all();
@@ -245,7 +274,8 @@
 - for(const index of ['idx_cf_canonical_comment_page_post','idx_cf_canonical_comment_page_post_legacy','idx_cf_canonical_comment_page_resource'])
 -  assert.match(plan,new RegExp('SEARCH a USING INDEX '+index),'each historical route must seek its matching partial index');
 - assert.doesNotMatch(plan,/SCAN a USING INDEX idx_friendbook_cf_firestore_parent/,'candidate lookup must not scan the comments partition');
-+ assert.match(plan,/SEARCH c USING PRIMARY KEY \(resource=\?\)/);
++ assert.match(plan,/SEARCH c USING PRIMARY KEY \(resource=\? AND author_uid=\?\)/);
++ assert.doesNotMatch(plan,/SUM\(CASE WHEN c\.author_uid/,'unblocked requests use only the total row');
 + assert.doesNotMatch(plan,/SCAN friendbook_cf_firestore_documents/,'runtime aggregate must not re-read historical comment documents');
   for(const blocked of [[],['blocked','blocked']])for(let offset=0;offset<resources.length;offset+=10){
    const page=resources.slice(offset,offset+10),expected=await Promise.all(page.map(r=>legacyCommentCount(f.env.DB,r,blocked)));
@@ -256,7 +286,7 @@
   }
  });
  
-@@ -40,7 +38,7 @@
+@@ -40,7 +39,7 @@
   const f=setup(t),add=canonicalSeed(f.sql);let candidateQueries=0,legacyQueries=0,epochReads=0,batches=0,inject=null,epochFail=false;
   const base=f.env.DB,db={...base,withSession(mode){assert.equal(mode,'first-primary');return this;},prepare(q){
    if(q.includes('FROM friendbook_cf_legacy_comment_epoch WHERE id=1')){epochReads++;if(epochFail)throw Error('storage unavailable');}
@@ -265,16 +295,16 @@
    else if(q.includes('COUNT(*) AS n FROM friendbook_cf_firestore_documents'))legacyQueries++;
    return base.prepare(q);
   },async batch(statements){batches++;if(inject){const callback=inject;inject=null;callback();}return base.batch(statements);}};
-@@ -160,7 +158,7 @@
+@@ -127,7 +126,7 @@
+   f.sql.prepare("INSERT INTO friendbook_cf_interaction_resources VALUES (?, 'verified') ON CONFLICT(resource) DO UPDATE SET state='verified'").run(`posts/${id}`);
   }
-  add.run('comments/legacy','comments','legacy','author',JSON.stringify({postId:'p1',authorId:'author',content:'old comment',createdAt:7}),1);
   let candidateQueries=0,primarySessions=0;
 - const base=f.env.DB,db={...base,withSession(mode){assert.equal(mode,'first-primary');primarySessions++;return this;},prepare(q){if(q.includes('quota_comment_candidates_'))candidateQueries++;return base.prepare(q);}};
 + const base=f.env.DB,db={...base,withSession(mode){assert.equal(mode,'first-primary');primarySessions++;return this;},prepare(q){if(q.includes('friendbook_cf_legacy_comment_route_counts'))candidateQueries++;return base.prepare(q);}};
   const app=createWorker(async token=>token),env={...f.env,DB:db,FIREBASE_PROJECT_ID:'test'};
   const body={parent:'posts',filters:[],orderBy:[{field:'createdAt',direction:'DESCENDING'}],limit:2,feedEngagement:true};
   async function request(){const response=await app.fetch(new Request('https://example.test/v1/firestore/query',{method:'POST',headers:{authorization:'Bearer user1','content-type':'application/json'},body:JSON.stringify(body)}),env);assert.equal(response.status,200,await response.clone().text());return (await response.json()).documents;}
-@@ -178,7 +176,7 @@
+@@ -144,7 +143,7 @@
   let grouped=0,batches=0,epochError=false;
   const db={...base,withSession(){return this;},prepare(q){
    if(epochError && q.includes('FROM friendbook_cf_legacy_comment_epoch WHERE id=1'))throw Error('unavailable');
@@ -283,20 +313,13 @@
    return base.prepare(q);
   },async batch(statements){batches++;return base.batch(statements);}};
   let result=await batchEngagementReads(db,resources,'user1',[],db);
---- a/cloudflare/test/feed-engagement-batch.test.js
-+++ b/cloudflare/test/feed-engagement-batch.test.js
-@@ -13,9 +13,9 @@
-       assert.equal(statements.length,24);
-       return statements.map(({args,sql},i)=>{
-         if(i>=20) {
--          assert.equal(args.length,11);
-+          assert.equal(args.length,6);
-           assert.equal(args[0],'["blocked"]');
--          assert.equal((sql.match(/COUNT\(\*\)/g)||[]).length,5);
-+          assert.equal((sql.match(/SUM\(CASE WHEN c\.author_uid/g)||[]).length,1);
-           // Do not depend on a database preserving compound-result ordering.
-           return {results:Array.from({length:5},(_,slot)=>({slot,n:0})).reverse()};
-         }
+@@ -153,5 +152,5 @@
+  result=await batchEngagementReads(db,resources,'user1',[],db);
+  assert.equal(result.get('posts/p19').count,1);assert.equal(grouped,5);assert.equal(batches,2);
+  epochError=true;result=await batchEngagementReads(db,resources,'user1',[],db);
+- assert.equal(result.get('posts/p19').count,1);assert.equal(grouped,9);assert.equal(batches,3);
++ assert.equal(result.get('posts/p19').count,1);assert.equal(grouped,5);assert.equal(batches,3);
+ });
 --- a/cloudflare/test/comment-epoch-smoke.test.js
 +++ b/cloudflare/test/comment-epoch-smoke.test.js
 @@ -7,14 +7,14 @@
