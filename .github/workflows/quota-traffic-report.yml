@@ -42,3 +42,4 @@ jobs:
 # Post-deployment quota snapshot; analytics-only and no application load.
 
 # Follow-up steady-state snapshot after code rollout.
+# Trigger a fresh owner-requested read-only quota report; no application traffic or deployment.
