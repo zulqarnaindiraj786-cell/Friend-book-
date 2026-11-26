@@ -9,8 +9,15 @@ globalThis.fetch=async()=>{throw new Error('Network access is disabled in the qu
 const sql = new DatabaseSync(':memory:');
 const migrations = new URL('../../cloudflare/migrations/', import.meta.url);
 for (const file of readdirSync(migrations).filter(f=>f.endsWith('.sql')).sort()) {
+  // 0106 archives the mirror only when it reappears after 0105. In a clean
+  // replay, 0105 has already retired it, so there is nothing to archive.
+  if(file==='0106_enforce_document_mirror_retirement.sql'
+      && !sql.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='friendbook_cf_documents'").get()) continue;
   sql.exec(readFileSync(new URL(file,migrations),'utf8'));
 }
+// Simulate a nonempty stale mirror left by a pre-canonical Worker; canonical
+// mode must keep using canonical rows and never write to this test-only table.
+sql.exec(`CREATE TABLE friendbook_cf_documents(path TEXT PRIMARY KEY,collection TEXT,doc_id TEXT,owner_uid TEXT,document_json TEXT,updated_at INTEGER)`);
 // Offline-only comparison: keep the data/schema but restore prior update triggers.
 if(process.env.QUOTA_FORCE_CHAT_MEMBERS_BASELINE==='1')
   sql.exec(readFileSync(new URL('0058_skip_unchanged_chat_members.sql',migrations),'utf8'));
@@ -60,6 +67,7 @@ for(let i=0;i<users;i++){
 }
 const app=createWorker(async token=>token);
 const env={DB:db,FIREBASE_PROJECT_ID:'offline-replay',D1_INTERACTIONS_ENABLED:'true',
+  DOCUMENT_MIRROR_MODE:'canonical',
   FRIEND_GUARD_INDEXED:process.env.QUOTA_EXPERIMENT_FRIEND_INDEXES==='1'?'true':'false'};
 async function call(uid,path,method='GET',body){
   const res=await app.fetch(new Request(`https://offline.invalid${path}`,{method,
@@ -134,19 +142,15 @@ for(let i=0;i<users;i+=2){
   assert.equal(message.isDelivered,true);
   assert.equal(JSON.parse(row.get(`chats/room${i}`).document_json).unreadCount[`user${i+1}`],0);
 }
-// A reply can serialize the same direct-chat members in reverse order. Seed a
-// historical mirror as in existing rooms; it must stay atomic and authorized.
-for(let i=0;i<users;i+=2){
-  const id=`room${i}`,doc=JSON.parse(sql.prepare('SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?').get(`chats/${id}`).document_json);
-  sql.prepare(`INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET document_json=excluded.document_json`)
-    .run(`chats/${id}`,'chats',id,`user${i}`,JSON.stringify({...doc,id}),now);
-}
+// Exercise canonical-only mode after the mirror-retirement migration: source-1
+// membership remains correct and no source-0 mirror rows are expected.
+
 await measure('reverseDirectReply',users/2,()=>wave(users/2,async slot=>{
   const i=slot*2,actor=`user${i+1}`,other=`user${i}`;
   await batch(actor,[{op:'set',path:`chats/room${i}/messages/reply`,data:{senderId:actor,receiverId:other,text:'offline reply'}},
     {op:'set',path:`chats/room${i}`,merge:true,data:{participants:[actor,other],lastMessage:'offline reply',unreadCount:{[other]:1}}}]);
   const rows=sql.prepare('SELECT participant_uid,source FROM friendbook_cf_chat_participants WHERE chat_path=? ORDER BY source,participant_uid').all(`chats/room${i}`);
-  assert.deepEqual(rows.map(row=>`${row.source}:${row.participant_uid}`),[`0:${other}`,`0:${actor}`,`1:${other}`,`1:${actor}`].sort());
+  assert.deepEqual(rows.map(row=>`${row.source}:${row.participant_uid}`),[`1:${other}`,`1:${actor}`].sort());
 }));
 for(const root of ['posts','reels']){
   for(let i=0;i<40;i++) add(root,`item${i}`,'user0',{authorId:'user0',createdAt:now+i,privacy:'Public'});

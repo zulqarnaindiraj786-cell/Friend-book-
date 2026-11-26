@@ -10,6 +10,7 @@ on:
       - 'worker.js'
       - 'cloudflare/canonical-document-writes.js'
       - 'cloudflare/test/canonical-document-writes.test.js'
+      - 'scripts/loadtest/d1_quota_replay.mjs'
 permissions:
   contents: read
 concurrency:
