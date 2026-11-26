@@ -1,6 +1,7 @@
 # A capped, aggregate-only lookup; no mutation or record values.
 name: Historical comment route aggregate preflight
 on:
+  workflow_dispatch:
   push:
     branches: [arena/b52bc74d-friend-book]
     paths: [.github/workflows/comment-route-preflight.yml, scripts/loadtest/comment_route_preflight.py, scripts/tests/test_comment_route_preflight.py]
@@ -8,7 +9,7 @@ permissions:
   contents: read
 jobs:
   preflight:
-    if: contains(github.event.head_commit.message, '[comment-route-preflight]') && contains(github.event.head_commit.message, '[allow-production-scans]')
+    if: github.event_name == 'workflow_dispatch' || (contains(github.event.head_commit.message, '[comment-route-preflight]') && contains(github.event.head_commit.message, '[allow-production-scans]'))
     runs-on: ubuntu-latest
     timeout-minutes: 3
     steps:
