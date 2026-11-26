@@ -91,9 +91,10 @@ test('retired presence routes and profile heartbeat avoid D1', async () => {
 });
 
 test('Android public config keeps only its public boolean and rejects missing settings', async () => {
-  const response=await call('/v1/android-config',{ADS_ENABLED_V3:'false',OTHER_SETTING:'not public'});
+  const response=await call('/v1/android-config',{ADS_ENABLED_V3:'false',ANDROID_MIN_VERSION_CODE:'42',OTHER_SETTING:'not public'});
   assert.equal(response.status,200);
-  assert.deepEqual(await response.json(),{ads_enabled_v3:false});
+  assert.deepEqual(await response.json(),{ads_enabled_v3:false,min_version_code:42});
+  assert.equal((await call('/v1/android-config',{ADS_ENABLED_V3:'true',ANDROID_MIN_VERSION_CODE:'0'})).status,503);
   assert.equal((await call('/v1/android-config')).status,503);
   assert.equal((await call('/v1/android-config',{}, {},'POST')).status,405);
 });

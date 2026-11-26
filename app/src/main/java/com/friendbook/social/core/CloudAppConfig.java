@@ -20,12 +20,18 @@ import org.json.JSONObject;
 public final class CloudAppConfig {
     private static final String URL = "https://rough-firefly-dd7b.zulqarnaindiraj786.workers.dev/v1/android-config";
     private static final String ADS = "ads_enabled_v3";
+    private static final String MIN_VERSION = "min_version_code";
     private static final long REFRESH_MS = TimeUnit.HOURS.toMillis(1);
     private static final AtomicBoolean FETCHING = new AtomicBoolean();
     private static final OkHttpClient HTTP = new OkHttpClient.Builder()
             .callTimeout(10, TimeUnit.SECONDS).followRedirects(false).build();
 
     private CloudAppConfig() {}
+
+    /** Public advisory gate; fail open to the first released version if config is unavailable. */
+    public static int minimumVersionCode(Context app) {
+        return app.getSharedPreferences("cloud_app_config", Context.MODE_PRIVATE).getInt(MIN_VERSION, 1);
+    }
 
     public static void refresh(Context app) {
         SharedPreferences prefs = app.getSharedPreferences("cloud_app_config", Context.MODE_PRIVATE);
@@ -39,10 +45,14 @@ public final class CloudAppConfig {
                     if (!result.isSuccessful() || result.body() == null) return;
                     byte[] bytes = result.body().source().readByteArray(Math.min(1025, boundedLength(result)));
                     if (bytes.length > 1024 || !result.body().source().exhausted()) return;
-                    Object value = new JSONObject(new String(bytes, java.nio.charset.StandardCharsets.UTF_8)).opt(ADS);
+                    JSONObject config = new JSONObject(new String(bytes, java.nio.charset.StandardCharsets.UTF_8));
+                    Object value = config.opt(ADS);
                     if (!(value instanceof Boolean)) return;
                     boolean allowed = (Boolean) value;
-                    prefs.edit().putBoolean(ADS, allowed).putLong("fetched_at", System.currentTimeMillis()).apply();
+                    int minimumVersion = config.optInt(MIN_VERSION, 1);
+                    if (minimumVersion < 1) minimumVersion = 1; // Fail open; never brick clients on bad public config.
+                    prefs.edit().putBoolean(ADS, allowed).putInt(MIN_VERSION, minimumVersion)
+                            .putLong("fetched_at", System.currentTimeMillis()).apply();
                     new Handler(Looper.getMainLooper()).post(() -> AdsConfig.setRemoteAllowed(allowed));
                 } catch (Exception ignored) {
                     // A failed fetch must not overwrite the last known switch.

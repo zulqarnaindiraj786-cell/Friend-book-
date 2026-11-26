@@ -24,10 +24,19 @@ public class AppUpdatesTest {
         assertFalse(AppUpdates.requiresUpdate(UpdateAvailability.UPDATE_NOT_AVAILABLE, installed+1));
     }
 
-    @Test public void requiredUpdateHasNoSkipAndOpensOfficialPlayListing() {
+    @Test public void minimumVersionConfigDefaultsFailOpenAndDoesNotBlock() {
         Activity activity=Robolectric.buildActivity(Activity.class).setup().get();
-        AlertDialog dialog=AppUpdates.showRequired(activity);
-        assertEquals(android.view.View.GONE, dialog.getButton(AlertDialog.BUTTON_NEGATIVE).getVisibility());
+        assertEquals(1,CloudAppConfig.minimumVersionCode(activity));
+        activity.getSharedPreferences("cloud_app_config",Activity.MODE_PRIVATE).edit()
+                .putInt("min_version_code",123).apply();
+        assertEquals(123,CloudAppConfig.minimumVersionCode(activity));
+    }
+
+    @Test public void availableUpdateIsOptionalAndOpensOfficialPlayListing() {
+        Activity activity=Robolectric.buildActivity(Activity.class).setup().get();
+        AlertDialog dialog=AppUpdates.showAvailable(activity, true);
+        assertTrue(dialog.getButton(AlertDialog.BUTTON_NEGATIVE).isShown());
+        assertTrue(dialog.isCancelable());
         dialog.getButton(AlertDialog.BUTTON_POSITIVE).performClick();
         Intent intent=Shadows.shadowOf(activity).getNextStartedActivity();
         assertEquals(Intent.ACTION_VIEW,intent.getAction());

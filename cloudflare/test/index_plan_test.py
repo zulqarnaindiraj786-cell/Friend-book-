@@ -19,6 +19,7 @@ class IndexPlans(unittest.TestCase):
             db.executescript((MIGRATIONS / '0080_remove_unused_comment_author_index.sql').read_text())
             table = 'friendbook_cf_firestore_documents'
             archive = 'friendbook_cf_documents'
+            notif_time = "CASE WHEN json_type(document_json,'$.createdAt') IN ('integer','real') THEN json_extract(document_json,'$.createdAt') WHEN json_type(document_json,'$.createdAt')='object' AND json_extract(document_json,'$.createdAt.__type')='timestamp' AND json_type(document_json,'$.createdAt.millis') IN ('integer','real') AND json_extract(document_json,'$.createdAt.millis') BETWEEN -9007199254740991 AND 9007199254740991 THEN json_extract(document_json,'$.createdAt.millis') END"
             checks = [
                 ('idx_cf_group_post_lookup', f"SELECT doc_id FROM {table} WHERE parent_path='posts' AND json_extract(document_json,'$.groupId')=?", ('group',)),
                 ('idx_cf_story_author', f"SELECT doc_id FROM {table} WHERE parent_path='stories' AND json_extract(document_json,'$.authorId')=?", ('author',)),
@@ -49,6 +50,7 @@ class IndexPlans(unittest.TestCase):
                 ('idx_cf_friend_participant_0', f"SELECT path FROM {table} WHERE parent_path='friends' AND json_extract(document_json,'$.participants[0]')=?", ('u',)),
                 ('idx_cf_chat_participant_source', 'SELECT chat_path FROM friendbook_cf_chat_participants WHERE participant_uid=? AND source=1', ('u',)),
                 ('idx_cf_notif_page', f"SELECT path FROM {table} INDEXED BY idx_cf_notif_page WHERE parent_path='notifications' AND json_extract(document_json,'$.toUserId')=?", ('u',)),
+                ('idx_cf_notification_retention', f"SELECT path FROM {table} INDEXED BY idx_cf_notification_retention WHERE parent_path='notifications' AND (json_type(document_json,'$.createdAt') IN ('integer','real') OR (json_type(document_json,'$.createdAt')='object' AND json_extract(document_json,'$.createdAt.__type')='timestamp' AND json_type(document_json,'$.createdAt.millis') IN ('integer','real') AND json_extract(document_json,'$.createdAt.millis') BETWEEN -9007199254740991 AND 9007199254740991)) AND ({notif_time}) IS NOT NULL AND ((json_type(document_json,'$.isRead')='true' AND ({notif_time})<?) OR (json_type(document_json,'$.isRead')='false' AND ({notif_time})<?)) ORDER BY ({notif_time}),doc_id LIMIT ?", (1, 2, 200)),
                 ('sqlite_autoindex_friendbook_cf_view_counters_1', 'SELECT views FROM friendbook_cf_view_counters WHERE resource=?', ('posts/p',)),
             ]
             for obsolete in ('idx_cf_broadcast_users', 'idx_cf_legacy_broadcast_users', 'idx_cf_posts_author',

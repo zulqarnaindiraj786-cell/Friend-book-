@@ -11,7 +11,7 @@ async function stableEventId(prefix,fields) {
     new Uint8Array(fields.flatMap(value=>{const bytes=encoder.encode(value);return [bytes.length>>>24,(bytes.length>>>16)&255,(bytes.length>>>8)&255,bytes.length&255,...bytes];}))));
   return prefix+[...digest].map(byte=>byte.toString(16).padStart(2,'0')).join('');
 }
-const reactionNotificationId=(actor,recipient,type,resource)=>stableEventId('action_',[actor,recipient,type,resource]);
+const reactionNotificationId=(actor,recipient,type,window)=>stableEventId('action_',[actor,recipient,type,`window:${window}`]);
 const commentNotificationId=(actor,recipient,type,resource,commentId)=>stableEventId('comment_',
   [actor,recipient,type==='reply'?'reply':'comment',resource,commentId]);
 function identifier(value) {
@@ -255,11 +255,15 @@ export async function interactions(request, env, identity, match, authorize = au
           // The optional inbox event is committed in this same D1 batch as the
           // absolute reaction. The server derives its recipient and sender from
           // the authorized resource/request, never from client-supplied identity.
+          const notificationTime=Date.now();
+          // Collapse repeated likes from one actor to one owner/type notification
+          // per ten-minute window. Existing rows stay immutable; later likes in
+          // the window return no new notification and trigger no additional push.
+          const notificationWindow=Math.floor(notificationTime/(10*60*1000));
           const notificationId=(data.notify===true || new URL(request.url).searchParams.get('notify')==='1')
             && context.owner && context.owner!==identity.uid
             ? await reactionNotificationId(identity.uid,context.owner,
-                collection==='posts'?'like':'reel_like',id) : null;
-          const notificationTime=Date.now();
+                collection==='posts'?'like':'reel_like',notificationWindow) : null;
           const notification=notificationId?{
             toUserId:context.owner,fromUserId:identity.uid,fromUserName:context.name||'',
             fromUserPhotoUrl:context.photo||'',type:collection==='posts'?'like':'reel_like',
@@ -280,6 +284,7 @@ export async function interactions(request, env, identity, match, authorize = au
           return json({reactionOnly:true,owner:context.owner,
             types:JSON.parse(results[2].results[0].types_json),
             ...(notificationId?{notificationId:created?notificationId:null,notificationCreated:created,
+              ...(created?{}:{notificationCoalesced:true}),
               notification:created?{...notification,id:notificationId}:null}:{})});
         }
         await db.batch(writes);

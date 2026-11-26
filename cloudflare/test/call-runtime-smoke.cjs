@@ -19,7 +19,7 @@ const {Miniflare}=require(process.env.MINIFLARE || 'miniflare');
    const timeout=setTimeout(()=>reject(new Error(`Timed out waiting for ${event}`)),5000);
    socket.addEventListener(event,e=>{clearTimeout(timeout);resolve(e);},{once:true});
   });
-  assert.deepEqual(await (await request('/v1/android-config')).json(),{ads_enabled_v3:true});
+  assert.deepEqual(await (await request('/v1/android-config')).json(),{ads_enabled_v3:true,min_version_code:1});
   assert.equal((await open(null,'video')).status,401);
   for (const type of ['video','voice']) {
    const started=await signal('alice',type,'start',type);assert.equal(started.status,200,await started.text());

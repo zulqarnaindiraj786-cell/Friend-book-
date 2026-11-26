@@ -68,9 +68,11 @@ export function createWorker(verify = verifyFirebaseToken) {
       }
       if (path === '/v1/android-config') {
         if (request.method !== 'GET') return json({error:'Method not allowed'},405);
-        // Only explicit public booleans are exposed; never serialize env or D1 rows.
+        // Only explicit public configuration is exposed; never serialize env or D1 rows.
         if (!['true','false'].includes(env.ADS_ENABLED_V3)) return json({error:'App config unavailable'},503);
-        return json({ads_enabled_v3:env.ADS_ENABLED_V3 === 'true'});
+        const minVersion=Number(env.ANDROID_MIN_VERSION_CODE ?? '1');
+        if (!Number.isSafeInteger(minVersion) || minVersion < 1) return json({error:'App config unavailable'},503);
+        return json({ads_enabled_v3:env.ADS_ENABLED_V3 === 'true',min_version_code:minVersion});
       }
       if (path === '/v1/android-release') return request.method === 'GET' ? json(androidRelease) : json({ error: 'Method not allowed' }, 405);
       const live = /^\/v1\/live\/([A-Za-z0-9_-]{1,128})\/(publish|watch|cohost|pkguest)$/.exec(path);

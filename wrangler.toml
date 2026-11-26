@@ -6,6 +6,8 @@ compatibility_date = "2024-01-01"
 [vars]
 # Public app gate; config/ads and AdMob consent still apply in Android.
 ADS_ENABLED_V3 = "true"
+# Public advisory minimum; raise only after an optional update-prompt rollout.
+ANDROID_MIN_VERSION_CODE = "1"
 CF_ACCOUNT_ID = "92f3d04598822de2e49e14561218d090"
 FIREBASE_PROJECT_ID = "friendbook-17551"
 # Server-side authority for free verification reviews; Firebase Auth UID, not a secret.
@@ -73,6 +75,7 @@ new_sqlite_classes = ["CallRelay"]
 # before enabling those bindings. Preview DO namespaces are isolated by Cloudflare.
 [previews.vars]
 ADS_ENABLED_V3 = "false"
+ANDROID_MIN_VERSION_CODE = "1"
 CF_ACCOUNT_ID = "preview-disabled"
 FIREBASE_PROJECT_ID = "preview-disabled"
 PAYMENT_ADMIN_UIDS = ""

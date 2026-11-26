@@ -108,6 +108,14 @@ test('reaction action atomically creates one authorized inbox event with its D1 
   assert.equal((await retry.json()).notificationCreated,false);
   assert.equal(f.sql.prepare("SELECT COUNT(*) n FROM friendbook_cf_firestore_documents WHERE parent_path='notifications'").get().n,1);
   assert.equal(f.sql.prepare('SELECT total_changes() n').get().n,changes);
+  f.sql.prepare("INSERT INTO friendbook_cf_interaction_resources(resource,state) VALUES ('posts/p2','verified') ON CONFLICT(resource) DO UPDATE SET state='verified'").run();
+  const otherPost=await call(f.env,'reactions','PUT',{type:'like',notify:true},
+    {query:'?response=reaction',authorize,post:'p2'});
+  assert.equal(otherPost.status,200);
+  const coalesced=await otherPost.json();
+  assert.equal(coalesced.notificationCreated,false);
+  assert.equal(coalesced.notificationCoalesced,true);
+  assert.equal(f.sql.prepare("SELECT COUNT(*) n FROM friendbook_cf_firestore_documents WHERE parent_path='notifications'").get().n,1);
 });
 
 test('five ordered quick-tap targets leave one Like and the correct persisted count', async t => {
