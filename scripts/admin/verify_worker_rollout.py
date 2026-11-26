@@ -69,11 +69,23 @@ def validate(settings, schedules, config):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--snapshot', type=Path, required=True)
+    parser.add_argument('--snapshot', type=Path)
     parser.add_argument('--compare', action='store_true')
+    parser.add_argument('--inspect', action='store_true', help='Print sanitized live binding identities only')
     args = parser.parse_args()
     config = tomllib.loads(Path('wrangler.toml').read_text())
     settings = api('settings')
+    if args.inspect:
+        identities = sorted((binding_identity(row) for row in settings['bindings']
+                             if row.get('type') not in ('plain_text', 'secret_text', 'json')),
+                            key=lambda row: row['name'])
+        public = next((row.get('text') for row in settings['bindings']
+                       if row.get('name') == 'ANDROID_MIN_VERSION_CODE' and row.get('type') == 'plain_text'), None)
+        print(json.dumps({'live_resources': identities,
+                          'android_min_version_code': public if public is None or str(public).isdigit() else 'non-numeric'}, sort_keys=True))
+        return
+    if not args.snapshot:
+        parser.error('--snapshot is required unless --inspect is used')
     identities = validate(settings, api('schedules'), config)
     if args.compare:
         if identities != json.loads(args.snapshot.read_text())['bindings']:
