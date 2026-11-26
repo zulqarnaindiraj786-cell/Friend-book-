@@ -19,9 +19,12 @@ def safe_query(sql, params):
   codes, reasons = [], []
   try:
    body = json.loads(error.read())
-   codes = [item.get('code') for item in body.get('errors', [])
+   errors = list(body.get('errors', []))
+   for result in body.get('result', []):
+    errors.extend(result.get('errors', []))
+   codes = [item.get('code') for item in errors
             if type(item.get('code')) is int][:5]
-   reasons = [item.get('message', '') for item in body.get('errors', [])]
+   reasons = [item.get('message', '') for item in errors]
   except (ValueError, TypeError, AttributeError):
    pass
   raise SanitizedHttpError(error.code, codes, ' '.join(reasons)) from None
