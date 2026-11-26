@@ -10,7 +10,7 @@ class IndexPlans(unittest.TestCase):
     def test_production_migrations_and_index_plans(self):
         with sqlite3.connect(':memory:') as db:
             for migration in sorted(MIGRATIONS.glob('*.sql')):
-                if migration.name in ('0105_retire_legacy_document_mirror.sql','0106_enforce_document_mirror_retirement.sql'):
+                if migration.name in ('0105_retire_legacy_document_mirror.sql','0106_enforce_document_mirror_retirement.sql','0109_archive_reappeared_document_mirror.sql'):
                     continue
                 db.executescript(migration.read_text())
             db.executescript((MIGRATIONS / '0038_document_and_reply_indexes.sql').read_text())
@@ -51,6 +51,7 @@ class IndexPlans(unittest.TestCase):
                 ('idx_cf_chat_participant_source', 'SELECT chat_path FROM friendbook_cf_chat_participants WHERE participant_uid=? AND source=1', ('u',)),
                 ('idx_cf_notif_page', f"SELECT path FROM {table} INDEXED BY idx_cf_notif_page WHERE parent_path='notifications' AND json_extract(document_json,'$.toUserId')=?", ('u',)),
                 ('idx_cf_notification_retention', f"SELECT path FROM {table} INDEXED BY idx_cf_notification_retention WHERE parent_path='notifications' AND (json_type(document_json,'$.createdAt') IN ('integer','real') OR (json_type(document_json,'$.createdAt')='object' AND json_extract(document_json,'$.createdAt.__type')='timestamp' AND json_type(document_json,'$.createdAt.millis') IN ('integer','real') AND json_extract(document_json,'$.createdAt.millis') BETWEEN -9007199254740991 AND 9007199254740991)) AND ({notif_time}) IS NOT NULL AND ((json_type(document_json,'$.isRead')='true' AND ({notif_time})<?) OR (json_type(document_json,'$.isRead')='false' AND ({notif_time})<?)) ORDER BY ({notif_time}),doc_id LIMIT ?", (1, 2, 200)),
+                ('idx_cf_notification_retention_state', f"SELECT path FROM {table} INDEXED BY idx_cf_notification_retention_state WHERE parent_path='notifications' AND json_type(document_json,'$.isRead') IN ('true','false') AND json_type(document_json,'$.isRead')='true' AND (json_type(document_json,'$.createdAt') IN ('integer','real') OR (json_type(document_json,'$.createdAt')='object' AND json_extract(document_json,'$.createdAt.__type')='timestamp' AND json_type(document_json,'$.createdAt.millis') IN ('integer','real') AND json_extract(document_json,'$.createdAt.millis') BETWEEN -9007199254740991 AND 9007199254740991)) AND ({notif_time})<? ORDER BY ({notif_time}),doc_id LIMIT ?", (1, 200)),
                 ('sqlite_autoindex_friendbook_cf_view_counters_1', 'SELECT views FROM friendbook_cf_view_counters WHERE resource=?', ('posts/p',)),
             ]
             for obsolete in ('idx_cf_broadcast_users', 'idx_cf_legacy_broadcast_users', 'idx_cf_posts_author',
@@ -67,7 +68,7 @@ class IndexPlans(unittest.TestCase):
     def test_obsolete_legacy_name_index_is_removed_without_losing_prefix_seek(self):
         with sqlite3.connect(':memory:') as db:
             for migration in sorted(MIGRATIONS.glob('*.sql')):
-                if migration.name not in ('0075_remove_obsolete_legacy_name_index.sql','0105_retire_legacy_document_mirror.sql','0106_enforce_document_mirror_retirement.sql'):
+                if migration.name not in ('0075_remove_obsolete_legacy_name_index.sql','0105_retire_legacy_document_mirror.sql','0106_enforce_document_mirror_retirement.sql','0109_archive_reappeared_document_mirror.sql'):
                     db.executescript(migration.read_text())
             db.execute('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)',
                        ('users/alice', 'users', 'alice', 'alice', '{"displayName":"Alice","lastSeenMs":0}', 1))
@@ -105,7 +106,7 @@ class IndexPlans(unittest.TestCase):
     def test_chat_membership_source_index_reduces_local_work_without_changing_results(self):
         with sqlite3.connect(':memory:') as db:
             for migration in sorted(MIGRATIONS.glob('*.sql')):
-                if migration.name not in ('0073_chat_membership_source_seek.sql','0105_retire_legacy_document_mirror.sql','0106_enforce_document_mirror_retirement.sql'):
+                if migration.name not in ('0073_chat_membership_source_seek.sql','0105_retire_legacy_document_mirror.sql','0106_enforce_document_mirror_retirement.sql','0109_archive_reappeared_document_mirror.sql'):
                     db.executescript(migration.read_text())
             for n in range(500):
                 path = f'chats/room{n}'
@@ -143,7 +144,7 @@ class IndexPlans(unittest.TestCase):
     def test_root_message_guards_seek_all_representations(self):
         with sqlite3.connect(':memory:') as db:
             for migration in sorted(MIGRATIONS.glob('*.sql')):
-                if migration.name in ('0105_retire_legacy_document_mirror.sql','0106_enforce_document_mirror_retirement.sql'):
+                if migration.name in ('0105_retire_legacy_document_mirror.sql','0106_enforce_document_mirror_retirement.sql','0109_archive_reappeared_document_mirror.sql'):
                     continue
                 db.executescript(migration.read_text())
             # Migrations are safe to rerun, including the new partial indexes.

@@ -20,7 +20,7 @@ test('real-schema maintenance ends stale lives, preserves fresh rooms and histor
     assert.equal(status('stale'),'ended');assert.equal(status('fresh'),'live');
     assert.equal(sql.prepare('SELECT count(*) n FROM friendbook_cf_view_dedupe').get().n,1);
     assert.equal(queries.length,3);assert.ok(queries.some(q=>q.includes('friendbook_cf_broadcast_push')));
-    assert.ok(queries.some(q=>q.includes('idx_cf_notification_retention')));
+    assert.ok(queries.some(q=>q.includes('idx_cf_notification_retention_state')));
   } finally {sql.close();}
 });
 
@@ -53,7 +53,8 @@ test('scheduled retention removes at most 200 expired notifications per tick usi
   await scheduled({}, {DB:db});assert.deepEqual(failures,[]);assert.deepEqual(deleteChanges,[200]);assert.equal(expired(),251,'first cron tick deletes at most 200, including timestamp envelopes');
   await scheduled({}, {DB:db});assert.equal(expired(),51,'second cron tick deletes at most 200');
   await scheduled({}, {DB:db});assert.equal(expired(),0,'third tick drains the remaining fifty-one');
-  assert.ok(plans.some(p=>p.includes('idx_cf_notification_retention')),plans.join('\\n'));
+  assert.ok(plans.some(p=>p.includes('idx_cf_notification_retention_state')),plans.join('\\n'));
+  assert.ok(plans.every(p=>!p.includes('USE TEMP B-TREE')),plans.join('\\n'));
   for(const id of ['fresh-read','fresh-unread','unknown-read','malformed-time'])assert.equal(sql.prepare('SELECT count(*) n FROM friendbook_cf_firestore_documents WHERE path=?').get(`notifications/${id}`).n,1);
   assert.equal(sql.prepare('SELECT count(*) n FROM friendbook_cf_firestore_documents WHERE path=?').get('notifications/wrapped-time').n,0);
  } finally {sql.close();}
@@ -65,7 +66,7 @@ test('synchronous live-task prepare failure does not suppress outbox delivery at
     return {bind(){return {async all(){return {results:[]};}};}};
   }}});
   assert.equal(queries.length,3);assert.ok(queries.some(q=>q.includes('friendbook_cf_broadcast_push')));
-  assert.ok(queries.some(q=>q.includes('idx_cf_notification_retention')));
+  assert.ok(queries.some(q=>q.includes('idx_cf_notification_retention_state')));
 });
 
 test('outbox rejection cannot suppress independent live expiry or reject the whole cron',async()=>{
