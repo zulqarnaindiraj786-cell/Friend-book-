@@ -331,11 +331,9 @@ export async function commentsAPI(request, db, identity, resource, data, context
     const parentRow=parent ? await promoteLegacy(db,resource,parent,uid,context.blocked||[]) : null;
     if(parent && !parentRow)return reply({error:'Parent not found'},400);
     const replyTo=parentRow?.uid||'';
-    const existing=await read(data.id);
-    if(existing){return existing.uid===uid && !existing.removed && existing.text===content.text && existing.parent_id===parent &&
-      (existing.media_url||'')===content.media && (existing.mentions||'[]')===content.mentions?reply({comment:normalized(existing,uid),owner:context.owner||'',replyTo,created:false,visibleToActor:!(context.blocked||[]).includes(uid)}):reply({error:'Comment ID conflict'},409);}
-    // The insert already checks legacy ID collisions atomically. Do not run
-    // the same check as a separate round trip before every new comment.
+    // Avoid a preflight comment SELECT on every POST. The insert is idempotent
+    // under its unique key, and the acknowledgement SELECT below distinguishes
+    // an identical retry from a conflicting ID in the same D1 batch.
     // Create inbox events in this same D1 transaction, after the comment has
     // passed its atomic insert guard; no second notification write request.
     const notificationEvents=await context.commentNotifications?.(data.id,replyTo) || [];
