@@ -18,12 +18,15 @@ class TrafficReport(unittest.TestCase):
         source=(ROOT/'cloudflare/firestore-documents.js').read_text()
         marker="if (body.createOnly===true && splitPath(docPath)[0]==='notifications')"
         branch=source[source.index(marker):]
+        branch=branch[:branch.index('// PATCH /v1/firestore/document')]
         start=branch.index('INSERT INTO friendbook_cf_firestore_documents(')
         sql=branch[start:branch.index('`',start)]
         shape=p.safe_shape(sql)
         self.assertIn('create_only_notification',shape['features'])
         self.assertEqual(shape['writer_families'],['document:notifications'])
         self.assertEqual(shape['roots'],['notifications'])
+        self.assertNotIn('INSERT INTO friendbook_cf_documents',branch,
+                         'create-only notifications must not pay for a duplicate legacy mirror write')
         for changed in (sql.replace("'notifications'","'users'"),
                         sql+' ON CONFLICT(path) DO NOTHING',
                         sql.replace('WHERE path=?1','WHERE path=?9')):
