@@ -88,8 +88,10 @@ def main():
         parser.error('--snapshot is required unless --inspect is used')
     identities = validate(settings, api('schedules'), config)
     if args.compare:
-        if identities != json.loads(args.snapshot.read_text())['bindings']:
-            raise ValueError('Post-deploy bindings differ')
+        previous = json.loads(args.snapshot.read_text())['bindings']
+        if identities != previous:
+            raise ValueError('Post-deploy bindings differ; expected=' + json.dumps(previous, sort_keys=True)
+                             + '; actual=' + json.dumps(identities, sort_keys=True))
     else:
         deployments = api('deployments')
         versions = deployments.get('deployments', [])
