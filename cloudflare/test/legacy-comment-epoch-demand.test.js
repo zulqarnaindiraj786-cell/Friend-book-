@@ -157,7 +157,7 @@ test('twenty-resource pages split legacy SQL into D1-safe groups in one batch',a
  assert.deepEqual(resources.map(r=>result.get(r).count),resources.map((_,i)=>i===19?1:0));
  assert.equal(grouped,4);assert.equal(batches,1);
  result=await batchEngagementReads(db,resources,'user1',[],db);
- assert.equal(result.get('posts/p19').count,1);assert.equal(grouped,5);assert.equal(batches,2);
+ assert.equal(result.get('posts/p19').count,1);assert.equal(grouped,4);assert.equal(batches,2,'cached legacy counts avoid another grouped probe');
  epochError=true;result=await batchEngagementReads(db,resources,'user1',[],db);
- assert.equal(result.get('posts/p19').count,1);assert.equal(grouped,9);assert.equal(batches,3);
+ assert.equal(result.get('posts/p19').count,1);assert.equal(grouped,8);assert.equal(batches,3,'epoch read failure disables all cached hints');
 });
