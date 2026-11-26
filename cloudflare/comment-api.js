@@ -337,17 +337,16 @@ export async function commentsAPI(request, db, identity, resource, data, context
     // Create inbox events in this same D1 transaction, after the comment has
     // passed its atomic insert guard; no second notification write request.
     const notificationEvents=await context.commentNotifications?.(data.id,replyTo) || [];
+    const batchCreatedAt=Date.now();
     const batch=[
       db.prepare(`INSERT INTO friendbook_cf_comments(resource,id,uid,text,parent_id,created_at)
         SELECT ?,?,?,?,?,? WHERE NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents WHERE path=? AND parent_path='comments')
         AND (? IS NULL OR EXISTS (SELECT 1 FROM friendbook_cf_comments c LEFT JOIN friendbook_cf_comment_details d ON d.resource=c.resource AND d.id=c.id
           WHERE c.resource=? AND c.id=? AND COALESCE(d.removed,0)=0))
-        ON CONFLICT(resource,id) DO NOTHING`).bind(resource,data.id,uid,content.text,parent,Date.now(),`comments/${data.id}`,parent,resource,parent),
+        ON CONFLICT(resource,id) DO NOTHING`).bind(resource,data.id,uid,content.text,parent,batchCreatedAt,`comments/${data.id}`,parent,resource,parent),
       db.prepare(`INSERT INTO friendbook_cf_comment_details(resource,id,media_url,mentions,name,photo)
         SELECT ?,?,?,?,?,? WHERE EXISTS(SELECT 1 FROM friendbook_cf_comments WHERE resource=? AND id=? AND uid=? AND text=? AND parent_id IS ?)
         ON CONFLICT(resource,id) DO NOTHING`).bind(resource,data.id,content.media,content.mentions,context.name||'',context.photo||'',resource,data.id,uid,content.text,parent),
-      // Read the acknowledgement in the same transaction as the write.
-      selectComment(data.id),
     ];
     for(const event of notificationEvents){
       const path=`notifications/${event.id}`,serialized=JSON.stringify(event),now=event.createdAt;
@@ -358,12 +357,20 @@ export async function commentsAPI(request, db, identity, resource, data, context
         .bind(path,event.id,uid,serialized,now,now,resource,data.id,uid,path));
     }
     const results=await db.batch(batch);
-    const insertResult=results[0],acknowledgement=results[2];
-    const saved=acknowledgement.results?.[0];
-    if(saved?.uid!==uid || saved.removed || saved.text!==content.text || saved.parent_id!==parent || (saved.media_url||'')!==content.media || (saved.mentions||'[]')!==content.mentions)return reply({error:'Comment ID conflict'},409);
+    const insertResult=results[0];
     const changes=insertResult?.meta?.changes ?? insertResult?.changes;
+    // A successful fresh insert is already fully described by validated input;
+    // avoid re-reading the entire comment/reaction join for the common path.
+    // Idempotent retries still read the persisted row to reject conflicting IDs.
+    const saved=changes===1 ? {
+      resource,id:data.id,uid,text:content.text,parent_id:parent,created_at:batchCreatedAt,
+      historical_unattributed:0,created_at_known:1,media_url:content.media,mentions:content.mentions,
+      name:context.name||'',photo:context.photo||'',edited:0,removed:0,
+      reaction_summary:JSON.stringify({likes:0,mine:null}),
+    } : (await selectComment(data.id).first());
+    if(saved?.uid!==uid || saved.removed || saved.text!==content.text || saved.parent_id!==parent || (saved.media_url||'')!==content.media || (saved.mentions||'[]')!==content.mentions)return reply({error:'Comment ID conflict'},409);
     const notifications=notificationEvents.filter((_,index)=>{
-      const result=results[3+index];return (result?.meta?.changes??result?.changes)===1;
+      const result=results[2+index];return (result?.meta?.changes??result?.changes)===1;
     });
     return reply({comment:normalized(saved,uid),owner:context.owner||'',replyTo,
       ...(notifications.length?{notifications}:{}),

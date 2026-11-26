@@ -882,9 +882,18 @@ test('new comment ACK indicates actual insert and visibility without changing id
   assert.equal(f.sql.prepare('SELECT COUNT(*) n FROM friendbook_cf_comments').get().n,2);
 });
 
+test('fresh comment writes skip the full reaction-joined acknowledgement read',async t=>{
+  const f=fixture();t.after(f.close);const prepare=f.env.DB.prepare.bind(f.env.DB);let joinedReads=0;
+  f.env.DB.prepare=query=>{if(query.includes('AS reaction_summary'))joinedReads++;return prepare(query);};
+  const response=await call(f.env,'comments','POST',{id:'fresh-no-ack-read',text:'hello'});
+  assert.equal(response.status,200);assert.equal(joinedReads,0);
+  const retry=await call(f.env,'comments','POST',{id:'fresh-no-ack-read',text:'hello'});
+  assert.equal(retry.status,200);assert.equal(joinedReads,1);
+});
+
 test('new comment ACK omits creation claim if batch result lacks change metadata',async t=>{
   const f=fixture();t.after(f.close);const batch=f.env.DB.batch;
-  f.env.DB.batch=async statements=>{const result=await batch(statements);if(statements.length===3)result[0]={};return result;};
+  f.env.DB.batch=async statements=>{const result=await batch(statements);if(statements.length===2)result[0]={};return result;};
   const response=await call(f.env,'comments','POST',{id:'unknown-change',text:'ok'});assert.equal(response.status,200);
   const data=await response.json();assert.equal(data.comment.id,'unknown-change');assert.equal(Object.hasOwn(data,'created'),false);
 });
@@ -892,9 +901,9 @@ test('new comment ACK omits creation claim if batch result lacks change metadata
 test('comment ACK reports a concurrent identical insert as not created and accepts D1 meta.changes',async t=>{
   const f=fixture();t.after(f.close);const batch=f.env.DB.batch;let raced=false;
   f.env.DB.batch=async statements=>{
-    if(statements.length===3 && !raced){raced=true;f.sql.prepare('INSERT INTO friendbook_cf_comments(resource,id,uid,text,parent_id,created_at) VALUES(?,?,?,?,?,?)').run('posts/p1','raced','user1','same',null,123);}
+    if(statements.length===2 && !raced){raced=true;f.sql.prepare('INSERT INTO friendbook_cf_comments(resource,id,uid,text,parent_id,created_at) VALUES(?,?,?,?,?,?)').run('posts/p1','raced','user1','same',null,123);}
     const result=await batch(statements);
-    if(statements.length===3){const changes=Number(result[0].changes);result[0]={meta:{changes}};}
+    if(statements.length===2){const changes=Number(result[0].changes);result[0]={meta:{changes}};}
     return result;
   };
   const response=await call(f.env,'comments','POST',{id:'raced',text:'same'});assert.equal(response.status,200);
