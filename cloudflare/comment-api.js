@@ -98,7 +98,6 @@ export function legacyCommentCountsWithCandidatesStatement(db,resources,blocked=
       FROM requested q CROSS JOIN friendbook_cf_firestore_documents AS a INDEXED BY idx_cf_canonical_comment_page_resource
       WHERE a.parent_path='comments' AND ${legacyField('resource')}=q.resource
   )`;
-  )`;
   const selects=resources.map((_,i)=>`SELECT ${i} AS slot,
     (SELECT COUNT(*) FROM quota_comment_candidates_0 a WHERE a.slot=${i}
       AND ${legacyRowGuard('?1',`(SELECT resource FROM requested WHERE slot=${i})`)}) AS n,
