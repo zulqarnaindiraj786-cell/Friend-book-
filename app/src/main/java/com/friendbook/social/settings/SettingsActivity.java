@@ -1361,29 +1361,46 @@ public class SettingsActivity extends Activity {
                     if (Fb.auth().getCurrentUser() == null) return;
                     final String uid = Fb.uid();
                     final String em = Fb.auth().getCurrentUser().getEmail();
-                    if (uid != null) {
-                        String[] cols = {"posts", "reels", "stories", "comments"};
-                        for (String col : cols) {
-                            Fb.db().collection(col).whereEqualTo("authorId", uid).limit(200).get()
-                                    .addOnSuccessListener(snap -> {
-                                        for (DocumentSnapshot d : snap) d.getReference().delete();
-                                    });
-                        }
-                        Fb.db().collection("users").document(uid).delete();
+                    if (uid == null) return;
+                    java.util.List<com.google.android.gms.tasks.Task<Void>> cleanup = new ArrayList<>();
+                    String[] cols = {"posts", "reels", "stories", "comments"};
+                    for (String col : cols) {
+                        cleanup.add(com.friendbook.social.core.QueryActions.deleteMatching(
+                                Fb.db().collection(col).whereEqualTo("authorId", uid)));
                     }
-                    Fb.auth().getCurrentUser().delete()
-                            .addOnSuccessListener(x -> {
-                                if (em != null) Prefs.removeSavedAccount(this, em);
-                                com.friendbook.social.core.FastCache.clearAll(this);
-                                Fb.me = null;
-                                Prefs.setUnlockedSession(this, false);
-                                Intent i = new Intent(this, LoginActivity.class);
-                                i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
-                                startActivity(i);
-                                finishAffinity();
+                    com.google.android.gms.tasks.Tasks.whenAllComplete(cleanup)
+                            .addOnSuccessListener(results -> {
+                                if (!java.util.Objects.equals(uid, Fb.uid())) return;
+                                for (com.google.android.gms.tasks.Task<?> task : results) {
+                                    if (!task.isSuccessful()) {
+                                        Ui.info(this, "Account data not fully deleted",
+                                                "Some content could not be deleted. Please retry when your connection is stable.");
+                                        return;
+                                    }
+                                }
+                                Fb.db().collection("users").document(uid).delete()
+                                        .continueWithTask(task -> {
+                                            if (!task.isSuccessful()) throw task.getException();
+                                            if (Fb.auth().getCurrentUser() == null
+                                                    || !java.util.Objects.equals(uid, Fb.uid()))
+                                                throw new IllegalStateException("Account changed");
+                                            return Fb.auth().getCurrentUser().delete();
+                                        })
+                                        .addOnSuccessListener(x -> {
+                                            if (em != null) Prefs.removeSavedAccount(this, em);
+                                            com.friendbook.social.core.FastCache.clearAll(this);
+                                            Fb.me = null;
+                                            Prefs.setUnlockedSession(this, false);
+                                            Intent i = new Intent(this, LoginActivity.class);
+                                            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
+                                            startActivity(i);
+                                            finishAffinity();
+                                        })
+                                        .addOnFailureListener(e -> Ui.info(this, "Re-authentication needed",
+                                                "For security, please log out, sign back in once, and tap Delete Account again."));
                             })
-                            .addOnFailureListener(e -> Ui.info(this, "Re-authentication needed",
-                                    "For security, please log out, sign back in once, and tap Delete Account again."));
+                            .addOnFailureListener(e -> Ui.info(this, "Account data not fully deleted",
+                                    "Some content could not be deleted. Please retry when your connection is stable."));
                 });
     }
 }
