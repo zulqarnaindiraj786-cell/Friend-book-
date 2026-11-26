@@ -36,7 +36,7 @@ public class AppUpdatesTest {
         Activity activity=Robolectric.buildActivity(Activity.class).setup().get();
         AlertDialog dialog=AppUpdates.showAvailable(activity, true);
         assertTrue(dialog.getButton(AlertDialog.BUTTON_NEGATIVE).isShown());
-        assertTrue(dialog.isCancelable());
+        assertEquals("Later",dialog.getButton(AlertDialog.BUTTON_NEGATIVE).getText().toString());
         dialog.getButton(AlertDialog.BUTTON_POSITIVE).performClick();
         Intent intent=Shadows.shadowOf(activity).getNextStartedActivity();
         assertEquals(Intent.ACTION_VIEW,intent.getAction());
