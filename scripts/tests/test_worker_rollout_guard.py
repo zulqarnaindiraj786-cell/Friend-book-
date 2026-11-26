@@ -35,6 +35,8 @@ class WorkerRolloutGuard(unittest.TestCase):
         settings = copy.deepcopy(self.settings)
         settings['bindings'].append({'name': 'EXTRA', 'type': 'kv_namespace'})
         cases.append((settings, self.schedules))
+        with self.assertRaisesRegex(ValueError, 'expected=.*actual=.*EXTRA'):
+            validate(settings, self.schedules, self.config)
         cases.append((self.settings, {'schedules': []}))
         for settings, schedules in cases:
             with self.subTest(settings=settings), self.assertRaises(ValueError):

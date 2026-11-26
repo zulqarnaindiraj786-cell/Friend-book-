@@ -38,7 +38,9 @@ def validate(settings, schedules, config):
     resources = {name: row['type'] for name, row in bindings.items()
                  if row['type'] not in ('plain_text', 'secret_text', 'json')}
     if resources != expected:
-        raise ValueError('Live resource bindings differ from reviewed configuration')
+        actual = json.dumps(dict(sorted(resources.items())), sort_keys=True)
+        required = json.dumps(dict(sorted(expected.items())), sort_keys=True)
+        raise ValueError('Live resource bindings differ from reviewed configuration; expected=' + required + '; actual=' + actual)
     if bindings['DB'].get('id') != config['d1_databases'][0]['database_id']:
         raise ValueError('D1 binding mismatch')
     if bindings['VIDEO_BUCKET'].get('bucket_name') != 'friendbook':
