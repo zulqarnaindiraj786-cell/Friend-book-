@@ -140,3 +140,8 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: python3 -m scripts.loadtest.canonical_mirror_state
+      - name: Aggregate snapshot comparison (read-only, sanitized)
+        continue-on-error: true
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: python3 -m scripts.loadtest.verify_canonical_mirror_retirement --diff

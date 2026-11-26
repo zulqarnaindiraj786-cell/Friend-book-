@@ -44,4 +44,5 @@ if __name__=='__main__':
  except Exception as e:
   allowed={'Legacy application mirror still exists','Rollback snapshot or schema metadata missing','Invalid rollback snapshot count','Original schema not retained'}
   message=str(e) if str(e) in allowed else type(e).__name__
+  print('::error:: Canonical mirror audit: '+message)
   raise SystemExit('Canonical mirror retirement verification failed: '+message)
