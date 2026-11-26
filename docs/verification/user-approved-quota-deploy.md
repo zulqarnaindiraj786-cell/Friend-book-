@@ -1,6 +1,8 @@
 # User-authorized quota deployment
 
-The user explicitly requested a production deploy to reduce quota after reviewing that the changes were not live. The authorized source is the current `arena/b52bc74d-friend-book` branch, including the one-minute viewer-local feed reuse and notification-retention state-seek optimization. This note records authorization only; it does not claim a deployment or migration succeeded.
+The user explicitly requested a production deploy to reduce quota and then authorized proceeding with the safe work needed. The authorized source is the current `arena/b52bc74d-friend-book` branch, including the one-minute viewer-local feed reuse and notification-retention state-seek optimization. This note records authorization only; it does not claim a deployment or migration succeeded.
+
+The user has now also approved the specific reversible archive step for the reappeared mirror. Migration 0109 renames the live mirror table to an archive while preserving its rows, indexes, triggers and columns; it does not delete or reconcile the discrepant records. The guarded preflight and quota-budget checks remain mandatory. No archive will run if any safety gate fails.
 
 The existing guarded Cloudflare deployment workflow remains the only rollout path. Its tests, D1 migration inventory, index-build quota preflight, resource/config checks, migration verification and post-deploy health/auth checks must pass. Canonical mirror retirement/archive safeguards remain unchanged; no mirror reconciliation, destructive migration, PR merge, or Android release is authorized by this note. If any preflight fails, stop and report it rather than bypassing the gate.
 
