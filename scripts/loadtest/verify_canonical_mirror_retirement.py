@@ -69,17 +69,21 @@ def diff(query):
         SELECT {columns} FROM friendbook_cf_documents_retired_backup
         EXCEPT SELECT {columns} FROM friendbook_cf_documents
     )
-    SELECT CASE WHEN snapshot_only.collection IN
-        ('users','posts','reels','stories','pages','groups','chats','friend_requests','comments','likes','followers','following','saves','payments','subscriptions','reports','feedback','gifts','lives','messages','notifications')
-        THEN snapshot_only.collection ELSE 'other' END AS collection,
-      CASE
-        WHEN canonical.path IS NULL THEN 'no_canonical_path'
-        WHEN canonical.document_json = snapshot_only.document_json THEN 'canonical_payload_exact'
-        ELSE 'canonical_payload_differs'
-      END AS classification, COUNT(*) AS n
-    FROM snapshot_only LEFT JOIN friendbook_cf_firestore_documents AS canonical
-      ON canonical.path = snapshot_only.path
-    GROUP BY collection, classification ORDER BY collection, classification'''
+    SELECT classified.collection, classified.classification, COUNT(*) AS n
+    FROM (
+      SELECT CASE WHEN snapshot_only.collection IN
+          ('users','posts','reels','stories','pages','groups','chats','friend_requests','comments','likes','followers','following','saves','payments','subscriptions','reports','feedback','gifts','lives','messages','notifications')
+          THEN snapshot_only.collection ELSE 'other' END AS collection,
+        CASE
+          WHEN canonical.path IS NULL THEN 'no_canonical_path'
+          WHEN canonical.document_json = snapshot_only.document_json THEN 'canonical_payload_exact'
+          ELSE 'canonical_payload_differs'
+        END AS classification
+      FROM snapshot_only LEFT JOIN friendbook_cf_firestore_documents AS canonical
+        ON canonical.path = snapshot_only.path
+    ) AS classified
+    GROUP BY classified.collection, classified.classification
+    ORDER BY classified.collection, classified.classification'''
     classifications, metadata = query(classification_sql, ())
     classified = {}
     allowed_collections = {'users','posts','reels','stories','pages','groups','chats','friend_requests','comments','likes','followers','following','saves','payments','subscriptions','reports','feedback','gifts','lives','messages','notifications','other'}
