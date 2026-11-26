@@ -37,6 +37,17 @@ async function body(request) {
   if (!data || Array.isArray(data) || typeof data !== 'object') throw Error();
   return data;
 }
+// The resource readiness lookup is hot on every interaction request. Force the
+// covering index so it reads no table payload after the resource key match.
+async function interactionResourceState(db,resource) {
+  const indexed=()=>db.prepare('SELECT state FROM friendbook_cf_interaction_resources INDEXED BY idx_cf_interaction_resource_state_cover WHERE resource = ?').bind(resource).first();
+  try { return await indexed(); }
+  catch(error) {
+    if(!/no such index: idx_cf_interaction_resource_state_cover/.test(String(error)))throw error;
+    return db.prepare('SELECT state FROM friendbook_cf_interaction_resources WHERE resource = ?').bind(resource).first();
+  }
+}
+
 // The actor has at most one reaction per resource. An uncorrelated scalar
 // lookup is evaluated once per statement, rather than joining the same actor
 // row once for each nonzero type. Both reads stay in the same D1 snapshot.
@@ -188,7 +199,7 @@ export async function interactions(request, env, identity, match, authorize = au
     db = env.DB.withSession('first-primary');
     // Keep a primary-first session, but overlap the independent readiness and access reads.
     const [ready,allowed] = await Promise.all([
-      db.prepare('SELECT state FROM friendbook_cf_interaction_resources WHERE resource = ?').bind(resource).first(),
+      interactionResourceState(db,resource),
       authorize({...identity,db}, collection, id, undefined, context, accountReads),
     ]);
     if (ready && ready.state !== 'verified') return json({ error: 'Resource migration not verified' }, 503);
@@ -197,7 +208,7 @@ export async function interactions(request, env, identity, match, authorize = au
       // Keep the insert-or-observe check atomic and in one D1 round trip.
       const [, observed] = await db.batch([
         db.prepare("INSERT INTO friendbook_cf_interaction_resources(resource, state) VALUES (?, 'verified') ON CONFLICT(resource) DO NOTHING").bind(resource),
-        db.prepare('SELECT state FROM friendbook_cf_interaction_resources WHERE resource = ?').bind(resource),
+        db.prepare('SELECT state FROM friendbook_cf_interaction_resources INDEXED BY idx_cf_interaction_resource_state_cover WHERE resource = ?').bind(resource),
       ]);
       const current = observed.results?.[0];
       if (!current || current.state !== 'verified') return json({ error: 'Resource migration not verified' }, 503);
