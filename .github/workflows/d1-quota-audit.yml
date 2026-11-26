@@ -142,7 +142,9 @@ jobs:
           PY
 
   canonical-mirror-state:
-    if: github.event_name == 'workflow_dispatch'
+    # Schema/Worker state is unrelated to routine usage analytics and reads
+    # sqlite_master; run it only when mirror comparison was explicitly requested.
+    if: github.event_name == 'workflow_dispatch' && inputs.compare_mirror == true
     runs-on: ubuntu-latest
     timeout-minutes: 3
     steps:

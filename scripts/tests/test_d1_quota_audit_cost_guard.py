@@ -15,6 +15,12 @@ class D1QuotaAuditCostGuard(unittest.TestCase):
         self.assertIn('inputs.compare_mirror == true && inputs.authorize_expensive_snapshot_scan != true', source)
         self.assertIn('needs both explicit confirmations', source)
 
+    def test_routine_usage_audit_skips_unrelated_schema_scan(self):
+        source = (ROOT / '.github/workflows/d1-quota-audit.yml').read_text()
+        job = source.split('  canonical-mirror-state:', 1)[1].split('    runs-on:', 1)[0]
+        self.assertIn("inputs.compare_mirror == true", job)
+        self.assertIn('sqlite_master', source)
+
     def test_normal_quota_report_stays_analytics_only(self):
         source = (ROOT / '.github/workflows/d1-quota-audit.yml').read_text()
         self.assertIn('d1QueriesAdaptiveGroups', source)
