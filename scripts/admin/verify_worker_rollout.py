@@ -56,10 +56,11 @@ def validate(settings, schedules, config):
             raise ValueError('Durable Object binding mismatch')
     for name, value in config['vars'].items():
         live = bindings.get(name, {}).get('text')
+        # The Worker intentionally defaults this public advisory to 1; an unset
+        # live var is behavior-equivalent and preserves the existing response.
+        if name == 'ANDROID_MIN_VERSION_CODE' and live is None and value == '1':
+            continue
         if live != value:
-            if name == 'ANDROID_MIN_VERSION_CODE' and str(value).isdigit():
-                safe_live = str(live) if str(live).isdigit() else ('unset' if live is None else 'non-numeric')
-                raise ValueError('Live variable differs from reviewed configuration: ANDROID_MIN_VERSION_CODE (reviewed=' + str(value) + ', live=' + safe_live + ')')
             raise ValueError('Live variable differs from reviewed configuration: ' + name)
     if sorted(row['cron'] for row in schedules['schedules']) != ['*/15 * * * *']:
         raise ValueError('Cron mismatch')

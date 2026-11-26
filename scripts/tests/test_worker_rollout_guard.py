@@ -26,6 +26,11 @@ class WorkerRolloutGuard(unittest.TestCase):
         self.assertNotIn('must-not-export', str(result))
         self.assertNotIn('text', {k for row in result for k in row})
 
+    def test_unset_public_minimum_version_uses_the_same_safe_default(self):
+        settings = copy.deepcopy(self.settings)
+        settings['bindings'] = [row for row in settings['bindings'] if row['name'] != 'ANDROID_MIN_VERSION_CODE']
+        self.assertTrue(validate(settings, self.schedules, self.config))
+
     def test_wrong_resources_flags_and_cron_fail_closed(self):
         cases = []
         for name, key, value in [('DB', 'id', 'wrong'), ('VIDEO_BUCKET', 'bucket_name', 'wrong'),
@@ -45,5 +50,5 @@ class WorkerRolloutGuard(unittest.TestCase):
                 validate(settings, schedules, self.config)
         mismatch = copy.deepcopy(self.settings)
         next(row for row in mismatch['bindings'] if row['name'] == 'ANDROID_MIN_VERSION_CODE')['text'] = '7'
-        with self.assertRaisesRegex(ValueError, 'ANDROID_MIN_VERSION_CODE \\(reviewed=1, live=7\\)'):
+        with self.assertRaisesRegex(ValueError, 'ANDROID_MIN_VERSION_CODE'):
             validate(mismatch, self.schedules, self.config)
