@@ -1,6 +1,6 @@
 --- a/cloudflare/comment-api.js
 +++ b/cloudflare/comment-api.js
-@@ -73,41 +73,20 @@
+@@ -73,42 +73,19 @@
  export function legacyCommentCountsWithCandidatesStatement(db,resources,blocked=[]) {
    if(!Array.isArray(resources) || resources.length<1 || resources.length>20)throw Error('Invalid count batch');
    const bindings=[JSON.stringify(blocked||[])];
@@ -42,19 +42,19 @@
 -        AND ${legacyRowGuard('?1',`(SELECT resource FROM requested WHERE slot=${i})`)}) AS n,
 -    EXISTS(SELECT 1 FROM quota_comment_candidates_0 WHERE slot=${i}) AS has_candidates`);
 -  return db.prepare(`WITH requested(slot,resource,post_id) AS (VALUES ${requested.join(',')}), ${candidates}
+-    ${selects.join(' UNION ALL ')}`).bind(...bindings);
 +  // Pre-aggregated author counts are transactionally maintained by migration
 +  // 0108. A blocked set subtracts author buckets, rather than re-reading and
 +  // reparsing every legacy comment document on each feed request.
-+  const selects=resources.map((_,slot)=>`SELECT ${slot} AS slot,
-+    COALESCE((SELECT SUM(c.comment_count) FROM friendbook_cf_legacy_comment_route_counts c
-+      WHERE c.resource=(SELECT resource FROM requested WHERE slot=${slot})
-+        AND c.author_uid NOT IN (SELECT value FROM json_each(?1))),0) AS n,
-+    EXISTS(SELECT 1 FROM friendbook_cf_legacy_comment_route_counts c
-+      WHERE c.resource=(SELECT resource FROM requested WHERE slot=${slot})) AS has_candidates`);
 +  return db.prepare(`WITH requested(slot,resource) AS (VALUES ${requested.join(',')})
-     ${selects.join(' UNION ALL ')}`).bind(...bindings);
++    SELECT r.slot,
++      COALESCE(SUM(CASE WHEN c.author_uid NOT IN (SELECT value FROM json_each(?1)) THEN c.comment_count ELSE 0 END),0) AS n,
++      MAX(CASE WHEN c.resource IS NOT NULL THEN 1 ELSE 0 END) AS has_candidates
++    FROM requested r LEFT JOIN friendbook_cf_legacy_comment_route_counts c ON c.resource=r.resource
++    GROUP BY r.slot`).bind(...bindings);
  }
  
+ export async function legacyCommentCount(db,resource,blocked=[]) {
 --- /dev/null
 +++ b/cloudflare/migrations/0108_legacy_comment_route_counts.sql
 @@ -0,0 +1,114 @@
@@ -274,6 +274,15 @@
   const app=createWorker(async token=>token),env={...f.env,DB:db,FIREBASE_PROJECT_ID:'test'};
   const body={parent:'posts',filters:[],orderBy:[{field:'createdAt',direction:'DESCENDING'}],limit:2,feedEngagement:true};
   async function request(){const response=await app.fetch(new Request('https://example.test/v1/firestore/query',{method:'POST',headers:{authorization:'Bearer user1','content-type':'application/json'},body:JSON.stringify(body)}),env);assert.equal(response.status,200,await response.clone().text());return (await response.json()).documents;}
+@@ -178,7 +176,7 @@
+  let grouped=0,batches=0,epochError=false;
+  const db={...base,withSession(){return this;},prepare(q){
+   if(epochError && q.includes('FROM friendbook_cf_legacy_comment_epoch WHERE id=1'))throw Error('unavailable');
+-  if(q.includes('AS slot')){grouped++;assert.ok((q.match(/AS slot/g)||[]).length<=5,'D1 compound SELECT limit');}
++  if(q.includes('friendbook_cf_legacy_comment_route_counts')){grouped++;assert.doesNotMatch(q,/UNION ALL/,'aggregate batch uses one grouped query, not per-resource compounds');}
+   return base.prepare(q);
+  },async batch(statements){batches++;return base.batch(statements);}};
+  let result=await batchEngagementReads(db,resources,'user1',[],db);
 --- a/cloudflare/test/feed-engagement-batch.test.js
 +++ b/cloudflare/test/feed-engagement-batch.test.js
 @@ -13,9 +13,9 @@
@@ -284,20 +293,28 @@
 +          assert.equal(args.length,6);
            assert.equal(args[0],'["blocked"]');
 -          assert.equal((sql.match(/COUNT\(\*\)/g)||[]).length,5);
-+          assert.equal((sql.match(/SUM\(c\.comment_count\)/g)||[]).length,5);
++          assert.equal((sql.match(/SUM\(CASE WHEN c\.author_uid/g)||[]).length,1);
            // Do not depend on a database preserving compound-result ordering.
            return {results:Array.from({length:5},(_,slot)=>({slot,n:0})).reverse()};
          }
 --- a/cloudflare/test/comment-epoch-smoke.test.js
 +++ b/cloudflare/test/comment-epoch-smoke.test.js
-@@ -8,8 +8,8 @@
+@@ -7,14 +7,14 @@
+  const fake=async(url,options)=>{
    calls++;assert.match(url,/\/d1\/database\//);const body=JSON.parse(options.body);
    assert.ok(body.sql);assert.ok(Array.isArray(body.params));
-   if(calls>11)return {ok:false,json:async()=>({errors:[{message:'too many terms in compound SELECT'}]})};
+-  if(calls>11)return {ok:false,json:async()=>({errors:[{message:'too many terms in compound SELECT'}]})};
 -  const candidate=body.sql.includes('quota_comment_candidates_0');
 -  const size=(body.params.length-1)/2;
 +  const candidate=body.sql.includes('friendbook_cf_legacy_comment_route_counts');
++  if(calls>11 && !candidate)return {ok:false,json:async()=>({errors:[{message:'too many terms in compound SELECT'}]})};
 +  const size=candidate?body.params.length-1:(body.params.length-1)/2;
    const rows=calls===1?[{n:1}]:Array.from({length:size},(_,slot)=>({slot,n:0,...(candidate?{has_candidates:0}:{})}));
    return {ok:true,json:async()=>({success:true,result:[{success:true,results:rows,meta:{rows_read:10}}]})};
   };
+  const output=await checkCommentEpoch(fake,'SYNTHETIC_TOKEN','abcdefghijklmnop');
+- assert.equal(calls,15);assert.equal(output.measurements.length,14);assert.equal(output.measurements.filter(x=>x.compound_limit).length,4);
++ assert.equal(calls,15);assert.equal(output.measurements.length,14);assert.equal(output.measurements.filter(x=>x.compound_limit).length,2);
+  assert.ok(!JSON.stringify(output).includes('SYNTHETIC_TOKEN'));
+  await assert.rejects(checkCommentEpoch(async()=>({ok:false,json:async()=>({})}),'token','abcdefghijklmnop'));
+ });
