@@ -2597,6 +2597,9 @@ test('official broadcast advances an indexed D1 cursor and writes private Team m
   const call=(uid,path,method='GET',body)=>app.fetch(new Request(`https://example.test${path}`,{method,headers:{authorization:`Bearer ${uid}`,'content-type':'application/json'},...(body?{body:JSON.stringify(body)}:{})}),env);
   const post=(uid,body)=>call(uid,'/v1/admin/broadcast','POST',body);
   const queue={action:'queue',id:'job',text:'Team update',mediaType:'',mediaUrl:''};
+  assert.equal((await post('admin',queue)).status,503);
+  assert.equal(sql.prepare('SELECT count(*) n FROM friendbook_cf_firestore_documents WHERE parent_path=\'officialBroadcasts\'').get().n,0);
+  env.OFFICIAL_BROADCAST_WRITES_ENABLED='true';
   assert.equal((await post('alice',queue)).status,403);
   assert.equal((await post('admin',{...queue,mediaType:'image',mediaUrl:'https://other.example/image.png'})).status,400);
   assert.equal((await call('alice','/v1/firestore/document?path=chats/team_cara','PUT',{data:{participants:['alice','cara']}})).status,403);

@@ -2766,6 +2766,9 @@ async function claimReferral(request,db,uid,now) {
 async function adminBroadcast(request,env,uid,now) {
   if (!isPaymentAdmin(env,uid)) return json({error:'Forbidden'},403);
   if (request.method!=='POST') return json({error:'Method not allowed'},405);
+  // Mass fan-out creates several persistent D1 rows per recipient. Keep it
+  // paused unless capacity has been explicitly provisioned for broadcasts.
+  if (env.OFFICIAL_BROADCAST_WRITES_ENABLED!=='true') return json({error:'Official broadcasts are paused'},503);
   const db=env.DB;
   if (typeof db.batch!=='function') return json({error:'Atomic storage unavailable'},503);
   let input;
