@@ -10,5 +10,5 @@ class CommentRoutePreflightTest(unittest.TestCase):
   self.assertEqual(db.execute(p.SQL).fetchone(),(2,4,7))
   self.assertIn('idx_friendbook_cf_firestore_parent',str(db.execute('EXPLAIN QUERY PLAN '+p.SQL).fetchall()))
  def test_invalid_fails(self):
-  for row in ({'sampled':258,'text_fields':0,'route_rows_upper_bound':0},{'sampled':1,'text_fields':4,'route_rows_upper_bound':5},{'sampled':1,'text_fields':2,'route_rows_upper_bound':1}):
+  for row in ({'sampled':5002,'text_fields':0,'route_rows_upper_bound':0},{'sampled':1,'text_fields':4,'route_rows_upper_bound':5},{'sampled':1,'text_fields':2,'route_rows_upper_bound':1}):
    with self.assertRaises(ValueError):p.summarize({'success':True,'result':[{'success':True,'results':[row]}]})

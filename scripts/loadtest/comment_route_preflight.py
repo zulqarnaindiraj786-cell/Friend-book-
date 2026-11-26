@@ -5,7 +5,7 @@ import json,os,urllib.error,urllib.request
 SQL="""
 WITH sample AS MATERIALIZED (
  SELECT document_json FROM friendbook_cf_firestore_documents INDEXED BY idx_friendbook_cf_firestore_parent
- WHERE parent_path='comments' LIMIT 257
+ WHERE parent_path='comments' LIMIT 5001
 ), routes AS (
  SELECT
    CASE WHEN json_type(document_json,'$.fields')='object' THEN json_extract(document_json,'$.fields.postId.stringValue') ELSE json_extract(document_json,'$.postId') END AS p,
@@ -24,8 +24,8 @@ def summarize(payload):
  result=payload['result'][0]
  if not result.get('success') or len(result.get('results',[]))!=1:raise ValueError('invalid result')
  row=result['results'][0];keys=('sampled','text_fields','route_rows_upper_bound')
- if any(type(row.get(k)) is not int or row[k]<0 for k in keys) or row['sampled']>257 or row['text_fields']>3*row['sampled'] or row['route_rows_upper_bound']>5*row['sampled'] or row['route_rows_upper_bound']<row['text_fields']:raise ValueError('invalid counts')
- return {**{k:row[k] for k in keys},'truncated':row['sampled']==257,'d1_reported_rows_read':(result.get('meta') or {}).get('rows_read')}
+ if any(type(row.get(k)) is not int or row[k]<0 for k in keys) or row['sampled']>5001 or row['text_fields']>3*row['sampled'] or row['route_rows_upper_bound']>5*row['sampled'] or row['route_rows_upper_bound']<row['text_fields']:raise ValueError('invalid counts')
+ return {**{k:row[k] for k in keys},'truncated':row['sampled']==5001,'d1_reported_rows_read':(result.get('meta') or {}).get('rows_read')}
 
 def main():
  account='92f3d04598822de2e49e14561218d090';db='e1c605ca-a50b-46c6-9deb-56dd1f70d163'
