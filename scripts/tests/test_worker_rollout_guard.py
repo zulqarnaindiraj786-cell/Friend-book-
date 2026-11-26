@@ -13,6 +13,8 @@ class WorkerRolloutGuard(unittest.TestCase):
             {'name': 'ASSETS', 'type': 'assets'},
             {'name': 'ANALYTICS_ENGINE', 'type': 'analytics_engine', 'dataset': 'friendbook_views'},
             {'name': 'VIDEO_BUCKET', 'type': 'r2_bucket', 'bucket_name': 'friendbook'},
+            *[{'name': row['binding'], 'type': 'kv_namespace', 'namespace_id': row['id']}
+              for row in self.config.get('kv_namespaces', [])],
             {'name': 'LIVE_RELAY', 'type': 'durable_object_namespace', 'class_name': 'LiveRelay'},
             {'name': 'CALL_RELAY', 'type': 'durable_object_namespace', 'class_name': 'CallRelay'},
             {'name': 'PRIVATE', 'type': 'secret_text', 'text': 'must-not-export'},
@@ -27,7 +29,7 @@ class WorkerRolloutGuard(unittest.TestCase):
     def test_wrong_resources_flags_and_cron_fail_closed(self):
         cases = []
         for name, key, value in [('DB', 'id', 'wrong'), ('VIDEO_BUCKET', 'bucket_name', 'wrong'),
-                                  ('LIVE_RELAY', 'class_name', 'wrong'),
+                                  ('VIEWS', 'namespace_id', 'wrong'), ('LIVE_RELAY', 'class_name', 'wrong'),
                                   ('D1_INTERACTIONS_ENABLED', 'text', 'false')]:
             settings = copy.deepcopy(self.settings)
             next(row for row in settings['bindings'] if row['name'] == name)[key] = value

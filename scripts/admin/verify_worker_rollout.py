@@ -32,7 +32,7 @@ def binding_identity(binding):
 def validate(settings, schedules, config):
     bindings = {row['name']: row for row in settings['bindings']}
     expected = {'DB': 'd1', 'ASSETS': 'assets', 'ANALYTICS_ENGINE': 'analytics_engine',
-                'VIDEO_BUCKET': 'r2_bucket', 'LIVE_RELAY': 'durable_object_namespace',
+                'VIDEO_BUCKET': 'r2_bucket', 'VIEWS': 'kv_namespace', 'LIVE_RELAY': 'durable_object_namespace',
                 'CALL_RELAY': 'durable_object_namespace'}
     # Refuse to replace a deployment with extra resources absent from local config.
     resources = {name: row['type'] for name, row in bindings.items()
@@ -49,6 +49,8 @@ def validate(settings, schedules, config):
         raise ValueError('R2 binding mismatch')
     if bindings['ANALYTICS_ENGINE'].get('dataset') != 'friendbook_views':
         raise ValueError('Analytics binding mismatch')
+    if bindings['VIEWS'].get('namespace_id') != config['kv_namespaces'][0]['id']:
+        raise ValueError('Workers KV binding mismatch')
     for name, cls in [('LIVE_RELAY', 'LiveRelay'), ('CALL_RELAY', 'CallRelay')]:
         if bindings[name].get('class_name') != cls or bindings[name].get('script_name'):
             raise ValueError('Durable Object binding mismatch')

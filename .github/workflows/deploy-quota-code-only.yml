@@ -8,6 +8,7 @@ on:
       - '.github/workflows/deploy-quota-code-only.yml'
       - 'scripts/admin/verify_worker_rollout.py'
       - 'worker.js'
+      - 'wrangler.toml'
       - 'cloudflare/canonical-document-writes.js'
       - 'cloudflare/test/canonical-document-writes.test.js'
       - 'scripts/loadtest/d1_quota_replay.mjs'

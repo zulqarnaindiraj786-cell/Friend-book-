@@ -49,6 +49,11 @@ not_found_handling = "none"
 binding = "ANALYTICS_ENGINE"
 dataset = "friendbook_views"
 
+# Existing production namespace shared by the view-counter snapshot path.
+[[kv_namespaces]]
+binding = "VIEWS"
+id = "fab0193059114fa793c98ab590087fd6"
+
 # Existing owner-provided bucket. Never create or replace it.
 [[r2_buckets]]
 binding = "VIDEO_BUCKET"
