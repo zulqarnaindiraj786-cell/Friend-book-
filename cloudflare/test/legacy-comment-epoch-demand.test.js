@@ -101,7 +101,10 @@ test('positive legacy count cache invalidates when canonical comments shadow or 
  const afterMove=await batchEngagementReads(f.env.DB,[resource,'posts/p2'],'viewer',[],scope);
  assert.equal(afterMove.get(resource).count,1,'unshadowed legacy source becomes countable again');
  assert.equal(afterMove.get('posts/p2').count,0,'moved canonical row shadows only its new resource');
+ const beforeDelete=epoch();
  f.sql.prepare("DELETE FROM friendbook_cf_comments WHERE resource='posts/p2' AND id='legacy'").run();
+ assert.notDeepEqual(epoch(),beforeDelete,'canonical delete must bump the legacy count epoch');
+ assert.equal(await legacyCommentCount(f.env.DB,'posts/p2',[]),1,'source row is countable after canonical shadow deletion');
  const deleted=await batchEngagementReads(f.env.DB,[resource,'posts/p2'],'viewer',[],scope);
  assert.equal(deleted.get('posts/p2').count,1,'deleting canonical shadow invalidates cached count');
 });
