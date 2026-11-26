@@ -63,4 +63,6 @@ be represented as rollback-restorable data.
 
 This workflow is not a live quota measurement and does not certify a zero-cost
 or zero-read workload. After rollout, inspect Cloudflare D1 rows read/written,
-Workers requests/CPU and R2 operations separately.
+Workers requests/CPU and R2 operations separately. The current PR must only be
+released through `.github/workflows/deploy-cloudflare.yml` with the explicit
+`[deploy-cloudflare-production]` push marker; never apply 0108 manually.
