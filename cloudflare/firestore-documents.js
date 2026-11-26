@@ -3519,6 +3519,17 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0, ct
       if (['posts','reels'].includes(splitPath(docPath)[0]) && (existingDoc?.groupId || next?.groupId)) return await writeGroupPost(db,uid,docPath,existing,next,now);
       const chatAuth=await authorizeChat(db,docPath,uid,existingDoc,next);
       if (!notificationWriteAllowed(docPath, uid, existingDoc, next) || !profileWriteAllowed(docPath, uid, existingDoc, next) || !chatAuth.allowed || !contentWriteAllowed(docPath, uid, existingDoc, next)) return json({ error: 'Forbidden' }, 403);
+      // Idempotent literal saves to root documents should not rewrite the row,
+      // its indexes, or derived projections. Recheck the canonical snapshot to
+      // preserve concurrent-edit protection; compatibility mode still repairs
+      // a genuinely missing legacy mirror instead of skipping that write.
+      const literalRetry=request.method==='PATCH' ? literalFields(body.fields||body.data||body.updates)
+        : body.mergeFields==null && literalFields(body.data);
+      if (existing?.[canonicalRootSnapshot] && literalRetry && existing.document_json===JSON.stringify(next)) {
+        const state=await unchangedRootState(db,docPath,existing,next);
+        if(!state.current)return json({error:'Document changed. Please retry.'},409);
+        if(state.mirror)return json(rowToDocument(existing));
+      }
       if (body.createOnly===true && splitPath(docPath)[0]==='notifications') {
         if (typeof db.batch!=='function') return json({error:'Atomic storage unavailable'},503);
         const id=docIdOf(docPath), serialized=JSON.stringify(next);

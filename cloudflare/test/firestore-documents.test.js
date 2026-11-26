@@ -1411,6 +1411,9 @@ test('stories load with owner and privacy checks without exposing viewers', asyn
   const call=(uid,path,method='GET',body)=>app.fetch(new Request('https://example.test'+path,{method,headers:{authorization:'Bearer '+uid,'content-type':'application/json'},...(body?{body:JSON.stringify(body)}:{})}),env);
   const story={authorId:'alice',privacy:'Public',caption:'hello',viewedBy:['bob'],reactions:{bob:'heart'},expiresAt:{__type:'timestamp',millis:2000000000000}};
   assert.equal((await call('alice','/v1/firestore/document?path=stories/s1','PUT',{data:story})).status,200);
+  const writesBeforeRetry=sql.prepare('SELECT total_changes() n').get().n;
+  assert.equal((await call('alice','/v1/firestore/document?path=stories/s1','PUT',{data:story})).status,200);
+  assert.equal(sql.prepare('SELECT total_changes() n').get().n,writesBeforeRetry,'identical authorized root save does not rewrite canonical/mirror/index rows');
   assert.equal((await call('bob','/v1/firestore/document?path=stories/s1','PATCH',{fields:{caption:'forged'}})).status,403);
   assert.equal((await call('bob','/v1/docs/stories/s1','PUT',{caption:'forged'})).status,403);
   const read=await call('bob','/v1/firestore/document?path=stories/s1');assert.equal(read.status,200);
