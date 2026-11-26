@@ -85,13 +85,16 @@ test('historical timestamps, zero/fractional fallthrough and Unicode ties keep c
 });
 
 
-test('first inbox page tries a 4x bounded shared head before any full membership sort',async()=>{
+test('27,701-room inbox bounds its first page to an indexed 4x head',async()=>{
   const f=fixture(true);try {
-    for(let i=0;i<1200;i++)f.add(`room${String(i).padStart(4,'0')}`,{participants:['alice','bob'],lastMessageTime:5000-i});
+    for(let i=0;i<27701;i++)f.add(`room${String(i).padStart(5,'0')}`,{participants:['alice','bob'],lastMessageTime:50000-i});
     const page=await f.query({});
     const head=f.reads.find(r=>r.q.includes('idx_cf_chat_activity_seek'));
     assert.ok(head);assert.equal(head.rows,40,'first attempt is capped at four times the requested page');
-    assert.deepEqual(page.map(d=>d.id),Array.from({length:10},(_,i)=>`room${String(i).padStart(4,'0')}`));
+    const plan=f.sql.prepare('EXPLAIN QUERY PLAN '+head.q).all(...head.args).map(row=>row.detail);
+    assert.ok(plan.some(line=>line.includes('idx_cf_chat_activity_seek')));
+    assert.ok(!plan.some(line=>line.includes('TEMP B-TREE')));
+    assert.deepEqual(page.map(d=>d.id),Array.from({length:10},(_,i)=>`room${String(i).padStart(5,'0')}`));
     assert.ok(!f.reads.some(r=>r.q.includes('WITH quota_inbox_candidates')),'dense inbox skips the unbounded sort on first request');
   } finally {f.sql.close();}
 });
