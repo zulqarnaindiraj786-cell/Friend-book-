@@ -105,6 +105,8 @@ test('shared activity index seeks a bounded head with parity and no per-member w
     f.expensive();const page=await f.query({});
     const head=f.reads.find(r=>r.q.includes('idx_cf_chat_activity_seek'));
     assert.ok(head);assert.equal(head.rows,64);
+    assert.equal((head.q.match(/LEFT JOIN friendbook_cf_chat_participants/g)||[]).length,1,
+      'one indexed membership join per shared-head candidate gates the document JSON');
     assert.ok(!f.reads.some(r=>r.q.includes('WITH quota_inbox_candidates')));
     const plan=f.sql.prepare('EXPLAIN QUERY PLAN '+head.q).all('bob',64).map(r=>r.detail);
     assert.ok(plan.some(p=>p.includes('idx_cf_chat_activity_seek')));
