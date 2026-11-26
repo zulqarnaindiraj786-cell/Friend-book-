@@ -11,7 +11,7 @@ class HomeVisibleCache(unittest.TestCase):
         self.assertNotIn('collection("reels")',home)
         self.assertIn('setItemPrefetchEnabled(false)',home)
         self.assertIn('FeedHeadReads.load(first,forceReload',home)
-        self.assertIn('first.hasFreshLocalPage(FeedReadPolicy.REUSE_MS)',(JAVA/'core/FeedHeadReads.java').read_text())
+        self.assertIn('first.hasFreshLocalPage(FeedReadPolicy.FEED_REUSE_MS)',(JAVA/'core/FeedHeadReads.java').read_text())
     def test_friend_graph_is_saved_and_video_stories_use_posters(self):
         home=(JAVA/'main/HomeFragment.java').read_text()
         self.assertIn('Fb.db().friendshipFactsAutomatic(ids,scope)',home)

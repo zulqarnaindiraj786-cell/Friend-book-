@@ -26,7 +26,10 @@ class FeedReadBudgetTest(unittest.TestCase):
         self.assertNotIn('refreshVisibleEngagement', source)
         self.assertNotIn('watchLatestPosts', source)
         self.assertNotIn('>= 120_000L', source)
-        self.assertIn('first.hasFreshLocalPage(FeedReadPolicy.REUSE_MS)', (JAVA/'core/FeedHeadReads.java').read_text())
+        self.assertIn('first.hasFreshLocalPage(FeedReadPolicy.FEED_REUSE_MS)', (JAVA/'core/FeedHeadReads.java').read_text())
+        policy=(JAVA/'core/FeedReadPolicy.java').read_text()
+        self.assertIn('FEED_REUSE_MS=60_000L',policy)
+        self.assertIn('REUSE_MS=120_000L',policy,'story cache policy stays independent')
         adapter=(JAVA/'post/FeedAdapter.java').read_text()
         self.assertIn('!feedEngagementInPage &&', adapter)
     def test_pages_reuse_query_guard_duplicates_and_unlock_on_error(self):

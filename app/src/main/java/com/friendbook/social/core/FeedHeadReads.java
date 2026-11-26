@@ -18,7 +18,7 @@ public final class FeedHeadReads {
         first.get(Source.CACHE).addOnCompleteListener(task->{
             if(!active.getAsBoolean())return;
             QuerySnapshot saved=task.isSuccessful()?task.getResult():null;
-            boolean reusable=saved!=null && first.hasFreshLocalPage(FeedReadPolicy.REUSE_MS);
+            boolean reusable=saved!=null && first.hasFreshLocalPage(FeedReadPolicy.FEED_REUSE_MS);
             if(saved!=null)cached.accept(saved,reusable);
             if(reusable || !active.getAsBoolean())return;
             // A delta only discovers newer IDs; it cannot remove deleted posts or

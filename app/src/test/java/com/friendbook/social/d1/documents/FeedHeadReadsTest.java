@@ -23,7 +23,7 @@ public class FeedHeadReadsTest {
  @Test public void hundredWarmEntriesDoNotFetchAndStaleHeadIsShownBeforeOneRefresh(){
   Head q=new Head();List<String> events=new ArrayList<>();
   for(int i=0;i<100;i++)FeedHeadReads.load(q,false,()->true,(s,f)->events.add("cached"),s->events.add("server"),e->fail());
-  drain();assertEquals(0,q.network);assertEquals(120000,q.age);assertEquals(100,events.size());
+  drain();assertEquals(0,q.network);assertEquals(60000,q.age);assertEquals(100,events.size());
   events.clear();q.reusable=false;
   FeedHeadReads.load(q,false,()->true,(s,f)->events.add("cached"),s->events.add("server"),e->fail());
   drain();assertEquals(Arrays.asList("cached","server"),events);assertEquals(1,q.network);assertEquals(0,q.delta);
