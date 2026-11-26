@@ -99,7 +99,40 @@ def diff(query):
     if type(reads) is not int or reads < 0:
         raise ValueError('D1 read accounting unavailable')
     result['snapshot_only_canonical_match'] = classified
-    total_reads += reads
+
+    current_only_sql = f'''WITH current_only AS (
+        SELECT {columns} FROM friendbook_cf_documents
+        EXCEPT SELECT {columns} FROM friendbook_cf_documents_retired_backup
+    )
+    SELECT current_only.collection, CASE
+        WHEN canonical.path IS NULL THEN 'no_canonical_path'
+        WHEN canonical.document_json = current_only.document_json THEN 'canonical_payload_exact'
+        ELSE 'canonical_payload_differs'
+      END AS classification, COUNT(*) AS n
+    FROM current_only LEFT JOIN friendbook_cf_firestore_documents AS canonical
+      ON canonical.path = current_only.path
+    GROUP BY current_only.collection, classification ORDER BY current_only.collection, classification'''
+    # collection is already a legacy fixed collection label; normalize unknown
+    # values before logging so this report remains aggregate and sanitized.
+    current_rows, current_meta = query(current_only_sql, ())
+    current_classified = {}
+    for row in current_rows:
+        collection = row.get('collection')
+        if collection not in allowed_collections:
+            collection = 'other'
+        category, count = row.get('classification'), row.get('n')
+        if category not in {'no_canonical_path', 'canonical_payload_exact', 'canonical_payload_differs'} \
+                or type(count) is not int or count < 0:
+            raise ValueError('invalid current-only canonical classification')
+        key = f'{collection}:{category}'
+        current_classified[key] = current_classified.get(key, 0) + count
+    if sum(current_classified.values()) != result['current_only']:
+        raise ValueError('current-only canonical classification incomplete')
+    current_reads = current_meta.get('rows_read')
+    if type(current_reads) is not int or current_reads < 0:
+        raise ValueError('D1 read accounting unavailable')
+    result['current_only_canonical_match'] = current_classified
+    total_reads += reads + current_reads
     result['rows_read'] = total_reads
     print('::notice:: Canonical mirror snapshot diff ' + json.dumps(result, sort_keys=True))
     return result
