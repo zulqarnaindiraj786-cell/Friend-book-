@@ -238,7 +238,7 @@ jobs:
           else
             echo "Canonical inventory preflight skipped; mirror mode was already '$current_mirror_mode' (previous '$previous_mirror_mode')."
           fi
-          if printf '%s\n' "$pending" | grep -q '0103_comment_reaction_covering_index.sql'; then
+          if printf '%s\n' "$pending" | grep -Eq '0103_comment_reaction_covering_index.sql|0105_canonical_wrapped_friend_indexes.sql'; then
             # The new covering index scans reaction rows during construction.
             # Proceed only when the account-wide delayed quota sample leaves a
             # conservative reserve; if analytics is unavailable the migration stays pending.
@@ -247,7 +247,7 @@ jobs:
             preflight_status=${PIPESTATUS[0]}
             set +o pipefail
             if [ "$preflight_status" -ne 0 ]; then
-              echo 'Comment reaction index quota preflight failed; no migration attempted.' | tee -a "$log"
+              echo 'Index-build quota preflight failed; no migration attempted.' | tee -a "$log"
               echo "whoami_status=$whoami_status" >> "$GITHUB_OUTPUT"
               echo "d1_list_status=$d1_list_status" >> "$GITHUB_OUTPUT"
               echo 'migration_status=comment-reaction-index-preflight-failed' >> "$GITHUB_OUTPUT"
