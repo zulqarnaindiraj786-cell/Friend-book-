@@ -1,0 +1,79 @@
+name: Deploy isolated comment-count cache hotfix
+on:
+  push:
+    branches: [arena/b52bc74d-friend-book]
+    paths:
+      - '.github/workflows/deploy-comment-count-cache-hotfix.yml'
+      - 'patches/legacy-comment-session-cache.diff'
+permissions:
+  contents: read
+concurrency:
+  group: friendbook-cloudflare-production
+  cancel-in-progress: false
+jobs:
+  deploy:
+    if: github.ref == 'refs/heads/arena/b52bc74d-friend-book' && contains(github.event.head_commit.message, '[deploy-comment-cache-hotfix]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: '92f3d04598822de2e49e14561218d090'
+      WRANGLER_SEND_METRICS: 'false'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          path: production-source
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: production-source/package-lock.json
+      - name: Apply only the reviewed cache patch to current production source
+        working-directory: production-source
+        run: git apply ../patches/legacy-comment-session-cache.diff
+      - name: Run Worker, schema, migration and index-plan tests
+        working-directory: production-source
+        run: |
+          npm ci --ignore-scripts
+          npm test
+          python3 cloudflare/test/schema_test.py
+          python3 cloudflare/test/migration_test.py
+          python3 cloudflare/test/index_plan_test.py
+      - name: Record rollback version and verify live Worker configuration
+        working-directory: production-source
+        run: python3 scripts/admin/verify_worker_rollout.py --snapshot /tmp/comment-cache-rollout-before.json
+      - name: Compile exact production Worker without deploying
+        working-directory: production-source
+        run: npx --yes wrangler@4.157.0 deploy --dry-run --outdir /tmp/comment-cache-bundle
+      - name: Deploy Worker code only; do not run D1 SQL or migrations
+        working-directory: production-source
+        run: npx --yes wrangler@4.157.0 deploy --keep-vars
+      - name: Verify deployed Worker health, auth and preserved settings
+        working-directory: production-source
+        run: |
+          python3 scripts/admin/verify_worker_rollout.py --snapshot /tmp/comment-cache-rollout-before.json --compare
+          python3 - <<'PY'
+          import json, urllib.request, urllib.error
+          base='https://rough-firefly-dd7b.zulqarnaindiraj786.workers.dev'
+          def get(path):
+              req=urllib.request.Request(base+path,headers={'User-Agent':'FriendBook-Comment-Cache-Hotfix/1.0'})
+              try:
+                  with urllib.request.urlopen(req,timeout=30) as response: return response.status,json.load(response)
+              except urllib.error.HTTPError as error: return error.code,{}
+          status,health=get('/health')
+          assert status==200 and health.get('ok') is True and health.get('d1InteractionsEnabled') is True
+          assert health.get('views',{}).get('ae') is True
+          assert get('/v1/me')[0]==401
+          print('Health and authentication smoke checks passed.')
+          PY
+      - name: Save rollback evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: comment-count-cache-hotfix-evidence
+          path: |
+            /tmp/comment-cache-rollout-before.json
+            /tmp/comment-cache-bundle
+          retention-days: 7
