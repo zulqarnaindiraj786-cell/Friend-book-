@@ -105,6 +105,17 @@ class TrafficReport(unittest.TestCase):
             self.assertNotIn(secret.lower(),json.dumps(shape).lower())
         self.assertNotIn(sql,json.dumps(shape))
 
+    def test_cte_mirror_reader_structure_is_allowlisted_and_private(self):
+        sql="WITH canonical AS (SELECT path,document_json FROM friendbook_cf_firestore_documents), n AS (SELECT COUNT(*) AS n FROM friendbook_cf_documents) SELECT canonical.path,n.n FROM canonical LEFT JOIN n ON 1=1 WHERE canonical.document_json='PRIVATE_VALUE'"
+        shape=p.safe_shape(sql)
+        self.assertIn('redacted_mirror_select_structure',shape)
+        grammar=shape['redacted_mirror_select_structure']
+        self.assertIn('with',grammar)
+        self.assertIn('left join',grammar)
+        self.assertIn('friendbook_cf_documents',grammar)
+        self.assertNotIn('PRIVATE_VALUE',json.dumps(shape))
+        self.assertNotIn(sql,json.dumps(shape))
+
     def test_unmapped_canonical_structure_is_allowlisted_and_private(self):
         sql="SELECT SECRET_COLUMN, path FROM friendbook_cf_firestore_documents WHERE parent_path='SECRET_PATH' AND mystery='PRIVATE_VALUE'"
         shape=p.safe_shape(sql)

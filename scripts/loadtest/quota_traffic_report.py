@@ -263,7 +263,7 @@ def safe_shape(sql):
     if aliases:result['recognized_aliases']=aliases
     if set(('sampled','legacy_only')) <= set(aliases) and set(('canonical_documents','legacy_mirror')) <= set(tables):
         result['redacted_inventory_structure']=redacted_inventory_structure(sql)
-    if result['operation']=='SELECT' and set(tables)=={'canonical_documents','legacy_mirror'}:
+    if result['operation'] in ('SELECT','WITH') and 'legacy_mirror' in tables:
         # High-volume mirror readers are the key physical-retirement blocker.
         # Emit only the fixed-vocabulary SQL grammar so query families can be
         # matched to diagnostics without exposing arbitrary columns/identifiers.
@@ -343,7 +343,7 @@ def priority_shape_notices(windows):
             for offset in range(0,len(selected),2):
                 shapes=[dict(shape) for shape in selected[offset:offset+2]]
                 for shape in shapes:
-                    for key in ('redacted_inventory_structure','redacted_unmapped_canonical_structure','redacted_unmapped_select_structure'):
+                    for key in ('redacted_inventory_structure','redacted_unmapped_canonical_structure','redacted_unmapped_select_structure','redacted_mirror_select_structure'):
                         if key in shape:shape[key]=shape[key][:700]
                 lines.append('Sanitized priority shapes '+json.dumps({
                     'minutes':window['minutes'],'end':window['end'],'ranked_by':metric,
