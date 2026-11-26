@@ -1252,6 +1252,7 @@ test('sender create-only notifications are atomic and never overwrite recipient 
   const req=(uid,id,method,body)=>app.fetch(new Request('https://example.test/v1/firestore/document?path=notifications/'+id,{method,headers:{authorization:'Bearer '+uid,'content-type':'application/json'},...(body?{body:JSON.stringify(body)}:{})}),env);
   const data={fromUserId:'alice',toUserId:'bob',isRead:false,text:'hello'};
   assert.equal((await req('alice','n','PUT',{data,createOnly:true})).status,200);
+  assert.equal(sql.prepare('SELECT path FROM friendbook_cf_documents WHERE path=?').get('notifications/n'),undefined,'new create-only notifications are not written to the duplicate legacy mirror');
   assert.equal((await req('alice','n','GET')).status,403);
   assert.equal((await req('bob','n','PATCH',{fields:{isRead:true}})).status,200);
   assert.equal((await req('alice','n','PUT',{data,createOnly:true})).status,409);
@@ -1263,8 +1264,9 @@ test('sender create-only notifications are atomic and never overwrite recipient 
   assert.equal(sql.prepare('SELECT path FROM friendbook_cf_documents WHERE path=?').get('notifications/race2'),undefined);
   assert.equal(JSON.parse(sql.prepare('SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?').get('notifications/race2').document_json).isRead,true);
   sql.exec("CREATE TRIGGER fail_notice_mirror BEFORE INSERT ON friendbook_cf_documents WHEN NEW.path='notifications/fail' BEGIN SELECT RAISE(ABORT,'injected failure'); END");
-  assert.notEqual((await req('alice','fail','PUT',{data,createOnly:true})).status,200);
-  assert.equal(sql.prepare('SELECT path FROM friendbook_cf_firestore_documents WHERE path=?').get('notifications/fail'),undefined,'mirror failure must roll back canonical insert');
+  assert.equal((await req('alice','fail','PUT',{data,createOnly:true})).status,200,'canonical notification creation does not depend on a duplicate legacy write');
+  assert.ok(sql.prepare('SELECT path FROM friendbook_cf_firestore_documents WHERE path=?').get('notifications/fail'));
+  assert.equal(sql.prepare('SELECT path FROM friendbook_cf_documents WHERE path=?').get('notifications/fail'),undefined);
   assert.equal((await req('eve','denied','PUT',{data,createOnly:true})).status,403);
   assert.equal(sql.prepare('SELECT path FROM friendbook_cf_firestore_documents WHERE path=?').get('notifications/denied'),undefined);
   sql.close();
