@@ -3281,7 +3281,7 @@ test('disabled online status suppresses old client heartbeat writes but preserve
 
 test('indexed friendship guards reject racing historical duplicates without partial changes', async () => {
   const sql=new DatabaseSync(':memory:');
-  for(const n of ['0003_additive_interactions.sql','0011_additive_app_documents.sql','0014_additive_firestore_documents.sql','0018_social_guards.sql','0019_trusted_friendships.sql','0027_friend_participant_indexes.sql']) sql.exec(readFileSync(new URL(`../migrations/${n}`,import.meta.url),'utf8'));
+  for(const n of ['0003_additive_interactions.sql','0011_additive_app_documents.sql','0014_additive_firestore_documents.sql','0018_social_guards.sql','0019_trusted_friendships.sql','0027_friend_participant_indexes.sql','0092_friend_exact_pair_seek.sql']) sql.exec(readFileSync(new URL(`../migrations/${n}`,import.meta.url),'utf8'));
   sql.exec(readFileSync(new URL('../migrations/0084_friend_guard_exceptions.sql',import.meta.url),'utf8'));
   let race=null;
   const db={prepare(q){const s=sql.prepare(q);return{bind(...a){return{run:async()=>s.run(...a),all:async()=>({results:s.all(...a)}),first:async()=>s.get(...a)||null};}};},async batch(stmts){if(race){const f=race;race=null;f();}sql.exec('BEGIN');try{for(const s of stmts)await s.run();sql.exec('COMMIT');}catch(e){sql.exec('ROLLBACK');throw e;}}};

@@ -42,6 +42,25 @@ export const indexedFriendCandidates=`
     WHERE a.collection='friends' AND ${legacyException} AND ${shadow} AND ${actorInCandidates('a.document_json')}
   )`;
 
+// Transaction guards know both participants. Seek their exact two-member rows
+// by pair instead of first materializing every edge in the actor's graph. Rare
+// historical object/long-array envelopes still come from the exception indexes.
+const canonicalPair=(left,right)=>`SELECT path,document_json FROM friendbook_cf_firestore_documents INDEXED BY idx_cf_friend_exact_pair
+  WHERE parent_path='friends' AND json_extract(document_json,'$.participants[0]')=${left} AND json_extract(document_json,'$.participants[1]')=${right}`;
+const canonicalPairExceptions=`SELECT path,document_json FROM friendbook_cf_firestore_documents INDEXED BY idx_cf_friend_guard_exceptions
+  WHERE parent_path='friends' AND ${canonicalException} AND ${actorInCandidates('document_json')}`;
+export const canonicalIndexedFriendPairCandidates=`${canonicalPair('?','?')} UNION ${canonicalPair('?','?')} UNION ${canonicalPairExceptions}`;
+export const indexedFriendPairCandidates=`
+  SELECT path,document_json FROM (${canonicalIndexedFriendPairCandidates})
+  UNION ALL SELECT path,document_json FROM (
+    SELECT a.path,a.document_json FROM friendbook_cf_documents a INDEXED BY idx_cf_legacy_friend_participant_0
+      WHERE a.collection='friends' AND ${legacyPosition(0)}=? AND ${legacyPosition(1)}=? AND ${shadow}
+    UNION SELECT a.path,a.document_json FROM friendbook_cf_documents a INDEXED BY idx_cf_legacy_friend_participant_0
+      WHERE a.collection='friends' AND ${legacyPosition(0)}=? AND ${legacyPosition(1)}=? AND ${shadow}
+    UNION SELECT a.path,a.document_json FROM friendbook_cf_documents a INDEXED BY idx_cf_legacy_friend_guard_exceptions
+      WHERE a.collection='friends' AND ${legacyException} AND ${shadow} AND ${actorInCandidates('a.document_json')}
+  )`;
+
 // The original duplicate guard can raise on malformed text within historical
 // Firestore envelopes. Indexed UNION ordering can otherwise short-circuit before
 // such a row. Detect dangerous unshadowed exceptions *inside the transaction*
@@ -55,13 +74,21 @@ export const duplicateExists=candidates=>`EXISTS (SELECT 1 FROM (${candidates}) 
    AND EXISTS (SELECT 1 FROM json_each(d.document_json,'$.fields.participants.arrayValue.values')
       WHERE json_valid(value)=1 AND json_extract(value,'$.stringValue')=?))
 ))`;
+export function friendshipPairSelection(candidates,uid,other) {
+  if(!candidates.pairIndexed)return candidates;
+  const canonicalOnly=candidates.canonicalOnly===true;
+  const sql=canonicalOnly?canonicalIndexedFriendPairCandidates:indexedFriendPairCandidates;
+  const args=canonicalOnly?[uid,other,other,uid,uid,uid]:[uid,other,other,uid,uid,uid,uid,other,other,uid,uid,uid];
+  return {sql,args};
+}
 export function friendshipDuplicateGuard(candidates,uid,other) {
   const pair=[uid,other,uid,other];
   const canonicalOnly=candidates.canonicalOnly===true;
   const full=canonicalOnly?canonicalFullFriendCandidates:fullFriendCandidates;
   const indexed=canonicalOnly?canonicalIndexedFriendCandidates:indexedFriendCandidates;
   if(candidates.sql===fullFriendCandidates || candidates.sql===canonicalFullFriendCandidates) return {sql:`NOT ${duplicateExists(full)}`,args:pair};
-  return {sql:`NOT ${duplicateExists(indexed)}`,args:[...candidates.args,...pair]};
+  const selected=friendshipPairSelection(candidates,uid,other);
+  return {sql:`NOT ${duplicateExists(selected.sql)}`,args:[...selected.args,...pair]};
 }
 
 // Compile the complete candidate query even on an empty database. Missing
@@ -70,11 +97,20 @@ export async function friendshipCandidates(db,uid,enabled=false,canonicalOnly=fa
   const full=canonicalOnly?canonicalFullFriendCandidates:fullFriendCandidates;
   const indexed=canonicalOnly?canonicalIndexedFriendCandidates:indexedFriendCandidates;
   const indexedArgs=canonicalOnly?[uid,uid,uid,uid]:[uid,uid,uid,uid,uid,uid,uid,uid];
-  const candidates=args=>({sql:args?indexed:full,args:args?indexedArgs:[],...(canonicalOnly?{canonicalOnly:true}:{})});
+  let pairReady=false;
+  const candidates=args=>({sql:args?indexed:full,args:args?indexedArgs:[],...(args===true?{pairIndexed:pairReady}:{}),...(canonicalOnly?{canonicalOnly:true}:{})});
   // The feature can be disabled for rollback without dropping indexes.
   if (!enabled) return candidates(false);
   try {
     await db.prepare(`SELECT path FROM (${indexed}) LIMIT 0`).bind(...indexedArgs).all();
+    const pairQuery=canonicalOnly?canonicalIndexedFriendPairCandidates:indexedFriendPairCandidates;
+    const pairArgs=canonicalOnly?['a','b','b','a','a','a']:['a','b','b','a','a','a','a','b','b','a','a','a'];
+    try {
+      await db.prepare(`SELECT path FROM (${pairQuery}) LIMIT 0`).bind(...pairArgs).all();
+      pairReady=true;
+    } catch(error) {
+      if(!/no such index: idx_cf_friend_exact_pair/i.test(String(error?.message||error))) throw error;
+    }
     return candidates(true);
   } catch(error) {
     if (!/no such index: idx_cf_(?:legacy_)?friend_(?:participant_[01]|guard_exceptions)/i.test(String(error?.message||error))) throw error;

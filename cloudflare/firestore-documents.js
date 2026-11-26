@@ -12,7 +12,7 @@ import { authorizeLiveMedia, authorizeLiveRoom } from './live-access.js';
 import { canReadPayment, canCreateFreeReview, isPaymentAdmin } from './payment-access.js';
 import { canReadFriendRequest, canCreateFriendRequest, canDeleteFriendRequest, friendshipReadView, canCreateGroup, canUpdateGroup, canManageGroup, canSelfManageGroup, isSelfArrayChange, groupReadView, trustedGroupOwner } from './social-access.js';
 import { supportedDocumentPath, supportedCollectionPath, contentReadAllowed, contentWriteAllowed } from './document-policy.js';
-import { friendshipCandidates, friendshipDuplicateGuard } from './friendship-candidates.js';
+import { friendshipCandidates, friendshipDuplicateGuard, friendshipPairSelection } from './friendship-candidates.js';
 import { chatReadAllowed, chatWriteAllowed, storedChatMember } from './chat-access.js';
 import { profileReadView, profileWriteAllowed } from './profile-access.js';
 import { canReadNotification, notificationWriteAllowed } from './notification-access.js';
@@ -2114,12 +2114,13 @@ async function acceptFriendBatch(db, uid, ops, now, indexedCandidates=false,cano
   // Reuse the existing row and counters: neither legacy fields nor a one-sided
   // action alone grants access to friends-only content.
   const candidates=await friendshipCandidates(db,uid,indexedCandidates,canonicalOnly);
-  const existingPair = await db.prepare(`SELECT path FROM (${candidates.sql}) d WHERE (json_array_length(document_json,'$.participants')=2 AND
+  const pairCandidates=friendshipPairSelection(candidates,uid,other);
+  const existingPair = await db.prepare(`SELECT path FROM (${pairCandidates.sql}) d WHERE (json_array_length(document_json,'$.participants')=2 AND
     ((json_extract(document_json,'$.participants[0]')=? AND json_extract(document_json,'$.participants[1]')=?) OR
      (json_extract(document_json,'$.participants[0]')=? AND json_extract(document_json,'$.participants[1]')=?))) OR
     (json_array_length(document_json,'$.fields.participants.arrayValue.values')=2 AND
     ((json_extract(document_json,'$.fields.participants.arrayValue.values[0].stringValue')=? AND json_extract(document_json,'$.fields.participants.arrayValue.values[1].stringValue')=?) OR
-     (json_extract(document_json,'$.fields.participants.arrayValue.values[0].stringValue')=? AND json_extract(document_json,'$.fields.participants.arrayValue.values[1].stringValue')=?))) ORDER BY path LIMIT 1`).bind(...candidates.args,uid,other,other,uid,uid,other,other,uid).first();
+     (json_extract(document_json,'$.fields.participants.arrayValue.values[0].stringValue')=? AND json_extract(document_json,'$.fields.participants.arrayValue.values[1].stringValue')=?))) ORDER BY path LIMIT 1`).bind(...pairCandidates.args,uid,other,other,uid,uid,other,other,uid).first();
   const prior=existingPair ? await readRow(db,existingPair.path) : null;
   if (existingPair && (!prior || !friendshipReadView(uid,decodeValue(JSON.parse(prior.document_json)))?.participants.includes(other))) return json({error:'Friendship changed'},409);
   const snapshots=[reqRow,...userRows,...(prior?[prior]:[])];

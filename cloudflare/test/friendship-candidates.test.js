@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
 import { readFileSync } from 'node:fs';
-import { fullFriendCandidates, indexedFriendCandidates, canonicalFullFriendCandidates, canonicalIndexedFriendCandidates, friendshipCandidates, friendshipDuplicateGuard } from '../friendship-candidates.js';
+import { fullFriendCandidates, indexedFriendCandidates, canonicalFullFriendCandidates, canonicalIndexedFriendCandidates, indexedFriendPairCandidates, friendshipCandidates, friendshipDuplicateGuard, friendshipPairSelection } from '../friendship-candidates.js';
 
 const migration = n => readFileSync(new URL(`../migrations/${n}`, import.meta.url), 'utf8');
 const wrap = sql => ({prepare(q) { const stmt=sql.prepare(q); return {bind(...a) { return {all:async()=>({results:stmt.all(...a)})}; }}; }});
@@ -46,9 +46,27 @@ test('indexed candidates preserve both friendship guard predicates and shadowing
   sql.close();
 });
 
+test('pair-aware friendship guard seeks one edge instead of materializing a large actor graph',async()=>{
+  const sql=new DatabaseSync(':memory:');
+  for(const n of ['0011_additive_app_documents.sql','0014_additive_firestore_documents.sql','0027_friend_participant_indexes.sql','0084_friend_guard_exceptions.sql','0092_friend_exact_pair_seek.sql'])sql.exec(migration(n));
+  const put=sql.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)');
+  for(let i=0;i<1200;i++)put.run(`friends/e${i}`,'friends','friends',`e${i}`,'',JSON.stringify({participants:['alice',`peer${i}`]}),0,0);
+  put.run('friends/target','friends','friends','target','',JSON.stringify({participants:['bob','alice']}),0,0);
+  const selection=await friendshipCandidates(wrap(sql),'alice',true);
+  assert.equal(selection.pairIndexed,true);
+  const pairSelection=friendshipPairSelection(selection,'alice','bob');
+  assert.equal(pairSelection.sql,indexedFriendPairCandidates);
+  const plan=sql.prepare(`EXPLAIN QUERY PLAN SELECT path FROM (${pairSelection.sql})`).all(...pairSelection.args).map(r=>r.detail).join('\\n');
+  assert.match(plan,/idx_cf_friend_exact_pair/);
+  assert.match(plan,/idx_cf_friend_guard_exceptions/);
+  const guard=friendshipDuplicateGuard(selection,'alice','bob');
+  assert.equal(sql.prepare(`SELECT ${guard.sql} allowed`).get(...guard.args).allowed,0);
+  sql.close();
+});
+
 test('malformed wrapped entries are scoped to the actor and safely ignored by duplicate guards', async() => {
   const sql=new DatabaseSync(':memory:');
-  for(const n of ['0011_additive_app_documents.sql','0014_additive_firestore_documents.sql','0027_friend_participant_indexes.sql','0084_friend_guard_exceptions.sql']) sql.exec(migration(n));
+  for(const n of ['0011_additive_app_documents.sql','0014_additive_firestore_documents.sql','0027_friend_participant_indexes.sql','0084_friend_guard_exceptions.sql','0092_friend_exact_pair_seek.sql']) sql.exec(migration(n));
   const c=sql.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)');
   c.run('friends/z','friends','friends','z','',JSON.stringify({fields:{participants:{arrayValue:{values:[{stringValue:'alice'},{stringValue:'bob'},'non-json']}}}}),0,0);
   c.run('friends/a','friends','friends','a','',JSON.stringify({participants:['alice','bob']}),0,0);
