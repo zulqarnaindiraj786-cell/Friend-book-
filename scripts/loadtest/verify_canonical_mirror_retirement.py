@@ -4,22 +4,27 @@ import json,sys,urllib.error
 from scripts.loadtest.retired_table_preflight import remote_query
 
 class SanitizedHttpError(Exception):
- def __init__(self, status, codes=()):
+ def __init__(self, status, codes=(), reason=''):
   suffix = ' error codes ' + ','.join(map(str, codes)) if codes else ''
+  safe_reasons = {'no such column', 'no such table', 'syntax error', 'misuse of aggregate',
+                  'too many', 'database or disk is full', 'query timed out', 'not authorized'}
+  reason = next((candidate for candidate in safe_reasons if candidate in reason.lower()), '')
+  suffix += ' ' + reason if reason else ''
   super().__init__('Cloudflare D1 HTTP '+str(status)+suffix)
 
 def safe_query(sql, params):
  try:
   return remote_query(sql, params)
  except urllib.error.HTTPError as error:
-  codes = []
+  codes, reasons = [], []
   try:
    body = json.loads(error.read())
    codes = [item.get('code') for item in body.get('errors', [])
             if type(item.get('code')) is int][:5]
+   reasons = [item.get('message', '') for item in body.get('errors', [])]
   except (ValueError, TypeError, AttributeError):
    pass
-  raise SanitizedHttpError(error.code, codes) from None
+  raise SanitizedHttpError(error.code, codes, ' '.join(reasons)) from None
 
 def diff(query):
  names,_=query("SELECT name FROM sqlite_master WHERE type='table' AND name IN (?,?)",('friendbook_cf_documents','friendbook_cf_documents_retired_backup'))
