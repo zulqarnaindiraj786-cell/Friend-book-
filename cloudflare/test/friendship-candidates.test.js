@@ -51,7 +51,7 @@ test('malformed-row short-circuit mismatch uses transactional full-scan fallback
   // matching pair can hide an invalid wrapped element when the indexed UNION
   // visits rows in a different order. Do not treat this prototype as equivalent.
   const sql=new DatabaseSync(':memory:');
-  for(const n of ['0011_additive_app_documents.sql','0014_additive_firestore_documents.sql','0027_friend_participant_indexes.sql','0084_friend_guard_exceptions.sql']) sql.exec(migration(n));
+  for(const n of ['0011_additive_app_documents.sql','0014_additive_firestore_documents.sql','0027_friend_participant_indexes.sql','0084_friend_guard_exceptions.sql','0105_canonical_wrapped_friend_indexes.sql']) sql.exec(migration(n));
   const c=sql.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)');
   c.run('friends/z','friends','friends','z','',JSON.stringify({fields:{participants:{arrayValue:{values:['non-json']}}}}),0,0);
   c.run('friends/a','friends','friends','a','',JSON.stringify({participants:['alice','bob']}),0,0);
@@ -68,11 +68,11 @@ test('malformed-row short-circuit mismatch uses transactional full-scan fallback
 
 test('transactional guard matches original across mixed rows, malformed envelopes and shadows', () => {
   const sql=new DatabaseSync(':memory:');
-  for(const n of ['0011_additive_app_documents.sql','0014_additive_firestore_documents.sql','0027_friend_participant_indexes.sql','0084_friend_guard_exceptions.sql']) sql.exec(migration(n));
+  for(const n of ['0011_additive_app_documents.sql','0014_additive_firestore_documents.sql','0027_friend_participant_indexes.sql','0084_friend_guard_exceptions.sql','0105_canonical_wrapped_friend_indexes.sql']) sql.exec(migration(n));
   const c=sql.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)');
   const l=sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)');
   const full=friendshipDuplicateGuard({sql:fullFriendCandidates,args:[]},'alice','bob');
-  const fast=friendshipDuplicateGuard({sql:indexedFriendCandidates,args:['alice','alice','alice','alice']},'alice','bob');
+  const fast=friendshipDuplicateGuard({sql:indexedFriendCandidates,args:['alice','alice','alice','alice','alice','alice']},'alice','bob');
   const run=g=>{try{return {value:sql.prepare(`SELECT ${g.sql} AS allowed`).get(...g.args).allowed};}catch(e){return {error:/malformed JSON/i.test(String(e))?'malformed JSON':String(e)};}};
   const runPair=(candidates,args,aggregate)=>{try{
     const projection=aggregate?'count(*) AS n':'path';
@@ -121,7 +121,7 @@ test('missing additive indexes fall back, unrelated errors propagate', async () 
 
 test('candidate predicate matches historical shape permutations and shadow races', async () => {
   const sql=new DatabaseSync(':memory:');
-  for(const n of ['0011_additive_app_documents.sql','0014_additive_firestore_documents.sql','0027_friend_participant_indexes.sql','0084_friend_guard_exceptions.sql']) sql.exec(migration(n));
+  for(const n of ['0011_additive_app_documents.sql','0014_additive_firestore_documents.sql','0027_friend_participant_indexes.sql','0084_friend_guard_exceptions.sql','0105_canonical_wrapped_friend_indexes.sql']) sql.exec(migration(n));
   const canonical=sql.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)');
   const legacy=sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)');
   const clear=()=>sql.exec('DELETE FROM friendbook_cf_firestore_documents; DELETE FROM friendbook_cf_documents');
