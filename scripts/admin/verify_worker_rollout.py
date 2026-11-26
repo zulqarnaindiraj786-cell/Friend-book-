@@ -55,7 +55,10 @@ def validate(settings, schedules, config):
         if bindings[name].get('class_name') != cls or bindings[name].get('script_name'):
             raise ValueError('Durable Object binding mismatch')
     for name, value in config['vars'].items():
-        if bindings.get(name, {}).get('text') != value:
+        live = bindings.get(name, {}).get('text')
+        if live != value:
+            if name == 'ANDROID_MIN_VERSION_CODE' and str(value).isdigit() and str(live).isdigit():
+                raise ValueError('Live variable differs from reviewed configuration: ANDROID_MIN_VERSION_CODE (reviewed=' + str(value) + ', live=' + str(live) + ')')
             raise ValueError('Live variable differs from reviewed configuration: ' + name)
     if sorted(row['cron'] for row in schedules['schedules']) != ['*/15 * * * *']:
         raise ValueError('Cron mismatch')

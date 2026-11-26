@@ -43,3 +43,7 @@ class WorkerRolloutGuard(unittest.TestCase):
         for settings, schedules in cases:
             with self.subTest(settings=settings), self.assertRaises(ValueError):
                 validate(settings, schedules, self.config)
+        mismatch = copy.deepcopy(self.settings)
+        next(row for row in mismatch['bindings'] if row['name'] == 'ANDROID_MIN_VERSION_CODE')['text'] = '7'
+        with self.assertRaisesRegex(ValueError, 'ANDROID_MIN_VERSION_CODE \\(reviewed=1, live=7\\)'):
+            validate(mismatch, self.schedules, self.config)
