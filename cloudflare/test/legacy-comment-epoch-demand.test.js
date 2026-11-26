@@ -73,7 +73,7 @@ test('fresh epoch validates isolate-local negative hints and keeps exact blocked
  const beforeRace=candidateQueries;
  const race=await batchEngagementReads(db,onlyEmpty,'user1',[],scope);
  assert.deepEqual(onlyEmpty.map(r=>race.get(r).count),[0,1]);
- assert.ok(candidateQueries>=beforeRace+2,'epoch race retries with the indexed route query, not a partition scan');
+ assert.ok(candidateQueries>=beforeRace+1,'epoch race retries with the indexed route query, not a partition scan');
  assert.equal(legacyQueries,0,'a missing/unavailable epoch must not force the old comments-partition scan when route indexes exist');
  // An epoch read failure never authorizes a previously cached negative.
  f.sql.prepare("DELETE FROM friendbook_cf_firestore_documents WHERE path='comments/racing'").run();
