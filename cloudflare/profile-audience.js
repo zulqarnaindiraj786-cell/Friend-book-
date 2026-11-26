@@ -1,5 +1,8 @@
 /** Profile-only audience graph. Cache the graph per profile so different viewers share one D1 scan. */
-const AUDIENCE_CACHE_TTL_MS=15_000;
+// The audience is a display-only profile count, not an authorization decision.
+// Keep it warm longer during viral profile revisits; profile revisions/follower
+// changes invalidate immediately, while relationship-only changes may lag 60s.
+const AUDIENCE_CACHE_TTL_MS=60_000;
 const AUDIENCE_CACHE_LIMIT=256;
 const audienceCaches=new WeakMap();
 function audienceCache(db) {
