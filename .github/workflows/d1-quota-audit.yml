@@ -6,7 +6,12 @@ on:
   workflow_dispatch:
     inputs:
       compare_mirror:
-        description: 'Run the full aggregate mirror comparison (reads both snapshots)'
+        description: 'Expensive: compare all mirror/snapshot rows (recent runs cost about 58k–127k D1 reads)'
+        required: true
+        type: boolean
+        default: false
+      authorize_expensive_snapshot_scan:
+        description: 'Second explicit confirmation for the full mirror/snapshot scan; leave false for ordinary quota checks'
         required: true
         type: boolean
         default: false
@@ -150,8 +155,11 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: python3 scripts/admin/verify_worker_rollout.py --inspect
+      - name: Explain skipped expensive snapshot comparison
+        if: inputs.compare_mirror == true && inputs.authorize_expensive_snapshot_scan != true
+        run: echo 'Full mirror scan skipped: it needs both explicit confirmations because recent runs consumed about 58k–127k D1 reads.'
       - name: Aggregate snapshot comparison (read-only, sanitized)
-        if: inputs.compare_mirror == true
+        if: inputs.compare_mirror == true && inputs.authorize_expensive_snapshot_scan == true
         continue-on-error: true
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
