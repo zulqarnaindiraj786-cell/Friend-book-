@@ -69,22 +69,26 @@ def diff(query):
         SELECT {columns} FROM friendbook_cf_documents_retired_backup
         EXCEPT SELECT {columns} FROM friendbook_cf_documents
     )
-    SELECT CASE
+    SELECT CASE WHEN snapshot_only.collection IN
+        ('users','posts','reels','stories','pages','groups','chats','friend_requests','comments','likes','followers','following','saves','payments','subscriptions','reports','feedback','gifts','lives','messages','notifications')
+        THEN snapshot_only.collection ELSE 'other' END AS collection,
+      CASE
         WHEN canonical.path IS NULL THEN 'no_canonical_path'
         WHEN canonical.document_json = snapshot_only.document_json THEN 'canonical_payload_exact'
         ELSE 'canonical_payload_differs'
-    END AS classification, COUNT(*) AS n
+      END AS classification, COUNT(*) AS n
     FROM snapshot_only LEFT JOIN friendbook_cf_firestore_documents AS canonical
       ON canonical.path = snapshot_only.path
-    GROUP BY classification ORDER BY classification'''
+    GROUP BY collection, classification ORDER BY collection, classification'''
     classifications, metadata = query(classification_sql, ())
     classified = {}
+    allowed_collections = {'users','posts','reels','stories','pages','groups','chats','friend_requests','comments','likes','followers','following','saves','payments','subscriptions','reports','feedback','gifts','lives','messages','notifications','other'}
     for row in classifications:
-        key, count = row.get('classification'), row.get('n')
-        if key not in {'no_canonical_path', 'canonical_payload_exact', 'canonical_payload_differs'} \
+        collection, category, count = row.get('collection'), row.get('classification'), row.get('n')
+        if collection not in allowed_collections or category not in {'no_canonical_path', 'canonical_payload_exact', 'canonical_payload_differs'} \
                 or type(count) is not int or count < 0:
             raise ValueError('invalid canonical match classification')
-        classified[key] = count
+        classified[f'{collection}:{category}'] = count
     if sum(classified.values()) != result['snapshot_only']:
         raise ValueError('canonical match classification incomplete')
     reads = metadata.get('rows_read')
