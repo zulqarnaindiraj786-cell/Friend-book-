@@ -28,7 +28,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   deploy:
-    if: (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/arena/15a53658-friend-book' || github.ref == 'refs/heads/arena/f6bf61bd-friend-book' || (github.ref == 'refs/heads/arena/7c7ddb7b-friend-book' && github.event_name == 'push' && contains(github.event.head_commit.message, '[deploy-cloudflare-production]')) || (github.ref == 'refs/heads/arena/b52bc74d-friend-book' && ((github.event_name == 'push' && contains(github.event.head_commit.message, '[deploy-cloudflare-production]')) || (github.event_name == 'workflow_dispatch' && contains(github.event.head_commit.message, '[deploy-cloudflare-production]'))))) && !contains(github.event.head_commit.message, '[no-deploy]')
+    if: (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/arena/15a53658-friend-book' || github.ref == 'refs/heads/arena/f6bf61bd-friend-book' || (github.ref == 'refs/heads/arena/7c7ddb7b-friend-book' && github.event_name == 'push' && contains(github.event.head_commit.message, '[deploy-cloudflare-production]')) || (github.ref == 'refs/heads/arena/b52bc74d-friend-book' && ((github.event_name == 'push' && contains(github.event.head_commit.message, '[deploy-cloudflare-production]')) || github.event_name == 'workflow_dispatch'))) && !contains(github.event.head_commit.message, '[no-deploy]')
     runs-on: ubuntu-latest
     timeout-minutes: 360
     steps:
