@@ -34,6 +34,23 @@ test('canonical-only friend candidates ignore stale mirror-only rows but retain 
  }finally{sql.close();}
 });
 
+test('normal Firestore-wrapped friendship pairs seek both participant indexes',async()=>{
+ const {sql,canonical}=setup();
+ try{
+  const wrapped=participants=>({fields:{participants:{arrayValue:{values:participants.map(stringValue=>({stringValue}))}}}});
+  canonical.run('friends/wrapped','friends','friends','wrapped','',JSON.stringify(wrapped(['alice','bob'])),1,1);
+  canonical.run('friends/other','friends','friends','other','',JSON.stringify(wrapped(['eve','mallory'])),1,1);
+  const selection=await friendshipCandidates(wrap(sql),'alice',true,true);
+  assert.equal(guard(sql,selection),0,'wrapped duplicate must remain protected');
+  const plan=sql.prepare(`EXPLAIN QUERY PLAN SELECT path FROM (${canonicalIndexedFriendCandidates})`).all(...selection.args).map(row=>row.detail).join('\\n');
+  assert.match(plan,/idx_cf_friend_wrapped_participant_0/);
+  assert.match(plan,/idx_cf_friend_wrapped_participant_1/);
+  assert.match(plan,/idx_cf_friend_guard_exceptions_v2/);
+  assert.equal(sql.prepare(`SELECT ${malformedCanonicalFriendProbe} dangerous`).get().dangerous,0,
+    'ordinary wrapped pairs must not enter the malformed exception probe');
+ }finally{sql.close();}
+});
+
 test('canonical-only malformed envelope fallback preserves the original fail-closed result',async()=>{
  const {sql,canonical}=setup();
  try{
