@@ -13,6 +13,8 @@ on:
       - 'scripts/admin/configure_video_r2.py'
       - 'scripts/admin/migrate_firestore_to_d1.py'
       - 'scripts/tests/test_firestore_migration.py'
+      - 'scripts/loadtest/verify_canonical_mirror_retirement.py'
+      - 'scripts/tests/test_verify_canonical_mirror_retirement.py'
   workflow_dispatch:
 permissions:
   contents: read
@@ -63,7 +65,7 @@ jobs:
           python3 cloudflare/test/schema_test.py
           python3 cloudflare/test/migration_test.py
           python3 cloudflare/test/index_plan_test.py
-          python3 -m unittest scripts.tests.test_fcm_claim_migration_gate scripts.tests.test_d1_account_usage_analytics scripts.tests.test_retired_table_preflight scripts.tests.test_verify_retired_drop scripts.tests.test_retired_migration_gate scripts.tests.test_canonical_inventory scripts.tests.test_seed_views_kv scripts.tests.test_document_mirror_retirement
+          python3 -m unittest scripts.tests.test_fcm_claim_migration_gate scripts.tests.test_d1_account_usage_analytics scripts.tests.test_retired_table_preflight scripts.tests.test_verify_retired_drop scripts.tests.test_retired_migration_gate scripts.tests.test_canonical_inventory scripts.tests.test_seed_views_kv scripts.tests.test_document_mirror_retirement scripts.tests.test_verify_canonical_mirror_retirement
       - name: Verify Save Forever R2 configuration (no R2 object deletion)
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -391,9 +393,9 @@ jobs:
             fi
           fi
           if [ "$migration_status" = 0 ]; then
-            # Verify on every deployment, not only the initial rollout: a later
-            # deployment must not bypass a missing or altered bridge. Read
-            # schema metadata only, never claims or application records.
+            # Verify bridge/mirror schema on every deployment, not only the initial
+            # rollout. Mirror backup checks use LIMIT 1 probes; full snapshot diffs
+            # are reserved for the separately authorized --diff workflow.
             schema="$RUNNER_TEMP/fcm-bridge-schema.json"
             npx wrangler d1 execute friendbook-db --remote --json --command "SELECT type,name,sql FROM sqlite_master WHERE name IN ('friendbook_cf_fcm_device_claims','friendbook_cf_fcm_device_claims_v2','cf_fcm_claims_legacy_bridge') LIMIT 3" > "$schema" 2>> "$log"
             if [ "$?" -ne 0 ] || ! python3 scripts/loadtest/fcm_claim_migration_gate.py schema "$schema"; then

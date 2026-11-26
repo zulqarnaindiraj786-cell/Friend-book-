@@ -153,19 +153,25 @@ def inspect(query):
                 'friendbook_cf_documents_reappeared_archive_0109'}
     if not required <= names:
         raise ValueError('Rollback snapshot or schema metadata missing')
-    counts, _ = query('SELECT COUNT(*) AS n FROM friendbook_cf_documents_retired_backup', ())
-    if len(counts) != 1 or type(counts[0].get('n')) is not int:
-        raise ValueError('Invalid rollback snapshot count')
-    schema, _ = query("SELECT COUNT(*) AS n FROM friendbook_cf_documents_retired_backup_schema WHERE type='table' AND name='friendbook_cf_documents' AND sql IS NOT NULL", ())
-    if len(schema) != 1 or schema[0].get('n') != 1:
+    # These tables are immutable after the guarded migration. A COUNT(*) on the
+    # 11k-row rollback snapshot made every routine deploy rescan the full table;
+    # schema + indexed existence probes are sufficient here. Full parity scans
+    # remain available only through the separately authorized --diff path.
+    snapshot, snapshot_meta = query('SELECT 1 AS present FROM friendbook_cf_documents_retired_backup LIMIT 1', ())
+    if len(snapshot) != 1 or snapshot[0].get('present') != 1:
+        raise ValueError('Rollback snapshot is empty')
+    schema, schema_meta = query("SELECT 1 AS present FROM friendbook_cf_documents_retired_backup_schema WHERE type='table' AND name='friendbook_cf_documents' AND sql IS NOT NULL LIMIT 1", ())
+    if len(schema) != 1 or schema[0].get('present') != 1:
         raise ValueError('Original schema not retained')
-    archived, _ = query('SELECT COUNT(*) AS n FROM friendbook_cf_documents_reappeared_archive_0109', ())
-    if len(archived) != 1 or type(archived[0].get('n')) is not int or archived[0]['n'] < 0:
+    archived, archive_meta = query('SELECT 1 AS present FROM friendbook_cf_documents_reappeared_archive_0109 LIMIT 1', ())
+    if len(archived) != 1 or archived[0].get('present') != 1:
         raise ValueError('Reappeared mirror archive unavailable')
+    read_counts=[meta.get('rows_read'),snapshot_meta.get('rows_read'),schema_meta.get('rows_read'),archive_meta.get('rows_read')]
+    if any(type(value) is not int or value < 0 for value in read_counts):
+        raise ValueError('D1 read accounting unavailable')
     return {'mirror_table_absent': True, 'rollback_snapshot_present': True,
-            'schema_retained': True, 'snapshot_rows': counts[0]['n'],
-            'reappeared_archive_rows': archived[0]['n'],
-            'rows_read': meta.get('rows_read')}
+            'schema_retained': True, 'archive_present': True,
+            'rows_read': sum(read_counts)}
 
 
 if __name__ == '__main__':

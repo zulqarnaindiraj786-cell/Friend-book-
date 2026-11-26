@@ -1,5 +1,5 @@
 import unittest
-from scripts.loadtest.verify_canonical_mirror_retirement import diff
+from scripts.loadtest.verify_canonical_mirror_retirement import diff, inspect
 
 
 class CanonicalMirrorDiffTests(unittest.TestCase):
@@ -35,6 +35,26 @@ class CanonicalMirrorDiffTests(unittest.TestCase):
         self.assertIn('LEFT JOIN friendbook_cf_firestore_documents', calls[5])
         self.assertIn('EXCEPT', calls[6])
         self.assertTrue(all('document_json' not in sql or 'COUNT(*)' in sql for sql in calls[1:]))
+
+    def test_routine_inspect_uses_bounded_existence_checks_not_snapshot_counts(self):
+        calls=[]
+        tables=[{'name':name} for name in (
+            'friendbook_cf_documents_retired_backup',
+            'friendbook_cf_documents_retired_backup_schema',
+            'friendbook_cf_documents_reappeared_0106',
+            'friendbook_cf_documents_reappeared_archive_0109')]
+        def query(sql,params):
+            calls.append(sql)
+            if 'sqlite_master' in sql:return tables,{'rows_read':4}
+            return [{'present':1}],{'rows_read':1}
+        result=inspect(query)
+        self.assertTrue(result['rollback_snapshot_present'])
+        self.assertTrue(result['schema_retained'])
+        self.assertTrue(result['archive_present'])
+        self.assertEqual(result['rows_read'],7)
+        self.assertEqual(len(calls),4)
+        self.assertFalse(any('COUNT(*)' in sql for sql in calls))
+        self.assertTrue(all('LIMIT 1' in sql for sql in calls[1:]))
 
 
 if __name__ == '__main__':
