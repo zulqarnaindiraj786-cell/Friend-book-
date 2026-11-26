@@ -37,6 +37,21 @@ test('profile audience coalesces same-viewer repeats briefly and invalidates on 
   assert.equal(reads,2,'profile writes invalidate the cached aggregate');
 });
 
+test('concurrent profile refreshes coalesce one D1 graph query across viewers',async()=>{
+  let reads=0,release;
+  const pending=new Promise(resolve=>{release=resolve;});
+  const db={prepare(){return {bind(){return {all:async()=>{reads++;await pending;return {results:[{uid:'viewer'},{uid:'friend'}]};}}}}}};
+  const a=profileAudience(db,'p','viewer',[],1);
+  const b=profileAudience(db,'p','friend',[],1);
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(reads,1,'concurrent viewers must share the in-flight D1 query');
+  release();
+  assert.deepEqual(await Promise.all([a,b]),[
+    {profileAudienceCount:2,profileAudienceIncludesViewer:true},
+    {profileAudienceCount:2,profileAudienceIncludesViewer:true},
+  ]);
+});
+
 test('audience works without a legacy table and seeks canonical recipient/status',async t=>{
   const sql=new DatabaseSync(':memory:');t.after(()=>sql.close());
   sql.exec(`CREATE TABLE friendbook_cf_trusted_friendships(uid_low,uid_high);
