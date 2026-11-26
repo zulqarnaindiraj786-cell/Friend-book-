@@ -57,8 +57,9 @@ def validate(settings, schedules, config):
     for name, value in config['vars'].items():
         live = bindings.get(name, {}).get('text')
         if live != value:
-            if name == 'ANDROID_MIN_VERSION_CODE' and str(value).isdigit() and str(live).isdigit():
-                raise ValueError('Live variable differs from reviewed configuration: ANDROID_MIN_VERSION_CODE (reviewed=' + str(value) + ', live=' + str(live) + ')')
+            if name == 'ANDROID_MIN_VERSION_CODE' and str(value).isdigit():
+                safe_live = str(live) if str(live).isdigit() else ('unset' if live is None else 'non-numeric')
+                raise ValueError('Live variable differs from reviewed configuration: ANDROID_MIN_VERSION_CODE (reviewed=' + str(value) + ', live=' + safe_live + ')')
             raise ValueError('Live variable differs from reviewed configuration: ' + name)
     if sorted(row['cron'] for row in schedules['schedules']) != ['*/15 * * * *']:
         raise ValueError('Cron mismatch')
