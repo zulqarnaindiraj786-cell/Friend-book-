@@ -58,7 +58,7 @@ export const malformedCanonicalFriendProbe=`EXISTS (
     WHERE a.parent_path='friends' AND ${canonicalException} AND ${dangerousWrappedRow}
 )`;
 export const malformedFriendProbe=`EXISTS (
-  SELECT 1 FROM friendbook_cf_firestore_documents a INDEXED BY idx_cf_friend_guard_exceptions
+  SELECT 1 FROM friendbook_cf_firestore_documents a INDEXED BY idx_cf_friend_guard_exceptions_v2
     WHERE a.parent_path='friends' AND ${canonicalException} AND ${dangerousWrappedRow}
   UNION ALL
   SELECT 1 FROM friendbook_cf_documents a INDEXED BY idx_cf_legacy_friend_guard_exceptions
@@ -90,7 +90,7 @@ export async function friendshipCandidates(db,uid,enabled=false,canonicalOnly=fa
   // The feature can be disabled for rollback without dropping indexes.
   if (!enabled) return candidates(false);
   try {
-    await db.prepare(`SELECT path FROM (${indexed}) LIMIT 0`).bind(...(canonicalOnly?[uid,uid]:[uid,uid,uid,uid])).all();
+    await db.prepare(`SELECT path FROM (${indexed}) LIMIT 0`).bind(...(canonicalOnly?[uid,uid,uid,uid]:[uid,uid,uid,uid,uid,uid])).all();
     return candidates(true);
   } catch(error) {
     if (!/no such index: idx_cf_(?:legacy_)?friend_(?:participant_[01]|wrapped_participant_[01]|guard_exceptions(?:_v2)?)/i.test(String(error?.message||error))) throw error;
