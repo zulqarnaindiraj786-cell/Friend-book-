@@ -12,6 +12,8 @@ class CanonicalMirrorDiffTests(unittest.TestCase):
             ([{'n': 100}], {'rows_read': 100}),
             ([{'n': 2}], {'rows_read': 200}),
             ([{'n': 2}], {'rows_read': 200}),
+            ([{'classification': 'no_canonical_path', 'n': 1},
+              {'classification': 'canonical_payload_exact', 'n': 1}], {'rows_read': 300}),
         ]
         def query(sql, params):
             calls.append(sql)
@@ -21,10 +23,13 @@ class CanonicalMirrorDiffTests(unittest.TestCase):
         self.assertEqual(result['snapshot_rows'], 100)
         self.assertEqual(result['current_only'], 2)
         self.assertEqual(result['snapshot_only'], 2)
-        self.assertEqual(result['rows_read'], 600)
-        self.assertEqual(len(calls), 5)
+        self.assertEqual(result['rows_read'], 900)
+        self.assertEqual(result['snapshot_only_canonical_match'], {
+            'no_canonical_path': 1, 'canonical_payload_exact': 1})
+        self.assertEqual(len(calls), 6)
         self.assertIn('EXCEPT', calls[3])
         self.assertIn('EXCEPT', calls[4])
+        self.assertIn('LEFT JOIN friendbook_cf_firestore_documents', calls[5])
         self.assertTrue(all('document_json' not in sql or 'COUNT(*)' in sql for sql in calls[1:]))
 
 

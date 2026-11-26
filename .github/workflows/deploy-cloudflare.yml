@@ -201,14 +201,15 @@ jobs:
               '0106_enforce_document_mirror_retirement.sql',
               '0107_canonical_comment_count_epoch.sql',
               '0108_notification_retention_seek.sql',
+              '0109_archive_reappeared_document_mirror.sql',
           ]
           if len(found) > len(expected) or found != expected[len(expected)-len(found):]:
-              print(f'Pending migrations are not a suffix of the reviewed 0088–0108 rollout: {found!r}', file=sys.stderr)
+              print(f'Pending migrations are not a suffix of the reviewed 0088–0109 rollout: {found!r}', file=sys.stderr)
               raise SystemExit(1)
           if found:
-              print('Remaining migrations are a reviewed suffix of 0088–0108; only those will be applied.')
+              print('Remaining migrations are a reviewed suffix of 0088–0109; only those will be applied.')
           else:
-              print('Reviewed 0088–0108 migrations are already applied; no D1 migration will run.')
+              print('Reviewed 0088–0109 migrations are already applied; no D1 migration will run.')
           PY_PENDING
             status=$?
             if [ "$status" -ne 0 ]; then
@@ -231,6 +232,15 @@ jobs:
             if printf '%s\n' "$pending" | grep -q '0106_enforce_document_mirror_retirement.sql'; then
               python3 -m scripts.loadtest.verify_canonical_mirror_retirement --diff
             fi
+          fi
+          if printf '%s\n' "$pending" | grep -q '0109_archive_reappeared_document_mirror.sql'; then
+            if [[ "$HEAD_COMMIT_MESSAGE" != *'[archive-canonical-mirror]'* ]] || ! grep -q '^DOCUMENT_MIRROR_MODE = "canonical"$' wrangler.toml; then
+              echo 'Mirror archive rename requires explicit authorization and canonical mode; no migration attempted.' | tee -a "$log"
+              echo 'migration_status=canonical-mirror-archive-not-authorized' >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            python3 -m unittest scripts.tests.test_document_mirror_archive scripts.tests.test_canonical_mirror_archive_preflight -v
+            python3 -m scripts.loadtest.canonical_mirror_archive_preflight
           fi
           if grep -q '^DOCUMENT_MIRROR_MODE = "canonical"$' wrangler.toml && printf '%s\n' "$pending" | grep -q '0104_retire_legacy_derived_index_triggers.sql'; then
             # The full bounded coverage scan is required for the one-time canonical cutover only.

@@ -7,7 +7,7 @@ test('canonical recipient prefix is redundant for reads and adds one insert inde
  const sql=new DatabaseSync(':memory:');
  try {
   const dir=new URL('../migrations/',import.meta.url),name='0093_remove_redundant_notification_recipient.sql';
-  for(const f of readdirSync(dir).filter(f=>f.endsWith('.sql')&&f!==name&&f!=='0102_remove_legacy_notification_recipient.sql'&&f!=='0105_retire_legacy_document_mirror.sql'&&f!=='0106_enforce_document_mirror_retirement.sql').sort())sql.exec(readFileSync(new URL(f,dir),'utf8'));
+  for(const f of readdirSync(dir).filter(f=>f.endsWith('.sql')&&f!==name&&f!=='0102_remove_legacy_notification_recipient.sql'&&f!=='0105_retire_legacy_document_mirror.sql'&&f!=='0106_enforce_document_mirror_retirement.sql'&&f!=='0109_archive_reappeared_document_mirror.sql').sort())sql.exec(readFileSync(new URL(f,dir),'utf8'));
   const insert='INSERT INTO friendbook_cf_firestore_documents VALUES(?,?,?,?,?,?,?,?)';
   const args=['notifications/new','notifications','notifications','new','sender',JSON.stringify({toUserId:'owner',isRead:false,createdAt:1}),1,1];
   const count=()=>sql.prepare('EXPLAIN '+insert).all(...args).filter(x=>x.opcode==='IdxInsert').length;

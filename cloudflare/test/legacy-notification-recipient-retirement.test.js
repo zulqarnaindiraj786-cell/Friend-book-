@@ -7,7 +7,7 @@ test('legacy recipient prefix removal retains plain and wrapped seeks, rollback 
  const sql=new DatabaseSync(':memory:');
  try {
   const dir=new URL('../migrations/',import.meta.url),name='0102_remove_legacy_notification_recipient.sql';
-  for(const f of readdirSync(dir).filter(f=>f.endsWith('.sql')&&f!==name&&f!=='0105_retire_legacy_document_mirror.sql'&&f!=='0106_enforce_document_mirror_retirement.sql').sort())sql.exec(readFileSync(new URL(f,dir),'utf8'));
+  for(const f of readdirSync(dir).filter(f=>f.endsWith('.sql')&&f!==name&&f!=='0105_retire_legacy_document_mirror.sql'&&f!=='0106_enforce_document_mirror_retirement.sql'&&f!=='0109_archive_reappeared_document_mirror.sql').sort())sql.exec(readFileSync(new URL(f,dir),'utf8'));
   const insert='INSERT INTO friendbook_cf_documents VALUES(?,?,?,?,?,?)';
   const args=['notifications/new','notifications','new','author',JSON.stringify({toUserId:'viewer',isRead:false,createdAt:1}),1];
   const count=()=>sql.prepare('EXPLAIN '+insert).all(...args).filter(row=>row.opcode==='IdxInsert').length;

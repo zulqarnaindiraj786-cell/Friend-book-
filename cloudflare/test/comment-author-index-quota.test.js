@@ -10,7 +10,7 @@ import {interactions} from '../interactions.js';
 test('unscoped comment author index removal preserves pages, counts and blocked-user privacy',async t=>{
   const sql=new DatabaseSync(':memory:');t.after(()=>sql.close());sql.exec('PRAGMA foreign_keys=ON');
   const dir=new URL('../migrations/',import.meta.url),removal='0080_remove_unused_comment_author_index.sql';
-  for(const file of readdirSync(dir).filter(f=>f.endsWith('.sql')&&f!==removal&&f!=='0105_retire_legacy_document_mirror.sql'&&f!=='0106_enforce_document_mirror_retirement.sql').sort())sql.exec(readFileSync(new URL(file,dir),'utf8'));
+  for(const file of readdirSync(dir).filter(f=>f.endsWith('.sql')&&f!==removal&&f!=='0105_retire_legacy_document_mirror.sql'&&f!=='0106_enforce_document_mirror_retirement.sql'&&f!=='0109_archive_reappeared_document_mirror.sql').sort())sql.exec(readFileSync(new URL(file,dir),'utf8'));
   sql.exec("INSERT INTO friendbook_cf_interaction_resources VALUES ('posts/p1','verified')");
   const insert=sql.prepare('INSERT INTO friendbook_cf_comments VALUES (?,?,?,?,?,?)');
   for(let i=0;i<120;i++)insert.run('posts/p1',`c${String(i).padStart(3,'0')}`,i%5===0?'blocked':i%2?'alice':'bob','comment',i>0&&i%7===0?'c001':null,1000+i);
