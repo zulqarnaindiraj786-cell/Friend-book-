@@ -8,7 +8,7 @@ import {batchEngagementReads} from '../interactions.js';
 const migration=n=>readFileSync(new URL(`../migrations/${n}.sql`,import.meta.url),'utf8');
 
 function setup(t){
- const f=fixture();t.after(f.close);f.sql.exec(migration('0032_legacy_comment_lookup'));f.sql.exec(migration('0087_canonical_comment_page_indexes'));f.sql.exec(migration('0101_legacy_comment_epoch'));
+ const f=fixture();t.after(f.close);f.sql.exec(migration('0032_legacy_comment_lookup'));f.sql.exec(migration('0087_canonical_comment_page_indexes'));f.sql.exec(migration('0101_legacy_comment_epoch'));f.sql.exec(migration('0107_canonical_comment_count_epoch'));
  return f;
 }
 
@@ -93,12 +93,37 @@ test('old schema, rollback and epoch rollover preserve invalidation',async t=>{
  assert.deepEqual(res.map(r=>oldSchema.get(r).count),res.map(r=>withEpoch.get(r).count));
 });
 
-test('negative hints never cross database binding scopes, even with equal epochs',async t=>{
+test('session-backed caches are shared across request-scoped D1 handles and epoch-invalidated',async t=>{
+ const f=setup(t),add=canonicalSeed(f.sql),resource='posts/reused';let candidateQueries=0;
+ add.run('comments/first','comments','first','author',JSON.stringify({postId:'reused',authorId:'author'}),1);
+ const base=f.env.DB;
+ const requestDb=()=>({...base,withSession(mode){assert.equal(mode,'first-primary');return this;},prepare(q){
+  if(q.includes('quota_comment_candidates_'))candidateQueries++;
+  return base.prepare(q);
+ }});
+ const first=await batchEngagementReads(requestDb(),[resource,'posts/other'],'viewer',[],requestDb());
+ assert.equal(first.get(resource).count,1);assert.equal(candidateQueries,1);
+ const second=await batchEngagementReads(requestDb(),[resource,'posts/other'],'viewer',[],requestDb());
+ assert.equal(second.get(resource).count,1);assert.equal(candidateQueries,1,'new request-scoped handles reuse the isolate-local cached count');
+ add.run('comments/second','comments','second','author',JSON.stringify({postId:'reused',authorId:'author'}),2);
+ const changed=await batchEngagementReads(requestDb(),[resource,'posts/other'],'viewer',[],requestDb());
+ assert.equal(changed.get(resource).count,2);assert.equal(candidateQueries,2,'fresh epoch invalidates the old count');
+ f.sql.prepare("INSERT INTO friendbook_cf_interaction_resources(resource,state) VALUES (?,'verified')").run(resource);
+ f.sql.prepare('INSERT INTO friendbook_cf_comments(resource,id,uid,text,parent_id,created_at) VALUES (?,?,?,?,?,?)').run(resource,'first','author','canonical',null,3);
+ const shadowed=await batchEngagementReads(requestDb(),[resource,'posts/other'],'viewer',[],requestDb());
+ assert.equal(shadowed.get(resource).count,1,'canonical shadow epoch prevents stale legacy double-counting');
+ assert.equal(candidateQueries,3);
+ f.sql.prepare('DELETE FROM friendbook_cf_comments WHERE resource=? AND id=?').run(resource,'first');
+ const restored=await batchEngagementReads(requestDb(),[resource,'posts/other'],'viewer',[],requestDb());
+ assert.equal(restored.get(resource).count,2,'deleting a canonical shadow restores the legacy count');
+ assert.equal(candidateQueries,4);
+});
+
+test('shared session cache scopes require distinct primary epoch generations',async t=>{
  const a=setup(t),b=setup(t),res=['posts/a','posts/b'];
- const stamp='a'.repeat(32);
- a.sql.prepare('UPDATE friendbook_cf_legacy_comment_epoch SET generation=?,revision=7 WHERE id=1').run(stamp);
+ a.sql.prepare('UPDATE friendbook_cf_legacy_comment_epoch SET generation=?,revision=7 WHERE id=1').run('a'.repeat(32));
  canonicalSeed(b.sql).run('comments/x','comments','x','author',JSON.stringify({postId:'a',authorId:'author'}),1);
- b.sql.prepare('UPDATE friendbook_cf_legacy_comment_epoch SET generation=?,revision=7 WHERE id=1').run(stamp);
+ b.sql.prepare('UPDATE friendbook_cf_legacy_comment_epoch SET generation=?,revision=7 WHERE id=1').run('b'.repeat(32));
  const first=await batchEngagementReads(a.env.DB,res,'user1',[],a.env.DB);
  assert.deepEqual(res.map(r=>first.get(r).count),[0,0]);
  const other=await batchEngagementReads(b.env.DB,res,'user1',[],b.env.DB);
@@ -152,7 +177,7 @@ test('twenty-resource pages split legacy SQL into D1-safe groups in one batch',a
  assert.deepEqual(resources.map(r=>result.get(r).count),resources.map((_,i)=>i===19?1:0));
  assert.equal(grouped,4);assert.equal(batches,1);
  result=await batchEngagementReads(db,resources,'user1',[],db);
- assert.equal(result.get('posts/p19').count,1);assert.equal(grouped,5);assert.equal(batches,2);
+ assert.equal(result.get('posts/p19').count,1);assert.equal(grouped,4);assert.equal(batches,2,'cached legacy counts avoid another grouped probe');
  epochError=true;result=await batchEngagementReads(db,resources,'user1',[],db);
- assert.equal(result.get('posts/p19').count,1);assert.equal(grouped,9);assert.equal(batches,3);
+ assert.equal(result.get('posts/p19').count,1);assert.equal(grouped,8);assert.equal(batches,3,'epoch failure disables all cached hints');
 });
