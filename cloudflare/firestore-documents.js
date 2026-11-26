@@ -1,5 +1,5 @@
 import { inboxSqlActivity } from './inbox-activity-sql.js';
-import { recordInboxSortCost, inboxSeekSize, suspendInboxSeek } from './inbox-plan-hints.js';
+import { recordInboxSortCost, inboxSeekSize, initialInboxSeekSize, suspendInboxSeek } from './inbox-plan-hints.js';
 import { writeAttribution } from './write-attribution.js';
 import { accountStatus } from './account-access.js';
 import { pushCommittedChat } from './fcm-push.js';
@@ -373,7 +373,7 @@ async function boundedInboxPage(db,uid,spec,requestUserReads) {
   // Only try the shared ordered stream after actual D1 metadata has shown
   // this actor's membership sort to be expensive. No extra count/probe query
   // for small inboxes. The hint never substitutes for current document ACLs.
-  const seekSize=inboxSeekSize(db,uid,spec.limit);
+  const seekSize=inboxSeekSize(db,uid,spec.limit) || initialInboxSeekSize(db,uid,spec.limit);
   if(seekSize) {
     try {
       // Do not materialize another actor's chat JSON merely to inspect the

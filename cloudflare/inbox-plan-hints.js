@@ -22,6 +22,17 @@ export function inboxSeekSize(db,uid,limit,now=Date.now()) {
   const size=Math.min(64,Math.floor(hint.cost/4));
   return size>=limit?size:0;
 }
+// Avoid one unbounded first sort for an inbox whose future cost is unknown.
+// A small shared-index head is only an optimization attempt: if it cannot
+// produce the exact page, the compatibility query still decides the result.
+export function initialInboxSeekSize(db,uid,limit,now=Date.now()) {
+  const map=entries(db),hint=map.get(uid);
+  if(hint && hint.expires<=now)map.delete(uid);
+  else if(hint)return 0; // honor measured cheap sorts and sparse-head cooldowns
+  if(!Number.isInteger(limit)||limit<1)return 0;
+  const size=Math.min(64,limit*4);
+  return size>=limit?size:0;
+}
 export function tryInboxSeek(db,uid,now=Date.now()) {
   return inboxSeekSize(db,uid,1,now)>0;
 }

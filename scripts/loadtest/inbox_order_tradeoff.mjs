@@ -40,7 +40,8 @@ function fixture(roomCount,memberCount,indexed) {
   sql.function('quota_inbox_visit',_path=>{visits++;return 1;});
   const db={
     prepare(q){
-      const query=q.replace('WHERE m.participant_uid=? AND m.source=1','WHERE m.participant_uid=? AND m.source=1 AND quota_inbox_visit(f.path)');
+      const query=q.replace('WHERE m.participant_uid=? AND m.source=1','WHERE m.participant_uid=? AND m.source=1 AND quota_inbox_visit(f.path)')
+        .replace("WHERE f.path='chats/'||f.doc_id","WHERE quota_inbox_visit(f.path) AND f.path='chats/'||f.doc_id");
       const stmt=sql.prepare(query);
       return {bind(...a){return {
         async first(){return stmt.get(...a)||null;},

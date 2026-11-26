@@ -85,6 +85,17 @@ test('historical timestamps, zero/fractional fallthrough and Unicode ties keep c
 });
 
 
+test('first inbox page tries a 4x bounded shared head before any full membership sort',async()=>{
+  const f=fixture(true);try {
+    for(let i=0;i<1200;i++)f.add(`room${String(i).padStart(4,'0')}`,{participants:['alice','bob'],lastMessageTime:5000-i});
+    const page=await f.query({});
+    const head=f.reads.find(r=>r.q.includes('idx_cf_chat_activity_seek'));
+    assert.ok(head);assert.equal(head.rows,40,'first attempt is capped at four times the requested page');
+    assert.deepEqual(page.map(d=>d.id),Array.from({length:10},(_,i)=>`room${String(i).padStart(4,'0')}`));
+    assert.ok(!f.reads.some(r=>r.q.includes('WITH quota_inbox_candidates')),'dense inbox skips the unbounded sort on first request');
+  } finally {f.sql.close();}
+});
+
 test('shared activity index seeks a bounded head with parity and no per-member write fanout',async()=>{
   const f=fixture(true);try {
     for(let i=0;i<1000;i++)f.add(`room${String(i).padStart(4,'0')}`,{participants:['alice','bob'],lastMessageTime:{__type:'timestamp',millis:2000-i}});
@@ -144,8 +155,8 @@ test('shared seek warms only from actual membership-query metadata, without an e
   const f=fixture(true,2000);try {
     for(let i=0;i<200;i++)f.add(`room${String(i).padStart(4,'0')}`,{participants:['alice','bob'],lastMessageTime:1000-i});
     const first=await f.query({});
-    assert.equal(f.reads.filter(r=>r.q.includes('WITH quota_inbox_candidates')).length,1);
-    assert.ok(!f.reads.some(r=>r.q.includes('idx_cf_chat_activity_seek')));
+    assert.equal(f.reads.filter(r=>r.q.includes('WITH quota_inbox_candidates')).length,0);
+    assert.ok(f.reads.some(r=>r.q.includes('idx_cf_chat_activity_seek')),'an observed expensive sort makes the next request seek immediately');
     f.reads.length=0;assert.deepEqual(await f.query({}),first);
     assert.equal(f.reads.length,1);assert.ok(f.reads[0].q.includes('idx_cf_chat_activity_seek'));
   } finally {f.sql.close();}
