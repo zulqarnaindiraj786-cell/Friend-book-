@@ -129,3 +129,14 @@ jobs:
           window=os.environ["AUDIT_WINDOW"]
           query(os.environ["AUDIT_METRIC"],now-dt.timedelta(minutes=int(window.removeprefix("latest-").removesuffix("m"))),now,window)
           PY
+
+  canonical-mirror-diff:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+      - name: Read-only aggregate diff of reappeared canonical mirror
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: python3 -m scripts.loadtest.verify_canonical_mirror_retirement --diff
