@@ -4,14 +4,22 @@ import json,sys,urllib.error
 from scripts.loadtest.retired_table_preflight import remote_query
 
 class SanitizedHttpError(Exception):
- def __init__(self, status):
-  super().__init__('Cloudflare D1 HTTP '+str(status))
+ def __init__(self, status, codes=()):
+  suffix = ' error codes ' + ','.join(map(str, codes)) if codes else ''
+  super().__init__('Cloudflare D1 HTTP '+str(status)+suffix)
 
 def safe_query(sql, params):
  try:
   return remote_query(sql, params)
  except urllib.error.HTTPError as error:
-  raise SanitizedHttpError(error.code) from None
+  codes = []
+  try:
+   body = json.loads(error.read())
+   codes = [item.get('code') for item in body.get('errors', [])
+            if type(item.get('code')) is int][:5]
+  except (ValueError, TypeError, AttributeError):
+   pass
+  raise SanitizedHttpError(error.code, codes) from None
 
 def diff(query):
  names,_=query("SELECT name FROM sqlite_master WHERE type='table' AND name IN (?,?)",('friendbook_cf_documents','friendbook_cf_documents_retired_backup'))
