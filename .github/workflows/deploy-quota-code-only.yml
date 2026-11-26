@@ -7,6 +7,9 @@ on:
     paths:
       - '.github/workflows/deploy-quota-code-only.yml'
       - 'scripts/admin/verify_worker_rollout.py'
+      - 'worker.js'
+      - 'cloudflare/canonical-document-writes.js'
+      - 'cloudflare/test/canonical-document-writes.test.js'
 permissions:
   contents: read
 concurrency:

@@ -53,6 +53,7 @@ async function isRetiredStatusHeartbeat(request, uid) {
 export function createWorker(verify = verifyFirebaseToken) {
   return {
     async fetch(request, env, ctx) {
+      // Apply canonical write suppression before any route can issue legacy mirror SQL.
       env = canonicalDocumentWriteEnv(env);
       const path = new URL(request.url).pathname;
       // API namespaces must never fall through to HTML, even for unknown endpoints.
