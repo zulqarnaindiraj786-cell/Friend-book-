@@ -3,6 +3,7 @@
 # Analytics only: no application load, D1 diagnostic scans, deployment or daily certificate.
 name: Analytics-only hotspot attribution
 on:
+  workflow_dispatch:
   push:
     branches: [arena/b52bc74d-friend-book]
     paths:
@@ -13,7 +14,7 @@ permissions:
   contents: read
 jobs:
   report:
-    if: contains(github.event.head_commit.message, '[quota-hotspot-report]')
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[quota-hotspot-report]')
     runs-on: ubuntu-latest
     timeout-minutes: 3
     steps:
