@@ -1,5 +1,5 @@
 import { commentsAPI, reactorsAPI, commentSelect, normalized, legacyCommentCount, legacyCommentCountsStatement, legacyCommentCountsWithCandidatesStatement, legacyPage } from './comment-api.js';
-import { legacyEpoch, legacyNoCandidates, rememberLegacyNoCandidates } from './legacy-comment-negative-cache.js';
+import { legacyEpoch, legacyNoCandidates, rememberLegacyNoCandidates, legacyCachedCount, rememberLegacyCount } from './legacy-comment-negative-cache.js';
 import { requestAccountReads } from './app-documents.js';
 import { authorizePost } from './firebase-post-access.js';
 const json = (body, status = 200) => Response.json(body, {
@@ -129,21 +129,24 @@ export async function batchEngagementReads(db, resources, uid, blocked, cacheSco
   const read=async(useHints)=>{
     const epoch=useHints?await freshEpoch():null;
     const missing=resources.filter(resource=>!legacyNoCandidates(cacheScope,resource,epoch));
-    const withCandidates=Boolean(epoch) && missing.length>0;
+    const countsByResource=new Map(resources.map(resource=>[
+      resource,legacyCachedCount(cacheScope,resource,blocked,epoch)??0
+    ]));
+    const toProbe=missing.filter(resource=>legacyCachedCount(cacheScope,resource,blocked,epoch)===undefined);
+    const withCandidates=Boolean(epoch) && toProbe.length>0;
     const statements=[...resources.map(resource=>engagementStatement(db,resource,uid,blocked))];
     const chunks=[];
-    for(let offset=0;offset<missing.length;offset+=LEGACY_COUNT_CHUNK_SIZE){
-      const chunk=missing.slice(offset,offset+LEGACY_COUNT_CHUNK_SIZE);chunks.push(chunk);
+    for(let offset=0;offset<toProbe.length;offset+=LEGACY_COUNT_CHUNK_SIZE){
+      const chunk=toProbe.slice(offset,offset+LEGACY_COUNT_CHUNK_SIZE);chunks.push(chunk);
       statements.push(withCandidates?legacyCommentCountsWithCandidatesStatement(db,chunk,blocked):legacyCommentCountsStatement(db,chunk,blocked));
     }
     const rows=await db.batch(statements);
-    // A concurrent root-comment write between the epoch read and this batch
-    // invalidates all skipped counts. Retry the original complete batch.
-    if(epoch && missing.length<resources.length && await freshEpoch()!==epoch)
+    // Any skipped positive or negative count is valid only if the primary epoch
+    // remains unchanged across the summary batch.
+    if(epoch && toProbe.length<resources.length && await freshEpoch()!==epoch)
       throw Error('Legacy comment epoch changed during batch');
     if(rows.length!==resources.length+chunks.length || rows.some(row=>row.success===false)
         || rows.slice(0,resources.length).some(row=>!row.results?.[0]))return new Map();
-    const countsByResource=new Map(resources.map(resource=>[resource,0]));
     const negatives=[];
     for(let ci=0;ci<chunks.length;ci++){
       const chunk=chunks[ci],counts=rows[resources.length+ci]?.results;
@@ -153,6 +156,8 @@ export async function batchEngagementReads(db, resources, uid, blocked, cacheSco
       for(let i=0;i<chunk.length;i++){
         const row=bySlot.get(i),count=Number(row.n)||0;
         countsByResource.set(chunk[i],count);
+        if(withCandidates && Number.isSafeInteger(row.n) && row.n>=0)
+          rememberLegacyCount(cacheScope,chunk[i],blocked,epoch,row.n);
         if(withCandidates && row.has_candidates===0 && Number.isSafeInteger(row.n) && row.n===0)negatives.push(chunk[i]);
       }
     }

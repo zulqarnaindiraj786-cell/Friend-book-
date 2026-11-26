@@ -51,6 +51,10 @@ test('fresh epoch validates isolate-local negative hints and keeps exact blocked
  const second=await batchEngagementReads(db,res,'user1',[],scope);
  assert.deepEqual(res.map(r=>second.get(r).count),[0,0,1],'blocked-only zero is never memoized');
  assert.equal(candidateQueries,2);assert.equal(batches,2);
+ const repeated=await batchEngagementReads(db,res,'user1',[],scope);
+ assert.deepEqual(res.map(r=>repeated.get(r).count),[0,0,1]);
+ assert.equal(candidateQueries,2,'same epoch and blocked set reuses positive legacy counts');
+ assert.equal(batches,3,'canonical summaries still refresh while legacy counts are reused');
  const onlyEmpty=res.slice(0,2),before=candidateQueries;
  assert.deepEqual(onlyEmpty.map(r=>(second.get(r)).count),[0,0]);
  const cached=await batchEngagementReads(db,onlyEmpty,'user1',[],scope);
@@ -126,15 +130,17 @@ test('actual authorized feed query reuses absent-route hints and observes later 
   add.run(`posts/${id}`,'posts',id,'author',JSON.stringify({authorId:'author',privacy:'Public',createdAt:{__type:'timestamp',millis:5}}),1);
   f.sql.prepare("INSERT INTO friendbook_cf_interaction_resources VALUES (?, 'verified') ON CONFLICT(resource) DO UPDATE SET state='verified'").run(`posts/${id}`);
  }
+ add.run('comments/legacy','comments','legacy','author',JSON.stringify({postId:'p1',authorId:'author',content:'old comment',createdAt:7}),1);
  let candidateQueries=0,primarySessions=0;
  const base=f.env.DB,db={...base,withSession(mode){assert.equal(mode,'first-primary');primarySessions++;return this;},prepare(q){if(q.includes('quota_comment_candidates_'))candidateQueries++;return base.prepare(q);}};
  const app=createWorker(async token=>token),env={...f.env,DB:db,FIREBASE_PROJECT_ID:'test'};
  const body={parent:'posts',filters:[],orderBy:[{field:'createdAt',direction:'DESCENDING'}],limit:2,feedEngagement:true};
  async function request(){const response=await app.fetch(new Request('https://example.test/v1/firestore/query',{method:'POST',headers:{authorization:'Bearer user1','content-type':'application/json'},body:JSON.stringify(body)}),env);assert.equal(response.status,200,await response.clone().text());return (await response.json()).documents;}
  const first=await request();assert.equal(first.length,2);assert.equal(candidateQueries,1);
- assert.deepEqual(await request(),first);assert.equal(candidateQueries,1,'unchanged second feed skips all three legacy route probes per post');
+ assert.equal(first.find(d=>d.id==='p1').engagement.comments,1);
+ assert.deepEqual(await request(),first);assert.equal(candidateQueries,1,'unchanged second feed reuses positive legacy count results');
  add.run('comments/new','comments','new','author',JSON.stringify({postId:'p1',authorId:'author',content:'hello',createdAt:10}),1);
- const updated=await request();assert.equal(candidateQueries,2);assert.equal(updated.find(d=>d.id==='p1').engagement.comments,1);
+ const updated=await request();assert.equal(candidateQueries,2);assert.equal(updated.find(d=>d.id==='p1').engagement.comments,2);
  assert.ok(primarySessions>=3,'epoch validation uses primary-first sessions');
 });
 
@@ -151,7 +157,7 @@ test('twenty-resource pages split legacy SQL into D1-safe groups in one batch',a
  assert.deepEqual(resources.map(r=>result.get(r).count),resources.map((_,i)=>i===19?1:0));
  assert.equal(grouped,4);assert.equal(batches,1);
  result=await batchEngagementReads(db,resources,'user1',[],db);
- assert.equal(result.get('posts/p19').count,1);assert.equal(grouped,5);assert.equal(batches,2);
+ assert.equal(result.get('posts/p19').count,1);assert.equal(grouped,4);assert.equal(batches,2,'cached legacy counts avoid another grouped probe');
  epochError=true;result=await batchEngagementReads(db,resources,'user1',[],db);
- assert.equal(result.get('posts/p19').count,1);assert.equal(grouped,9);assert.equal(batches,3);
+ assert.equal(result.get('posts/p19').count,1);assert.equal(grouped,8);assert.equal(batches,3,'epoch read failure disables all cached hints');
 });
