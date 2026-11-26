@@ -126,14 +126,14 @@ export async function batchEngagementReads(db, resources, uid, blocked, cacheSco
     try {return await legacyEpoch(cacheScope.withSession('first-primary'));}
     catch {return null;}
   };
-  const read=async(useHints)=>{
+  const read=async(useHints,forceLegacyGrouped=false)=>{
     const epoch=useHints?await freshEpoch():null;
     const missing=resources.filter(resource=>!legacyNoCandidates(cacheScope,resource,epoch));
     const countsByResource=new Map(resources.map(resource=>[
       resource,legacyCachedCount(cacheScope,resource,blocked,epoch)??0
     ]));
     const toProbe=missing.filter(resource=>legacyCachedCount(cacheScope,resource,blocked,epoch)===undefined);
-    const withCandidates=Boolean(epoch) && toProbe.length>0;
+    const withCandidates=!forceLegacyGrouped && toProbe.length>0;
     const statements=[...resources.map(resource=>engagementStatement(db,resource,uid,blocked))];
     const chunks=[];
     for(let offset=0;offset<toProbe.length;offset+=LEGACY_COUNT_CHUNK_SIZE){
@@ -156,9 +156,9 @@ export async function batchEngagementReads(db, resources, uid, blocked, cacheSco
       for(let i=0;i<chunk.length;i++){
         const row=bySlot.get(i),count=Number(row.n)||0;
         countsByResource.set(chunk[i],count);
-        if(withCandidates && Number.isSafeInteger(row.n) && row.n>=0)
+        if(withCandidates && epoch && Number.isSafeInteger(row.n) && row.n>=0)
           rememberLegacyCount(cacheScope,chunk[i],blocked,epoch,row.n);
-        if(withCandidates && row.has_candidates===0 && Number.isSafeInteger(row.n) && row.n===0)negatives.push(chunk[i]);
+        if(withCandidates && epoch && row.has_candidates===0 && Number.isSafeInteger(row.n) && row.n===0)negatives.push(chunk[i]);
       }
     }
     for(const resource of negatives)rememberLegacyNoCandidates(cacheScope,resource,epoch);
@@ -166,10 +166,15 @@ export async function batchEngagementReads(db, resources, uid, blocked, cacheSco
   };
   try { return await read(!!cacheScope); }
   catch {
-    // Older schema or an unavailable optional hint must keep the exact original
-    // grouped-count path, without masking failure of its actual reads.
-    if(cacheScope)try {return await read(false);} catch { /* existing fallback below */ }
-    return new Map();
+    // First retry without any isolate-local hints, but keep the indexed route
+    // candidate query: a missing epoch table does not make a comments-partition
+    // scan necessary. Only if those additive route indexes are unavailable do
+    // we use the original grouped compatibility query.
+    try { return await read(false); }
+    catch {
+      try { return await read(false,true); }
+      catch { return new Map(); }
+    }
   }
 }
 

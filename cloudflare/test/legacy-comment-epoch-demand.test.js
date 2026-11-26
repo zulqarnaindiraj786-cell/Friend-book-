@@ -70,8 +70,11 @@ test('fresh epoch validates isolate-local negative hints and keeps exact blocked
  // Root write between the first epoch check and batch must trigger a complete
  // retry, never return the stale hinted zero from a mixed snapshot.
  inject=()=>add.run('comments/racing','comments','racing','a',JSON.stringify({postId:'empty2',authorId:'alice'}),1);
+ const beforeRace=candidateQueries;
  const race=await batchEngagementReads(db,onlyEmpty,'user1',[],scope);
- assert.deepEqual(onlyEmpty.map(r=>race.get(r).count),[0,1]);assert.ok(legacyQueries>0,'epoch race retried the old grouped count');
+ assert.deepEqual(onlyEmpty.map(r=>race.get(r).count),[0,1]);
+ assert.ok(candidateQueries>=beforeRace+1,'epoch race retries with the indexed route query, not a partition scan');
+ assert.equal(legacyQueries,0,'a missing/unavailable epoch must not force the old comments-partition scan when route indexes exist');
  // An epoch read failure never authorizes a previously cached negative.
  f.sql.prepare("DELETE FROM friendbook_cf_firestore_documents WHERE path='comments/racing'").run();
  await batchEngagementReads(db,onlyEmpty,'user1',[],scope);
