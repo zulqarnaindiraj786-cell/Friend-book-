@@ -3553,7 +3553,8 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0, ct
       if (splitPath(docPath).length===2 && splitPath(docPath)[0]==='chats') return await writeChatRoot(db,docPath,next,now,existing,uid,{
         literalNoop:body.merge===true && body.mergeFields==null && literalFields(body.data),
       });
-      const row = await writeRow(db, docPath, next, now, existing, ['stories','events','pages','lives'].includes(splitPath(docPath)[0]));
+      const guardedRoot=['stories','events','pages','lives'].includes(splitPath(docPath)[0]);
+      const row=await writeRow(db,docPath,next,now,existing,guardedRoot,guardedRoot&&!!existing?.[canonicalRootSnapshot]);
       return json(rowToDocument(row));
     } catch (e) {
       return json({ error: e.message === 'Document too large' ? 'Document too large' : 'Write unavailable' }, e.message === 'Document too large' ? 413 : 503);
@@ -3654,7 +3655,8 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0, ct
         if (!updated) return json({error:'Update unavailable'},503);
         return json(rowToDocument({...existing,document_json:serialized,update_time:now}));
       }
-      const row = await writeRow(db, docPath, next, now, existing, ['stories','events','pages','lives'].includes(splitPath(docPath)[0]));
+      const guardedRoot=['stories','events','pages','lives'].includes(splitPath(docPath)[0]);
+      const row=await writeRow(db,docPath,next,now,existing,guardedRoot,guardedRoot&&!!existing?.[canonicalRootSnapshot]);
       return json(rowToDocument(row));
     } catch {
       return json({ error: 'Update unavailable' }, 503);

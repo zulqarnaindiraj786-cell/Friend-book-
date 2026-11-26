@@ -1403,7 +1403,8 @@ test('query cursor bounds work for prefixes, ties and deleted page anchors', asy
 
 test('stories load with owner and privacy checks without exposing viewers', async () => {
   const sql=new DatabaseSync(':memory:');sql.exec(resourcesSchema);sql.exec(appSchema);sql.exec(schema);sql.exec(socialGuardSchema);
-  const db={prepare(query){const stmt=sql.prepare(query);return{bind(...args){return{run:async()=>stmt.run(...args),all:async()=>({results:stmt.all(...args)}),first:async()=>stmt.get(...args)||null};}};},async batch(stmts){sql.exec('BEGIN');try{for(const st of stmts)await st.run();sql.exec('COMMIT');}catch(e){sql.exec('ROLLBACK');throw e;}}};
+  let guardWrites=0;
+  const db={prepare(query){const stmt=sql.prepare(query);return{bind(...args){return{run:async()=>{if(query.includes('INSERT INTO friendbook_cf_social_guards'))guardWrites++;return stmt.run(...args);},all:async()=>({results:stmt.all(...args)}),first:async()=>stmt.get(...args)||null};}};},async batch(stmts){sql.exec('BEGIN');try{for(const st of stmts)await st.run();sql.exec('COMMIT');}catch(e){sql.exec('ROLLBACK');throw e;}}};
   const add=sql.prepare('INSERT INTO friendbook_cf_documents VALUES (?,?,?,?,?,?)');
   for(const uid of ['alice','bob'])add.run(`users/${uid}`,'users',uid,uid,JSON.stringify({uid}),1);
   mirrorAccounts(sql); mirrorAllLegacy(sql);
@@ -1421,7 +1422,9 @@ test('stories load with owner and privacy checks without exposing viewers', asyn
   const query=await call('bob','/v1/firestore/query','POST',{parent:'stories',filters:[{field:'expiresAt',op:'>',value:{__type:'timestamp',millis:1}}]});
   assert.equal(query.status,200);assert.equal((await query.json()).documents.length,1);
   const listing=await call('bob','/v1/docs?collection=stories');assert.equal((await listing.json()).documents[0].viewedBy,undefined);
+  guardWrites=0;
   assert.equal((await call('alice','/v1/firestore/document?path=stories/s1','PATCH',{fields:{privacy:'Only me'}})).status,200);
+  assert.equal(guardWrites,0,'existing root edits guard their snapshot inline without temporary D1 rows');
   assert.equal((await call('bob','/v1/firestore/document?path=stories/s1')).status,403);
   assert.equal((await (await call('bob','/v1/firestore/query','POST',{parent:'stories'})).json()).documents.length,0);
   assert.equal((await (await call('bob','/v1/docs?collection=stories')).json()).documents.length,0);
