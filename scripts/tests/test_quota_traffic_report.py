@@ -78,6 +78,15 @@ class TrafficReport(unittest.TestCase):
         report=p.summarize_shapes([{'sum':{'rowsRead':123,'rowsWritten':0},'count':1,'dimensions':{'query':sql}}],'rowsRead')
         self.assertEqual(report['observed_top_shape_subtotals'],{'exact_canonical_semantic_inventory_template':123})
 
+    def test_update_structure_is_allowlisted_and_private(self):
+        shape=p.safe_shape("UPDATE friendbook_cf_firestore_documents SET document_json='PRIVATE_VALUE' WHERE path='users/PRIVATE_UID'")
+        grammar=shape['redacted_update_structure']
+        self.assertIn('update',grammar)
+        self.assertIn('set',grammar)
+        self.assertIn('friendbook_cf_firestore_documents',grammar)
+        self.assertNotIn('PRIVATE_VALUE',json.dumps(shape))
+        self.assertNotIn('PRIVATE_UID',json.dumps(shape))
+
     def test_private_sql_never_appears_in_report_or_total(self):
         sql="SELECT document_json FROM friendbook_cf_firestore_documents WHERE parent_path='users' AND path='users/PRIVATE_USER_123'"
         row={'sum':{'rowsRead':12,'rowsWritten':0},'count':3,'dimensions':{'query':sql}}

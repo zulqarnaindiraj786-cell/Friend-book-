@@ -156,7 +156,7 @@ def category(sql):
 def redacted_inventory_structure(sql):
     # Diagnostic grammar from a fixed vocabulary, NOT raw SQL. Literals,
     # arbitrary identifiers, numeric values and comments never pass through.
-    vocabulary=set("resource views friendbook_cf_view_counters event_key created_at friendbook_cf_fcm_device_claims friendbook_cf_chat_participants chat_path uid friendbook_cf_trusted_friendships uid_low uid_high friend_path select count sum coalesce case when then else end as from where and or not is null left join on indexed by limit order group having asc desc with materialized exists distinct in sampled legacy_only path collection parent_path doc_id document_json owner_uid updated_at update_time sample l f s a friendbook_cf_documents friendbook_cf_firestore_documents idx_friendbook_cf_documents_collection_updated idx_friendbook_cf_firestore_parent".split())
+    vocabulary=set("resource update views friendbook_cf_view_counters event_key created_at friendbook_cf_fcm_device_claims friendbook_cf_chat_participants chat_path uid friendbook_cf_trusted_friendships uid_low uid_high friend_path select count sum coalesce case when then else end as from where set and or not is null left join on indexed by limit order group having asc desc with materialized exists distinct in sampled legacy_only path collection parent_path doc_id document_json owner_uid updated_at update_time sample l f s a friendbook_cf_documents friendbook_cf_firestore_documents idx_friendbook_cf_documents_collection_updated idx_friendbook_cf_firestore_parent".split())
     pattern=r"'(?:''|[^'])*'|\"(?:\"\"|[^\"])*\"|`[^`]*`|\[[^\]]*\]|--[^\n]*|/\*[\s\S]*?\*/|\?[0-9]*|[A-Za-z_][A-Za-z0-9_]*|[0-9]+(?:\.[0-9]+)?|<>|!=|<=|>=|[^\s]"
     vocabulary.update(('rowid','_rowid_','offset','friendbook_cf_presence','friendbook_cf_presence_sessions',
         'friendbook_cf_presence_sessions_fullcopy','friendbook_cf_presence_sessions_copy',
@@ -268,6 +268,10 @@ def safe_shape(sql):
         # Emit only the fixed-vocabulary SQL grammar so query families can be
         # matched to diagnostics without exposing arbitrary columns/identifiers.
         result['redacted_mirror_select_structure']=redacted_inventory_structure(sql)
+    if result['operation']=='UPDATE':
+        # Attribute the remaining high-volume D1 write family without exporting
+        # bound values or arbitrary SQL identifiers.
+        result['redacted_update_structure']=redacted_inventory_structure(sql)
     if result['operation']=='SELECT' and not (set(tables)&{'canonical_documents','legacy_mirror','comments','reactions'}):
         result['redacted_unmapped_select_structure']=redacted_inventory_structure(sql)
     # Help attribute a high-volume otherwise unrecognized canonical SELECT.
