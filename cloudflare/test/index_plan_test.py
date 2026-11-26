@@ -33,6 +33,8 @@ class IndexPlans(unittest.TestCase):
                     (f'idx_cf_request_canonical_{direction}_status', f"SELECT * FROM {table} WHERE parent_path='friend_requests' AND json_extract(document_json,'$.{uid}')=? AND json_extract(document_json,'$.status')=?", ('actor','pending')),
                     (f'idx_cf_request_legacy_{direction}_status', f"SELECT * FROM {archive} a WHERE a.collection='friend_requests' AND {legacy(uid)}=? AND {legacy('status')}=? AND NOT EXISTS (SELECT 1 FROM {table} f WHERE f.path=a.path)", ('actor','pending')),
                 ])
+            duplicate_guard = f"SELECT 1 FROM {table} WHERE parent_path='friend_requests' AND COALESCE(json_extract(document_json,'$.fromUid'),json_extract(document_json,'$.fields.fromUid.stringValue'))=? AND COALESCE(json_extract(document_json,'$.toUid'),json_extract(document_json,'$.fields.toUid.stringValue'))=? AND COALESCE(json_extract(document_json,'$.status'),json_extract(document_json,'$.fields.status.stringValue'))='pending'"
+            checks.append(('idx_cf_request_duplicate_pair_status', duplicate_guard, ('sender','recipient')))
             checks += [
                 ('idx_cf_posts_author_page', f"SELECT * FROM {table} WHERE parent_path='posts' AND json_extract(document_json,'$.authorId')=?", ('author',)),
                 ('idx_cf_legacy_posts_author_page', f"SELECT * FROM {archive} WHERE collection='posts' AND {legacy('authorId')}=?", ('author',)),
