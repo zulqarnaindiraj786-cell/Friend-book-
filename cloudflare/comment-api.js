@@ -80,15 +80,24 @@ export function legacyCommentCountsWithCandidatesStatement(db,resources,blocked=
     const res=`?${2+i*2}`,id=`?${3+i*2}`;
     requested.push(`(${i},${res},${id})`);
   });
-  // Scan the canonical comments partition once for the whole resource batch.
-  // The previous per-resource CTE ran three UNION scans for each item. This
-  // shared materialized candidate set preserves all three legacy field shapes
-  // and de-duplicates a document that contains more than one route key.
+  // Probe the three legacy route fields through their matching expression
+  // indexes. A cross join over every historical comment plus JSON OR predicates
+  // looked efficient in small fixtures, but production analytics showed it
+  // reading the entire comments partition on each candidate probe.
+  // UNION removes duplicate rows when one document carries multiple route keys.
   const candidates=`quota_comment_candidates_0 AS MATERIALIZED (
-    SELECT DISTINCT q.slot,q.resource,a.path,a.doc_id,a.document_json
-    FROM friendbook_cf_firestore_documents a CROSS JOIN requested q
-    WHERE a.parent_path='comments' AND (${legacyField('postId')}=q.post_id
-      OR ${legacyField('post_id')}=q.post_id OR ${legacyField('resource')}=q.resource)
+    SELECT q.slot,q.resource,a.path,a.doc_id,a.document_json
+      FROM requested q CROSS JOIN friendbook_cf_firestore_documents AS a INDEXED BY idx_cf_canonical_comment_page_post
+      WHERE a.parent_path='comments' AND ${legacyField('postId')}=q.post_id
+    UNION
+    SELECT q.slot,q.resource,a.path,a.doc_id,a.document_json
+      FROM requested q CROSS JOIN friendbook_cf_firestore_documents AS a INDEXED BY idx_cf_canonical_comment_page_post_legacy
+      WHERE a.parent_path='comments' AND ${legacyField('post_id')}=q.post_id
+    UNION
+    SELECT q.slot,q.resource,a.path,a.doc_id,a.document_json
+      FROM requested q CROSS JOIN friendbook_cf_firestore_documents AS a INDEXED BY idx_cf_canonical_comment_page_resource
+      WHERE a.parent_path='comments' AND ${legacyField('resource')}=q.resource
+  )`;
   )`;
   const selects=resources.map((_,i)=>`SELECT ${i} AS slot,
     (SELECT COUNT(*) FROM quota_comment_candidates_0 a WHERE a.slot=${i}
