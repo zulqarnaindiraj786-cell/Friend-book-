@@ -21,6 +21,7 @@ def inspect(query):
     if not names.issubset(set(TABLES)):
         raise ValueError('Unexpected schema response')
     nonempty = None
+    mirror_rows = None
     reads = meta.get('rows_read')
     if type(reads) is not int or reads < 0:
         raise ValueError('D1 read accounting unavailable')
@@ -31,9 +32,17 @@ def inspect(query):
         if type(extra) is not int or extra < 0:
             raise ValueError('D1 read accounting unavailable')
         reads += extra
+        totals, total_meta = query('SELECT COUNT(*) AS n FROM friendbook_cf_documents', ())
+        total_reads = total_meta.get('rows_read')
+        if (len(totals) != 1 or type(totals[0].get('n')) is not int or totals[0]['n'] < 0
+                or type(total_reads) is not int or total_reads < 0):
+            raise ValueError('D1 read accounting unavailable')
+        mirror_rows = totals[0]['n']
+        reads += total_reads
     return {
         'mirror_table_exists': 'friendbook_cf_documents' in names,
         'mirror_has_rows': nonempty,
+        'mirror_rows': mirror_rows,
         'backup_exists': 'friendbook_cf_documents_retired_backup' in names,
         'backup_schema_exists': 'friendbook_cf_documents_retired_backup_schema' in names,
         'reappeared_snapshot_exists': 'friendbook_cf_documents_reappeared_0106' in names,

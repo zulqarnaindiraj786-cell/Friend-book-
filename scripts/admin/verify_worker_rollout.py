@@ -81,8 +81,8 @@ def main():
                             key=lambda row: row['name'])
         public = next((row.get('text') for row in settings['bindings']
                        if row.get('name') == 'ANDROID_MIN_VERSION_CODE' and row.get('type') == 'plain_text'), None)
-        print(json.dumps({'live_resources': identities,
-                          'android_min_version_code': public if public is None or str(public).isdigit() else 'non-numeric'}, sort_keys=True))
+        print('::notice:: Live Worker binding inspection ' + json.dumps({'live_resources': identities,
+              'android_min_version_code': public if public is None or str(public).isdigit() else 'non-numeric'}, sort_keys=True))
         return
     if not args.snapshot:
         parser.error('--snapshot is required unless --inspect is used')

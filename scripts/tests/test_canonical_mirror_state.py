@@ -9,16 +9,18 @@ class CanonicalMirrorStateTests(unittest.TestCase):
             calls.append((sql, params))
             if 'sqlite_master' in sql:
                 return ([{'name': TABLES[0]}, {'name': TABLES[1]}, {'name': TABLES[2]}], {'rows_read': 4})
+            if 'COUNT(*)' in sql:
+                return ([{'n': 336}], {'rows_read': 336})
             return ([{'present': 1}], {'rows_read': 1})
         result = inspect(query)
         self.assertEqual(result, {
-            'mirror_table_exists': True, 'mirror_has_rows': True,
+            'mirror_table_exists': True, 'mirror_has_rows': True, 'mirror_rows': 336,
             'backup_exists': True, 'backup_schema_exists': True,
-            'reappeared_snapshot_exists': False, 'rows_read': 5,
+            'reappeared_snapshot_exists': False, 'rows_read': 341,
         })
-        self.assertEqual(len(calls), 2)
+        self.assertEqual(len(calls), 3)
         self.assertIn('LIMIT 1', calls[1][0])
-        self.assertNotIn('COUNT(*)', calls[1][0])
+        self.assertIn('COUNT(*)', calls[2][0])
         self.assertEqual(calls[0][1], TABLES)
 
     def test_absent_mirror_does_not_scan_application_rows(self):
