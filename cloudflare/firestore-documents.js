@@ -3524,13 +3524,12 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0, ct
         const id=docIdOf(docPath), serialized=JSON.stringify(next);
         if (serialized.length>1_800_000) return json({error:'Document too large'},413);
         try {
-          // Insert only into the canonical store. Keep the legacy path check
-          // in the same statement so an old notification cannot be shadowed;
-          // new notifications no longer pay for a duplicate mirror write.
+          // The document mirror is retired. Only a live canonical notification
+          // blocks a create-only insert; archived snapshots are not live rows.
           await db.batch([
             db.prepare(`INSERT INTO friendbook_cf_firestore_documents(path,parent_path,collection_id,doc_id,owner_uid,document_json,create_time,update_time)
               VALUES (CASE WHEN NOT EXISTS (SELECT 1 FROM friendbook_cf_firestore_documents WHERE path=?1)
-                AND NOT EXISTS (SELECT 1 FROM friendbook_cf_documents WHERE path=?1) THEN ?1 ELSE NULL END,
+                THEN ?1 ELSE NULL END,
                 'notifications','notifications',?2,?3,?4,?5,?5)`).bind(docPath,id,uid,serialized,now)
           ]);
           return json({exists:true,id,path:docPath,parent:'notifications',collection:'notifications',data:next,createTime:now,updateTime:now});

@@ -241,7 +241,7 @@ def safe_shape(sql):
     notification_create = re.search(
         r"^insert into friendbook_cf_firestore_documents\s*\(path,\s*parent_path,\s*collection_id,\s*doc_id,\s*owner_uid,\s*document_json,\s*create_time,\s*update_time\)\s*"
         r"values\s*\(case when not exists\s*\(select 1 from friendbook_cf_firestore_documents where path=\?1\)\s*"
-        r"and not exists\s*\(select 1 from friendbook_cf_documents where path=\?1\) then \?1 else null end,\s*"
+        r"then \?1 else null end,\s*"
         r"'notifications',\s*'notifications',\s*\?2,\s*\?3,\s*\?4,\s*\?5,\s*\?5\)\s*;?$", q)
     if notification_create:
         features.append('create_only_notification')

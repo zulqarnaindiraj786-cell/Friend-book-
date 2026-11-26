@@ -1257,9 +1257,9 @@ test('sender create-only notifications are atomic and never overwrite recipient 
   assert.equal((await req('bob','n','PATCH',{fields:{isRead:true}})).status,200);
   assert.equal((await req('alice','n','PUT',{data,createOnly:true})).status,409);
   assert.equal(JSON.parse(sql.prepare('SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?').get('notifications/n').document_json).isRead,true);
-  race='legacy';assert.equal((await req('alice','race','PUT',{data,createOnly:true})).status,409);
-  assert.equal(sql.prepare('SELECT path FROM friendbook_cf_firestore_documents WHERE path=?').get('notifications/race'),undefined);
-  assert.equal(JSON.parse(sql.prepare('SELECT document_json FROM friendbook_cf_documents WHERE path=?').get('notifications/race').document_json).text,'winner');
+  race='legacy';assert.equal((await req('alice','race','PUT',{data,createOnly:true})).status,200,'retired mirror snapshots do not block live canonical creates');
+  assert.equal(JSON.parse(sql.prepare('SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?').get('notifications/race').document_json).text,'hello');
+  assert.equal(JSON.parse(sql.prepare('SELECT document_json FROM friendbook_cf_documents WHERE path=?').get('notifications/race').document_json).text,'winner','archived mirror row remains untouched');
   race='canonical';assert.equal((await req('alice','race2','PUT',{data,createOnly:true})).status,409);
   assert.equal(sql.prepare('SELECT path FROM friendbook_cf_documents WHERE path=?').get('notifications/race2'),undefined);
   assert.equal(JSON.parse(sql.prepare('SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?').get('notifications/race2').document_json).isRead,true);
