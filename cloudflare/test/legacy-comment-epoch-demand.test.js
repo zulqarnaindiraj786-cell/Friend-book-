@@ -8,7 +8,7 @@ import {batchEngagementReads} from '../interactions.js';
 const migration=n=>readFileSync(new URL(`../migrations/${n}.sql`,import.meta.url),'utf8');
 
 function setup(t){
- const f=fixture();t.after(f.close);f.sql.exec(migration('0032_legacy_comment_lookup'));f.sql.exec(migration('0087_canonical_comment_page_indexes'));f.sql.exec(migration('0101_legacy_comment_epoch'));
+ const f=fixture();t.after(f.close);f.sql.exec(migration('0032_legacy_comment_lookup'));f.sql.exec(migration('0087_canonical_comment_page_indexes'));f.sql.exec(migration('0101_legacy_comment_epoch'));f.sql.exec(migration('0106_canonical_comment_shadow_epoch'));
  return f;
 }
 
@@ -82,6 +82,31 @@ test('fresh epoch validates isolate-local negative hints and keeps exact blocked
  epochFail=true;
  const unavailable=await batchEngagementReads(db,onlyEmpty,'user1',[],scope);
  assert.deepEqual(onlyEmpty.map(r=>unavailable.get(r).count),[1,0]);
+});
+
+test('positive legacy count cache invalidates when canonical comments shadow or unshadow a root row',async t=>{
+ const f=setup(t),add=canonicalSeed(f.sql),resource='posts/p1',scope=f.env.DB;
+ add.run('comments/legacy','comments','legacy','author',JSON.stringify({postId:'p1',resource:'posts/p2',authorId:'author'}),1);
+ const first=await batchEngagementReads(f.env.DB,[resource,'posts/p2'],'viewer',[],scope);
+ assert.equal(first.get(resource).count,1);assert.equal(first.get('posts/p2').count,1);
+ const epoch=()=>f.sql.prepare('SELECT generation,revision FROM friendbook_cf_legacy_comment_epoch WHERE id=1').get();
+ const before=epoch();
+ f.sql.prepare('INSERT INTO friendbook_cf_comments VALUES (?,?,?,?,?,?)').run(resource,'legacy','author','canonical',null,1);
+ assert.notDeepEqual(epoch(),before,'canonical promotion must invalidate cached legacy counts');
+ const promoted=await batchEngagementReads(f.env.DB,[resource,'posts/p2'],'viewer',[],scope);
+ assert.equal(promoted.get(resource).count,0,'canonical shadow removes the legacy duplicate');assert.equal(promoted.get('posts/p2').count,1);
+ const afterInsert=epoch();
+ f.sql.prepare("UPDATE friendbook_cf_comments SET resource='posts/p2' WHERE resource=? AND id='legacy'").run(resource);
+ assert.notDeepEqual(epoch(),afterInsert,'moving a canonical shadow invalidates both resources');
+ const afterMove=await batchEngagementReads(f.env.DB,[resource,'posts/p2'],'viewer',[],scope);
+ assert.equal(afterMove.get(resource).count,1,'unshadowed legacy source becomes countable again');
+ assert.equal(afterMove.get('posts/p2').count,0,'moved canonical row shadows only its new resource');
+ const beforeDelete=epoch();
+ f.sql.prepare("DELETE FROM friendbook_cf_comments WHERE resource='posts/p2' AND id='legacy'").run();
+ assert.notDeepEqual(epoch(),beforeDelete,'canonical delete must bump the legacy count epoch');
+ assert.equal(await legacyCommentCount(f.env.DB,'posts/p2',[]),1,'source row is countable after canonical shadow deletion');
+ const deleted=await batchEngagementReads(f.env.DB,[resource,'posts/p2'],'viewer',[],scope);
+ assert.equal(deleted.get('posts/p2').count,1,'deleting canonical shadow invalidates cached count');
 });
 
 test('old schema, rollback and epoch rollover preserve invalidation',async t=>{
