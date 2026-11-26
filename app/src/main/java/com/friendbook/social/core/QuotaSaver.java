@@ -3,7 +3,9 @@ package com.friendbook.social.core;
 /** Global, server-configured policy for reducing repeated automatic page revalidations. */
 public final class QuotaSaver {
     private QuotaSaver(){}
-    private static volatile boolean enabled;
+    // Automatic list pages default to the low-churn policy even before remote
+    // config arrives. Explicit refreshes and manual actions bypass this policy.
+    private static volatile boolean enabled=true;
     public static boolean enabled(){return enabled;}
     public static void setEnabled(boolean value){enabled=value;}
 

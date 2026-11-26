@@ -77,7 +77,7 @@ public class AdsConfig {
     private static volatile String feedNativeUnitId = FEED_NATIVE_ID;
     private static volatile String reelsNativeUnitId = REELS_NATIVE_ID;
     private static volatile boolean masterSwitchEnabled = true;
-    private static volatile boolean quotaSaverEnabled;
+    private static volatile boolean quotaSaverEnabled=true;
     private static volatile boolean remoteAllowed = true;
     private static ListenerRegistration reg;
 
@@ -278,7 +278,7 @@ public class AdsConfig {
                             reelsNativeUnitId = isRealProductionUnit(rId) ? rId.trim() : REELS_NATIVE_ID;
                             if (en != null) masterSwitchEnabled = en;
                             Boolean saver=snap.getBoolean("quota_saver_v1");
-                            quotaSaverEnabled=saver!=null && saver;
+                            quotaSaverEnabled=saver==null || saver;
                             QuotaSaver.setEnabled(quotaSaverEnabled);
                             notifyChange();
                         }
