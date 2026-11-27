@@ -1,6 +1,9 @@
 name: Retain only the 15-minute Worker cron
 on:
   workflow_dispatch:
+  push:
+    branches: ['arena/b52bc74d-friend-book']
+    paths: ['.github/workflows/retain-quarter-hour-cron.yml']
 permissions:
   contents: read
 concurrency:
