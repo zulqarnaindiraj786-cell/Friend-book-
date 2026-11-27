@@ -29,20 +29,17 @@ test('neither the app nor the Worker runtime references removed status endpoints
   }
 });
 
-test('exactly one cron runs every fifteen minutes and it only does bounded maintenance', () => {
+test('quota hard stop has no production cron consumers and scheduled handler fails closed', async () => {
   const config = read('wrangler.toml');
   assert.match(config, /^\s*\[triggers\]/m, 'a triggers block exists');
-  const cronLines = config.split('\n').filter(line => /^\s*crons?\s*=/.test(line));
-  assert.equal(cronLines.length, 1, 'one cron declaration');
-  assert.match(cronLines[0], /\*\/15 \* \* \* \*/, 'every fifteen minutes');
-  assert.doesNotMatch(config, /\*\/1 |\* \* \* \* \*|\*\/5 /, 'never per minute or per second');
+  assert.match(config, /crons = \[\]/, 'production crons are disabled');
+  assert.match(config, /D1_QUOTA_HARD_STOP = "true"/, 'production hard stop is enabled');
+  assert.match(config, /D1_QUOTA_HARD_STOP = "false"/, 'preview remains available');
   assert.equal('scheduled' in worker, true, 'the Worker exports a scheduled handler');
-
-  const scheduled = read('cloudflare/scheduled.js');
-  assert.doesNotMatch(scheduled, /setInterval|setTimeout|while\s*\(/, 'no looping inside the pass');
-  assert.match(scheduled, /UPDATE friendbook_cf_firestore_documents[\s\S]*?LIMIT 20/, 'stale live rooms are bounded');
-  assert.match(scheduled, /drainBroadcastPush/, 'only the durable outbox is retried');
-  assert.doesNotMatch(scheduled, /DELETE FROM friendbook_cf_view_dedupe/, 'retired view table has no invented timestamp cleanup');
+  const { scheduled } = await import('../scheduled.js');
+  let prepared = 0;
+  await scheduled({ cron: '*/15 * * * *' }, { D1_QUOTA_HARD_STOP: 'true', DB: { prepare() { prepared++; throw Error('must not query D1'); } } });
+  assert.equal(prepared, 0);
 });
 
 test('chat, feed and presence-free requests still reach the Worker exactly as before', async () => {

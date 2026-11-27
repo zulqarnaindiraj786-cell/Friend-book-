@@ -23,7 +23,7 @@ const NOTIFICATION_VALID_CREATED_AT = `(json_type(document_json,'$.createdAt') I
     AND json_extract(document_json,'$.createdAt.millis') BETWEEN -9007199254740991 AND 9007199254740991))`;
 
 export async function scheduled(event, env) {
-  if (!env.DB) return;
+  if (!env.DB || env.D1_QUOTA_HARD_STOP==='true') return;
   const now = Date.now();
   // Keep 15-minute live-expiry and outbox retry freshness, but defer 7/30-day
   // notification retention to the separate hourly cron. Unknown/manual events

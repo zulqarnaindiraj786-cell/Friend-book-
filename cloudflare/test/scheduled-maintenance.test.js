@@ -24,6 +24,12 @@ test('real-schema maintenance ends stale lives, preserves fresh rooms and histor
   } finally {sql.close();}
 });
 
+test('quota hard stop disables all scheduled D1 maintenance without preparing a query',async()=>{
+ let prepared=0;
+ await scheduled({cron:'*/15 * * * *'},{D1_QUOTA_HARD_STOP:'true',DB:{prepare(){prepared++;throw Error('must not query D1');}}});
+ assert.equal(prepared,0);
+});
+
 test('scheduled retention removes at most 200 expired notifications per tick using the retention index',async()=>{
  const sql=new DatabaseSync(':memory:');
  try {

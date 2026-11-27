@@ -57,6 +57,16 @@ export function createWorker(verify = verifyFirebaseToken) {
       // Apply canonical write suppression before any route can issue legacy mirror SQL.
       env = canonicalDocumentWriteEnv(env);
       const path = new URL(request.url).pathname;
+      // Emergency account-wide D1 circuit breaker. When the operator enables
+      // it, refuse every authenticated app/API route before token/account/D1
+      // lookups. Keep static pages and the explicitly read-free config/release
+      // endpoints available so the site can explain/update the outage.
+      if (env.D1_QUOTA_HARD_STOP==='true'
+          && path!=='/health' && path!=='/health/r2'
+          && path!=='/v1/android-config' && path!=='/v1/android-release'
+          && (path.startsWith('/v1/') || path.startsWith('/functions/v1/'))) {
+        return json({error:'Temporarily unavailable while D1 quota protection is active'},503);
+      }
       // API namespaces must never fall through to HTML, even for unknown endpoints.
       const api = path === '/health' || path.startsWith('/health/') || path === '/v1' || path.startsWith('/v1/')
         || path === '/functions/v1/send-fcm-notification' || path === '/functions/v1/bulk-mentions';
@@ -105,6 +115,8 @@ export function createWorker(verify = verifyFirebaseToken) {
         } catch { return json({ ok: false, r2Bound: true, videoR2Enabled: true }, 503); }
       }
       if (path === '/health') {
+        if (env.D1_QUOTA_HARD_STOP==='true') return json({ok:true,d1InteractionsEnabled:false,quotaHardStop:true,
+          views:{ae:Boolean(env.ANALYTICS_ENGINE),kv:Boolean(env.VIEWS),r2Snapshot:!env.VIEWS && Boolean(env.VIDEO_BUCKET),aeReadToken:Boolean(env.CF_AE_TOKEN)}});
         if (!env.DB) return json({ ok: false }, 503);
         // Binding flags only - no data, no counts. It proves what a deploy actually shipped:
         // views run on Analytics Engine (+ KV), and D1 is never written by the view path.

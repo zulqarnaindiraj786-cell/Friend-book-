@@ -36,6 +36,20 @@ test('health reports the R2 snapshot fallback when Workers KV is not bound', asy
   assert.deepEqual(await response.json(),
     { ok: true, d1InteractionsEnabled: false, views: { ae: true, kv: false, r2Snapshot: true, aeReadToken: true } });
 });
+test('quota hard stop refuses all API/D1 consumers before auth or storage while leaving read-free config available', async () => {
+  let d1=0,verify=0;
+  const app=createWorker(async()=>{verify++;return 'user';});
+  const env={D1_QUOTA_HARD_STOP:'true',FIREBASE_PROJECT_ID:'friendbook-test',ADS_ENABLED_V3:'true',ANDROID_MIN_VERSION_CODE:'1',DB:{prepare(){d1++;throw Error('D1 must stay untouched');}}};
+  for(const [path,method] of [['/v1/me','GET'],['/v1/firestore/query','POST'],['/v1/engagement/posts/p1/comments','GET'],['/functions/v1/send-fcm-notification','POST']]){
+    const response=await call(path,env,{Authorization:'Bearer test'},method,app);
+    assert.equal(response.status,503,path);
+  }
+  assert.equal(verify,0);assert.equal(d1,0);
+  assert.equal((await call('/v1/android-config',env)).status,200);
+  const health=await call('/health',env);assert.equal(health.status,200);
+  assert.deepEqual(await health.json(),{ok:true,d1InteractionsEnabled:false,quotaHardStop:true,views:{ae:false,kv:false,r2Snapshot:false,aeReadToken:false}});
+  assert.equal(d1,0);
+});
 test('unknown and write routes are closed', async () => {
   assert.equal((await call('/v1/users')).status, 404);
   assert.equal((await call('/health', {}, {}, 'POST')).status, 405);
