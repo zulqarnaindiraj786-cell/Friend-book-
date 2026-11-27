@@ -729,25 +729,25 @@ jobs:
           with open('/tmp/friendbook-health-r2.json') as f:
               r2 = json.load(f)
           print('Sanitized health flags:', json.dumps({'health': health, 'r2': r2}, sort_keys=True))
-          assert health.get('ok') is True, 'Worker/D1 health check failed'
-          assert health.get('d1InteractionsEnabled') is True, 'Worker D1 interaction gate is not enabled'
+          assert health.get('ok') is True, 'Worker health check failed'
+          assert health.get('d1InteractionsEnabled') is False and health.get('quotaHardStop') is True, 'D1 quota hard stop is not active'
           views = health.get('views') or {}
           assert views.get('kv') is True, 'Live Worker VIEWS KV binding is not active'
           assert r2.get('ok') is True and r2.get('r2Bound') is True and r2.get('videoR2Enabled') is True, 'Worker/R2 health check failed'
-          print('Worker health + read-only D1 SELECT 1 + R2 bucket head check passed. No user data was written.')
+          print('Worker hard-stop health + R2 bucket head passed. Hard-stop health performs no D1 query.')
           PY
           code=$(curl --silent --show-error --max-time 30 -o /tmp/friendbook-auth.json -w '%{http_code}' \
             https://rough-firefly-dd7b.zulqarnaindiraj786.workers.dev/v1/me)
-          test "$code" = 401
+          test "$code" = 503
           # Presence routes are retired for good: they must answer 404, never 401/200.
           pcode=$(curl --silent --show-error --max-time 30 -o /tmp/friendbook-presence.json -w '%{http_code}' \
             https://rough-firefly-dd7b.zulqarnaindiraj786.workers.dev/v1/presence/me)
           test "$pcode" = 404
           vcode=$(curl --silent --show-error --max-time 30 -X POST -o /tmp/friendbook-video.json -w '%{http_code}' \
             https://rough-firefly-dd7b.zulqarnaindiraj786.workers.dev/v1/videos)
-          test "$vcode" = 401
-          echo 'Unauthenticated profile and video requests rejected (401); retired presence routes answer 404.'
-          echo 'Deployment passed; D1 interactions are explicitly verified ON, with retired presence routes gone and R2 Video routes active.' >> "$GITHUB_STEP_SUMMARY"
+          test "$vcode" = 503
+          echo 'D1-backed profile and video APIs are hard-stopped (503); static/config, health, and R2 health remain available.'
+          echo 'Deployment passed; D1 quota hard stop is active, scheduled D1 consumers are disabled, and no release APK was produced.' >> "$GITHUB_STEP_SUMMARY"
       - name: Copy Firebase Firestore to D1 with per-collection checkpoints
         if: github.event_name == 'push' && contains(github.event.head_commit.message, '[firestore-copy]')
         env:
