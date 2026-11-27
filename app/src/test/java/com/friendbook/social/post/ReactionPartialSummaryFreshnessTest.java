@@ -30,7 +30,7 @@ public class ReactionPartialSummaryFreshnessTest {
  }
  private static JSONArray types(String type)throws Exception{return full(0,type).getJSONArray("types");}
  private static Models.Post post(String id){Models.Post post=new Models.Post();post.id=id;return post;}
- @Test public void partialDetailTotalsDoNotMakeAnAbsentSummaryFresh()throws Exception{
+ @Test public void partialDetailTotalsSupplyReactionStateWithoutFetchingCommentSummary()throws Exception{
   try(MockedStatic<Fb> fb=mockStatic(Fb.class);MockedStatic<FastCache> cache=mockStatic(FastCache.class);
       MockedStatic<D1Client> client=mockStatic(D1Client.class,call->"key".equals(call.getMethod().getName())?call.callRealMethod():RETURNS_DEFAULTS.answer(call))){
    fb.when(Fb::uid).thenReturn("partial-empty-actor");
@@ -38,8 +38,8 @@ public class ReactionPartialSummaryFreshnessTest {
    client.when(()->D1Client.request("posts","partial-empty","reactions","GET",null,null)).thenReturn(Tasks.forResult(full(7,"like")));
    Models.Post post=post("partial-empty");
    D1Reactions.loadPost(RuntimeEnvironment.getApplication(),post,()->{});Shadows.shadowOf(Looper.getMainLooper()).idle();
-   client.verify(()->D1Client.request("posts","partial-empty","reactions","GET",null,null),times(1));
-   assertEquals(7,post.comments);assertEquals(1,post.likes);
+   client.verify(()->D1Client.request("posts","partial-empty","reactions","GET",null,null),never());
+   assertEquals(0,post.comments);assertEquals(1,post.likes);assertNull(D1Reactions.commentBaseline("posts","partial-empty"));
   }
  }
  @Test public void orphanedTimestampCannotMakePartialSummaryFresh()throws Exception{
@@ -53,8 +53,9 @@ public class ReactionPartialSummaryFreshnessTest {
    D1Reactions.acceptDetailTotals("partial-evicted",types("like"),android.os.SystemClock.elapsedRealtime());
    client.when(()->D1Client.request("posts","partial-evicted","reactions","GET",null,null)).thenReturn(Tasks.forResult(full(8,"like")));
    Models.Post post=post("partial-evicted");D1Reactions.loadPost(RuntimeEnvironment.getApplication(),post,()->{});
-   Shadows.shadowOf(Looper.getMainLooper()).idle();assertEquals(8,post.comments);
-   client.verify(()->D1Client.request("posts","partial-evicted","reactions","GET",null,null),times(1));
+   Shadows.shadowOf(Looper.getMainLooper()).idle();assertEquals(0,post.comments);assertEquals(1,post.likes);
+   client.verify(()->D1Client.request("posts","partial-evicted","reactions","GET",null,null),never());
+   assertNull(D1Reactions.commentBaseline("posts","partial-evicted"));
   }
  }
  @Test public void partialDetailTotalsPreserveExistingSummaryAge()throws Exception{
