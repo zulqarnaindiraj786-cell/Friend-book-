@@ -101,7 +101,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         storyGeneration++;loadingStories=false;
         if(homeReadScope!=null){homeReadScope.close();homeReadScope=null;}
         // A canceled first story page must be retryable on the next visible entry.
-        if(storyCursor==null && loadedStoryDocs.isEmpty())storyQuery=null;
+        if(storyCursor==null && loadedStoryDocs.isEmpty() && !storyPageCompleted)storyQuery=null;
         if(notesInFlight){notesInFlight=false;notesReadAt=-com.friendbook.social.core.OnDemandLoads.PYMK_CACHE_MS;}
         headerRequested=false;
     }
@@ -113,7 +113,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
             loadedPosts=false;pageError=false;moreAvailable=true;lastDoc=null;feedQuery=null;
             lastPostDocs.clear();loadedPostIds.clear();sessionOrderIds.clear();cfPosts.clear();
             storyQuery=null;storyCursor=null;loadedStoryDocs.clear();storyGroups.clear();storyIds.clear();
-            storiesActor=null;moreStories=true;
+            storiesActor=null;moreStories=true;storyPageCompleted=false;
             friendGraphActor=null;friendIds.clear();friendFactsChecked.clear();friendFactsPending.clear();friendFactsFailed.clear();
             if(actor!=null)friendIds.add(actor);
             noteUsers.clear();pymkCandidates.clear();notesActor=null;notesLoaded=false;notesInFlight=false;
@@ -145,6 +145,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
     private Query feedQuery, storyQuery;
     private DocumentSnapshot storyCursor;
     private boolean loadingStories, moreStories;
+    private boolean storyPageCompleted;
     private long lastStoryFetch,storyQueryAnchor;
     private String storiesActor,friendGraphActor;
     private int storyGeneration;
@@ -1273,7 +1274,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         }
         storiesActor=actor;
         if(storiesReg!=null) { storiesReg.remove(); storiesReg=null; }
-        storyGeneration++; loadingStories=false; moreStories=true; storyCursor=null;
+        storyGeneration++; loadingStories=false; moreStories=true; storyCursor=null; storyPageCompleted=false;
         android.content.SharedPreferences prefs=getActivity().getSharedPreferences("fb_prefs",0);
         long previous=prefs.getLong("storyAnchor:"+actor,0L);
         long anchor=com.friendbook.social.core.StoryWindowPolicy.anchor(previous,now);
@@ -1299,7 +1300,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         (automatic && !forceSections ? page.getCachedOrFetchAutomatic(homeReadScope(),maxAge)
                 : page.getCachedOrFetch(forceSections,maxAge)).addOnSuccessListener(snapshot -> {
             if(generation!=storyGeneration || !java.util.Objects.equals(actor,Fb.uid()) || !isAdded() || !homeStarted || isHidden()) return;
-            loadingStories=false;lastStoryFetch=android.os.SystemClock.elapsedRealtime(); moreStories=snapshot.size()==3;
+            loadingStories=false;storyPageCompleted=true;lastStoryFetch=android.os.SystemClock.elapsedRealtime(); moreStories=snapshot.size()==3;
             if(first)loadedStoryDocs.clear();
             if(!snapshot.isEmpty())storyCursor=snapshot.getDocuments().get(snapshot.size()-1);
             for(DocumentSnapshot doc:snapshot)loadedStoryDocs.put(doc.getId(),doc);
