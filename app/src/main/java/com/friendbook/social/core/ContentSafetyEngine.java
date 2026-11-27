@@ -191,7 +191,9 @@ public final class ContentSafetyEngine {
             return analyzeVideoUri(ctx, uri);
         } else {
             Bitmap bmp = decodeSampledBitmap(ctx, uri, 96);
-            if (bmp == null) return Verdict.safe();
+            // Do not let unreadable media bypass pre-upload safety scanning.
+            if (bmp == null) return Verdict.block("scan_unavailable",
+                    "Could not scan this photo safely. Please choose another image and try again.");
             try {
                 return analyzeBitmap(bmp);
             } finally {
@@ -210,13 +212,16 @@ public final class ContentSafetyEngine {
             if (durStr != null) {
                 try { durMs = Math.max(1000L, Long.parseLong(durStr)); } catch (NumberFormatException ignored) {}
             }
-            double[] fracs = {0.12, 0.32, 0.52, 0.72, 0.88};
+            // More evenly spaced samples reduce the chance of missing short explicit segments.
+            double[] fracs = {0.05, 0.13, 0.21, 0.29, 0.37, 0.45, 0.53, 0.61, 0.69, 0.77, 0.85, 0.93};
             int unsafeFrames = 0;
+            int decodedFrames = 0;
             Verdict firstHit = null;
             for (double f : fracs) {
                 long timeUs = (long) (durMs * f * 1000L);
                 Bitmap frame = mmr.getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC);
                 if (frame == null) continue;
+                decodedFrames++;
                 try {
                     Bitmap small = Bitmap.createScaledBitmap(frame, 96, 96, true);
                     Verdict v = analyzeBitmap(small);
@@ -224,16 +229,19 @@ public final class ContentSafetyEngine {
                     if (v.unsafe) {
                         unsafeFrames++;
                         if (firstHit == null) firstHit = v;
-                        // Immediate block if 2+ keyframes across timeline show explicit nudity/gore
-                        if (unsafeFrames >= 2) return firstHit;
+                        // A single positive unsafe frame is sufficient to stop publication.
+                        if (unsafeFrames >= 1) return firstHit;
                     }
                 } finally {
                     try { frame.recycle(); } catch (Throwable ignored) {}
                 }
             }
+            if (decodedFrames == 0) return Verdict.block("scan_unavailable",
+                    "Could not inspect this video. Please re-export or choose another video and try again.");
             return Verdict.safe();
         } catch (Throwable ignored) {
-            return Verdict.safe();
+            return Verdict.block("scan_unavailable",
+                    "Could not scan this video safely. Please choose another video and try again.");
         } finally {
             try { mmr.release(); } catch (Throwable ignored) {}
         }
