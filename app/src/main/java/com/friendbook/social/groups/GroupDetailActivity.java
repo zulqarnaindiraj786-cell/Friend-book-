@@ -1158,12 +1158,13 @@ public class GroupDetailActivity extends Activity implements FeedAdapter.Host {
         TextView dots = Ui.tvBold(this, "⋯", 18, Ui.sub(this));
         row.addView(dots);
 
-        Fb.getUser(memberUid).addOnSuccessListener(u -> {
-            if (u == null || isFinishing()) return;
-            FastCache.putUser(u);
-            nm.setText(u.displayName);
-            Ui.avatar(this, av, u.photoUrl);
-            Icons.setTickBadge(tk, u.tickLevel, false);
+        final String actor=Fb.uid();final int generation=screenGeneration;
+        com.friendbook.social.core.UserBatchLookup.load(java.util.Collections.singletonList(memberUid),users->{
+            if(generation!=screenGeneration || !java.util.Objects.equals(actor,Fb.uid()) || isFinishing())return;
+            Models.User user=users.get(memberUid);if(user==null)return;
+            nm.setText(user.displayName);
+            Ui.avatar(this,av,user.photoUrl);
+            Icons.setTickBadge(tk,user.tickLevel,false);
         });
 
         row.setOnClickListener(v -> showGroupMemberRoleMenu(v, memberUid, nm.getText().toString(), amAdmin, amMod));

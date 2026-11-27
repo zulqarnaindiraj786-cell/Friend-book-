@@ -2546,14 +2546,17 @@ public class ReelsFragment extends Fragment {
                         return true;
                     }
                     if (id == 8) {
-                        Fb.getUser(reel.authorId).addOnSuccessListener(u -> {
-                            if (!com.friendbook.social.core.Admin.isAdmin() && com.friendbook.social.core.Admin.isProtectedStaff(u)) {
+                        final String actor=Fb.uid();
+                        com.friendbook.social.core.UserBatchLookup.load(java.util.Collections.singletonList(reel.authorId),users->{
+                            if(a.isFinishing() || !java.util.Objects.equals(actor,Fb.uid()))return;
+                            Models.User user=users.get(reel.authorId);
+                            if (!com.friendbook.social.core.Admin.isAdmin() && com.friendbook.social.core.Admin.isProtectedStaff(user)) {
                                 Ui.toast(a, "Admin reels cannot be removed by a moderator");
                                 return;
                             }
                             Ui.confirm(a, "Delete Reel?", "Remove this reel permanently?", "Delete", () ->
                                     Fb.db().collection(reel.collectionName()).document(reel.id).delete()
-                                            .addOnSuccessListener(x -> Ui.toast(a, "Reel deleted")));
+                                            .addOnSuccessListener(x -> {if(!a.isFinishing())Ui.toast(a, "Reel deleted");}));
                         });
                         return true;
                     }
