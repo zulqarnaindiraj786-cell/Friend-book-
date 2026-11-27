@@ -72,6 +72,13 @@ test('Firestore-compatible D1 endpoint accepts Firebase UIDs containing x', asyn
   }), {DB:db,FIREBASE_PROJECT_ID:'friendbook-test'});
   assert.equal(legacyPatch.status,200);
   assert.equal(JSON.parse(sql.prepare('SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?').get(`users/${uid}`).document_json).displayName,'Patched legacy payload');
+  const changesBeforeDuplicate = sql.totalChanges;
+  const duplicatePatch = await app.fetch(new Request(`https://example.test/v1/firestore/document?path=users/${uid}`, {
+    method:'PATCH', headers:{authorization:'Bearer proof-token','content-type':'application/json'},
+    body:JSON.stringify({updates:{displayName:'Patched legacy payload'}}),
+  }), {DB:db,FIREBASE_PROJECT_ID:'friendbook-test'});
+  assert.equal(duplicatePatch.status,200,await duplicatePatch.text());
+  assert.equal(sql.totalChanges,changesBeforeDuplicate,'repeating an identical non-root document update must not incur D1 writes');
   const appRow = sql.prepare('SELECT path, owner_uid, document_json FROM friendbook_cf_documents WHERE path = ?').get(`users/${uid}`);
   assert.equal(appRow.owner_uid, uid);
   assert.match(appRow.document_json, /d1-only/);

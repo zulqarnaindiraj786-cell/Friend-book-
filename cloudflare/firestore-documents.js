@@ -2055,6 +2055,8 @@ async function applyOperation(db, op, uid, now, existingCache) {
   if (type === 'update') {
     if (!existingRow) throw new Error('NOT_FOUND');
     const next = applyUpdate(existingDoc, op.fields || op.data || {}, now);
+    if (!isRootDocument(path) && JSON.stringify(next) === existingRow.document_json)
+      return rowToDocument(existingRow);
     const row = await writeRow(db, path, next, now, existingRow);
     return rowToDocument(row);
   }
@@ -2067,6 +2069,8 @@ async function applyOperation(db, op, uid, now, existingCache) {
   // set
   if (op.precondition === 'exists=false' && existingRow) throw new Error('ALREADY_EXISTS');
   const next = applySet(existingDoc, op.data || {}, Boolean(op.merge), op.mergeFields || null, now);
+  if (existingRow && !isRootDocument(path) && JSON.stringify(next) === existingRow.document_json)
+    return rowToDocument(existingRow);
   const row = await writeRow(db, path, next, now, existingRow);
   return rowToDocument(row);
 }
