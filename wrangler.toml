@@ -16,8 +16,8 @@ FIREBASE_PROJECT_ID = "friendbook-17551"
 # Server-side authority for free verification reviews; Firebase Auth UID, not a secret.
 PAYMENT_ADMIN_UIDS = "ZlCw7oeKitPbhAcEryjnz2Do2Ky2"
 D1_INTERACTIONS_ENABLED = "true"
-# Emergency mode: stop every app/API D1 consumer until an operator re-enables it.
-D1_QUOTA_HARD_STOP = "true"
+# Operator authorized restoring app/API D1 consumers.
+D1_QUOTA_HARD_STOP = "false"
 # Additive indexes have an automatic fallback when absent; disable to roll back.
 FRIEND_GUARD_INDEXED = "true"
 # Cut over document reads/writes only when the deploy workflow's full coverage gate passes.
@@ -27,9 +27,9 @@ VIDEO_R2_RETENTION_VERIFIED = "true"
 CLOUDINARY_CLOUD_NAME = "x5ed4d0b"
 CLOUDINARY_UPLOAD_PRESET = "Myapp_upload"
 
-# No scheduled D1 work while quota hard-stop is enabled.
+# Restore routine stale-live/outbox and notification TTL maintenance schedules.
 [triggers]
-crons = []
+crons = ["*/15 * * * *", "0 * * * *"]
 
 [[d1_databases]]
 binding = "DB"

@@ -29,11 +29,11 @@ test('neither the app nor the Worker runtime references removed status endpoints
   }
 });
 
-test('quota hard stop has no production cron consumers and scheduled handler fails closed', async () => {
+test('production app consumers and routine schedules are restored; hard stop remains available as an override', async () => {
   const config = read('wrangler.toml');
   assert.match(config, /^\s*\[triggers\]/m, 'a triggers block exists');
-  assert.match(config, /crons = \[\]/, 'production crons are disabled');
-  assert.match(config, /D1_QUOTA_HARD_STOP = "true"/, 'production hard stop is enabled');
+  assert.match(config, /crons = \["\*\/15 \* \* \* \*", "0 \* \* \* \*"\]/, 'production crons are restored');
+  assert.match(config, /D1_QUOTA_HARD_STOP = "false"/, 'production hard stop is off');
   assert.match(config, /D1_QUOTA_HARD_STOP = "false"/, 'preview remains available');
   assert.equal('scheduled' in worker, true, 'the Worker exports a scheduled handler');
   const { scheduled } = await import('../scheduled.js');
