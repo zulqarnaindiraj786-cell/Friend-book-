@@ -49,9 +49,9 @@ final class CloudflareContentSafety {
             try (Response response = CloudflareHttp.openDocument("/v1/safety/scan", "POST", token,
                     body.toString().getBytes(StandardCharsets.UTF_8))) {
                 String text = CloudflareHttp.readUtf8(response.body(), 32 * 1024);
-                if (response.code() == 429) return null; // Daily Workers AI allocation exhausted; caller uses its local scanner.
-                if (!response.isSuccessful())
-                    return ContentSafetyEngine.Verdict.block("scan_unavailable", "Cloudflare safety check is unavailable. Upload paused; try again later.");
+                // If Workers AI is unavailable (including the daily free limit), let the
+                // caller use the established on-device scanner instead of rejecting safe media.
+                if (response.code() == 429 || response.code() >= 500 || !response.isSuccessful()) return null;
                 JSONObject result = new JSONObject(text);
                 if (result.optBoolean("blocked", true))
                     return ContentSafetyEngine.Verdict.block(result.optString("category", "sexual_nudity"),
@@ -59,7 +59,7 @@ final class CloudflareContentSafety {
                 return ContentSafetyEngine.Verdict.safe();
             }
         } catch (Throwable ignored) {
-            return ContentSafetyEngine.Verdict.block("scan_unavailable", "Cloudflare safety check failed. Upload paused; try again later.");
+            return null; // Network or service failure: use local on-device moderation.
         }
     }
 }

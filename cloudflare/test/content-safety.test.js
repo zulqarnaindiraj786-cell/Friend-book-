@@ -6,16 +6,21 @@ const request=body=>new Request('https://worker.test/v1/safety/scan',{method:'PO
 
 test('Cloudflare AI only allows an exact ALLOW answer and inspects supplied samples',async()=>{
  let args;
- const response=await scanUploadMedia(request({images:[sample,sample]}),{AI:{async run(model,input){args={model,input};return {response:'ALLOW'};}}});
+ const response=await scanUploadMedia(request({images:[sample,sample]}),{AI:{async run(model,input){args={model,input};return {answers:{decision:{value:'ALLOW',confidence:0.95}}};}}});
  assert.equal(response.status,200);assert.deepEqual(await response.json(),{blocked:false,category:''});
- assert.equal(args.model,'@cf/meta/llama-3.2-11b-vision-instruct');
- assert.equal(args.input.messages[0].content.filter(part=>part.type==='image_url').length,2);
- assert.equal(args.input.temperature,0);
+ assert.equal(args.model,'@cf/cloudflare/clairic');
+ assert.equal(args.input.model,'clairic');
+ assert.equal(args.input.images.length,2);
+ assert.equal(args.input.fields.decision.type,'enum');
 });
 
 test('Cloudflare AI blocks explicit content and fails closed on ambiguous responses',async()=>{
- for(const answer of ['BLOCK','Probably ALLOW','']){
-  const response=await scanUploadMedia(request({images:[sample]}),{AI:{async run(){return {response:answer};}}});
+ for(const result of [
+  {answers:{decision:{value:'BLOCK',confidence:0.97}}},
+  {answers:{decision:{value:'ALLOW',confidence:0.42}}},
+  {answers:{}},
+ ]){
+  const response=await scanUploadMedia(request({images:[sample]}),{AI:{async run(){return result;}}});
   assert.equal(response.status,200);assert.equal((await response.json()).blocked,true);
  }
 });
