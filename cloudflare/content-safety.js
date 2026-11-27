@@ -26,8 +26,8 @@ export async function scanUploadMedia(request, env) {
       temperature:0,
     });
     if (result?.success === false || result?.error) {
-      const detail=String(result?.error||'').toLowerCase();
-      if (/neuron|quota|daily limit|limit exceeded|rate limit/.test(detail))
+      const detail=typeof result?.error==='string' ? result.error.toLowerCase() : JSON.stringify(result?.error||'').toLowerCase();
+      if (/neuron|quota|daily|limit|rate|429|exceed|too many requests/.test(detail))
         return Response.json({error:'AI daily allocation exhausted',fallback:'on_device'}, {status:429});
       return Response.json({error:'Safety scanner unavailable'}, {status:503});
     }
@@ -39,7 +39,7 @@ export async function scanUploadMedia(request, env) {
     // Workers AI's free daily neuron allocation returns quota/limit errors once spent.
     // Tell the app to use its local scanner only for that case; other outages fail closed.
     const detail=String(error?.message||error||'').toLowerCase();
-    if (/neuron|quota|daily limit|limit exceeded|rate limit/.test(detail))
+    if (/neuron|quota|daily|limit|rate|429|exceed|too many requests/.test(detail))
       return Response.json({error:'AI daily allocation exhausted',fallback:'on_device'}, {status:429});
     return Response.json({error:'Safety scanner unavailable'}, {status:503});
   }
