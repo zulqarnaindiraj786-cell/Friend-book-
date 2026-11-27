@@ -103,3 +103,21 @@ test('maintenance seeks active status even with thousands of ended lives and exp
    assert.equal(sql.prepare("SELECT COUNT(*) n FROM friendbook_cf_firestore_documents WHERE path LIKE 'lives/ended%'").get().n,2500,'historical lives are preserved');
  } finally {sql.close();}
 });
+
+test('15-minute cron skips low-priority notification retention while keeping live and outbox freshness',async()=>{
+ const queries=[];
+ const db={prepare(q){queries.push(q);return{bind(){return{async run(){return{};},async all(){return{results:[]};}};}};}};
+ await scheduled({cron:'*/15 * * * *'},{DB:db});
+ assert.equal(queries.length,2);
+ assert.ok(queries.some(q=>q.startsWith('UPDATE')),'stale lives remain bounded to 15-minute cleanup');
+ assert.ok(queries.some(q=>q.includes('friendbook_cf_broadcast_push')),'existing outbox retries remain 15-minute');
+ assert.ok(!queries.some(q=>q.startsWith('DELETE')),'7/30-day retention scan is skipped on frequent ticks');
+});
+
+test('hourly cron runs only the bounded notification retention seek',async()=>{
+ const queries=[];
+ const db={prepare(q){queries.push(q);return{bind(){return{async run(){return{};},async all(){return{results:[]};}};}};}};
+ await scheduled({cron:'0 * * * *'},{DB:db});
+ assert.equal(queries.length,1);
+ assert.ok(queries[0].startsWith('DELETE')&&queries[0].includes('idx_cf_notification_retention_state'));
+});
