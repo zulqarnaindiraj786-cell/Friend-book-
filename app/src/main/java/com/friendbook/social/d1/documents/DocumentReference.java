@@ -62,6 +62,17 @@ public class DocumentReference {
         return get(Source.DEFAULT);
     }
 
+    /** Reuse only a recently network-fetched snapshot within the document's cache policy. */
+    public Task<DocumentSnapshot> getCachedOrFetch() {
+        return getCachedOrFetch(ListenerPollingPolicy.cacheFreshMs(path));
+    }
+
+    public Task<DocumentSnapshot> getCachedOrFetch(long maxAgeMs) {
+        if(profileAudience || !firestore.documentCacheFresh(path,maxAgeMs))return get();
+        DocumentSnapshot cached=firestore.getCachedDoc(path);
+        return cached!=null ? com.google.android.gms.tasks.Tasks.forResult(cached.asCached()) : get();
+    }
+
     public Task<DocumentSnapshot> get(Source source) {
         if (source == Source.CACHE) {
             DocumentSnapshot cached = firestore.getCachedDoc(path);

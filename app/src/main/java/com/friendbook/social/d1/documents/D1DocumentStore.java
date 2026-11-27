@@ -446,9 +446,15 @@ public class D1DocumentStore {
 
     /** True when a cached snapshot can be shown without touching the network. */
     private boolean serveFromCacheOnly(String path) {
-        if (getCachedDoc(path) == null) return false;
-        Long fetchedAt = docFetchedAt.get(scopedCacheKey(authenticatedUid(), path));
-        return fetchedAt!=null && ListenerPollingPolicy.documentCacheFresh(path,
+        return documentCacheFresh(path,ListenerPollingPolicy.cacheFreshMs(path));
+    }
+
+    boolean documentCacheFresh(String path,long maxAgeMs) {
+        if(path==null || maxAgeMs<=0 || getCachedDoc(path)==null)return false;
+        Long fetchedAt=docFetchedAt.get(scopedCacheKey(authenticatedUid(),path));
+        if(fetchedAt==null)return false;
+        long policyAge=ListenerPollingPolicy.cacheFreshMs(path);
+        return maxAgeMs<=policyAge && ListenerPollingPolicy.documentCacheFresh(path,
                 android.os.SystemClock.elapsedRealtime(),fetchedAt);
     }
 

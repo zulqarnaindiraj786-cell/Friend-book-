@@ -271,7 +271,7 @@ public class StoryViewerActivity extends Activity {
     private void loadStoryPages(int request){
         if(specificStoryId!=null){
             moreStories.setVisibility(View.GONE);
-            Fb.db().collection("stories").document(specificStoryId).get().addOnSuccessListener(doc->{
+            Fb.db().collection("stories").document(specificStoryId).getCachedOrFetch().addOnSuccessListener(doc->{
                 if(request!=storyRequest || isFinishing())return;
                 if(!doc.exists()){status("This story is no longer available",null);return;}Models.Story story=Models.Story.fromDoc(doc);
                 if(!authorId.equals(story.authorId) || !allowedStory(story)

@@ -659,10 +659,10 @@ public class ReelsFragment extends Fragment {
                 || !java.util.Objects.equals(actor,Fb.uid()) || !isAdded())return;
         if(loadedVideoIds.contains("reels/"+target) || loadedVideoIds.contains("posts/"+target))return;
         linkedTargetAttemptedGeneration=generation;
-        Fb.db().collection("reels").document(target).get().addOnSuccessListener(doc -> {
+        Fb.db().collection("reels").document(target).getCachedOrFetch().addOnSuccessListener(doc -> {
             if(generation!=videoGeneration || !java.util.Objects.equals(actor,Fb.uid()) || !isAdded())return;
             if(doc.exists()){addLinkedVideo(doc,true);return;}
-            Fb.db().collection("posts").document(target).get().addOnSuccessListener(post -> {
+            Fb.db().collection("posts").document(target).getCachedOrFetch().addOnSuccessListener(post -> {
                 if(generation==videoGeneration && java.util.Objects.equals(actor,Fb.uid()) && isAdded() && post.exists())addLinkedVideo(post,false);
             });
         });

@@ -525,7 +525,7 @@ public class MenuFragment extends Fragment {
     private void claimDailyBonus(final Activity a) {
         final String me = Fb.uid();
         if (me == null) return;
-        Fb.db().collection("users").document(me).get()
+        Fb.db().collection("users").document(me).getCachedOrFetch()
                 .addOnSuccessListener(d -> {
                     long now = System.currentTimeMillis();
                     Calendar cal = Calendar.getInstance();

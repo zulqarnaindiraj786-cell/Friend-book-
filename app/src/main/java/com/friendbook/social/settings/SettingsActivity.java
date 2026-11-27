@@ -1142,7 +1142,7 @@ public class SettingsActivity extends Activity {
         Ui.choose(this, "Download your information",
                 new String[]{"📄 Readable text summary", "{ } JSON format (portable)"}, fmt -> {
                     Ui.toast(this, "Preparing your data export…");
-                    Fb.db().collection("users").document(me).get().addOnSuccessListener(d -> {
+                    Fb.db().collection("users").document(me).getCachedOrFetch().addOnSuccessListener(d -> {
                         Map<String, Object> m = d.getData();
                         StringBuilder sb = new StringBuilder();
                         if (fmt == 1) {

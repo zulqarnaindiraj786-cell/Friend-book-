@@ -344,7 +344,7 @@ public class GroupDetailActivity extends Activity implements FeedAdapter.Host {
         if(pin.equals(requestedPinnedId))return;
         requestedPinnedId=pin;separatelyLoadedPin=null;
         final String actor=Fb.uid();final int generation=screenGeneration;
-        Fb.db().collection("posts").document(pin).get().addOnSuccessListener(doc->{
+        Fb.db().collection("posts").document(pin).getCachedOrFetch().addOnSuccessListener(doc->{
             if(generation!=screenGeneration || !java.util.Objects.equals(actor,Fb.uid())
                     || !canReadGroupPosts() || !pin.equals(group.pinnedPostId) || !doc.exists())return;
             Models.Post post=Models.Post.fromDoc(doc);
