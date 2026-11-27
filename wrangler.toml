@@ -29,7 +29,7 @@ CLOUDINARY_UPLOAD_PRESET = "Myapp_upload"
 
 # Restore routine stale-live/outbox and notification TTL maintenance schedules.
 [triggers]
-crons = ["*/15 * * * *", "0 * * * *"]
+crons = ["*/15 * * * *"]
 
 [[d1_databases]]
 binding = "DB"
