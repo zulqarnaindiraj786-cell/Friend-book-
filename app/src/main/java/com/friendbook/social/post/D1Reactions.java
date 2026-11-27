@@ -120,20 +120,14 @@ public final class D1Reactions {
   if(a!=null)for(int i=0;i<a.length();i++){JSONObject r=a.optJSONObject(i);if(r!=null&&r.optInt("count")>0)types.add(r.optString("type"));}
   if("posts".equals(collection) && !data.optBoolean("reactionStateUnknown")){FastCache.setReactionTypes(id,types);FastCache.setReactionState(context,id,mine(data),total(data),true);}
  }
- private static void fetch(Context context,String collection,String id,Runnable ready){fetch(context,collection,id,true,ready);}
- private static void fetch(Context context,String collection,String id,boolean renderCached,Runnable ready){
+ private static void fetch(Context context,String collection,String id,Runnable ready){fetch(context,collection,id,true,false,ready);}
+ private static void fetch(Context context,String collection,String id,boolean renderCached,Runnable ready){fetch(context,collection,id,renderCached,false,ready);}
+ private static void fetch(Context context,String collection,String id,boolean renderCached,boolean requireComments,Runnable ready){
   scope();String key=D1Client.key(collection,id);JSONObject cached=CACHE.get(key);if(cached!=null){
    if(renderCached)ready.run();
-   long now=android.os.SystemClock.elapsedRealtime();
-   Long reactionsFetched=REACTION_FETCHED_AT.get(key);
-   boolean reactionsFresh=reactionsFetched!=null && now-reactionsFetched<REFRESH_MS;
-   // A reaction-only response cannot satisfy the feed's comment counter when
-   // no count is cached. Preserve the independent reaction freshness window
-   // for rows that already have a comment count; don't turn every bind into a
-   // full-summary read just because an older cache lacks a preview.
-   if(reactionsFresh && cached.has("comments"))return;
-   Long summaryFetched=FETCHED_AT.get(key);
-   if(cached.has("comments") && summaryFetched!=null && now-summaryFetched<REFRESH_MS)return;
+   Long fetched=REACTION_FETCHED_AT.get(key);
+   if(fetched!=null && android.os.SystemClock.elapsedRealtime()-fetched<REFRESH_MS
+       && (!requireComments || cached.has("comments")))return;
   }if(FAILED.contains(key)||WRITING.contains(key))return;
   WAITERS.computeIfAbsent(key,k->new ArrayList<>()).add(ready);
   if(LOADING.contains(key))return;
@@ -200,10 +194,13 @@ public final class D1Reactions {
    REACTION_FETCHED_AT.put(key,android.os.SystemClock.elapsedRealtime());
   }catch(JSONException ignored){}
  }
- public static void loadPost(Context context,Models.Post post,Runnable render){
+ public static void loadPost(Context context,Models.Post post,Runnable render){loadPost(context,post,false,render);}
+ /** Feed cards require a comment count even when the cache only contains reaction totals. */
+ public static void loadFeedPost(Context context,Models.Post post,Runnable render){loadPost(context,post,true,render);}
+ private static void loadPost(Context context,Models.Post post,boolean requireComments,Runnable render){
   if(post==null || post.id==null)return;
   hydrate(post);
-  fetch(context.getApplicationContext(),"posts",post.id,()->{hydrate(post);render.run();});
+  fetch(context.getApplicationContext(),"posts",post.id,requireComments,()->{hydrate(post);render.run();});
  }
  public static void hydrate(Models.Post post){
   scope();POSTS.put(D1Client.key("posts",post.id),new java.lang.ref.WeakReference<>(post));

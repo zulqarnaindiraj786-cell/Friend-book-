@@ -43,11 +43,11 @@ public class ReactionSummaryReuseTest {
       .put(new JSONObject().put("type","love").put("count",7).put("mine",1))).put("comments",19).put("preview",new JSONArray()));
    });
    Models.Post post=new Models.Post();post.id="reaction-only";post.comments=19;
-   D1Reactions.loadPost(RuntimeEnvironment.getApplication(),post,()->{});Shadows.shadowOf(Looper.getMainLooper()).idle();
+   D1Reactions.loadFeedPost(RuntimeEnvironment.getApplication(),post,()->{});Shadows.shadowOf(Looper.getMainLooper()).idle();
    assertEquals(19,post.comments);assertEquals("love",D1Reactions.mine("posts","reaction-only"));assertEquals(1,calls.get());
-   D1Reactions.loadPost(RuntimeEnvironment.getApplication(),post,()->{});Shadows.shadowOf(Looper.getMainLooper()).idle();
+   D1Reactions.loadFeedPost(RuntimeEnvironment.getApplication(),post,()->{});Shadows.shadowOf(Looper.getMainLooper()).idle();
    assertEquals(2,calls.get());assertEquals(19,post.comments);
-   D1Reactions.loadPost(RuntimeEnvironment.getApplication(),post,()->{});Shadows.shadowOf(Looper.getMainLooper()).idle();assertEquals(2,calls.get());
+   D1Reactions.loadFeedPost(RuntimeEnvironment.getApplication(),post,()->{});Shadows.shadowOf(Looper.getMainLooper()).idle();assertEquals(2,calls.get());
    D1Reactions.invalidate("posts","reaction-only");Shadows.shadowOf(Looper.getMainLooper()).idle();assertEquals(3,calls.get());
   }
  }

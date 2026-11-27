@@ -1363,7 +1363,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         // unverified legacy rows). Hydrate missing/stale summaries on demand;
         // loadPost reuses fresh page-seeded cache entries and coalesces in-flight reads.
         if (com.friendbook.social.core.D1Client.enabled("posts")) {
-            D1Reactions.loadPost(c, p, () -> {
+            D1Reactions.loadFeedPost(c, p, () -> {
                 if (!p.id.equals(vh.itemView.getTag())) return;
                 renderReactionBar(c, vh, p, Reactions.resolveCurrentUserReaction(p),
                         com.friendbook.social.core.FastCache.getReactionTotal(p.id, p.likes));
