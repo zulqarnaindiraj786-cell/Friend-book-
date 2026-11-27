@@ -27,4 +27,6 @@ test('Cloudflare AI safety route rejects invalid payloads and fails closed when 
  assert.equal(missing.status,503);
  const broken=await scanUploadMedia(request({images:[sample]}),{AI:{async run(){throw Error('unavailable');}}});
  assert.equal(broken.status,503);
+ const exhausted=await scanUploadMedia(request({images:[sample]}),{AI:{async run(){throw Error('Workers AI daily neuron quota exceeded');}}});
+ assert.equal(exhausted.status,429);assert.equal((await exhausted.json()).fallback,'on_device');
 });

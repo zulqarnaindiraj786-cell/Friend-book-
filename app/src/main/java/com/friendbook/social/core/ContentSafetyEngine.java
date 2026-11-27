@@ -197,7 +197,9 @@ public final class ContentSafetyEngine {
                     "Could not scan this photo safely. Please choose another image and try again.");
             try {
                 Verdict local = analyzeBitmap(bmp);
-                return local.unsafe ? local : CloudflareContentSafety.scan(java.util.Collections.singletonList(bmp));
+                if (local.unsafe) return local;
+                Verdict ai = CloudflareContentSafety.scan(java.util.Collections.singletonList(bmp));
+                return ai == null ? local : ai; // Daily AI allowance exhausted: use the on-device scanner.
             } finally {
                 try { bmp.recycle(); } catch (Throwable ignored) {}
             }
@@ -229,7 +231,7 @@ public final class ContentSafetyEngine {
                     Bitmap small = Bitmap.createScaledBitmap(frame, 96, 96, true);
                     Verdict v = analyzeBitmap(small);
                     if (small != frame) small.recycle();
-                    if (!v.unsafe && aiFrames.size() < 4 && (decodedFrames == 1 || decodedFrames % 3 == 1))
+                    if (!v.unsafe && aiFrames.size() < 3 && (decodedFrames == 1 || decodedFrames == 5 || decodedFrames == 9))
                         aiFrames.add(Bitmap.createScaledBitmap(frame, 256, 256, true));
                     if (v.unsafe) {
                         unsafeFrames++;
@@ -243,7 +245,8 @@ public final class ContentSafetyEngine {
             }
             if (decodedFrames == 0) return Verdict.block("scan_unavailable",
                     "Could not inspect this video. Please re-export or choose another video and try again.");
-            return CloudflareContentSafety.scan(aiFrames);
+            Verdict ai = CloudflareContentSafety.scan(aiFrames);
+            return ai == null ? Verdict.safe() : ai; // AI daily allowance exhausted: local 12-frame scanner already passed.
         } catch (Throwable ignored) {
             return Verdict.block("scan_unavailable",
                     "Could not scan this video safely. Please choose another video and try again.");

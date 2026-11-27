@@ -25,11 +25,22 @@ export async function scanUploadMedia(request, env) {
       max_tokens:8,
       temperature:0,
     });
+    if (result?.success === false || result?.error) {
+      const detail=String(result?.error||'').toLowerCase();
+      if (/neuron|quota|daily limit|limit exceeded|rate limit/.test(detail))
+        return Response.json({error:'AI daily allocation exhausted',fallback:'on_device'}, {status:429});
+      return Response.json({error:'Safety scanner unavailable'}, {status:503});
+    }
     const answer=String(result?.response||'').trim().toUpperCase();
     // Fail closed: any malformed, ambiguous, or unexpected model output blocks publication.
     const allowed=answer==='ALLOW';
     return Response.json({blocked:!allowed,category:allowed?'':'sexual_nudity'});
-  } catch {
+  } catch (error) {
+    // Workers AI's free daily neuron allocation returns quota/limit errors once spent.
+    // Tell the app to use its local scanner only for that case; other outages fail closed.
+    const detail=String(error?.message||error||'').toLowerCase();
+    if (/neuron|quota|daily limit|limit exceeded|rate limit/.test(detail))
+      return Response.json({error:'AI daily allocation exhausted',fallback:'on_device'}, {status:429});
     return Response.json({error:'Safety scanner unavailable'}, {status:503});
   }
 }

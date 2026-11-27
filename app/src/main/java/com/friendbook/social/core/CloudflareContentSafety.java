@@ -49,6 +49,7 @@ final class CloudflareContentSafety {
             try (Response response = CloudflareHttp.openDocument("/v1/safety/scan", "POST", token,
                     body.toString().getBytes(StandardCharsets.UTF_8))) {
                 String text = CloudflareHttp.readUtf8(response.body(), 32 * 1024);
+                if (response.code() == 429) return null; // Daily Workers AI allocation exhausted; caller uses its local scanner.
                 if (!response.isSuccessful())
                     return ContentSafetyEngine.Verdict.block("scan_unavailable", "Cloudflare safety check is unavailable. Upload paused; try again later.");
                 JSONObject result = new JSONObject(text);
