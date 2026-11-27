@@ -17,7 +17,7 @@ public class ChatReadDemandTest {
  @Test public void hundredForegroundResumesWithoutNewMessagesDoNotResetUnreadAgain()throws Exception{
   try(MockedStatic<Fb> fb=mockStatic(Fb.class);MockedStatic<Prefs> prefs=mockStatic(Prefs.class);MockedStatic<SoundEffects> sound=mockStatic(SoundEffects.class)){
    fb.when(Fb::uid).thenReturn("receipt-actor");prefs.when(()->Prefs.hiddenMsgs(any(),anyString())).thenReturn(Collections.emptySet());
-   ChatActivity a=Robolectric.buildActivity(ChatActivity.class).get();set(a,"chatId","receipt-chat");set(a,"messageActor","receipt-actor");
+   ChatActivity a=Robolectric.buildActivity(ChatActivity.class).get();set(a,"chatId","receipt-chat");set(a,"messageActor","receipt-actor");set(a,"chatVisible",true);set(a,"currentUnreadForMe",1);
    java.lang.reflect.Field snapshots=ChatActivity.class.getDeclaredField("messageSnapshots");snapshots.setAccessible(true);
    Models.Message m=new Models.Message();m.id="already-read";m.receiverId="receipt-actor";m.isDelivered=true;m.isSeen=true;((Map<String,Models.Message>)snapshots.get(a)).put(m.id,m);
    D1DocumentStore db=mock(D1DocumentStore.class);fb.when(Fb::db).thenReturn(db);WriteBatch batch=mock(WriteBatch.class);when(db.batch()).thenReturn(batch);
@@ -27,10 +27,21 @@ public class ChatReadDemandTest {
    verify(batch,times(1)).commit();
   }
  }
+ @Test public void alreadyZeroUnreadCounterDoesNotSendAnotherWrite()throws Exception{
+  try(MockedStatic<Fb> fb=mockStatic(Fb.class);MockedStatic<Prefs> prefs=mockStatic(Prefs.class)){
+   fb.when(Fb::uid).thenReturn("zero-unread-actor");prefs.when(()->Prefs.hiddenMsgs(any(),anyString())).thenReturn(Collections.emptySet());
+   ChatActivity a=Robolectric.buildActivity(ChatActivity.class).get();set(a,"chatId","receipt-chat");set(a,"messageActor","zero-unread-actor");set(a,"chatVisible",true);set(a,"currentUnreadForMe",0);
+   java.lang.reflect.Field snapshots=ChatActivity.class.getDeclaredField("messageSnapshots");snapshots.setAccessible(true);
+   Models.Message m=new Models.Message();m.id="already-read";m.receiverId="zero-unread-actor";m.isDelivered=true;m.isSeen=true;((Map<String,Models.Message>)snapshots.get(a)).put(m.id,m);
+   D1DocumentStore db=mock(D1DocumentStore.class);fb.when(Fb::db).thenReturn(db);
+   java.lang.reflect.Method mark=ChatActivity.class.getDeclaredMethod("markVisibleReceipts");mark.setAccessible(true);mark.invoke(a);
+   verify(db,never()).batch();
+  }
+ }
  @Test public void failedUnreadResetWaitsForForegroundDemandInsteadOfSnapshotRetryLoop()throws Exception{
   try(MockedStatic<Fb> fb=mockStatic(Fb.class);MockedStatic<Prefs> prefs=mockStatic(Prefs.class);MockedStatic<SoundEffects> sound=mockStatic(SoundEffects.class)){
    fb.when(Fb::uid).thenReturn("failed-receipt-actor");prefs.when(()->Prefs.hiddenMsgs(any(),anyString())).thenReturn(Collections.emptySet());
-   ChatActivity a=Robolectric.buildActivity(ChatActivity.class).get();set(a,"chatId","receipt-chat");set(a,"messageActor","failed-receipt-actor");
+   ChatActivity a=Robolectric.buildActivity(ChatActivity.class).get();set(a,"chatId","receipt-chat");set(a,"messageActor","failed-receipt-actor");set(a,"chatVisible",true);set(a,"currentUnreadForMe",1);
    java.lang.reflect.Field snapshots=ChatActivity.class.getDeclaredField("messageSnapshots");snapshots.setAccessible(true);
    Models.Message m=new Models.Message();m.id="already-read";m.receiverId="failed-receipt-actor";m.isDelivered=true;m.isSeen=true;((Map<String,Models.Message>)snapshots.get(a)).put(m.id,m);
    D1DocumentStore db=mock(D1DocumentStore.class);fb.when(Fb::db).thenReturn(db);WriteBatch batch=mock(WriteBatch.class);when(db.batch()).thenReturn(batch);

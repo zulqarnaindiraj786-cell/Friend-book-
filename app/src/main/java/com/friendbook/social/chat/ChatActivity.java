@@ -81,6 +81,8 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
     private boolean initialScrollDone = false;
     private boolean forceScrollBottom = false;
     private boolean unreadResetOnce = false;
+    // -1 means no authoritative room snapshot yet; never write a speculative zero.
+    private int currentUnreadForMe = -1;
     private ImageView mic;
     private android.media.MediaRecorder recorder;
     private String voicePath;
@@ -475,6 +477,7 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
                             return; // a transient read failure is not a deleted room
                         }
                         if (!d.exists()) { if (!d.getMetadata().isFromCache()) finish(); return; }
+                        captureUnreadForMe(d,chatActor);
                         CallActivity.maybeHandleIncomingFromRoomDoc(ChatActivity.this, d);
                         groupRoom = Models.ChatRoom.fromDoc(d);
                         peerName = (groupRoom.groupName == null || groupRoom.groupName.isEmpty())
@@ -526,6 +529,7 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
                     .addSnapshotListener((d, err) -> {
                         if(!activeChatRead(chatActor,chatGeneration))return;
                         if (d != null && d.exists()) {
+                            captureUnreadForMe(d,chatActor);
                             CallActivity.maybeHandleIncomingFromRoomDoc(ChatActivity.this, d);
                         }
                     });
@@ -762,6 +766,12 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         historyButton.setText("Retry older messages");historyButton.setVisibility(View.VISIBLE);
     }
 
+    @SuppressWarnings("unchecked")
+    private void captureUnreadForMe(DocumentSnapshot room,String actor){
+        Object raw=room==null?null:room.get("unreadCount");
+        if(raw instanceof Map){Object count=((Map<String,Object>)raw).get(actor);if(count instanceof Number)currentUnreadForMe=Math.max(0,((Number)count).intValue());}
+    }
+
     /** Dispatch receipts before rendering; only the foreground open conversation, no history scan. */
     private void markVisibleReceipts(){
         String me=Fb.uid();if(!chatVisible || me==null || !me.equals(messageActor) || messageSnapshots.isEmpty())return;
@@ -776,14 +786,18 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
             batch.update(Fb.db().collection("chats").document(chatId).collection("messages").document(m.id),patch);
             receiptInFlight.add(m.id);claimed.add(m.id);
         }
+        // The message listener may contain only already-read/outgoing rows. Do not
+        // send a zero-write for every open/resume unless the room snapshot proves
+        // this user's unread counter is positive.
         if(claimed.isEmpty() && unreadResetOnce)return;
+        if(claimed.isEmpty() && currentUnreadForMe<=0)return;
         unreadResetOnce=true;
         batch.update(Fb.db().collection("chats").document(chatId),com.friendbook.social.d1.documents.FieldPath.of("unreadCount",me),0);
         batch.commit().addOnCompleteListener(done->{
             receiptInFlight.removeAll(claimed);
             if(!me.equals(Fb.uid()))return;
             if(!done.isSuccessful()){receiptFailed.addAll(claimed);unreadResetFailed=true;return;}
-            unreadResetFailed=false;
+            unreadResetFailed=false;currentUnreadForMe=0;
             for(String id:claimed)confirmedReceipts.put(id,markSeen);
             while(confirmedReceipts.size()>128)confirmedReceipts.remove(confirmedReceipts.keySet().iterator().next());
         });
