@@ -30,7 +30,15 @@ public class Fb {
     private static boolean firestoreConfigured;
     public static Models.User me;           // cached profile of the signed-in user
     private static ListenerRegistration meReg;
-    private static long meLastRefresh;
+    private static String meListenerActor;
+    private static boolean meListenerFailed;
+    public interface MeObserver { void changed(Models.User user); }
+    private static final java.util.Set<MeObserver> ME_OBSERVERS=new java.util.concurrent.CopyOnWriteArraySet<>();
+    public static void addMeObserver(MeObserver observer) {
+        ME_OBSERVERS.add(observer);
+        if (me!=null && java.util.Objects.equals(me.uid,uid())) observer.changed(me);
+    }
+    public static void removeMeObserver(MeObserver observer) { ME_OBSERVERS.remove(observer); }
 
     public static void init(Context appContext) {
         FastCache.init(appContext);
@@ -79,9 +87,14 @@ public class Fb {
             if (cachedMe != null && uid.equals(cachedMe.uid)) me = cachedMe;
         }
         if (meReg != null) meReg.remove();
+        meListenerActor=uid;
+        meListenerFailed=false;
         meReg = db().collection("users").document(uid)
                 .addSnapshotListener((doc, err) -> {
-                    if (!uid.equals(Fb.uid()) || doc == null) return;
+                    if (!uid.equals(Fb.uid())) return;
+                    if (err!=null) { meListenerFailed=true;return; }
+                    if (doc==null) return;
+                    meListenerFailed=false;
                     if (!doc.exists()) {
                         if (!doc.getMetadata().isFromCache()) {
                             com.google.firebase.auth.FirebaseUser fu = auth().getCurrentUser();
@@ -102,11 +115,12 @@ public class Fb {
                     Models.User u = Models.User.fromDoc(doc);
                     me = u;
                     FastCache.saveMe(com.friendbook.social.App.instance, u);
-                    syncProfileToCloudflare(u);
+                    // Reading a profile must not write an unused /v1/me projection.
+                    // Canonical profile saves remain explicit mutations.
                     if (u.banned && !Admin.isOwnerEmail(u.email)) {
                         me = null;
                         FastCache.clearAll(com.friendbook.social.App.instance);
-                        Presence.goOffline();
+
                         com.friendbook.social.push.PushManager.unregister(com.friendbook.social.App.instance);
                         auth().signOut();
                         android.content.Context app = com.friendbook.social.App.instance;
@@ -119,12 +133,16 @@ public class Fb {
                             app.startActivity(i);
                         }
                     }
+                    // Security handling must complete before any optional UI callback.
+                    if (me!=null && uid.equals(Fb.uid()))
+                        for (MeObserver observer : ME_OBSERVERS) observer.changed(u);
                 });
-        meLastRefresh = System.currentTimeMillis();
     }
 
     public static void ensureMeFresh() {
-        if (uid() != null && (meReg == null || System.currentTimeMillis() - meLastRefresh > 60_000))
+        // The existing registration receives committed changes/foreground refreshes already.
+        // Age alone is not a reason to detach and fetch the same document again.
+        if (OnDemandLoads.profileListenerNeedsRestart(uid(),meListenerActor,meReg!=null,meListenerFailed))
             startMeListener();
     }
 
@@ -170,12 +188,20 @@ public class Fb {
      * 2. Local Firestore Disk Cache (`Source.CACHE`) → <2ms offline/2G return!
      * 3. Server fallback only on cold miss (and stores into RAM + Disk cache).
      */
+    private static final ProfileReadFlights<java.util.List<String>,Models.User> USER_READS = new ProfileReadFlights<>();
+
     public static Task<Models.User> getUser(String uid) {
         if (uid == null || uid.isEmpty()) return Tasks.forResult(null);
         Models.User ram = FastCache.getUser(uid);
         if (ram != null) return Tasks.forResult(ram);
-
         final String actor=Fb.uid();
+        // Share the complete async disk->network lookup, not only the HTTP
+        // interval. Independent caller callbacks may otherwise enqueue another
+        // network read after the first response has already left transport.
+        return USER_READS.read(java.util.Arrays.asList(actor,uid),()->readUserCacheFirst(uid,actor));
+    }
+
+    private static Task<Models.User> readUserCacheFirst(String uid,String actor) {
         TaskCompletionSource<Models.User> tcs = new TaskCompletionSource<>();
         db().collection("users").document(uid).get(Source.CACHE)
                 .addOnSuccessListener(d -> {
@@ -198,34 +224,6 @@ public class Fb {
         TaskCompletionSource<Models.User> tcs=new TaskCompletionSource<>();
         fetchUserNetwork(uid,Fb.uid(),tcs);
         return tcs.getTask();
-    }
-
-    private static String lastCloudflareProfileKey = "";
-    private static final java.util.concurrent.ExecutorService CF_PROFILE_IO =
-            java.util.concurrent.Executors.newSingleThreadExecutor();
-
-    private static void syncProfileToCloudflare(Models.User u) {
-        if (!com.friendbook.social.BuildConfig.D1_INTERACTIONS_ENABLED || u == null || u.uid == null) return;
-        String dn = u.displayName != null ? u.displayName : "";
-        String ph = u.photoUrl != null ? u.photoUrl : "";
-        String key = u.uid + "|" + dn + "|" + ph;
-        if (key.equals(lastCloudflareProfileKey)) return;
-        lastCloudflareProfileKey = key;
-        try {
-            com.google.firebase.auth.FirebaseUser user = auth().getCurrentUser();
-            if (user == null) return;
-            user.getIdToken(false).addOnSuccessListener(res -> {
-                String token = res != null ? res.getToken() : null;
-                if (token == null || token.isEmpty()) return;
-                CF_PROFILE_IO.execute(() -> {
-                    try {
-                        D1HttpTransport.send(
-                                new java.net.URL("https://rough-firefly-dd7b.zulqarnaindiraj786.workers.dev/v1/me"),
-                                "PUT", token, D1Client.object("displayName", dn, "photoUrl", ph));
-                    } catch (Throwable ignored) { }
-                });
-            });
-        } catch (Throwable ignored) { }
     }
 
     private static void fetchUserNetwork(String uid, String actor, TaskCompletionSource<Models.User> tcs) {

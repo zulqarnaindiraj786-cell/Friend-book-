@@ -4,16 +4,27 @@ main = "worker.js"
 compatibility_date = "2024-01-01"
 
 [vars]
+# Public app gate; config/ads and AdMob consent still apply in Android.
+ADS_ENABLED_V3 = "true"
+# Public advisory minimum; raise only after an optional update-prompt rollout.
+ANDROID_MIN_VERSION_CODE = "1"
 CF_ACCOUNT_ID = "92f3d04598822de2e49e14561218d090"
 FIREBASE_PROJECT_ID = "friendbook-17551"
 # Server-side authority for free verification reviews; Firebase Auth UID, not a secret.
 PAYMENT_ADMIN_UIDS = "ZlCw7oeKitPbhAcEryjnz2Do2Ky2"
 D1_INTERACTIONS_ENABLED = "true"
+# Additive indexes have an automatic fallback when absent; disable to roll back.
+FRIEND_GUARD_INDEXED = "true"
+# Cut over document reads/writes only when the deploy workflow's full coverage gate passes.
+DOCUMENT_MIRROR_MODE = "canonical"
 VIDEO_R2_ENABLED = "true"
 VIDEO_R2_RETENTION_VERIFIED = "true"
-REALTIME_WS_ENABLED = "true"
 CLOUDINARY_CLOUD_NAME = "x5ed4d0b"
 CLOUDINARY_UPLOAD_PRESET = "Myapp_upload"
+
+# One maintenance pass every 15 minutes; never per second or per minute.
+[triggers]
+crons = ["*/15 * * * *"]
 
 [[d1_databases]]
 binding = "DB"
@@ -38,11 +49,53 @@ not_found_handling = "none"
 binding = "ANALYTICS_ENGINE"
 dataset = "friendbook_views"
 
+# Existing production namespace shared by the view-counter snapshot path.
+[[kv_namespaces]]
+binding = "VIEWS"
+id = "fab0193059114fa793c98ab590087fd6"
+
 # Existing owner-provided bucket. Never create or replace it.
 [[r2_buckets]]
 binding = "VIDEO_BUCKET"
 bucket_name = "friendbook"
 
-[triggers]
-# Cleans temporary Cloudinary processing assets ONLY; never deletes R2 videos.
-crons = ["*/15 * * * *"]
+[[durable_objects.bindings]]
+name = "LIVE_RELAY"
+class_name = "LiveRelay"
+
+[[migrations]]
+tag = "live-relay-v1"
+new_sqlite_classes = ["LiveRelay"]
+
+[[durable_objects.bindings]]
+name = "CALL_RELAY"
+class_name = "CallRelay"
+
+[[migrations]]
+tag = "call-relay-v1"
+new_sqlite_classes = ["CallRelay"]
+
+# Cloudflare Workers Builds runs `wrangler preview`. Do not bind previews to
+# production D1, R2, or Analytics Engine; provision dedicated staging resources
+# before enabling those bindings. Preview DO namespaces are isolated by Cloudflare.
+[previews.vars]
+ADS_ENABLED_V3 = "false"
+ANDROID_MIN_VERSION_CODE = "1"
+CF_ACCOUNT_ID = "preview-disabled"
+FIREBASE_PROJECT_ID = "preview-disabled"
+PAYMENT_ADMIN_UIDS = ""
+D1_INTERACTIONS_ENABLED = "false"
+FRIEND_GUARD_INDEXED = "false"
+DOCUMENT_MIRROR_MODE = "dual"
+VIDEO_R2_ENABLED = "false"
+VIDEO_R2_RETENTION_VERIFIED = "false"
+CLOUDINARY_CLOUD_NAME = ""
+CLOUDINARY_UPLOAD_PRESET = ""
+
+[[previews.durable_objects.bindings]]
+name = "LIVE_RELAY"
+class_name = "LiveRelay"
+
+[[previews.durable_objects.bindings]]
+name = "CALL_RELAY"
+class_name = "CallRelay"

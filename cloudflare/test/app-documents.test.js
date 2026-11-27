@@ -4,6 +4,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { readFileSync } from 'node:fs';
 import { createWorker } from '../../worker.js';
 import { authorizePost } from '../firebase-post-access.js';
+import { mirrorAllLegacy } from './fixtures/canonical.js';
 
 const MIGRATION_0001 = readFileSync(new URL('../migrations/0001_additive_profiles.sql', import.meta.url), 'utf8');
 const MIGRATION_0002 = readFileSync(new URL('../migrations/0002_additive_copy_staging.sql', import.meta.url), 'utf8');
@@ -44,7 +45,7 @@ function createSqliteD1() {
 }
 
 test('/v1/docs preserves historical staging records and stores new Cloudflare documents with D1-first ACL', async () => {
-  const { db } = createSqliteD1();
+  const { sql, db } = createSqliteD1();
   await db
     .prepare(
       `INSERT INTO friendbook_cf_documents (path, collection, doc_id, owner_uid, document_json, updated_at)
@@ -76,6 +77,7 @@ test('/v1/docs preserves historical staging records and stores new Cloudflare do
     } })).run();
   }
 
+  mirrorAllLegacy(sql);
   const w = createWorker(async () => 'uid_new');
   const env = { DB: db, FIREBASE_PROJECT_ID: 'friendbook-test' };
 
@@ -159,4 +161,104 @@ test('/v1/docs preserves historical staging records and stores new Cloudflare do
   );
   assert.equal(allowed, true);
   assert.equal(ctx.owner, 'uid_new');
+});
+
+
+test('canonical list rows do not incur duplicate canonical-root reads and still enforce post privacy', async t => {
+  const {appDocuments}=await import('../app-documents.js');
+  const {sql,db}=createSqliteD1();t.after(()=>sql.close());
+  const add=sql.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES(?,?,?,?,?,?,?,?)');
+  for(const uid of ['viewer','author'])add.run('users/'+uid,'users','users',uid,uid,JSON.stringify({uid}),1,1);
+  for(let i=0;i<20;i++){
+    const id='p'+i;add.run('posts/'+id,'posts','posts',id,'author',JSON.stringify({authorId:'author',privacy:i%2?'Only me':'Public',content:id}),1,i+1);
+  }
+  let duplicateReads=0,postAclReads=0;
+  const counted={prepare(q){
+    if(q.startsWith('SELECT owner_uid, document_json'))duplicateReads++;
+    const prepared=db.prepare(q);return {bind(...args){
+      if(q.includes('SELECT document_json') && String(args[0]).startsWith('posts/'))postAclReads++;
+      return prepared.bind(...args);
+    }};
+  }};
+  const request=()=>new Request('https://local.invalid/v1/docs?collection=posts&limit=20');
+  const response=await appDocuments(request(),{DB:counted},{uid:'viewer'});
+  assert.equal(response.status,200);
+  const result=await response.json();
+  assert.equal(result.documents.length,10);
+  assert.ok(result.documents.every(doc=>doc.privacy==='Public'));
+  assert.equal(duplicateReads,0);
+  assert.equal(postAclReads,0,'each post ACL uses its fresh canonical list snapshot, not a repeated root SELECT');
+  sql.prepare("UPDATE friendbook_cf_firestore_documents SET document_json=json_set(document_json,'$.blocked',json(?)) WHERE path='users/author'").run(JSON.stringify(['viewer']));
+  assert.deepEqual((await (await appDocuments(request(),{DB:counted},{uid:'viewer'})).json()).documents,[]);
+});
+
+
+test('identical legacy profile PUTs do not generate timestamp-only dual writes', async t => {
+  const {appDocuments}=await import('../app-documents.js');
+  const {sql,db}=createSqliteD1();t.after(()=>sql.close());
+  const oldNow=Date.now;let clock=1800000000000;Date.now=()=>clock++;
+  t.after(()=>{Date.now=oldNow;});
+  const save=()=>appDocuments(new Request('https://local.invalid/v1/docs/users/viewer',{
+    method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify({displayName:'Viewer',photoUrl:'',preferences:{theme:'dark',muted:[],refreshCount:0}})
+  }),{DB:db},{uid:'viewer'});
+  const first=await save();assert.equal(first.status,200,await first.clone().text());
+  const stored=sql.prepare("SELECT document_json,update_time FROM friendbook_cf_firestore_documents WHERE path='users/viewer'").get();
+  const before=sql.prepare('SELECT total_changes() n').get().n;
+  for(let i=0;i<5;i++){const response=await save();assert.equal(response.status,200,await response.clone().text());}
+  assert.equal(sql.prepare('SELECT total_changes() n').get().n,before,'no base, mirror, guard or projection writes for identical saves');
+  assert.deepEqual(sql.prepare("SELECT document_json,update_time FROM friendbook_cf_firestore_documents WHERE path='users/viewer'").get(),stored);
+  const {firestoreDocuments}=await import('../firestore-documents.js');
+  const transform=await firestoreDocuments(new Request('https://local.invalid/v1/firestore/document?path=users/viewer',{
+    method:'PATCH',headers:{'content-type':'application/json'},
+    body:JSON.stringify({fields:{'preferences.refreshCount':{__fieldValue:'increment',value:0}}})
+  }),{DB:db},{uid:'viewer'});
+  assert.equal(transform.status,200,await transform.clone().text());
+  assert.ok(sql.prepare('SELECT total_changes() n').get().n>before,'a nested transform remains a genuine guarded write');
+  sql.prepare("DELETE FROM friendbook_cf_documents WHERE path='users/viewer'").run();
+  assert.equal((await save()).status,200);
+  assert.ok(sql.prepare("SELECT 1 FROM friendbook_cf_documents WHERE path='users/viewer'").get(),'an identical save still repairs a missing mirror');
+  const changed=await appDocuments(new Request('https://local.invalid/v1/docs/users/viewer',{
+    method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify({displayName:'Renamed'})
+  }),{DB:db},{uid:'viewer'});
+  assert.equal(changed.status,200,await changed.clone().text());
+  const updated=sql.prepare("SELECT document_json,update_time FROM friendbook_cf_firestore_documents WHERE path='users/viewer'").get();
+  assert.equal(JSON.parse(updated.document_json).displayName,'Renamed');
+  assert.ok(updated.update_time>stored.update_time,'genuine edits still advance canonical metadata');
+  const beforeDenied=sql.prepare('SELECT total_changes() n').get().n;
+  const denied=await appDocuments(new Request('https://local.invalid/v1/docs/users/viewer',{
+    method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify({displayName:'Renamed'})
+  }),{DB:db},{uid:'attacker'});
+  assert.equal(denied.status,403,'same-value payload never bypasses authorization');
+  assert.equal(sql.prepare('SELECT total_changes() n').get().n,beforeDenied);
+});
+
+test('legacy content GET uses one canonical root read and keeps fresh author restrictions',async t=>{
+  const {appDocuments}=await import('../app-documents.js');
+  const {sql,db}=createSqliteD1();t.after(()=>sql.close());
+  const put=sql.prepare('INSERT OR REPLACE INTO friendbook_cf_firestore_documents VALUES(?,?,?,?,?,?,?,?)');
+  const seed=(parent,id,data)=>put.run(`${parent}/${id}`,parent,parent,id,id,JSON.stringify(data),1,1);
+  seed('users','viewer',{uid:'viewer'});seed('users','author',{uid:'author'});
+  let rootReads=0;
+  const counted={prepare(q){const prepared=db.prepare(q);return{bind(...args){
+    if(q.includes('friendbook_cf_firestore_documents') && /WHERE path\s*=/.test(q) && /^(posts|reels|stories)\/p$/.test(String(args[0])))rootReads++;
+    return prepared.bind(...args);
+  }};}};
+  for(const root of ['posts','reels','stories']){
+    const read=async(actor,expected)=>{
+      rootReads=0;
+      const response=await appDocuments(new Request(`https://local.invalid/v1/docs/${root}/p`),{DB:counted},{uid:actor});
+      assert.equal(response.status,expected,await response.clone().text());
+      assert.equal(rootReads,1,'legacy GET must not re-read its canonical root for ACL');
+      return response;
+    };
+    seed('users','author',{uid:'author'});
+    seed(root,'p',{authorId:'author',privacy:'Public',content:'visible'});
+    assert.equal((await (await read('viewer',200)).json()).document.content,'visible');
+    seed(root,'p',{authorId:'author',privacy:'Only me'});
+    await read('viewer',403);await read('author',200);
+    seed(root,'p',{authorId:'author',privacy:'Public'});
+    for(const restriction of [{blocked:['viewer']},{banned:true},{deactivated:true}]){
+      seed('users','author',{uid:'author',...restriction});await read('viewer',403);
+    }
+  }
 });

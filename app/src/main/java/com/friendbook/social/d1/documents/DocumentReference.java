@@ -14,6 +14,7 @@ public class DocumentReference {
     private final D1DocumentStore firestore;
     private final String path;
     private final String id;
+    private boolean profileAudience;
 
     DocumentReference(D1DocumentStore firestore, String path) {
         this.firestore = firestore;
@@ -32,6 +33,14 @@ public class DocumentReference {
 
     public String getId() { return id; }
 
+    public DocumentReference withProfileAudience() {
+        DocumentReference ref=new DocumentReference(firestore,path);
+        ref.profileAudience=true;
+        return ref;
+    }
+
+    boolean includesProfileAudience(){return profileAudience;}
+
     public String getPath() { return path; }
 
     public D1DocumentStore getStore() { return firestore; }
@@ -43,6 +52,10 @@ public class DocumentReference {
     public CollectionReference getParent() {
         int idx = path.lastIndexOf('/');
         return idx > 0 ? new CollectionReference(firestore, path.substring(0, idx)) : null;
+    }
+
+    public boolean hasFreshOwnProfileCache() {
+        return firestore.ownProfileCacheFresh(path) && firestore.getCachedDoc(path)!=null;
     }
 
     public Task<DocumentSnapshot> get() {
@@ -57,11 +70,14 @@ public class DocumentReference {
                     D1DocumentStoreException.Code.UNAVAILABLE, "No cached document"));
         }
         final String actor = D1DocumentStore.authenticatedUid();
-        return firestore.runAsync(() -> {
-            JSONObject res = D1DocumentTransport.getDocument(path);
-            DocumentSnapshot snap = parseSnapshot(res);
+        // Share only overlapping DEFAULT reads of the same account/path. No TTL,
+        // no completed results, and explicit SERVER reads always start new work.
+        return firestore.readDocumentResponse(actor,path,profileAudience,source == Source.DEFAULT)
+                .continueWith(Runnable::run,completed -> {
             if (!actor.equals(D1DocumentStore.authenticatedUid()))
                 throw new D1DocumentStoreException(D1DocumentStoreException.Code.CANCELLED, "Account changed during document read");
+            if(!completed.isSuccessful())throw completed.getException()!=null?completed.getException():new java.io.IOException("Document read cancelled");
+            DocumentSnapshot snap = parseSnapshot(new JSONObject(completed.getResult()));
             firestore.cacheDoc(path, snap, actor);
             return snap;
         });

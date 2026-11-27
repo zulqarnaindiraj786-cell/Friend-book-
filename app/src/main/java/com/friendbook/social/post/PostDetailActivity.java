@@ -17,6 +17,7 @@ import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
 import com.friendbook.social.core.Cloudinary;
+import com.friendbook.social.core.D1Client;
 import com.friendbook.social.core.FastCache;
 import com.friendbook.social.core.Fb;
 import com.friendbook.social.core.Icons;
@@ -54,7 +55,10 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
     private androidx.swiperefreshlayout.widget.SwipeRefreshLayout commentSwipe;
     private ListenerRegistration postReg;
     private CommentsEngine.Handle commentsHandle;
-    private boolean initialLoaded;
+    private boolean initialLoaded,commentsScreenStarted;
+    private String commentsActor;
+    private boolean currentCommentsActor(){return commentsActor!=null && java.util.Objects.equals(commentsActor,Fb.uid());}
+    private boolean visibleCommentsScreen(){return commentsScreenStarted && currentCommentsActor() && !isFinishing() && !isDestroyed();}
     private String retryD1Media="";
     private TextView olderCommentsButton;
     private EditText input;
@@ -81,6 +85,7 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
     @Override
     protected void onCreate(Bundle b) {
         super.onCreate(b);
+        commentsActor=Fb.uid();
         Ui.statusBarLight(this);
         postId = getIntent().getStringExtra("post_id");
         if (postId == null) { finish(); return; }
@@ -117,6 +122,7 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
         postAdapter.showFooter = false;
         postAdapter.showInlineComments = false; // Full comment thread is rendered directly below!
         final boolean isSponsoredAdDetail = postId.startsWith("sponsored_ad_");
+        postAdapter.feedEngagementInPage=!isSponsoredAdDetail && com.friendbook.social.core.D1Client.enabled("posts");
         final int adSlotOrdinal = getIntent().getIntExtra("ad_slot_ordinal", 0);
         if (isSponsoredAdDetail) {
             // Render ONLY the 1 real AdMob AdVH card — NEVER render a fake PostVH card above it!
@@ -133,9 +139,10 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
             for (Models.Post cached : FastCache.getFeed()) {
                 if (cached != null && postId.equals(cached.id)) {
                     post = cached;
+                    reactionObserver.onReactionChanged(postId,FastCache.getMyReaction(postId),FastCache.getReactionTotal(postId,post.likes));
                     postAdapter.setPosts(Collections.singletonList(post));
-                    if (post.inlineComments != null && !post.inlineComments.isEmpty()) {
-                        rawComments.addAll(post.inlineComments);
+                    if (!post.detailPreview().isEmpty()) {
+                        for(Models.Comment comment:post.detailPreview())if(Fb.me==null || Fb.me.blocked==null || !Fb.me.blocked.contains(comment.authorId))rawComments.add(comment);
                     }
                     break;
                 }
@@ -173,7 +180,7 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
         olderCommentsButton=older;
         older.setPadding(Ui.dp(this,8),Ui.dp(this,8),Ui.dp(this,8),Ui.dp(this,8));
         older.setOnClickListener(v -> {
-            if(commentsHandle==null) return;
+            if(commentsHandle==null || !visibleCommentsScreen()) return;
             if(!commentsHandle.error.isEmpty()) Ui.toast(this,commentsHandle.error);
             if(commentsHandle.hasMore()) commentsHandle.loadMore(); else Ui.toast(this,"All comments loaded");
             updateCommentPager();
@@ -181,9 +188,6 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
         cHeader.addView(older);
         if(com.friendbook.social.core.D1Client.enabled("posts")){TextView drafts=Ui.tvBold(this,"Unsent",12,Ui.BLUE);drafts.setOnClickListener(v->CommentsEngine.showD1Drafts(this,"posts",postId));cHeader.addView(drafts);}
 
-        TextView seeLikes = Ui.tvBold(this, "See reactions ›", 13, Ui.BLUE);
-        seeLikes.setOnClickListener(v -> Reactions.showWhoReacted(this, postId));
-        cHeader.addView(seeLikes);
         headerBox.addView(cHeader);
         headerBox.addView(Ui.divider(this));
 
@@ -193,6 +197,7 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
         mainRv.setLayoutManager(new LinearLayoutManager(this));
         mainRv.setItemAnimator(null);
         commentsAdapter = new CommentsAdapter(this, this);
+        commentsAdapter.setShowEmptyWhenNone(false);
         commentsAdapter.counterCollection = "posts";
         commentsAdapter.counterId = postId;
         commentsAdapter.postAuthorId = post != null ? post.authorId : "";
@@ -332,6 +337,9 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
     @Override
     protected void onStart() {
         super.onStart();
+        if(!currentCommentsActor()){finish();return;}
+        commentsScreenStarted=true;
+        if(commentsHandle!=null)commentsHandle.resume();
         FastCache.addReactionObserver(reactionObserver);
         if (!initialLoaded) {
             loadPostAndComments(false);
@@ -340,10 +348,13 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
 
     private void loadPostAndComments(final boolean forceHeader) {
         initialLoaded = true;
+        commentsAdapter.setShowEmptyWhenNone(false);
+        commentsAdapter.notifyDataSetChanged();
         if (postReg != null) { postReg.remove(); postReg = null; }
         if (commentsHandle != null) { commentsHandle.remove(); commentsHandle = null; }
         final boolean[] headerRendered = {!forceHeader && post != null};
-        postReg = Fb.db().collection("posts").document(postId).addSnapshotListener((d, e) -> {
+        if(forceHeader || post==null || !postAdapter.feedEngagementInPage)postReg = Fb.db().collection("posts").document(postId).addSnapshotListener((d, e) -> {
+            if(!currentCommentsActor() || isDestroyed() || isFinishing())return;
             // A listener may first emit null while the D1/Firestore-compatible endpoint is
             // connecting, or report an error during an offline/network transition. Do not close
             // the comments screen on a transient read failure; retain cached post/comments and
@@ -374,27 +385,36 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
         });
 
         // Latest canonical page stays live; older pages are explicit one-shot reads.
-        commentsHandle = CommentsEngine.watch("posts", postId, postId, (allComments, pinnedId) -> {
+        commentsHandle = CommentsEngine.watchPostDetail(postId, forceHeader?null:post, (allComments, pinnedId) -> {
+            if (commentsHandle==null) return;
             updateCommentPager();
-            if(commentsHandle!=null && commentsHandle.isLoading())return;
+            if(commentsHandle.isLoading())return;
             if(commentSwipe!=null)commentSwipe.setRefreshing(false);
+            if(!commentsHandle.hasInitialPage())return;
+            commentsAdapter.setShowEmptyWhenNone(true);
             rawComments.clear();
             rawComments.addAll(allComments);
             commentsAdapter.pinnedCommentId = pinnedId == null ? "" : pinnedId;
             sortLabel.setText(sortText(commentsAdapter.sortMode, rawComments.size()));
             commentsAdapter.setAll(rawComments);
-        });
+        }, this::finish);
+        commentsHandle.publishCached();
+        updateCommentPager();
     }
 
     private void updateCommentPager() {
         if(olderCommentsButton==null || commentsHandle==null) return;
         olderCommentsButton.setText(commentsHandle.isLoading()?"Loading comments…":
-                !commentsHandle.error.isEmpty()?"Retry older comments":commentsHandle.hasMore()?"View more comments":"All comments loaded");
+                !commentsHandle.error.isEmpty()?(commentsHandle.hasInitialPage()?"Retry older comments":"Retry loading comments"):commentsHandle.hasMore()?"View more comments":"All comments loaded");
+        olderCommentsButton.setVisibility(commentsHandle.isLoading() || commentsHandle.hasMore()
+                || !commentsHandle.error.isEmpty()?View.VISIBLE:View.GONE);
         olderCommentsButton.setEnabled(!commentsHandle.isLoading() && (commentsHandle.hasMore() || !commentsHandle.error.isEmpty()));
     }
 
     @Override
     protected void onStop() {
+        commentsScreenStarted=false;
+        if(commentsHandle!=null)commentsHandle.pause();
         super.onStop();
         FastCache.removeReactionObserver(reactionObserver);
         if (isFinishing()) {
@@ -403,7 +423,18 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
         }
     }
 
+    @Override
+    protected void onDestroy() {
+        // Rotation/process UI recreation is destruction too: isFinishing() is
+        // false there, but the old Activity must own no live registrations.
+        FastCache.removeReactionObserver(reactionObserver);
+        if (postReg != null) { postReg.remove(); postReg = null; }
+        if (commentsHandle != null) { commentsHandle.remove(); commentsHandle = null; }
+        super.onDestroy();
+    }
+
     private void send() {
+        if(!visibleCommentsScreen())return;
         if (busy) return;
         if (!com.friendbook.social.core.Admin.checkNotSuspended(this)) return;
         String text = input.getText().toString().trim();
@@ -420,13 +451,15 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
             String path = "comments/" + me + "_" + System.currentTimeMillis() + ".jpg";
             Cloudinary.uploadOrFirebase(this, path, toUpload)
                     .addOnSuccessListener(url -> {
+                        if(!currentCommentsActor()){busy=false;return;}
+                        if(!visibleCommentsScreen()){busy=false;retryD1Media=url;pendingPhotoUri=null;return;}
                         pendingPhotoUri = null;
                         mediaPreviewRow.setVisibility(View.GONE);
                         writeCommentDoc(me, text, url, mentions);
                     })
                     .addOnFailureListener(err -> {
                         busy = false;
-                        Ui.toast(PostDetailActivity.this, "Photo upload failed: " + err.getMessage());
+                        if(visibleCommentsScreen())Ui.toast(PostDetailActivity.this, "Photo upload failed: " + err.getMessage());
                     });
         } else {
             writeCommentDoc(me, text, "", mentions);
@@ -434,6 +467,7 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
     }
 
     private void writeCommentDoc(String me, String text, String mediaUrl, List<Map<String,Object>> mentions) {
+        if(!currentCommentsActor() || !java.util.Objects.equals(me,Fb.uid())){busy=false;return;}
         final Models.Comment replyTarget = replyingTo;
         String parentId = replyTarget != null ? replyTarget.id : "";
 
@@ -447,18 +481,21 @@ public class PostDetailActivity extends Activity implements FeedAdapter.Host, Co
 
         // Writes atomically to posts/{postId}.commentsMap.<newId> (100% visible to ALL users!) + mirrors!
         Models.Comment local = CommentsEngine.sendComment("posts", postId, postId, text, mediaUrl, parentId, mentions,
-                (ok, errMsg) -> {
-                    if (ok) {
-                        if (post != null && !me.equals(post.authorId)) {
-                            Notify.send(post.authorId, "comment",
-                                    Fb.myName() + " commented on your post", postId);
+                new CommentsEngine.PostCallback() {
+                    @Override public void onSaved(String commentId) {
+                        if(!currentCommentsActor())return;
+                        if (!D1Client.enabled("posts") && post != null && !me.equals(post.authorId)) {
+                            Notify.sendForComment(post.authorId, "comment",
+                                    Fb.myName() + " commented on your post", "posts",postId,commentId);
                         }
-                        if (replyTarget != null && !me.equals(replyTarget.authorId)) {
-                            Notify.send(replyTarget.authorId, "reply",
-                                    Fb.myName() + " replied to your comment", postId);
+                        if (!D1Client.enabled("posts") && replyTarget != null && !me.equals(replyTarget.authorId)
+                                && !java.util.Objects.equals(replyTarget.authorId,post==null?null:post.authorId)) {
+                            Notify.sendForComment(replyTarget.authorId, "reply",
+                                    Fb.myName() + " replied to your comment", "posts",postId,commentId);
                         }
-                    } else {
-                        Ui.toast(PostDetailActivity.this, errMsg != null ? errMsg : "Comment failed");
+                    }
+                    @Override public void onComplete(boolean ok,String errMsg) {
+                        if(!ok && visibleCommentsScreen())Ui.toast(PostDetailActivity.this, errMsg != null ? errMsg : "Comment failed");
                     }
                 });
 

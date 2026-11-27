@@ -1,11 +1,10 @@
-// Best-effort provisioning of the Workers KV namespace that holds the LIVE view counters.
+// Provision the Workers KV namespace that holds the live view-counter snapshot.
 //
-// Why this exists: counting views in KV + Worker memory keeps the view path at ZERO D1 row reads,
-// while D1 still receives exactly one write per resource per hour (permanent history, never lost).
+// The request path reads KV/Analytics Engine only and performs zero D1 view reads or writes. A
+// separate guarded pre-deploy step copies historical D1 totals to an immutable KV key once.
 //
-// It uses the same CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID the deploy step already uses. If
-// anything is missing or refused, it prints a warning and exits 0: the Worker then counts in memory
-// only, which still costs zero D1 row reads. This script never fails a deploy.
+// If this best-effort provisioning cannot establish a namespace, the subsequent history-seed step
+// fails closed before deployment rather than silently shipping without the planned KV binding.
 import { readFileSync, writeFileSync } from 'node:fs';
 
 const TITLE = 'friendbook-views';
@@ -23,8 +22,8 @@ function bindInWrangler(id) {
     console.log(`Updated the existing ${BINDING} binding id in wrangler.toml.`);
     return;
   }
-  const block = `# Live view counters (aggregate totals). Counting stays in KV + Worker memory so the
-# view path costs ZERO D1 row reads; D1 receives one write per resource per hour.
+  const block = `# Live view counters (aggregate totals). View reads/writes stay in Analytics Engine,
+# Workers KV and Worker memory; the view request path does no D1 reads or writes.
 [[kv_namespaces]]
 binding = "${BINDING}"
 id = "${id}"
@@ -38,7 +37,7 @@ id = "${id}"
 }
 
 if (!account || !token) {
-  warn('CLOUDFLARE_ACCOUNT_ID/CLOUDFLARE_API_TOKEN unavailable here; deploying with in-memory view counters (still zero D1 row reads).');
+  warn('CLOUDFLARE_ACCOUNT_ID/CLOUDFLARE_API_TOKEN unavailable; the required pre-deploy view snapshot step will block deployment.');
   process.exit(0);
 }
 
@@ -61,7 +60,7 @@ try {
   }
   if (!namespace?.id) throw new Error('namespace response had no id');
   bindInWrangler(namespace.id);
-  console.log('View counters will run on KV + memory: zero D1 row reads, one D1 write per resource per hour.');
+  console.log('VIEWS namespace is configured; the guarded historical snapshot step must pass before deployment.');
 } catch (error) {
   warn(`Workers KV namespace unavailable (${error.message}); deploying with in-memory view counters (still zero D1 row reads).`);
 }

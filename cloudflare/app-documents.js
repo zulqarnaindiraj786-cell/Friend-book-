@@ -1,10 +1,10 @@
+import { writeAttribution } from './write-attribution.js';
 import { canReadPayment, isPaymentAdmin } from './payment-access.js';
 import { canReadFriendRequest, friendshipReadView, groupReadView, trustedGroupOwner } from './social-access.js';
 import { supportedDocumentPath, supportedCollectionPath, contentReadAllowed, contentWriteAllowed } from './document-policy.js';
-import { chatReadAllowed, chatWriteAllowed } from './chat-access.js';
+import { chatReadAllowed, chatWriteAllowed, storedChatMember } from './chat-access.js';
 import { profileReadView, profileWriteAllowed } from './profile-access.js';
 // Cloudflare D1 App Document Store (/v1/docs) + D1-first ACL helpers.
-import { authorizePost } from './firebase-post-access.js';
 import { canReadNotification, notificationWriteAllowed } from './notification-access.js';
 const json = (body, status = 200) => Response.json(body, {
   status, headers: { 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' },
@@ -98,22 +98,33 @@ export function toFirestoreFields(rawJson) {
   return fields;
 }
 
+// Request-local only: never keep authorization state between HTTP requests.
+export function requestAccountReads(identity) {
+  const reads=new Map();
+  if(identity?.viewerProfile!==undefined) reads.set(`users/${identity.uid}`,toFirestoreFields(identity.viewerProfile));
+  return reads;
+}
+
+export function readPreferredDocumentJson(db, path) {
+  // Historical records were backfilled: every lookup uses one canonical index.
+  return db.prepare('SELECT document_json FROM friendbook_cf_firestore_documents WHERE path = ?1 LIMIT 1').bind(path).first();
+}
+
 export async function readD1DocumentFields(db, path) {
   if (!db) return null;
   // Authorization and privacy fields must reflect the current D1 row, not a
   // stale per-isolate cache after another device changes a block or ban.
-  // Canonical records take precedence over the mirror. A failed read is not a
+  // Only canonical records are readable. A failed read is not a
   // missing record: treating it as missing can turn a transient outage into a
   // successful empty feed, overwriting good cached data on every client.
-  const row = await db.prepare('SELECT document_json FROM friendbook_cf_firestore_documents WHERE path = ?').bind(path).first()
-    || await db.prepare('SELECT document_json FROM friendbook_cf_documents WHERE path = ?').bind(path).first();
+  const row = await readPreferredDocumentJson(db,path);
   if (!row) return null;
   const fields=toFirestoreFields(row.document_json);
   if (!fields) throw new Error('Invalid stored document');
   return fields;
 }
 
-// Only server-verified friendship transitions can authorize private content or presence.
+// Only server-verified friendship transitions can authorize private content.
 // Legacy records are not trusted merely because their document ID looks correct.
 export async function hasD1Friendship(db, uidA, uidB) {
   if (!db || !validSegment(uidA) || !validSegment(uidB) || uidA===uidB) return null;
@@ -125,6 +136,13 @@ export async function hasD1Friendship(db, uidA, uidB) {
 async function canonicalRoot(db, path, fallback) {
   const row = await db.prepare('SELECT owner_uid, document_json FROM friendbook_cf_firestore_documents WHERE path = ?').bind(path).first();
   return row || fallback;
+}
+
+export function saveProfileProjection(db, uid, displayName, avatarUrl) {
+  return db.prepare(`INSERT INTO friendbook_cf_profiles(uid,display_name,cloudinary_avatar_url) VALUES (?,?,?)
+    ON CONFLICT(uid) DO UPDATE SET display_name=excluded.display_name, cloudinary_avatar_url=excluded.cloudinary_avatar_url
+    WHERE friendbook_cf_profiles.display_name IS NOT excluded.display_name
+       OR friendbook_cf_profiles.cloudinary_avatar_url IS NOT excluded.cloudinary_avatar_url`).bind(uid,displayName,avatarUrl).run();
 }
 
 export async function appDocuments(request, env, identity) {
@@ -143,21 +161,36 @@ export async function appDocuments(request, env, identity) {
     const limit = Number.isFinite(rawLimit) ? Math.max(1, Math.min(50, Math.trunc(rawLimit))) : 20;
     // Membership and privacy may change through another isolate or API: reauthorize every read.
     try {
-      const rows = await env.DB.prepare(
-        'SELECT doc_id, document_json, updated_at FROM friendbook_cf_documents WHERE collection = ? ORDER BY updated_at DESC LIMIT ?'
-      ).bind(collection, limit).all();
+      // Chat previews and unread counters can advance without rewriting the
+      // historical room mirror. Sort current rooms by their canonical timestamp.
+      const joinedRoot=['users','groups','friends','friend_requests','notifications'].includes(collection);
+      const rows = collection==='chats' ? await env.DB.prepare(`
+        SELECT path,doc_id,document_json,update_time AS updated_at,1 AS canonical FROM friendbook_cf_firestore_documents
+          WHERE collection_id='chats' AND parent_path='chats'
+        ORDER BY updated_at DESC LIMIT ?`).bind(limit).all() : await env.DB.prepare(`
+        SELECT path,doc_id,document_json,update_time AS updated_at,1 AS canonical FROM friendbook_cf_firestore_documents
+          WHERE parent_path=?1 ORDER BY updated_at DESC LIMIT ?2`).bind(collection,limit).all();
       let documents = [];
+      const requestRoomReads = new Map();
+      const canonicalContentReads = new Map();
       for (const row of rows?.results || []) {
-        const current = await canonicalRoot(env.DB, `${collection}/${row.doc_id}`, row);
+        const docPath = `${collection}/${row.doc_id}`;
+        const canonicalSnapshot = row.canonical===1 && row.path===docPath && validSegment(row.doc_id);
+        const currentChat = collection==='chats' && canonicalSnapshot;
+        if(canonicalSnapshot && ['posts','reels','stories'].includes(collection))
+          canonicalContentReads.set(docPath,toFirestoreFields(row.document_json));
+        // The list query already loaded this exact canonical root. Avoid an
+        // additional lookup per row; content ACLs below still run unchanged.
+        const current = canonicalSnapshot || joinedRoot ? row : await canonicalRoot(env.DB, docPath, row);
         const doc = toPlainDocument(current.document_json, row.doc_id);
         if (doc && (collection !== 'payments' || canReadPayment(env,uid,doc)) && (collection !== 'friend_requests' || canReadFriendRequest(uid,doc)) && canReadNotification(`${collection}/${row.doc_id}`, uid, doc)) {
           const view = collection === 'groups' ? groupReadView(uid,doc,await trustedGroupOwner(env.DB,`${collection}/${row.doc_id}`)) : collection === 'friends' ? friendshipReadView(uid,doc) : profileReadView(`${collection}/${row.doc_id}`, uid, doc, isPaymentAdmin(env,uid));
-          if (view !== null && await chatReadAllowed(env.DB, `${collection}/${row.doc_id}`, uid, doc)) documents.push(view);
+          if (view !== null && (currentChat ? storedChatMember(current.document_json,uid) : await chatReadAllowed(env.DB,docPath,uid,doc,requestRoomReads))) documents.push(view);
         }
       }
-      if (collection === 'posts' || collection === 'reels' || collection === 'stories') {
-        const userReads = new Map(); // scoped to this response; never cache privacy across requests
-        const allowed = await Promise.all(documents.map(doc => authorizePost({ uid, db: env.DB }, collection, doc.id, undefined, undefined, userReads)));
+      if (['posts','reels','stories','lives'].includes(collection)) {
+        const userReads = requestAccountReads(identity);
+        const allowed = await Promise.all(documents.map(doc => contentReadAllowed(env.DB,uid,`${collection}/${doc.id}`,userReads,false,canonicalContentReads.get(`${collection}/${doc.id}`))));
         documents = documents.filter((_doc, index) => allowed[index]);
       }
       return json({ collection, documents });
@@ -183,17 +216,18 @@ export async function appDocuments(request, env, identity) {
 
   if (request.method === 'GET') {
     try {
-      const row = await env.DB.prepare(
-        'SELECT doc_id, document_json, updated_at FROM friendbook_cf_documents WHERE path = ?'
-      ).bind(docPath).first();
-      const current = await canonicalRoot(env.DB, docPath, row);
+      const current = await readPreferredDocumentJson(env.DB,docPath);
       if (!current) return json({ error: 'Not found' }, 404);
       const document = toPlainDocument(current.document_json, docId);
-      if (!(await contentReadAllowed(env.DB, uid, docPath))) return json({error:'Forbidden'},403);
+      // This route also reads canonical storage directly. Authorize the exact
+      // raw content snapshot returned, never a client body or projected view.
+      const canonicalFields=['posts','reels','stories'].includes(collection)
+        ? toFirestoreFields(current.document_json) : undefined;
+      if (!(await contentReadAllowed(env.DB, uid, docPath,requestAccountReads(identity),false,canonicalFields))) return json({error:'Forbidden'},403);
       if (collection === 'payments' && !canReadPayment(env,uid,document)) return json({error:'Forbidden'},403);
       if (collection === 'friend_requests' && !canReadFriendRequest(uid,document)) return json({error:'Forbidden'},403);
       if (!canReadNotification(docPath, uid, document)) return json({ error: 'Forbidden' }, 403);
-      if (!(await chatReadAllowed(env.DB, docPath, uid, document))) return json({ error: 'Forbidden' }, 403);
+      if (!(collection==='chats' ? storedChatMember(current.document_json,uid) : await chatReadAllowed(env.DB, docPath, uid, document))) return json({ error: 'Forbidden' }, 403);
       const view = collection === 'groups' ? groupReadView(uid,document,await trustedGroupOwner(env.DB,docPath)) : collection === 'friends' ? friendshipReadView(uid,document) : profileReadView(docPath, uid, document, isPaymentAdmin(env,uid));
       if (view === null) return json({ error: 'Forbidden' }, 403);
       return json({ id: docId, document: view });
@@ -213,10 +247,14 @@ export async function appDocuments(request, env, identity) {
       return json({ error: 'Document object required' }, 400);
     }
     const now = Date.now();
-    if (['users','posts','reels'].includes(collection)) {
+    if (['users','posts','reels','events','pages','lives'].includes(collection)) {
       // Older clients use /v1/docs. Share the guarded canonical mutation with
       // newer clients so concurrent edits and relationship changes are not lost.
-      const data={...incoming,updatedAt:now};
+      // Profile revisions use canonical update_time. Injecting a new JSON
+      // updatedAt here turned identical profile saves into real writes,
+      // defeating existing no-op/mirror-repair checks. Retain historical
+      // timestamp behavior for content/event/page clients.
+      const data=collection==='users' ? {...incoming} : {...incoming,updatedAt:now};
       delete data.id;
       const {firestoreDocuments}=await import('./firestore-documents.js');
       const forwarded=new Request(`${url.origin}/v1/firestore/document?path=${encodeURIComponent(docPath)}`,{
@@ -229,16 +267,16 @@ export async function appDocuments(request, env, identity) {
       // This separate projection is only a convenience for /v1/me; failure must
       // never turn an already committed canonical profile update into a retry.
       if (collection==='users') try {
-        await env.DB.prepare('INSERT INTO friendbook_cf_profiles(uid, display_name, cloudinary_avatar_url) VALUES (?, ?, ?) ON CONFLICT(uid) DO UPDATE SET display_name = excluded.display_name, cloudinary_avatar_url = excluded.cloudinary_avatar_url')
-          .bind(uid,typeof profile.displayName==='string' ? profile.displayName.slice(0,200) : '',typeof profile.photoUrl==='string' ? profile.photoUrl.slice(0,2048) : null).run();
+        await saveProfileProjection(env.DB,uid,typeof profile.displayName==='string' ? profile.displayName.slice(0,200) : '',
+          typeof profile.photoUrl==='string' ? profile.photoUrl.slice(0,2048) : null);
       } catch { /* Canonical profile remains authoritative. */ }
       return json({id:docId,path:docPath,document:{...profile,id:docId}});
     }
     try {
       const existingRow = await env.DB.prepare(
-        'SELECT owner_uid, document_json FROM friendbook_cf_documents WHERE path = ?'
+        'SELECT owner_uid, document_json FROM friendbook_cf_firestore_documents WHERE path = ?'
       ).bind(docPath).first();
-      const currentRow = await canonicalRoot(env.DB, docPath, existingRow);
+      const currentRow = existingRow;
       const existingPlain = currentRow ? (toPlainDocument(currentRow.document_json, docId) || {}) : {};
       const merged = { ...existingPlain, ...incoming, id: docId };
       if (!notificationWriteAllowed(docPath, uid, currentRow ? existingPlain : null, merged) || !profileWriteAllowed(docPath, uid, currentRow ? existingPlain : null, merged) || !(await chatWriteAllowed(env.DB, docPath, uid, currentRow ? existingPlain : null, merged)) || !contentWriteAllowed(docPath, uid, currentRow ? existingPlain : null, merged)) return json({ error: 'Forbidden' }, 403);
@@ -248,7 +286,7 @@ export async function appDocuments(request, env, identity) {
       const serialized = JSON.stringify(merged);
       if (serialized.length > 95_000) return json({ error: 'Document too large' }, 413);
       const appWrite = env.DB.prepare(
-        `INSERT INTO friendbook_cf_documents(path, collection, doc_id, owner_uid, document_json, updated_at)
+        `INSERT INTO friendbook_cf_documents AS ${writeAttribution('legacy',docPath)}(path, collection, doc_id, owner_uid, document_json, updated_at)
          VALUES (?, ?, ?, ?, ?, ?)
          ON CONFLICT(path) DO UPDATE SET
            owner_uid = excluded.owner_uid,
@@ -258,7 +296,7 @@ export async function appDocuments(request, env, identity) {
       const firestoreDoc = { ...merged };
       delete firestoreDoc.id;
       const firestoreWrite = env.DB.prepare(
-        `INSERT INTO friendbook_cf_firestore_documents(path, parent_path, collection_id, doc_id, owner_uid, document_json, create_time, update_time)
+        `INSERT INTO friendbook_cf_firestore_documents AS ${writeAttribution('legacy',docPath)}(path, parent_path, collection_id, doc_id, owner_uid, document_json, create_time, update_time)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(path) DO UPDATE SET owner_uid=excluded.owner_uid, document_json=excluded.document_json, update_time=excluded.update_time`
       ).bind(docPath, collection, collection, docId, ownerUid, JSON.stringify(firestoreDoc),
@@ -273,10 +311,7 @@ export async function appDocuments(request, env, identity) {
       if (collection === 'users' && docId === uid) {
         const displayName = typeof merged.displayName === 'string' ? merged.displayName.slice(0, 200) : '';
         const avatarUrl = typeof merged.photoUrl === 'string' ? merged.photoUrl.slice(0, 2048) : null;
-        await env.DB.prepare(
-          'INSERT INTO friendbook_cf_profiles(uid, display_name, cloudinary_avatar_url) VALUES (?, ?, ?) '
-          + 'ON CONFLICT(uid) DO UPDATE SET display_name = excluded.display_name, cloudinary_avatar_url = excluded.cloudinary_avatar_url'
-        ).bind(uid, displayName, avatarUrl).run();
+        await saveProfileProjection(env.DB,uid,displayName,avatarUrl);
       }
       return json({ id: docId, path: docPath, document: merged });
     } catch {

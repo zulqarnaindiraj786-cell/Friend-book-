@@ -44,6 +44,10 @@ public class AdminModeratorsFragment extends Fragment {
     private final List<Models.User> allUsers = new ArrayList<>();
     private String query = "";
     private ListenerRegistration reg;
+    private LinearLayout pageControls;
+    private String actor;
+    private boolean started;
+    private final java.util.Set<String> pending=new java.util.HashSet<>();
 
     @Nullable
     @Override
@@ -74,6 +78,8 @@ public class AdminModeratorsFragment extends Fragment {
         Ui.pad(activeCountT, 4, 14, 4, 6);
         root.addView(activeCountT);
 
+        root.addView(Ui.tv(a,"Moderators and search results cover loaded users only.",12,Ui.sub(a)));
+        pageControls=Ui.col(a);root.addView(pageControls);
         activeList = Ui.col(a);
         root.addView(activeList);
 
@@ -81,7 +87,7 @@ public class AdminModeratorsFragment extends Fragment {
         Ui.pad(addHead, 4, 16, 4, 6);
         root.addView(addHead);
 
-        EditText search = Ui.input(a, "🔍 Search any user by name or email…");
+        EditText search = Ui.input(a, "🔍 Search loaded users by name or email…");
         search.addTextChangedListener(new TextWatcher() {
             @Override public void beforeTextChanged(CharSequence s, int st, int c, int af) {}
             @Override public void onTextChanged(CharSequence s, int st, int bf, int c) {
@@ -103,22 +109,21 @@ public class AdminModeratorsFragment extends Fragment {
     @Override
     public void onStart() {
         super.onStart();
-        reg = Fb.db().collection("users").limit(400)
-                .addSnapshotListener((snap, err) -> {
-                    allUsers.clear();
-                    if (snap != null) {
-                        for (DocumentSnapshot d : snap.getDocuments()) {
-                            allUsers.add(Models.User.fromDoc(d));
-                        }
-                    }
-                    render();
-                });
+        android.app.Activity a=getActivity();
+        if(a==null || !Admin.isAdmin() || Fb.uid()==null)return;
+        if(actor!=null && !actor.equals(Fb.uid())){a.finish();return;}
+        actor=Fb.uid();started=true;
+        reg=com.friendbook.social.core.PagedLists.attach(a,pageControls,Fb.db().collection("users"),10,"admin-moderators",(snap,err)->{
+            if(!started || !java.util.Objects.equals(actor,Fb.uid()) || snap==null)return;
+            allUsers.clear();for(DocumentSnapshot d:snap)allUsers.add(Models.User.fromDoc(d));
+            render();
+        });
     }
 
     @Override
     public void onStop() {
-        super.onStop();
-        if (reg != null) reg.remove();
+        super.onStop();started=false;
+        if(reg!=null){reg.remove();reg=null;}
     }
 
     private void render() {
@@ -134,9 +139,9 @@ public class AdminModeratorsFragment extends Fragment {
                 activeList.addView(userRow(a, u, true));
             }
         }
-        activeCountT.setText("Active Moderators (" + modCount + ")");
+        activeCountT.setText("Moderators in loaded users (" + modCount + ")");
         if (modCount == 0) {
-            TextView empty = Ui.tv(a, "No global moderators appointed yet. Search below to add one.", 12, Ui.sub(a));
+            TextView empty = Ui.tv(a, "No moderators in loaded users. Load more to see others.", 12, Ui.sub(a));
             Ui.pad(empty, 8, 6, 8, 6);
             activeList.addView(empty);
         }
@@ -194,7 +199,21 @@ public class AdminModeratorsFragment extends Fragment {
                 ? Ui.btnOutline(a, "Remove", Ui.RED)
                 : Ui.btn(a, "🛡 Make Mod");
         Ui.pad(btn, 12, 6, 12, 6);
-        btn.setOnClickListener(v -> Admin.setGlobalModerator(a, u.uid, u.displayName, !activeMod));
+        btn.setEnabled(!pending.contains(u.uid));
+        btn.setOnClickListener(v -> {
+            final String owner=actor,id=u.uid;
+            if(!started || !Admin.isAdmin() || !java.util.Objects.equals(owner,Fb.uid()) || !pending.add(id))return;
+            render();
+            Fb.db().moderate("set_moderator","users",id,!activeMod).addOnCompleteListener(task->{
+                pending.remove(id);
+                if(!java.util.Objects.equals(owner,Fb.uid()))return;
+                if(task.isSuccessful()) {
+                    // The server authorizes and commits the change; update loaded rows only after its acknowledgement.
+                    for(Models.User loaded:allUsers)if(id.equals(loaded.uid))loaded.isModerator=!activeMod;
+                }
+                if(started && getActivity()!=null){render();Ui.toast(getActivity(),task.isSuccessful()?"Moderator role updated":"Moderator role could not be updated");}
+            });
+        });
         row.addView(btn);
 
         row.setOnClickListener(v ->

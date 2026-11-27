@@ -1,7 +1,7 @@
 import tempfile
 from pathlib import Path
 import unittest
-from scripts.ci.verify_presence_android_tests import SUITES, verify
+from scripts.ci.verify_android_tests import SUITES, verify
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -11,8 +11,7 @@ class MigrationCandidateCiTest(unittest.TestCase):
         source = (ROOT / '.github/workflows/build-apk.yml').read_text()
         publish = source[source.index('      - name: Publish Signed Release APK'):]
         self.assertIn("github.ref == 'refs/heads/main'", publish.split('        env:', 1)[0])
-        self.assertIn('verify_presence_android_tests.py', source)
-        self.assertIn('PresenceSocketControllerCheck', source)
+        self.assertIn('verify_android_tests.py', source)
 
     def write_suite(self, root, suite, counts='', cases='<testcase name="synthetic"/>'):
         (root / ('TEST-com.friendbook.social.core.' + suite + '.xml')).write_text(

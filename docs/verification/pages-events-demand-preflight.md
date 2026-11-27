@@ -1,0 +1,7 @@
+# Pages and events: avoid adding a needless index
+
+Android's Pages and Events screens request explicit ten-item pages, but the generic Worker reads the complete root collection before applying the default ID cursor. A local prototype used the existing path primary key plus a new sparse noncanonical-path guard index to preserve exact ordering and fall back for unusual paths, IDs and cursor shapes. In a 1,000-item synthetic fixture it returned ten candidate rows instead of scanning the full collection, but it required an extra guard query and index predicate on writes.
+
+Before deploying or changing schema, aggregate-only production preflight [45379162523](https://github.com/zulqarnaindiraj786-cell/Friend-book-/actions/runs/45379162523) read at most 257 per collection and reported **1 page, 0 events**, neither truncated, both with zero noncanonical paths; four D1 rows read reported. This snapshot may change. With so little current data, the extra guard and write work are not justified as a quota optimization. The prototype and proposed 0102 migration were removed and were not committed or deployed; generic behavior remains. A minimal local SQLite fixture measured insert/edit/delete for an ordinary page at 50/29/27 VM steps before versus 64/29/40 after the sparse index; an ordinary post insert/delete went from 50/27 to 58/34. VM steps are not D1 billed writes.
+
+This does not rule out a future issue as collections grow, or prove the current whole-app quota. No records, names, document contents or user identifiers were returned by the preflight.

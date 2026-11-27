@@ -1,0 +1,42 @@
+# Post PR #37 indexed legacy-comment route deployment verification: 2026-11-25.
+# Read-only post-rollout audit trigger: 2026-11-25; no production writes or app traffic.
+# Owner-requested current read/write breakdown; analytics only, no load or deployment.
+# Post D1-safe comment batching rollout: analytics only.
+# Refresh production ranking after app-wide demand fixes; distinguish quiet windows from representative use.
+# Analytics only: no application load, D1 diagnostic scans, deployment or daily certificate.
+# Recheck the current read/write hotspots without changing production data.
+name: Analytics-only quota traffic report
+on:
+  workflow_dispatch:
+  push:
+    branches: [arena/b52bc74d-friend-book]
+    paths:
+      - '.github/workflows/quota-traffic-report.yml'
+      - 'scripts/loadtest/quota_traffic_report.py'
+      - 'scripts/tests/test_quota_traffic_report.py'
+permissions:
+  contents: read
+jobs:
+  report:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[quota-traffic-report]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test attribution, incomplete-data handling and output privacy
+        run: python3 -m unittest scripts.tests.test_quota_traffic_report -v
+      - name: Read analytics only (no D1 SQL, application traffic or deployment)
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: python3 scripts/loadtest/quota_traffic_report.py --window-minutes 5 15 30 60 360 --output /tmp/quota-traffic-report.json
+      - name: Publish sanitized aggregate summary to Actions log
+        run: cat /tmp/quota-traffic-report.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sanitized-quota-traffic-report
+          path: /tmp/quota-traffic-report.json
+          retention-days: 7
+
+# Refresh after the group-page backend rollout; activity may be quiet and windows overlap.
+# Refresh after the story-page backend rollout; analytics-only and not a daily certificate.
+# Post-Home-head backend rollout refresh; delayed analytics are not matched-session proof.

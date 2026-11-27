@@ -1,0 +1,30 @@
+# Read-only, bounded aggregate diagnostics and semantic parity preflight; no document identities or content in logs.
+name: Canonical coverage inventory
+on:
+  workflow_dispatch:
+    inputs:
+      confirm_production_scan:
+        description: 'Explicitly authorize production D1 diagnostic/migration cost; not routine app work'
+        type: boolean
+        default: false
+        required: true
+permissions:
+  contents: read
+jobs:
+  inventory:
+    if: github.event_name == 'workflow_dispatch' && inputs.confirm_production_scan == true
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test capped inventory
+        run: python3 -m unittest scripts.tests.test_canonical_inventory
+      - name: Inspect bounded aggregates with quota reserve
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          set -e
+          python3 scripts/loadtest/d1_account_usage_analytics.py --notification-inspection-budget
+          python3 -m scripts.loadtest.canonical_inventory --full
+          node scripts/loadtest/canonical_semantic_inventory.mjs
+          python3 scripts/loadtest/d1_account_usage_analytics.py --notification-inspection-budget

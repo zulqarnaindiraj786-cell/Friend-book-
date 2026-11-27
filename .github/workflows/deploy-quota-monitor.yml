@@ -1,0 +1,154 @@
+name: Deploy isolated quota reporting Worker
+on:
+  push:
+    branches: [arena/b52bc74d-friend-book]
+    paths:
+      - '.github/workflows/deploy-quota-monitor.yml'
+      - 'wrangler.quota-monitor.toml'
+      - 'cloudflare/quota-monitor.js'
+      - 'cloudflare/test/quota-monitor.test.js'
+permissions:
+  contents: read
+concurrency:
+  group: friendbook-quota-monitor-deployment
+  cancel-in-progress: false
+jobs:
+  deploy:
+    if: contains(github.event.head_commit.message, '[deploy-quota-monitor]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      WRANGLER_SEND_METRICS: 'false'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - name: Test all Worker handlers and Python regressions
+        run: |
+          npm test
+          python3 -m unittest discover -s scripts/tests
+      - name: Verify isolated configuration and compile both Workers without deploying the app
+        run: |
+          python3 - <<'PY'
+          import pathlib,tomllib
+          cfg=tomllib.loads(pathlib.Path('wrangler.quota-monitor.toml').read_text())
+          assert cfg['name']=='friendbook-quota-monitor'
+          assert cfg['main']=='cloudflare/quota-monitor.js'
+          assert cfg['triggers']['crons']==['*/15 * * * *']
+          assert set(cfg)=={'name','main','compatibility_date','workers_dev','preview_urls','triggers','observability'}
+          app=tomllib.loads(pathlib.Path('wrangler.toml').read_text())
+          assert app['name']=='rough-firefly-dd7b' and app['triggers']['crons']==['*/15 * * * *']
+          PY
+          npx --yes wrangler@4.157.0 deploy --dry-run --outdir /tmp/friendbook-app-compile
+          npx --yes wrangler@4.157.0 deploy --config wrangler.quota-monitor.toml --dry-run --outdir /tmp/quota-monitor-compile
+      - name: Deploy only isolated monitor and verify authenticated report
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: '92f3d04598822de2e49e14561218d090'
+          MONITOR_ANALYTICS_TOKEN: ${{ secrets.CLOUDFLARE_ANALYTICS_READ_TOKEN || secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          python3 - <<'PY'
+          import json,os,re,secrets,subprocess,sys,time,urllib.request,urllib.error
+          stage='name preflight'
+          report_token=''
+          def safe(text):
+              for secret in (os.environ.get('CLOUDFLARE_API_TOKEN',''),os.environ.get('MONITOR_ANALYTICS_TOKEN',''),report_token):
+                  if secret: text=text.replace(secret,'[REDACTED]')
+              return re.sub(r'\x1b\[[0-9;]*m','',text)
+          def failure(kind,error,tb):
+              detail='HTTP '+str(error.code) if isinstance(error,urllib.error.HTTPError) else kind.__name__+': '+str(error)
+              if isinstance(error,urllib.error.HTTPError):
+                  try:
+                      raw=error.read().decode('utf-8',errors='replace')
+                      try:
+                          body=json.loads(raw)
+                          detail+=' '+json.dumps(body.get('errors',body.get('error','unavailable')))
+                      except ValueError:
+                          title=re.search(r'<title>(.*?)</title>',raw,re.S|re.I)
+                          codes=re.findall(r'(?:error code:|Error)\s*(\d{4})',raw,re.I)
+                          detail+=' '+json.dumps({'title':title.group(1).strip()[:150] if title else None,'edge_error_codes':codes[:3]})
+                  except Exception: pass
+              print('::error::Isolated monitor '+stage+' failed: '+safe(detail).replace('\n',' ')[:2000],flush=True)
+          sys.excepthook=failure
+          def cli(arguments,stdin=None):
+              result=subprocess.run(command+arguments,input=stdin,text=True,capture_output=True)
+              if result.returncode:
+                  detail=safe(result.stdout+'\n'+result.stderr)[-3000:].replace('\n',' %0A')
+                  print('::error::Monitor CLI '+stage+' '+detail,flush=True)
+                  raise RuntimeError(result.returncode)
+              print('::notice::Monitor '+stage+' completed',flush=True)
+          account=os.environ['CLOUDFLARE_ACCOUNT_ID']
+          api='https://api.cloudflare.com/client/v4/accounts/'+account
+          headers={'Authorization':'Bearer '+os.environ['CLOUDFLARE_API_TOKEN']}
+          # Refuse to replace an unrelated Worker if the name is already in use.
+          req=urllib.request.Request(api+'/workers/scripts/friendbook-quota-monitor',headers=headers)
+          try:
+              with urllib.request.urlopen(req,timeout=30) as response: source=response.read().decode('utf-8',errors='replace')
+              if 'quota_monitor_report' not in source or 'createQuotaMonitor' not in source:
+                  raise RuntimeError('Monitor name is already in use by an unrelated script; not deploying')
+          except urllib.error.HTTPError as error:
+              if error.code!=404: raise RuntimeError('Worker name preflight unavailable; not deploying')
+          command=['npx','--yes','wrangler@4.157.0']
+          stage='script upload'
+          cli(['deploy','--config','wrangler.quota-monitor.toml'])
+          report_token=secrets.token_urlsafe(48)
+          print('::add-mask::'+report_token,flush=True)
+          # Secret values go only to stdin and encrypted Worker bindings, not logs/files.
+          secret_body=json.dumps({'CF_ANALYTICS_TOKEN':os.environ['MONITOR_ANALYTICS_TOKEN'],'REPORT_TOKEN':report_token})
+          stage='encrypted secret setup'
+          cli(['secret','bulk','--config','wrangler.quota-monitor.toml'],secret_body)
+          stage='remote monitor configuration verification'
+          def cfget(suffix):
+              req=urllib.request.Request(api+'/workers/scripts/friendbook-quota-monitor'+suffix,headers=headers)
+              with urllib.request.urlopen(req,timeout=30) as response: value=json.load(response)
+              if not value.get('success'): raise ValueError('Monitor metadata unavailable')
+              return value['result']
+          settings=cfget('/settings')
+          bindings=settings.get('bindings',[])
+          if any(b.get('type')!='secret_text' for b in bindings): raise ValueError('Unexpected monitor binding')
+          if {b.get('name') for b in bindings}!={'CF_ANALYTICS_TOKEN','REPORT_TOKEN'}: raise ValueError('Missing encrypted monitor bindings')
+          schedules=cfget('/schedules')
+          schedules=schedules.get('schedules',[]) if isinstance(schedules,dict) else schedules
+          if [s.get('cron') for s in schedules]!=['*/15 * * * *']: raise ValueError('Unexpected monitor schedule')
+          routing=cfget('/subdomain')
+          if not routing.get('enabled'):
+              req=urllib.request.Request(api+'/workers/scripts/friendbook-quota-monitor/subdomain',data=json.dumps({'enabled':True,'previews_enabled':False}).encode(),headers={**headers,'Content-Type':'application/json'},method='POST')
+              with urllib.request.urlopen(req,timeout=30) as response: enabled=json.load(response)
+              if not enabled.get('success'): raise ValueError('Monitor route not enabled')
+          print('::notice::Remote monitor has only two encrypted secret bindings and exactly one 15-minute cron')
+          stage='subdomain lookup'
+          req=urllib.request.Request(api+'/workers/subdomain',headers=headers)
+          with urllib.request.urlopen(req,timeout=30) as response: payload=json.load(response)
+          subdomain=payload.get('result',{}).get('subdomain','')
+          if not payload.get('success') or not re.fullmatch('[a-zA-Z0-9-]+',subdomain): raise RuntimeError('Worker subdomain unavailable')
+          base='https://friendbook-quota-monitor.'+subdomain+'.workers.dev'
+          print('::notice::Monitor URL '+base+'/health')
+          stage='public health smoke check'
+          for attempt in range(6):
+              try:
+                  req=urllib.request.Request(base+'/health',headers={'User-Agent':'FriendBookQuotaMonitorVerification/1.0'})
+                  with urllib.request.urlopen(req,timeout=30) as response: health=json.load(response)
+                  break
+              except urllib.error.HTTPError as error:
+                  if attempt==5 or error.code not in (403,404,429,500,502,503,504): raise
+                  time.sleep(3)
+
+          if health!={'ok':True,'role':'observe_only','d1_bound':False}: raise RuntimeError('Monitor health mismatch '+json.dumps({k:health.get(k) for k in ('ok','role','d1_bound')}))
+          stage='private report access check'
+          try:
+              urllib.request.urlopen(urllib.request.Request(base+'/report',headers={'User-Agent':'FriendBookQuotaMonitorVerification/1.0'}),timeout=30)
+              raise RuntimeError('Report unexpectedly public')
+          except urllib.error.HTTPError as error:
+              if error.code!=401: raise RuntimeError('Unexpected unauthenticated report status '+str(error.code))
+          stage='authenticated analytics report'
+          req=urllib.request.Request(base+'/report',headers={'Authorization':'Bearer '+report_token,'User-Agent':'FriendBookQuotaMonitorVerification/1.0'})
+          with urllib.request.urlopen(req,timeout=45) as response: report=json.load(response)
+          if report.get('role')!='observe_only' or report.get('automatic_fix_actions')!=[] or report.get('future_quota_guarantee') is not False:
+              raise RuntimeError('Unsafe monitor report contract')
+          print('::notice::Isolated monitor health '+base+'/health')
+          print('::notice::Live monitor report '+json.dumps(report,sort_keys=True))
+          print('::notice::Monitor deployed with 15-minute aggregate logging. Application Worker, data and cron unchanged. It does not auto-fix or enforce quota.')
+          PY

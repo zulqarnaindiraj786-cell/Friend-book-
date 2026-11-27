@@ -239,9 +239,9 @@ public class Cloudinary {
             s1.close();
             if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null;
 
-            boolean slow2g = FastCache.isSlow2G(ctx);
-            int maxDim = slow2g ? 720 : (Prefs.turbo2g(ctx) ? 1080 : 1440);
-            int quality = slow2g ? 60 : (Prefs.turbo2g(ctx) ? 75 : 85);
+            boolean slow2g = FastCache.isSlow2G(ctx) || Prefs.dataSaver(ctx);
+            int maxDim = slow2g ? 720 : 1080;
+            int quality = slow2g ? 60 : 78;
 
             int sample = 1;
             int w = bounds.outWidth, h = bounds.outHeight;
@@ -365,7 +365,9 @@ public class Cloudinary {
 
                 byte[] compressedImg = compressImageFor2G(ctx, uri, mime);
                 boolean isVideo = mime.startsWith("video/");
-                if (!isVideo) {
+                final int r2BufferLimit = 25_000_000;
+                final long uploadSize = compressedImg != null ? compressedImg.length : queryUriLength(ctx, uri);
+                if (!isVideo && uploadSize <= r2BufferLimit) {
                     try {
                         byte[] r2Payload = compressedImg;
                         String r2Mime = compressedImg != null ? "image/jpeg" : mime;
@@ -375,11 +377,14 @@ public class Cloudinary {
                                 if (rawIn != null) {
                                     byte[] tmp = new byte[16 * 1024];
                                     int r;
+                                    boolean complete = true;
                                     while ((r = rawIn.read(tmp)) != -1) {
-                                        if (bos.size() + r > 25_000_000) break;
+                                        if (r > r2BufferLimit - bos.size()) { complete = false; break; }
                                         bos.write(tmp, 0, r);
                                     }
-                                    r2Payload = bos.toByteArray();
+                                    // Do not send a partial file. The existing streaming fallback
+                                    // reopens the original URI without the in-memory buffer limit.
+                                    if (complete) r2Payload = bos.toByteArray();
                                 }
                             }
                         }
@@ -406,7 +411,7 @@ public class Cloudinary {
                 }
                 String fname = "friendbook_" + System.currentTimeMillis() + "." + ext;
 
-                long totalBytes = compressedImg != null ? compressedImg.length : queryUriLength(ctx, uri);
+                long totalBytes = uploadSize;
 
                 // High-throughput 64 KB chunks for video (4x faster mobile socket throughput), 16 KB for 2G photos
                 int chunkSize = isVideo ? (64 * 1024) : (16 * 1024);

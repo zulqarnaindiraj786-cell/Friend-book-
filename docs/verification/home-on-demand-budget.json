@@ -1,0 +1,68 @@
+{
+  "all_20_opens_cache_miss_daily_reads": 28555,
+  "assumptions": "20 opens: 1 cache miss, 19 cache hits; 60 friends; 2 explicit Home refreshes; cache not evicted/invalidated otherwise; notification list: 5 opens + 5 older pages charged as misses, 200 sender lookups, 1 explicit mark-all of 40 unread; inbox: 10 opens as misses + 20 visible push refreshes + 2 pulls + 5 older pages, 11 docs each",
+  "baseline_daily_reads": 43630,
+  "baseline_daily_writes": 1875,
+  "cached_open_auth_allowance": 1,
+  "cached_open_incremental_home_and_badge_documents": 0,
+  "cold_open_documents_with_60_friends": 177,
+  "cron_runs_per_day": 96,
+  "daily_reads": 11535,
+  "daily_writes": 1495,
+  "measurement": "document-delivery estimate, not D1 rows_read telemetry",
+  "read_limit": 100000,
+  "reads_per_user_per_day": {
+    "app_opens": 136,
+    "chat_list": 407,
+    "chat_received": 0,
+    "chat_sends": 90,
+    "chat_threads": 516,
+    "explicit_home_refreshes": 158,
+    "feed_listener": 0,
+    "feed_pages": 200,
+    "friend_graph": 60,
+    "notification_mark_all": 61,
+    "notification_pages": 100,
+    "notification_senders": 200,
+    "notifications": 100,
+    "profiles": 80,
+    "reactions": 0,
+    "story_viewer": 100,
+    "visible_discovery": 3
+  },
+  "reads_per_user_total": 2211,
+  "reads_removed_pct": 73.6,
+  "top_read_consumers": [
+    {
+      "action": "chat_threads",
+      "reads": 516
+    },
+    {
+      "action": "chat_list",
+      "reads": 407
+    },
+    {
+      "action": "feed_pages",
+      "reads": 200
+    }
+  ],
+  "users": 5,
+  "within_read_target": true,
+  "within_write_target": true,
+  "write_limit": 5000,
+  "writes_per_user_per_day": {
+    "fcm_maintenance": 2,
+    "live": 10,
+    "messages": 30,
+    "notification_mark_all": 40,
+    "notifications": 30,
+    "posts_comments": 30,
+    "presence": 0,
+    "reactions": 100,
+    "receipts": 22,
+    "room_previews": 30,
+    "settings": 5
+  },
+  "writes_per_user_total": 299,
+  "writes_removed_pct": 20.3
+}

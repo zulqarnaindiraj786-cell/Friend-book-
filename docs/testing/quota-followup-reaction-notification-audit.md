@@ -1,0 +1,9 @@
+# Quota follow-up after reaction and notification deployment
+
+Read-only adaptive analytics run 44994077623 succeeded; its reported UTC timestamp was 2026-11-22 06:31:09. Its database-level UTC-day aggregate was 506,276 reads and 30,738 writes. This is sampled query analytics for one database, **not** account-wide billed usage or current available headroom. The last five-minute sample was largely quiet. The last 60-minute sample included 1,669 rows written across 363 presence-session upserts and 13,660 reads across 13,660 point-lookup executions. The window overlaps earlier traffic and does not establish savings from the latest deployment or identify whether these operations can safely be eliminated. Presence expiry, lookup authorization and fresh data must not be weakened merely to reduce a counter.
+
+The indexed friendship candidate remains disabled and outside the production migrations: its index-build cost, complete malformed-record equivalence and production concurrency still need independent validation. It is not included in the deployed Worker. Avoid generating synthetic production activity, or building/dropping indexes just to estimate the limit; both can consume quota.
+
+A finite daily allowance cannot support unbounded usage permanently. Use actual account-wide billed D1 usage and limits (not this analytics sample) to forecast peak demand, configure provider usage notifications and plan capacity, and test quota-exhaustion/recovery on staging. Other services have separate limits. For an offline estimate using billed dashboard values see `scripts/loadtest/d1_budget_forecast.py`; it is not an alert, cap or guarantee.
+
+The Worker and Android code did not change in this audit. Android compile/unit workflow 44994077662 encountered a Robolectric Maven download IOException; unchanged code passed retry 44994172601. The previously deployed code also passed Android run 44993622751; Worker validation passed in 44994172589.

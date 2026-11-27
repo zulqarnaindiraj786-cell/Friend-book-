@@ -1,0 +1,111 @@
+name: Deploy legacy-comment aggregate quota fix
+on:
+  push:
+    branches: [arena/b52bc74d-friend-book]
+    paths:
+      - '.github/workflows/deploy-comment-route-aggregate.yml'
+      - 'patches/legacy-comment-route-aggregate.diff'
+permissions:
+  contents: read
+concurrency:
+  group: friendbook-cloudflare-production
+  cancel-in-progress: false
+jobs:
+  deploy:
+    if: contains(github.event.head_commit.message, '[deploy-comment-route-aggregate]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: '92f3d04598822de2e49e14561218d090'
+      WRANGLER_SEND_METRICS: 'false'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          path: production-source
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: production-source/package-lock.json
+      - name: Apply only the reviewed aggregate migration and Worker patch to production source
+        working-directory: production-source
+        run: git apply ../patches/legacy-comment-route-aggregate.diff
+      - name: Run Worker, migration, and query-plan regressions
+        working-directory: production-source
+        run: |
+          npm ci --ignore-scripts
+          npm test
+          python3 cloudflare/test/schema_test.py
+          python3 cloudflare/test/migration_test.py
+          python3 cloudflare/test/index_plan_test.py
+      - name: Verify production Worker config and capture rollback version
+        working-directory: production-source
+        run: python3 scripts/admin/verify_worker_rollout.py --snapshot /tmp/comment-route-before.json
+      - name: Compile exact production Worker without deploying
+        working-directory: production-source
+        run: npx --yes wrangler@4.157.0 deploy --dry-run --outdir /tmp/comment-route-bundle
+      - name: Apply the additive route-count migration only
+        working-directory: production-source
+        run: npx --yes wrangler@4.157.0 d1 execute friendbook-db --remote --file cloudflare/migrations/0108_legacy_comment_route_counts.sql
+      - name: Verify aggregate parity using counts only; never print user/comment values
+        working-directory: production-source
+        run: |
+          python3 - <<'PY'
+          import json, os, urllib.request
+          account='92f3d04598822de2e49e14561218d090'
+          database='e1c605ca-a50b-46c6-9deb-56dd1f70d163'
+          sql='''WITH expected AS (
+            SELECT resource,author_uid,COUNT(*) AS n
+            FROM friendbook_cf_legacy_comment_route_sources GROUP BY resource,author_uid
+            UNION ALL
+            SELECT resource,'' AS author_uid,COUNT(*) AS n
+            FROM friendbook_cf_legacy_comment_route_sources GROUP BY resource
+          ), actual AS (
+            SELECT resource,author_uid,comment_count AS n FROM friendbook_cf_legacy_comment_route_counts
+          )
+          SELECT CASE WHEN NOT EXISTS(SELECT resource,author_uid,n FROM expected EXCEPT SELECT resource,author_uid,n FROM actual)
+            AND NOT EXISTS(SELECT resource,author_uid,n FROM actual EXCEPT SELECT resource,author_uid,n FROM expected)
+            THEN 1 ELSE 0 END AS ok'''
+          req=urllib.request.Request(f'https://api.cloudflare.com/client/v4/accounts/{account}/d1/database/{database}/query',
+            data=json.dumps({'sql':sql}).encode(),headers={'Authorization':'Bearer '+os.environ['CLOUDFLARE_API_TOKEN'],'Content-Type':'application/json'})
+          with urllib.request.urlopen(req,timeout=45) as response: payload=json.load(response)
+          rows=payload.get('result',[{}])[0].get('results',[])
+          if payload.get('success') is not True or len(rows)!=1 or rows[0].get('ok')!=1:
+            raise SystemExit('Legacy route aggregate parity check failed; Worker code not deployed.')
+          print('Aggregate parity verified: one boolean result, no user/comment values emitted.')
+          PY
+      - name: Smoke-test aggregate queries against production D1, read-only
+        working-directory: production-source
+        run: node scripts/loadtest/comment_epoch_smoke.mjs
+      - name: Deploy Worker code after aggregate parity succeeds
+        working-directory: production-source
+        run: npx --yes wrangler@4.157.0 deploy --keep-vars
+      - name: Verify preserved bindings, Worker health and auth gate
+        working-directory: production-source
+        run: |
+          python3 scripts/admin/verify_worker_rollout.py --snapshot /tmp/comment-route-before.json --compare
+          python3 - <<'PY'
+          import json, urllib.request, urllib.error
+          base='https://rough-firefly-dd7b.zulqarnaindiraj786.workers.dev'
+          def get(path):
+              req=urllib.request.Request(base+path,headers={'User-Agent':'FriendBook-Comment-Route-Aggregate/1.0'})
+              try:
+                  with urllib.request.urlopen(req,timeout=30) as response: return response.status,json.load(response)
+              except urllib.error.HTTPError as error: return error.code,{}
+          status,health=get('/health')
+          assert status==200 and health.get('ok') is True and health.get('d1InteractionsEnabled') is True
+          assert health.get('views',{}).get('ae') is True and get('/v1/me')[0]==401
+          print('Health, D1 and analytics bindings, and authentication gate verified.')
+          PY
+      - name: Preserve rollback and bundle evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: comment-route-aggregate-rollout-evidence
+          path: |
+            /tmp/comment-route-before.json
+            /tmp/comment-route-bundle
+          retention-days: 7

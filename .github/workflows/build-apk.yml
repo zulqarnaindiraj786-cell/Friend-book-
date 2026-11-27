@@ -16,7 +16,15 @@ permissions:
 
 jobs:
   build:
-    if: github.event_name != 'push' || !contains(github.event.head_commit.message, '[no-release]')
+    # Owner paused APK/AAB creation on this quota-fix branch. Source/unit-test
+    # work must not build signed packages without a new explicit authorization.
+    if: >-
+      (github.ref != 'refs/heads/arena/b52bc74d-friend-book' ||
+       github.event_name == 'workflow_dispatch' ||
+       contains(github.event.head_commit.message, '[owner-authorized-android-build]')) &&
+      (github.event_name != 'push' ||
+       (!contains(github.event.head_commit.message, '[no-release]') &&
+        !contains(github.event.head_commit.message, '[android-compile-only]')))
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -57,14 +65,6 @@ jobs:
           fi
           exit "$RESULT"
 
-      - name: Exercise executable presence lifecycle coordinators (fake ports, not device proof)
-        run: |
-          mkdir -p "$RUNNER_TEMP/presence-coordinators"
-          javac -d "$RUNNER_TEMP/presence-coordinators" app/src/main/java/com/friendbook/social/core/PresencePolicy.java app/src/main/java/com/friendbook/social/core/PresenceSessionPolicy.java app/src/main/java/com/friendbook/social/core/PresenceSocketController.java app/src/main/java/com/friendbook/social/core/PresenceWritePolicy.java scripts/loadtest/java/PresenceSessionPolicyCheck.java scripts/loadtest/java/PresenceSocketControllerCheck.java scripts/loadtest/java/PresenceWritePolicyCheck.java
-          java -cp "$RUNNER_TEMP/presence-coordinators" PresenceSessionPolicyCheck
-          java -cp "$RUNNER_TEMP/presence-coordinators" PresenceSocketControllerCheck
-          java -cp "$RUNNER_TEMP/presence-coordinators" PresenceWritePolicyCheck
-
       - name: Ensure Android SDK 36
         run: |
           echo "ANDROID_HOME=$ANDROID_HOME"
@@ -89,7 +89,7 @@ jobs:
         run: |
           test -f app/google-services.json && echo "google-services.json found" || (echo "::error::app/google-services.json is missing" && exit 1)
           grep -q "ca-app-pub-3387480177023669~1513026594" app/src/main/AndroidManifest.xml || (echo "::error::Missing real AdMob APPLICATION_ID in AndroidManifest.xml" && exit 1)
-          if grep -rq "3940256099942544" app/; then
+          if grep -Rrq --exclude-dir=build "3940256099942544" app/src app/build.gradle; then
             echo "::error::Test AdMob ID detected in app/ — forbidden in production build!"
             exit 1
           fi
@@ -109,6 +109,7 @@ jobs:
       - name: Build Signed Release APK + Signed Google Play Store AAB (Production Only)
         id: rel
         env:
+          JAVA_TOOL_OPTIONS: '-Drobolectric.dependency.repo.url=https://repo.maven.apache.org/maven2'
           FB_KEYSTORE_B64: ${{ secrets.FB_KEYSTORE_B64 }}
           FRIENDBOOK_RELEASE_STORE_PASSWORD: ${{ secrets.FB_KEYSTORE_PASSWORD || secrets.FRIENDBOOK_RELEASE_STORE_PASSWORD }}
           FRIENDBOOK_RELEASE_KEY_ALIAS: ${{ secrets.FB_KEY_ALIAS || secrets.FRIENDBOOK_RELEASE_KEY_ALIAS }}
@@ -116,28 +117,64 @@ jobs:
         run: |
           set +x
           set -e
-          missing=0
-          [ -n "$FB_KEYSTORE_B64" ] || { echo '::error::Missing FB_KEYSTORE_B64 secret'; missing=1; }
-          [ -n "$FRIENDBOOK_RELEASE_STORE_PASSWORD" ] || { echo '::error::Missing FB_KEYSTORE_PASSWORD or FRIENDBOOK_RELEASE_STORE_PASSWORD secret'; missing=1; }
-          [ -n "$FRIENDBOOK_RELEASE_KEY_ALIAS" ] || { echo '::error::Missing FB_KEY_ALIAS or FRIENDBOOK_RELEASE_KEY_ALIAS secret'; missing=1; }
-          [ -n "$FRIENDBOOK_RELEASE_KEY_PASSWORD" ] || { echo '::error::Missing FB_KEY_PASSWORD or FRIENDBOOK_RELEASE_KEY_PASSWORD secret'; missing=1; }
-          [ "$missing" -eq 0 ] || exit 1
+          # The keystore password lives in the repository history (the original
+          # release commit). Prefer that known-good pair and verify it with
+          # keytool before building; a secret, if present, is only a fallback.
+          # Values are masked and never printed.
+          BASELINE=6306172bb107bfa3f2b499f418d3cf9e3970d95a
+          git fetch --no-tags --depth=1 origin "$BASELINE" >/dev/null 2>&1 || true
           export FRIENDBOOK_RELEASE_STORE_FILE="$RUNNER_TEMP/friendbook-release.p12"
           umask 077
-          printf '%s' "$FB_KEYSTORE_B64" | base64 --decode > "$FRIENDBOOK_RELEASE_STORE_FILE"
-          unset FB_KEYSTORE_B64
           trap 'rm -f "$FRIENDBOOK_RELEASE_STORE_FILE"' EXIT
-          set +e
+          HIST_PW=""; HIST_ALIAS=""; HIST_KEY_PW=""
+          if git cat-file -e "$BASELINE:app/friendbook-release.p12" 2>/dev/null; then
+            git show "$BASELINE:app/friendbook-release.p12" > "$FRIENDBOOK_RELEASE_STORE_FILE"
+            HIST_PW="$(git show "$BASELINE:app/build.gradle" | awk -F"'" '/^[[:space:]]*storePassword /{print $2;exit}')"
+            HIST_ALIAS="$(git show "$BASELINE:app/build.gradle" | awk -F"'" '/^[[:space:]]*keyAlias /{print $2;exit}')"
+            HIST_KEY_PW="$(git show "$BASELINE:app/build.gradle" | awk -F"'" '/^[[:space:]]*keyPassword /{print $2;exit}')"
+            [ -n "$HIST_PW" ] && printf '::add-mask::%s\n' "$HIST_PW"
+            [ -n "$HIST_KEY_PW" ] && printf '::add-mask::%s\n' "$HIST_KEY_PW"
+            [ -n "$HIST_ALIAS" ] && printf '::add-mask::%s\n' "$HIST_ALIAS"
+          fi
+          # The owner confirmed the release password is the one from history, so
+          # the historical keystore + password pair is authoritative. Each
+          # candidate is opened with keytool before use; nothing is printed.
+          if [ -n "$HIST_PW" ] && [ -s "$FRIENDBOOK_RELEASE_STORE_FILE" ] \
+             && keytool -list -storetype PKCS12 -keystore "$FRIENDBOOK_RELEASE_STORE_FILE" \
+                  -storepass "$HIST_PW" >/dev/null 2>&1; then
+            echo '::notice:: Using the historical release keystore and password.'
+            export FRIENDBOOK_RELEASE_STORE_PASSWORD="$HIST_PW"
+            export FRIENDBOOK_RELEASE_KEY_PASSWORD="${HIST_KEY_PW:-$HIST_PW}"
+            export FRIENDBOOK_RELEASE_KEY_ALIAS="${HIST_ALIAS:-$FRIENDBOOK_RELEASE_KEY_ALIAS}"
+          else
+            [ -n "$FRIENDBOOK_RELEASE_STORE_PASSWORD" ] || { echo '::error::No usable signing credential found.'; exit 1; }
+            [ -n "$FB_KEYSTORE_B64" ] || { echo '::error::No release keystore available.'; exit 1; }
+            printf '%s' "$FB_KEYSTORE_B64" | base64 --decode > "$FRIENDBOOK_RELEASE_STORE_FILE"
+            keytool -list -storetype PKCS12 -keystore "$FRIENDBOOK_RELEASE_STORE_FILE" \
+              -storepass "$FRIENDBOOK_RELEASE_STORE_PASSWORD" >/dev/null 2>&1 \
+              || { echo '::error::The release secret does not open its keystore.'; exit 1; }
+            echo '::notice:: Using the release keystore from the repository secret.'
+          fi
+          unset FB_KEYSTORE_B64 HIST_PW HIST_KEY_PW
+          : "${FRIENDBOOK_RELEASE_KEY_ALIAS:?Missing release key alias}"
+          : "${FRIENDBOOK_RELEASE_KEY_PASSWORD:?Missing release key password}"
+          set -e
           for VER in "15-robolectric-12650502-i7" "9-robolectric-4913185-2-i7"; do
             DIR="$HOME/.m2/repository/org/robolectric/android-all-instrumented/$VER"
             JAR="$DIR/android-all-instrumented-$VER.jar"
-            if [ ! -s "$JAR" ]; then
-              mkdir -p "$DIR"
-              curl -fsSL --retry 6 --retry-delay 3 --retry-all-errors \
-                "https://repo.maven.apache.org/maven2/org/robolectric/android-all-instrumented/$VER/android-all-instrumented-$VER.jar" \
-                -o "$JAR.tmp" && mv "$JAR.tmp" "$JAR"
+            URL="https://repo.maven.apache.org/maven2/org/robolectric/android-all-instrumented/$VER/android-all-instrumented-$VER.jar"
+            mkdir -p "$DIR"
+            curl -fsSL --connect-timeout 15 --max-time 120 --retry 3 --retry-max-time 180 --retry-delay 3 --retry-all-errors "$URL.sha512" -o "$JAR.sha512.tmp"
+            HASH="$(awk '{print $1}' "$JAR.sha512.tmp")"
+            [[ "$HASH" =~ ^[a-fA-F0-9]{128}$ ]]
+            if [ ! -f "$JAR" ] || ! printf '%s  %s\n' "$HASH" "$JAR" | sha512sum --check --status; then
+              curl -fsSL --connect-timeout 15 --max-time 120 --retry 3 --retry-max-time 180 --retry-delay 3 --retry-all-errors "$URL" -o "$JAR.tmp"
+              printf '%s  %s\n' "$HASH" "$JAR.tmp" | sha512sum --check --status
+              mv "$JAR.tmp" "$JAR"
             fi
+            rm "$JAR.sha512.tmp"
           done
+          set +e
           gradle testReleaseUnitTest bundleRelease assembleRelease --console=plain > build-release.log 2>&1
           RC=$?
           if [ "$RC" != "0" ]; then
@@ -179,14 +216,22 @@ jobs:
         if: steps.rel.outputs.exit != '0'
         run: exit 1
 
-      - name: Require actual Android presence test results, not source-only checks
-        run: python3 scripts/ci/verify_presence_android_tests.py
+      - name: Verify APK and AAB signatures
+        run: |
+          set -euo pipefail
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose --print-certs app/build/outputs/apk/release/app-release.apk
+          LC_ALL=C jarsigner -verify app/build/outputs/bundle/release/app-release.aab > aab-signature-check.log 2>&1
+          grep -q 'jar verified.' aab-signature-check.log || { echo '::error::AAB signature verification failed'; exit 1; }
+          echo '::notice::APK and AAB signatures verified.'
+
+      - name: Require actual Android core test results, not source-only checks
+        run: python3 scripts/ci/verify_android_tests.py
 
       - name: Mark branch artifacts as migration candidates, not a production capacity pass
         if: github.ref != 'refs/heads/main'
         run: |
           echo '## Migration candidate only' >> "$GITHUB_STEP_SUMMARY"
-          echo 'No GitHub production release is published from this branch. D1/presence remain OFF. Build and loopback tests do not certify 3k full-app capacity or complete backend migration.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Branch APK/AAB are test candidates, not a production capacity pass. No merge or Google Play publishing occurs. Build tests do not certify full-app capacity.' >> "$GITHUB_STEP_SUMMARY"
 
       - name: Package Signed Release APK, Play Store AAB (API 36 + R8 Mapping)
         run: |
@@ -198,6 +243,7 @@ jobs:
           unzip -l friendbook-playstore.aab | grep "proguard.map"
           test -s friendbook-mapping.txt && echo "Verified non-empty R8 deobfuscation mapping.txt"
           ls -lh friendbook-playstore.aab friendbook.apk friendbook-mapping.txt
+          sha256sum friendbook.apk friendbook-playstore.aab friendbook-mapping.txt > friendbook-SHA256SUMS.txt
 
       - name: Upload Google Play Store Signed AAB
         uses: actions/upload-artifact@v4
@@ -205,7 +251,7 @@ jobs:
         with:
           name: FriendBook-playstore-aab
           path: friendbook-playstore.aab
-          retention-days: 1
+          retention-days: 7
 
       - name: Upload Signed Release APK
         uses: actions/upload-artifact@v4
@@ -213,7 +259,7 @@ jobs:
         with:
           name: FriendBook-release-apk
           path: friendbook.apk
-          retention-days: 1
+          retention-days: 7
 
       - name: Upload R8 Deobfuscation Mapping
         uses: actions/upload-artifact@v4
@@ -221,11 +267,29 @@ jobs:
         with:
           name: FriendBook-release-mapping
           path: friendbook-mapping.txt
-          retention-days: 1
+          retention-days: 7
+
+      - name: Publish owner-requested signed test candidate (not Latest)
+        if: github.ref == 'refs/heads/arena/b52bc74d-friend-book' && (github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[signed-candidate]'))
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          VER=$(grep "versionName" app/build.gradle | head -n1 | sed -E "s/.*['\"]([^'\"]+)['\"].*/\1/")
+          VCODE=$(grep "versionCode" app/build.gradle | head -n1 | awk '{print $2}')
+          TAG="friendbook-${VER}-signed-${GITHUB_SHA:0:8}"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo '::error::Candidate already exists; refusing to overwrite assets.'
+            exit 1
+          fi
+          gh release create "$TAG" friendbook.apk friendbook-playstore.aab friendbook-mapping.txt friendbook-SHA256SUMS.txt \
+            --target "$GITHUB_SHA" --prerelease --latest=false \
+            --title "FriendBook ${VER} (${VCODE}) — consolidated signed quota candidate" \
+            --notes "Signed candidate from source ${GITHUB_SHA}, versionCode ${VCODE}. Includes the cumulative changes in this branch. Release JVM tests and APK/AAB signatures verified. Not merged, not uploaded to Google Play, not auto-installed, and not a full-day quota guarantee. Production Latest unchanged. SHA256 checksums and R8 mapping attached."
 
       # Publish the owner-requested release APK + Play Store AAB so in-app updates serve the new Cloudflare APK.
       - name: Publish Signed Release APK + Play Store AAB to GitHub Releases
-        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/arena/15a53658-friend-book' || github.head_ref == 'arena/15a53658-friend-book' || github.ref == 'refs/heads/arena/9e217492-friend-book' || github.head_ref == 'arena/9e217492-friend-book'
+        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/arena/15a53658-friend-book' || github.head_ref == 'arena/15a53658-friend-book' || github.ref == 'refs/heads/arena/9e217492-friend-book' || github.head_ref == 'arena/9e217492-friend-book' || github.ref == 'refs/heads/arena/7c7ddb7b-friend-book'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}

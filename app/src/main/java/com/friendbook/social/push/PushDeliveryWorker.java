@@ -14,10 +14,12 @@ import java.util.concurrent.TimeUnit;
 public final class PushDeliveryWorker extends Worker {
     public PushDeliveryWorker(@NonNull Context c, @NonNull WorkerParameters p) { super(c, p); }
     public static void enqueue(JSONObject body) { enqueue(body, false); }
-    public static void enqueue(JSONObject body, boolean replaceRegistration) {
-        String uid = Fb.uid(); if (uid == null) return;
+    public static void enqueue(JSONObject body, boolean replaceRegistration) { enqueueAcknowledged(body,replaceRegistration,Fb.uid()); }
+    /** Returns the WorkManager persistence operation, not proof of FCM delivery. */
+    static Operation enqueueAcknowledged(JSONObject body,boolean replaceRegistration,String expectedActor) {
+        String uid=Fb.uid();if(uid==null || !uid.equals(expectedActor))return null;
         String action = body.optString("action");
-        String key = "register".equals(action) ? "register_" + uid : uid + "_" + body.toString();
+        String key = PushWorkKey.of(uid, body);
         OneTimeWorkRequest.Builder builder = new OneTimeWorkRequest.Builder(PushDeliveryWorker.class)
                 .setInputData(new Data.Builder().putString("uid", uid).putString("body", body.toString()).build())
                 .setConstraints(new Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
@@ -37,6 +39,7 @@ public final class PushDeliveryWorker extends Worker {
                 PushTrace.stage("queue_operation_ok", "work=" + work.getId()); // KEEP may retain an older active request.
             } catch (Exception e) { PushTrace.failure("queue_failed", e); }
         }, androidx.core.content.ContextCompat.getMainExecutor(App.instance));
+        return operation;
     }
     @NonNull @Override public Result doWork() {
         String uid = getInputData().getString("uid");
@@ -75,7 +78,14 @@ public final class PushDeliveryWorker extends Worker {
                     .putString(register ? "registration" : "last_send", outcome)
                     .putLong("updated_at", System.currentTimeMillis()).apply();
             android.util.Log.i("FriendBookPush", outcome);
-            if (response.status >= 200 && response.status < 300) return Result.success();
+            if (response.status >= 200 && response.status < 300) {
+                // Some devices may accept while another transiently fails. The
+                // gateway deduplicates accepted devices on a bounded retry.
+                if ("message".equals(body.optJSONObject("data") == null ? "" : body.optJSONObject("data").optString("type"))
+                        && response.data.optInt("failed") > 0)
+                    return PushRetryPolicy.shouldRetry(false, 503, getRunAttemptCount()) ? Result.retry() : Result.failure();
+                return Result.success();
+            }
             return PushRetryPolicy.shouldRetry(register, response.status, getRunAttemptCount(), response.data.optString("error"))
                     ? Result.retry() : Result.failure();
         } catch (Exception e) {

@@ -24,7 +24,6 @@ import com.friendbook.social.core.Fb;
 import com.friendbook.social.core.FeedAlgorithm;
 import com.friendbook.social.core.Icons;
 import com.friendbook.social.core.Prefs;
-import com.friendbook.social.core.Presence;
 import com.friendbook.social.core.Ui;
 import com.friendbook.social.friends.SearchActivity;
 import com.friendbook.social.groups.GroupsActivity;
@@ -76,7 +75,10 @@ public class MainActivity extends Activity {
     private final Fragment[] tabFragments = new Fragment[5];
     private TextView homeBadge, msgBadge, notifBadge, friendsBadge, reelsBadge;
     private int active = -1;
-    private ListenerRegistration notifReg, chatReg, reqReg, referralReg;
+    private long foregroundStartedAt;
+    private final com.friendbook.social.core.AppUpdates appUpdates = new com.friendbook.social.core.AppUpdates();
+    private final com.friendbook.social.d1.documents.ForegroundReadScope badgeReadScope =
+            new com.friendbook.social.d1.documents.ForegroundReadScope();
 
     private final java.util.Set<String> currentPendingReqIds = new java.util.HashSet<>();
     private final java.util.Set<String> currentUnreadChatIds = new java.util.HashSet<>();
@@ -85,7 +87,6 @@ public class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle b) {
         super.onCreate(b);
-        com.friendbook.social.core.AppUpdates.check(this,false);
         if (!Fb.signedIn()) { finish(); return; }
         activeInstance = this;
         // Advance friendbook discovery epoch on every app open so user greets fresh posts, videos & ads!
@@ -104,12 +105,7 @@ public class MainActivity extends Activity {
 
         TextView logo = Ui.tvBold(this, "friendbook", 27, Ui.isDark(this) ? 0xFFFFFFFF : 0xFF111827);
         logo.setLetterSpacing(-0.03f);
-        logo.setOnClickListener(v -> {
-            if (active != TAB_HOME) select(TAB_HOME);
-            else if (tabFragments[TAB_HOME] instanceof HomeFragment) {
-                ((HomeFragment) tabFragments[TAB_HOME]).scrollToTop();
-            }
-        });
+        logo.setOnClickListener(v -> { if (active != TAB_HOME) select(TAB_HOME); });
         brandBar.addView(logo, new LinearLayout.LayoutParams(0, -2, 1));
 
         brandBar.addView(circleHeaderIcon(Icons.PLUS, v -> showUniversalCreateSheet()));
@@ -206,10 +202,8 @@ public class MainActivity extends Activity {
         select(TAB_HOME);
         refreshLiteUi();
 
-        // 6. Gather UMP GDPR Consent & Initialize Google Mobile Ads SDK — immediately preload 5 Feed Ads on app open!
-        AdsConfig.preloadFeedBatchNow(this, AdsConfig.AD_POOL_SIZE);
+        // The screen-owned banners start after consent and SDK initialization.
         ConsentManager.gatherConsentAndInitAds(this, () -> {
-            AdsConfig.preloadFeedBatchNow(this, AdsConfig.AD_POOL_SIZE);
             if (tabFragments[TAB_HOME] instanceof HomeFragment) {
                 ((HomeFragment) tabFragments[TAB_HOME]).onLiteModeChanged();
             }
@@ -217,26 +211,12 @@ public class MainActivity extends Activity {
 
         // ⚡ Defer non-critical SDK/network listeners until AFTER Frame #1 paints!
         Looper.myQueue().addIdleHandler(() -> {
+            if (isFinishing() || isDestroyed()) return false;
             Fb.ensureMeFresh();
-            Presence.init();
+
             startBadgeListeners();
-            watchReferralsForFreeTick();
             AdsConfig.startWatching();
-            notificationPermissionHandler.postDelayed(
-                    () -> com.friendbook.social.reels.ReelVideoCache.warmStartupReels(getApplicationContext()),
-                    2000L);
-            try {
-                com.friendbook.social.d1.config.D1RemoteConfig rc =
-                        com.friendbook.social.d1.config.D1RemoteConfig.getInstance();
-                rc.setConfigSettingsAsync(new com.friendbook.social.d1.config.D1RemoteConfigSettings.Builder()
-                        .setMinimumFetchIntervalInSeconds(3600).build());
-                rc.setDefaultsAsync(java.util.Collections.singletonMap("ads_enabled_v3", true))
-                        .addOnCompleteListener(dt -> rc.fetchAndActivate().addOnCompleteListener(t -> {
-                            String raw = rc.getString("ads_enabled_v3");
-                            boolean allow = !"false".equalsIgnoreCase(raw == null ? "" : raw.trim());
-                            AdsConfig.setRemoteAllowed(allow);
-                        }));
-            } catch (Throwable ignored) { }
+            com.friendbook.social.core.CloudAppConfig.refresh(getApplicationContext());
             return false;
         });
 
@@ -382,15 +362,8 @@ public class MainActivity extends Activity {
      * Keeps fragments alive in memory via add + hide/show instead of destroying & recreating!
      */
     public void select(int tab) {
-        if (tab == TAB_REELS) {
-            AdsConfig.preloadReelsBatchNow(this, AdsConfig.AD_POOL_SIZE);
-        } else if (tab == TAB_HOME) {
-            AdsConfig.preloadFeedBatchNow(this, AdsConfig.AD_POOL_SIZE);
-        }
         if (tab == active) {
-            if (tab == TAB_HOME && tabFragments[TAB_HOME] instanceof HomeFragment) {
-                ((HomeFragment) tabFragments[TAB_HOME]).scrollToTop();
-            } else if (tab == TAB_REELS && tabFragments[TAB_REELS] instanceof com.friendbook.social.reels.ReelsFragment) {
+            if (tab == TAB_REELS && tabFragments[TAB_REELS] instanceof com.friendbook.social.reels.ReelsFragment) {
                 ((com.friendbook.social.reels.ReelsFragment) tabFragments[TAB_REELS]).refreshWithAlgorithm();
             }
             return;
@@ -546,22 +519,50 @@ public class MainActivity extends Activity {
         Prefs.setReelsBadgeClearedAt(ctx, me, System.currentTimeMillis());
     }
 
-    private void watchReferralsForFreeTick() {
-        String me = Fb.uid();
-        if (me == null) return;
-        if(referralReg!=null)referralReg.remove();
-        referralReg=com.friendbook.social.core.CountReads.once(Fb.db().collection("referrals").whereEqualTo("refBy",me),total->
-                com.friendbook.social.core.Admin.autoGrantByReferrals(this,(int)Math.min(Integer.MAX_VALUE,total)));
+    // Badges display at most 15+; full history remains in the paginated screens.
+
+    /** Last rendered badge values so a push can bump the pill with zero reads. */
+    private static int liveMsgUnread = 0;
+    private static int liveNotifUnread = 0;
+
+    /**
+     * Called by the FCM service when a push lands while the app is open: the pill goes up locally
+     * instead of re-reading the notification/chat tables. No listener, no polling, no re-read.
+     */
+    public static void onPushArrived(String type) {
+        MainActivity inst = activeInstance;
+        if (inst == null) return;
+        final boolean message = "message".equals(type);
+        inst.runOnUiThread(() -> {
+            if (message) {
+                liveMsgUnread++;
+                Ui.setBadge(inst.msgBadge, liveMsgUnread);
+            } else {
+                liveNotifUnread++;
+                Ui.setBadge(inst.notifBadge, liveNotifUnread);
+            }
+        });
     }
 
     private void startBadgeListeners() {
         String me = Fb.uid();
-        if (me == null) return;
-        if (notifReg != null) notifReg.remove();
-        notifReg = Fb.db().collection("notifications")
+        if (me == null || isFinishing() || isDestroyed()) return;
+        // QUOTA: badges are one-shot bounded reads. A live listener re-read the whole window on
+        // every message/notification just to repaint a pill; pushes bump it locally instead.
+        Fb.db().collection("notifications")
                 .whereEqualTo("toUserId", me).whereEqualTo("isRead", false)
-                .addSnapshotListener((snap, err) -> {
-                    if (snap == null || !java.util.Objects.equals(me,Fb.uid())) return;
+                .orderBy("createdAt", com.friendbook.social.d1.documents.Query.Direction.DESCENDING)
+                .limit(10)
+                .getCachedOrFetchAutomatic(badgeReadScope,60_000L)
+                .addOnSuccessListener((snap) -> {
+                    if (snap == null || !java.util.Objects.equals(me,Fb.uid()) || isFinishing() || isDestroyed()) return;
+                    if (hasWindowFocus() && foregroundStartedAt > 0 && !snap.getMetadata().isFromCache()) {
+                        for (com.friendbook.social.d1.documents.DocumentChange change : snap.getDocumentChanges()) {
+                            if (change.getType() == com.friendbook.social.d1.documents.DocumentChange.Type.ADDED) {
+                                com.friendbook.social.push.PushManager.showForegroundInbox(this, change.getDocument(), foregroundStartedAt);
+                            }
+                        }
+                    }
                     synchronized (currentUnreadNotifIds) {
                         currentUnreadNotifIds.clear();
                         if (snap != null) {
@@ -591,14 +592,18 @@ public class MainActivity extends Activity {
                             }
                         }
                     }
+                    liveNotifUnread = unseen;
                     Ui.setBadge(notifBadge, unseen);
                 });
 
-        if (chatReg != null) chatReg.remove();
-        chatReg = Fb.db().collection("chats")
+        // The badge only needs the rooms that can still be unread — read once, never listened to.
+        Fb.db().collection("chats")
                 .whereArrayContains("participants", me)
-                .addSnapshotListener((snap, err) -> {
-                    if (snap == null || !java.util.Objects.equals(me,Fb.uid())) return;
+                .orderBy("inboxActivityAt", com.friendbook.social.d1.documents.Query.Direction.DESCENDING)
+                .limit(com.friendbook.social.core.OnDemandLoads.CHAT_BADGE_LIMIT)
+                .getCachedOrFetchAutomatic(badgeReadScope,Long.MAX_VALUE)
+                .addOnSuccessListener((snap) -> {
+                    if (snap == null || !java.util.Objects.equals(me,Fb.uid()) || isFinishing() || isDestroyed()) return;
                     int total = 0;
                     long chatClearedAt = Prefs.chatBadgeClearedAt(this, me);
                     synchronized (currentUnreadChatIds) {
@@ -630,13 +635,17 @@ public class MainActivity extends Activity {
                             }
                         }
                     }
+                    liveMsgUnread = total;
                     Ui.setBadge(msgBadge, total);
                 });
 
-        if (reqReg != null) reqReg.remove();
-        reqReg = Fb.db().collection("friend_requests")
+        Fb.db().collection("friend_requests")
                 .whereEqualTo("toUid", me).whereEqualTo("status", "pending")
-                .addSnapshotListener((snap, err) -> {
+                .orderBy("createdAt", com.friendbook.social.d1.documents.Query.Direction.DESCENDING)
+                .limit(10)
+                .getCachedOrFetchAutomatic(badgeReadScope,300_000L)
+                .addOnSuccessListener((snap) -> {
+                    if (snap == null || !me.equals(Fb.uid()) || isFinishing() || isDestroyed()) return;
                     synchronized (currentPendingReqIds) {
                         currentPendingReqIds.clear();
                         if (snap != null) {
@@ -678,28 +687,9 @@ public class MainActivity extends Activity {
                     Ui.setBadge(friendsBadge, count);
                 });
 
-        // Video / Reels badge (capped at 15+ via Ui.setBadge)
-        Fb.db().collection("reels")
-                .orderBy("createdAt", com.friendbook.social.d1.documents.Query.Direction.DESCENDING)
-                .limit(16)
-                .get()
-                .addOnSuccessListener(snap -> {
-                    if (Prefs.quiet(this) || active == TAB_REELS) {
-                        Ui.setBadge(reelsBadge, 0);
-                        return;
-                    }
-                    long clearedAt = Prefs.reelsBadgeClearedAt(this, me);
-                    int unseen = 0;
-                    if (snap != null) {
-                        for (com.friendbook.social.d1.documents.DocumentSnapshot d : snap) {
-                            long ts = com.friendbook.social.core.Format.ts(d.get("createdAt"));
-                            if (clearedAt <= 0L || ts <= 0L || ts > clearedAt) {
-                                unseen++;
-                            }
-                        }
-                    }
-                    Ui.setBadge(reelsBadge, unseen);
-                });
+        // Reels are loaded only when the user opens that tab. Do not prefetch
+        // unseen videos just to manufacture a badge on another screen.
+        Ui.setBadge(reelsBadge,0);
     }
 
     private final android.os.Handler notificationPermissionHandler =
@@ -761,6 +751,8 @@ public class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        foregroundStartedAt = System.currentTimeMillis();
+        if (!isFinishing()) appUpdates.onResume(this);
         permissionHostResumed = true;
         boolean freshSession = FeedAlgorithm.onAppResumed(this);
         if (freshSession) {
@@ -775,8 +767,9 @@ public class MainActivity extends Activity {
         com.friendbook.social.push.PushManager.sync(this);
         com.friendbook.social.push.PushOpenActivity.resumePending(this);
         refreshLiteUi();
+        if (!ConsentManager.canRequestAds(this)) ConsentManager.retryConsentOnResume(this);
         Fb.ensureMeFresh();
-        Presence.init();
+
         // Delay until Main is visible; never show a permission dialog from background/PIN/login.
         notificationPermissionHandler.removeCallbacks(notificationPermissionPrompt);
         notificationPermissionHandler.postDelayed(notificationPermissionPrompt, 2000L);
@@ -793,13 +786,11 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        badgeReadScope.close();
+        appUpdates.dismiss();
         notificationPermissionHandler.removeCallbacks(notificationPermissionPrompt);
         if (activeInstance == this) activeInstance = null;
         super.onDestroy();
-        if (referralReg != null) referralReg.remove();
-        if (notifReg != null) notifReg.remove();
-        if (chatReg != null) chatReg.remove();
-        if (reqReg != null) reqReg.remove();
         App.instance.setShakeListener(null);
     }
 }

@@ -41,6 +41,9 @@ public class AdminEarningsFragment extends Fragment {
     private TextView tickIncomeT, subsIncomeT, liveIncomeT, totalT, splitT, monthT;
     private BarChart chart;
     private ListenerRegistration payReg, giftReg;
+    private LinearLayout payControls,giftControls;
+    private String actor;
+    private boolean started,payReady,giftReady;
 
     // running totals
     private long tickBlue, tickGold, tickDiamond, subs, liveStars;
@@ -56,17 +59,21 @@ public class AdminEarningsFragment extends Fragment {
         Ui.pad(body, 12, 10, 12, 24);
         sv.addView(body);
 
-        totalT = bigCard(body, "📊 Community Milestones Approved", "…", Ui.BLUE);
+        TextView partial=Ui.tv(a,"Figures and chart cover loaded records only, not full totals. Load more or refresh as needed.",12,Ui.sub(a));
+        Ui.pad(partial,4,4,4,8);body.addView(partial);
+        payControls=Ui.col(a);body.addView(payControls);
+        giftControls=Ui.col(a);body.addView(giftControls);
+        totalT = bigCard(body, "📊 Loaded Community Milestones", "…", Ui.BLUE);
         tickIncomeT = row(body, "✓ Verified Badges Granted", "blue / gold / diamond reviews", Ui.BLUE);
         subsIncomeT = row(body, "⭐ VIP Fan Club Memberships", "free creator fan club", Ui.GREEN);
-        liveIncomeT = row(body, "🔴 Live Community Stars", "total stars sent on live streams", Ui.RED);
+        liveIncomeT = row(body, "🔴 Live Community Stars", "stars in loaded live gifts", Ui.RED);
 
         splitT = Ui.tv(a, "", 12, Ui.sub(a));
         Ui.pad(splitT, 4, 10, 4, 0);
         body.addView(splitT);
 
         // monthly chart
-        TextView ch = Ui.tvBold(a, "📊 Monthly approvals (last 6 months)", 14, Ui.txt(a));
+        TextView ch = Ui.tvBold(a, "📊 Loaded approvals (last 6 months)", 14, Ui.txt(a));
         Ui.pad(ch, 4, 16, 4, 6);
         body.addView(ch);
         LinearLayout chartCard = Ui.col(a);
@@ -147,46 +154,43 @@ public class AdminEarningsFragment extends Fragment {
     @Override
     public void onStart() {
         super.onStart();
-        payReg = Fb.db().collection("payments")
-                .whereEqualTo("status", "approved").limit(1000)
-                .addSnapshotListener((snap, err) -> {
-                    tickBlue = tickGold = tickDiamond = subs = 0;
-                    monthly.clear();
-                    seedMonths();
-                    if (snap != null) {
-                        for (DocumentSnapshot d : snap) {
-                            Map<String, Object> m = d.getData();
-                            String type = Format.str(m, "type");
-                            long amount = Format.intOf(m, "amount");
-                            boolean usd = "USD".equals(Format.str(m, "currency"));
-                            String mk = Format.str(m, "createdMonth");
-                            if (type == null) continue;
-                            switch (type) {
-                                case "tick_blue": tickBlue += amount; break;
-                                case "tick_gold": tickGold += amount; break;
-                                case "tick_diamond": tickDiamond += amount; break;
-                                case "subscription": subs += amount; break; // USD
-                            }
-                            if (!mk.isEmpty() && monthly.containsKey(mk) && !usd)
-                                monthly.put(mk, monthly.get(mk) + amount);
+        android.app.Activity a=getActivity();
+        if(a==null || !Admin.isAdmin() || Fb.uid()==null)return;
+        if(actor!=null && !actor.equals(Fb.uid())){a.finish();return;}
+        actor=Fb.uid();started=true;payReady=false;giftReady=false;
+        tickBlue=tickGold=tickDiamond=subs=liveStars=0;monthly.clear();seedMonths();render();
+        payReg=com.friendbook.social.core.PagedLists.attach(a,payControls,
+                Fb.db().collection("payments").whereEqualTo("status","approved"),
+                10,"approved-payments",(snap,err)->{
+                    if(snap==null)return;
+                    tickBlue=tickGold=tickDiamond=subs=0;monthly.clear();seedMonths();
+                    for(DocumentSnapshot d:snap) {
+                        Map<String,Object> m=d.getData();
+                        String type=Format.str(m,"type");long amount=Format.intOf(m,"amount");
+                        boolean usd="USD".equals(Format.str(m,"currency"));String mk=Format.str(m,"createdMonth");
+                        switch(type) {
+                            case "tick_blue":tickBlue+=amount;break;
+                            case "tick_gold":tickGold+=amount;break;
+                            case "tick_diamond":tickDiamond+=amount;break;
+                            case "subscription":subs+=amount;break;
                         }
+                        if(!mk.isEmpty() && monthly.containsKey(mk) && !usd)monthly.put(mk,monthly.get(mk)+amount);
                     }
-                    render();
+                    payReady=true;render();
                 });
-        giftReg = Fb.db().collection("gifts").limit(1000)
-                .addSnapshotListener((snap, err) -> {
-                    liveStars = 0;
-                    if (snap != null) for (DocumentSnapshot d : snap)
-                        liveStars += Format.intOf(d.getData(), "stars");
-                    render();
+        giftReg=com.friendbook.social.core.PagedLists.attach(a,giftControls,
+                Fb.db().collection("gifts"),10,"live-gifts",(snap,err)->{
+                    if(snap==null)return;
+                    liveStars=0;for(DocumentSnapshot d:snap)liveStars+=Format.intOf(d.getData(),"stars");
+                    giftReady=true;render();
                 });
     }
 
     @Override
     public void onStop() {
-        super.onStop();
-        if (payReg != null) payReg.remove();
-        if (giftReg != null) giftReg.remove();
+        super.onStop();started=false;
+        if(payReg!=null){payReg.remove();payReg=null;}
+        if(giftReg!=null){giftReg.remove();giftReg=null;}
     }
 
     private void seedMonths() {
@@ -200,11 +204,15 @@ public class AdminEarningsFragment extends Fragment {
     }
 
     private void render() {
-        if (totalT == null) return;
+        if (totalT == null || !started || !java.util.Objects.equals(actor,Fb.uid())) return;
+        if(!payReady || !giftReady) {
+            totalT.setText("Loading…");tickIncomeT.setText("…");subsIncomeT.setText("…");liveIncomeT.setText("…");
+            splitT.setText("Waiting for loaded pages; not a total.");monthT.setText("");chart.setData(new LinkedHashMap<>());return;
+        }
         long tickTotal = tickBlue + tickGold + tickDiamond;
         long totalMilestones = tickTotal + subs + liveStars;
 
-        totalT.setText(Format.count(totalMilestones) + " milestones");
+        totalT.setText(Format.count(totalMilestones) + " loaded");
         tickIncomeT.setText(Format.count(tickTotal) + " ✓");
         subsIncomeT.setText(Format.count(subs) + " ⭐");
         liveIncomeT.setText("⭐ " + Format.count(liveStars));
@@ -216,7 +224,7 @@ public class AdminEarningsFragment extends Fragment {
         String lastKey = null;
         for (Map.Entry<String, Long> e : monthly.entrySet()) { lastKey = e.getKey(); }
         if (lastKey != null) current = monthly.get(lastKey);
-        monthT.setText("This month activity: " + Format.count(current));
+        monthT.setText("This month in loaded approvals: " + Format.count(current));
         chart.setData(monthly);
     }
 

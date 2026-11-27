@@ -1,0 +1,23 @@
+# Three read-only synthetic D1 SQL statements, no application traffic or user data.
+name: Comment epoch SQL smoke
+on:
+  push:
+    branches: [arena/b52bc74d-friend-book]
+    paths: [.github/workflows/comment-epoch-smoke.yml, scripts/loadtest/comment_epoch_smoke.mjs, cloudflare/test/comment-epoch-smoke.test.js]
+permissions:
+  contents: read
+jobs:
+  smoke:
+    if: contains(github.event.head_commit.message, '[comment-epoch-smoke]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: node --test cloudflare/test/comment-epoch-smoke.test.js
+      - name: Read-only synthetic SQL compatibility and reported rows
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: node scripts/loadtest/comment_epoch_smoke.mjs

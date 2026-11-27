@@ -20,6 +20,7 @@ jobs:
       - run: npm test
       - run: python3 cloudflare/test/schema_test.py
       - run: python3 cloudflare/test/migration_test.py
+      - run: python3 cloudflare/test/index_plan_test.py
       - name: Bundle only — no deployment or remote migrations
         run: npx --yes wrangler@4.157.0 deploy --dry-run --outdir /tmp/friendbook-worker
         env:

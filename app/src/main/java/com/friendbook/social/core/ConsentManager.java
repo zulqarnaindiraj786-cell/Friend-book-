@@ -66,40 +66,56 @@ public final class ConsentManager {
         if (activity == null || activity.isFinishing()) return;
         final Context appCtx = activity.getApplicationContext();
 
-        // Always ensure MobileAds SDK is initialized so real ad requests are never blocked
-        initializeMobileAdsOnce(appCtx, onAdsReady);
-
+        initializeMobileAdsOnce(appCtx, null);
+        if (!consentInFlight.compareAndSet(false,true)) {
+            if (onAdsReady != null) onAdsReady.run();
+            return;
+        }
+        lastConsentAttempt = android.os.SystemClock.elapsedRealtime();
+        consentDiagnostic = "Checking Google UMP…";
         try {
             ConsentRequestParameters params = new ConsentRequestParameters.Builder()
-                    .setTagForUnderAgeOfConsent(false)
-                    .build();
-
-            final ConsentInformation consentInfo = UserMessagingPlatform.getConsentInformation(activity);
-            consentInfo.requestConsentInfoUpdate(
-                    activity,
-                    params,
-                    () -> {
-                        if (activity.isFinishing() || activity.isDestroyed()) return;
-                        UserMessagingPlatform.loadAndShowConsentFormIfRequired(
-                                activity,
-                                loadAndShowError -> {
-                                    if (loadAndShowError != null) {
-                                        Log.w(AdsConfig.LOG_TAG, "UMP consent form notice: code="
-                                                + loadAndShowError.getErrorCode() + " msg="
-                                                + loadAndShowError.getMessage());
-                                    }
-                                    AdsConfig.notifyChange();
-                                    if (onAdsReady != null) onAdsReady.run();
-                                }
-                        );
-                    },
-                    requestConsentError -> Log.w(AdsConfig.LOG_TAG, "UMP consent update notice: code="
-                            + requestConsentError.getErrorCode() + " msg="
-                            + requestConsentError.getMessage())
-            );
-        } catch (Throwable t) {
-            Log.w(AdsConfig.LOG_TAG, "UMP check skipped: " + t.getMessage());
+                    .setTagForUnderAgeOfConsent(false).build();
+            UserMessagingPlatform.getConsentInformation(activity).requestConsentInfoUpdate(activity, params, () -> {
+                if (activity.isFinishing() || activity.isDestroyed()) {
+                    finishConsent(appCtx, "Consent screen closed; reopen FriendBook", onAdsReady);
+                    return;
+                }
+                try {
+                    UserMessagingPlatform.loadAndShowConsentFormIfRequired(activity, error ->
+                            finishConsent(appCtx, error == null ? "Consent check complete" : "UMP form error " + error.getErrorCode() + ": " + error.getMessage(), onAdsReady));
+                } catch (RuntimeException error) {
+                    finishConsent(appCtx, "UMP could not open the consent form", onAdsReady);
+                }
+            }, error -> finishConsent(appCtx, "UMP update error " + error.getErrorCode() + ": " + error.getMessage(), onAdsReady));
+        } catch (RuntimeException error) {
+            finishConsent(appCtx, "UMP could not start the consent check", onAdsReady);
         }
+    }
+
+    private static final AtomicBoolean consentInFlight = new AtomicBoolean(false);
+    private static volatile long lastConsentAttempt = -60_000L;
+    private static volatile String consentDiagnostic = "Consent has not been checked yet";
+
+    public static String consentDiagnostic() { return consentDiagnostic; }
+
+    public static void retryConsentOnResume(Activity activity) {
+        if (!canRequestAds(activity) && android.os.SystemClock.elapsedRealtime() - lastConsentAttempt >= 60_000L) {
+            gatherConsentAndInitAds(activity, null);
+        }
+    }
+
+    private static void finishConsent(Context context, String status, Runnable callback) {
+        consentDiagnostic = status;
+        consentInFlight.set(false);
+        AdsConfig.notifyChange();
+        if (callback != null) callback.run();
+    }
+
+    public static boolean canRequestAds(Context context) {
+        if (context == null) return false;
+        try { return UserMessagingPlatform.getConsentInformation(context.getApplicationContext()).canRequestAds(); }
+        catch (RuntimeException error) { return false; }
     }
 
     /** Returns true if EEA/UK GDPR privacy options entry point should be shown in Settings. */
@@ -124,7 +140,8 @@ public final class ConsentManager {
         if (activity == null || activity.isFinishing()) return;
         try {
             UserMessagingPlatform.showPrivacyOptionsForm(activity, formError -> {
-                if (onDone != null) onDone.run();
+                finishConsent(activity.getApplicationContext(), formError == null ? "Privacy choices updated"
+                        : "UMP privacy options error " + formError.getErrorCode() + ": " + formError.getMessage(), onDone);
             });
         } catch (Throwable t) {
             if (onDone != null) onDone.run();
@@ -235,7 +252,6 @@ public final class ConsentManager {
         MAIN_HANDLER.post(() -> {
             if (sdkInitCompleted.get()) {
                 flushSdkReadyCallbacks();
-                preloadAdPools(appCtx);
             } else {
                 scheduleBootPreload(appCtx);
             }
@@ -246,24 +262,14 @@ public final class ConsentManager {
         });
     }
 
-    /** Kicks the 5-ad Feed pool (fast single-ad first fill) and the Reels pool. Idempotent. */
-    private static void preloadAdPools(final Context appCtx) {
-        if (appCtx == null) return;
-        try {
-            AdsConfig.preloadFeedBatchNow(appCtx, AdsConfig.AD_POOL_SIZE);
-            AdsConfig.warmUpPools(appCtx);
-        } catch (Throwable ignored) { }
-    }
-
-    /** One-shot fallback so ads still boot if the Play Services callback never arrives. */
+    /** One-shot fallback so SDK waiters are not stranded if the callback never arrives. */
     private static void scheduleBootPreload(final Context appCtx) {
         if (appCtx == null || !bootPreloadScheduled.compareAndSet(false, true)) return;
         MAIN_HANDLER.postDelayed(() -> {
             // Waited long enough: treat the SDK as usable so deferred ad requests can never be
-            // stranded, then boot the pools.
+            // stranded.
             if (sdkInitCompleted.compareAndSet(false, true)) {
                 flushSdkReadyCallbacks();
-                preloadAdPools(appCtx);
             }
         }, SDK_BOOT_PRELOAD_FALLBACK_MS);
     }

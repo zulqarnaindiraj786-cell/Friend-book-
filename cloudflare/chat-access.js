@@ -9,27 +9,36 @@ function unpack(raw) {
   }
   return out;
 }
-export async function loadChat(db, chatId) {
-  let row = await db.prepare('SELECT document_json FROM friendbook_cf_firestore_documents WHERE path = ?').bind(`chats/${chatId}`).first();
-  if (!row) row = await db.prepare('SELECT document_json FROM friendbook_cf_documents WHERE path = ?').bind(`chats/${chatId}`).first();
+export async function loadChat(db, chatId, requestRoomReads) {
+  // Caller-owned request-local map only. Cache the pending promise as well so
+  // parallel message ACL checks do not each issue the same room lookup.
+  if (requestRoomReads) {
+    if (!requestRoomReads.has(chatId)) requestRoomReads.set(chatId, loadChat(db, chatId));
+    return requestRoomReads.get(chatId);
+  }
+  // Mirrors may be stale or mirror-only. They must never authorize a room,
+  // and a missing canonical room must not incur a second lookup.
+  const row = await db.prepare('SELECT document_json FROM friendbook_cf_firestore_documents WHERE path = ?').bind(`chats/${chatId}`).first();
   if (!row) return null;
   return unpack(JSON.parse(row.document_json));
 }
 const member=(room,uid)=>Array.isArray(room?.participants) && room.participants.includes(uid);
+export function storedChatMember(documentJson, uid) {
+  return member(unpack(JSON.parse(documentJson)), uid);
+}
 function chatIdFor(path, data) {
   const parts=path.split('/');
   if (parts[0] === 'chats' && parts.length >= 2) return parts[1];
   if (parts[0] === 'messages' && parts.length === 2) return typeof data?.chatId === 'string' ? data.chatId : '';
   return null;
 }
-export async function chatReadAllowed(db,path,uid,data) {
-  const parts=path.split('/');
+export async function chatReadAllowed(db,path,uid,data,requestRoomReads) {
   const id=chatIdFor(path,data);
   if (id === null) return true;
   if (!id) return false;
   // A legacy app-table mirror can be stale. Always consult the canonical room before
   // authorizing its root document as well as nested messages.
-  return member(await loadChat(db,id),uid);
+  return member(await loadChat(db,id,requestRoomReads),uid);
 }
 const equal=(a,b)=>JSON.stringify(a)===JSON.stringify(b);
 const validId=x=>typeof x==='string' && x.length>0 && x.length<=128 && !/[\/\x00-\x1f]/.test(x);
@@ -46,12 +55,33 @@ function validGroupRoom(room) {
 function sameExcept(a,b,keys) {
   return [...new Set([...Object.keys(a),...Object.keys(b)])].every(k=>keys.has(k) || equal(a[k],b[k]));
 }
+// A participant can only change their own entries, not forge or remove anyone
+// else's reaction. Missing maps are equivalent to empty maps for old messages.
+function ownReactionChanges(before, after, uid) {
+  for (const [key, max] of [['reactions',32],['reactorNames',256],['reactorPhotos',2048]]) {
+    if (equal(before[key],after[key])) continue;
+    const a=before[key] == null ? {} : before[key], b=after[key] == null ? {} : after[key];
+    if (typeof a!=='object' || Array.isArray(a) || typeof b!=='object' || Array.isArray(b)
+        || !sameExcept(a,b,new Set([uid]))) return false;
+    if (Object.hasOwn(b,uid) && (typeof b[uid]!=='string' || !b[uid].length || b[uid].length>max)) return false;
+  }
+  return true;
+}
 export async function chatWriteAllowed(db,path,uid,before,after,pendingRooms = new Map(), roomSnapshot = undefined) {
   const parts=path.split('/');
   const id=chatIdFor(path,before || after);
   if (id === null) return true;
   if (!id) return false;
+  if (id.startsWith('team_')) {
+    if (parts[0]==='chats' && parts.length===2) {
+      // Clients must not reserve Team room IDs or change the official identity.
+      return !!before && !!after && member(before,uid) && sameExcept(before,after,new Set(['unreadCount']));
+    }
+    // Team conversations are read-only, except normal delivery/read receipts.
+    if (!before) return false;
+  }
   if (parts[0] === 'chats' && parts.length === 2) {
+    if (id.startsWith('callmedia_') || (after && !equal(before?.activeCall,after.activeCall))) return false;
     if (!before) {
       if (!after || !member(after,uid) || !validList(after.participants)) return false;
       if (after.isGroup===true) return validGroupRoom(after) && after.createdBy===uid && equal(after.adminIds,[uid]);
@@ -107,8 +137,9 @@ export async function chatWriteAllowed(db,path,uid,before,after,pendingRooms = n
   if (!before) return !!after && after.senderId === uid && (parts[0] !== 'messages' || after.chatId === id);
   if (!after) return before.senderId === uid;
   if (before.senderId !== after.senderId || (parts[0] === 'messages' && before.chatId !== after.chatId)) return false;
+  if (!ownReactionChanges(before,after,uid)) return false;
   if (before.senderId === uid) return true;
-  const allowed=new Set(['isSeen','isDelivered','seenBy','deliveredTo']);
+  const allowed=new Set(['isSeen','isDelivered','seenBy','deliveredTo','reactions','reactorNames','reactorPhotos']);
   return [...new Set([...Object.keys(before),...Object.keys(after)])]
     .every(k=>allowed.has(k) || JSON.stringify(before[k])===JSON.stringify(after[k]));
 }

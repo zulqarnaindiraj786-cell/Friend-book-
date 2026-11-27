@@ -25,11 +25,24 @@ class ProfileFeedConsistencyTest(unittest.TestCase):
         bootstrap = (JAVA / 'd1/documents/D1DocumentStore.java').read_text()
         self.assertIn('.orderBy("createdAt", Query.Direction.DESCENDING).limit(7)', bootstrap)
 
+    def test_profile_count_starts_without_waiting_for_page_callback(self):
+        profile = (JAVA / 'profile/ProfileActivity.java').read_text()
+        self.assertIn('postPager.startCachedForForeground(120_000L);\n        refreshPostCount(generation);', profile)
+        self.assertIn('postPager.forget(id)', profile)
+
+    def test_staff_delete_uses_moderation_api_not_owner_only_delete(self):
+        adapter = (JAVA / 'post/FeedAdapter.java').read_text()
+        for role in ('admin', 'moderator'):
+            self.assertIn(f'"Delete post ({role})")) deletePost(p, true)', adapter)
+        self.assertIn('moderation ? Fb.db().moderate("delete_content", "posts", p.id)', adapter)
+        self.assertIn(': Fb.db().collection("posts").document(p.id).delete()', adapter)
+
     def test_missing_feed_author_lookup_is_account_scoped_and_deduped(self):
         source = (JAVA / 'post/FeedAdapter.java').read_text()
         self.assertIn('requestedAuthors.add(String.valueOf(actor) + ":" + p.authorId)', source)
         self.assertIn('java.util.Objects.equals(actor, Fb.uid())', source)
-        self.assertIn('Fb.getUser(p.authorId).addOnSuccessListener', source)
+        self.assertIn('FieldPath.documentId(),chunk)', source)
+        self.assertNotIn('Fb.getUserFresh(p.authorId)', source)
         self.assertIn('String dpUrl = photo;', source)
 
 

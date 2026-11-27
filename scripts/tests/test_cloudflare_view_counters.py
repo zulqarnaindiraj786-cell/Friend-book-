@@ -6,9 +6,9 @@ enough; watching the whole video, looping it or coming back next month adds noth
 does no view-counter work at all - no request, no D1, no KV - so loading the feed costs nothing.
 
 Storage contract (the reason this design exists): every view is ONE Analytics Engine event, the
-count is AE's uniq(uid), and D1 receives ZERO writes from the view path (and zero reads, except one
-bounded read-only seed when both AE and KV are empty). Worker memory + one KV aggregate key serve
-requests so nothing waits on a query.
+count is AE's uniq(uid), and D1 receives ZERO reads and writes from the view path. Historical totals
+are copied to an immutable, separate KV key by a guarded pre-deploy step. Worker memory + KV serve
+requests so nothing waits on D1.
 """
 from pathlib import Path
 import unittest
@@ -38,16 +38,15 @@ class CloudflareViewCounterGuards(unittest.TestCase):
             for forbidden in ['.update("views"', 'doc.put("views"', '"views", FieldValue.increment']:
                 absent(self, forbidden, source, path.name)
 
-    def test_view_path_reads_d1_only_as_a_bounded_last_resort(self):
+    def test_view_path_never_reads_d1(self):
         worker = (CLOUDFLARE / 'view-counters.js').read_text()
-        # The only SELECT in the module is the emergency seed, and it runs only when Analytics Engine
-        # and KV both came back empty - so a normal view costs no D1 statement at all.
-        self.assertEqual(worker.count("'SELECT"), 1, 'exactly one SELECT literal may exist')
-        self.assertIn('SELECT resource, views FROM friendbook_cf_view_counters ORDER BY views DESC LIMIT ?', worker)
-        self.assertIn('const SEED_LIMIT = 500;', worker)
-        self.assertIn('if (state.totals.size === 0 && env?.DB)', worker)
-        # Live reads come from memory, refilled from Analytics Engine and the snapshot store.
+        self.assertNotIn('friendbook_cf_view_counters', worker)
+        self.assertNotIn('env.DB', worker)
+        self.assertNotIn('SEED_LIMIT', worker)
+        # Live reads come from memory, Analytics Engine, and the live + immutable legacy KV keys.
         self.assertIn("const KV_KEY = 'views:live:v1';", worker)
+        self.assertIn("const LEGACY_KV_KEY = 'views:legacy-seed:v1';", worker)
+        self.assertIn('await env.VIEWS.get(LEGACY_KV_KEY', worker)
         self.assertIn("await env.VIEWS.get(KV_KEY, { type: 'json', cacheTtl: 60 })", worker)
         self.assertIn("const snapshotStore = (env) => (env?.VIEWS ? 'kv' : (env?.VIDEO_BUCKET ? 'r2' : null));", worker)
         self.assertIn('const store = snapshotStore(env);', worker)
@@ -70,7 +69,7 @@ class CloudflareViewCounterGuards(unittest.TestCase):
         # the 1,000/day Workers Free limit, throttled inside flushKv so no other path can add one.
         self.assertIn('const KV_FLUSH_MS = 300_000;', worker)
         self.assertIn('if (!force && now - state.lastKvFlushAt < KV_FLUSH_MS) return false;', worker)
-        self.assertIn('await flushKv(env, seededAt, true);', worker)
+        self.assertIn('await flushKv(env, now);', worker)
         self.assertIn('const KV_SNAPSHOT_LIMIT = 1000;', worker)
         self.assertIn('await env.VIEWS.put(KV_KEY, JSON.stringify(snapshot))', worker)
         # The snapshot stores AE's de-duplicated truth (plus pre-AE history), never this isolate's
@@ -78,7 +77,6 @@ class CloudflareViewCounterGuards(unittest.TestCase):
         self.assertIn('return state.aeUsable ? historical : Math.max(historical, state.totals.get(resource) ?? 0);', worker)
         self.assertIn("state.kvUsable ? (state.snapshotStore === 'r2' ? 'r2' : 'kv') : null,", worker)
         self.assertIn('if (!snapshotStore(env)) return false;', worker)
-        self.assertIn('if (snapshotStore(env)) await flushKv(env, seededAt, true);', worker)
 
     def test_the_r2_snapshot_fallback_never_touches_a_video(self):
         worker = (CLOUDFLARE / 'view-counters.js').read_text()
@@ -304,7 +302,12 @@ class CloudflareViewCounterGuards(unittest.TestCase):
         self.assertIn('retryNow.setOnClickListener(v -> { reelsLoadFailed = false; resetVideoPages(); });', reels)
         self.assertIn('reelsWatchdog.postDelayed(() -> {', reels)
         self.assertIn('}, 15_000L);', reels)
-        self.assertIn('if (loadAttempts < 3) { loadAttempts++; loadNextVideos(); }', reels)
+        paging = reels.split('private void loadNextVideos()', 1)[1].split('@Override public void onResume()', 1)[0]
+        self.assertNotIn('if (!pagingVideos ||', paging)
+        self.assertIn('watchdogGen++;\n            pagingVideos=false;', paging)
+        self.assertEqual(paging.count('generation!=videoGeneration || wdGen!=watchdogGen'), 3)
+        self.assertIn('if (!pageFailed[0] && loadAttempts < 3) { loadAttempts++; loadNextVideos(); }', reels)
+        self.assertNotIn('CloudflareStore.list("reels", 10', reels)
         # The page-load listener must settle its source even when the page cannot be applied: this
         # early return is what kept pagingVideos true and the spinner visible forever.
         self.assertIn('}\n                done.run();\n            }).addOnFailureListener(', reels)

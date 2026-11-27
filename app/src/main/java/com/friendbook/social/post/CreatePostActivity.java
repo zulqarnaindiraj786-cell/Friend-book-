@@ -816,9 +816,6 @@ public class CreatePostActivity extends Activity {
         postBtn.setText("Uploading " + (done.size() + 1) + "/" + mediaUris.size() + "…");
         com.friendbook.social.core.Cloudinary.uploadOrFirebase(this, path, uri)
                 .addOnSuccessListener(url -> {
-                    if ("video".equals(mediaType)) {
-                        com.friendbook.social.reels.ReelVideoCache.seedLocalUriToCache(getApplicationContext(), uri, url);
-                    }
                     done.add(url.toString());
                     uploadAll(content, done);
                 })

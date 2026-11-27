@@ -31,6 +31,10 @@ public class AdminFeedbackActivity extends Activity {
     private Adapter adapter;
     private ListenerRegistration reg;
     private TextView empty;
+    private LinearLayout pageControls;
+    private String screenActor;
+    private boolean started;
+    private final java.util.Set<String> removed = new java.util.HashSet<>();
 
     @Override
     protected void onCreate(Bundle b) {
@@ -41,7 +45,7 @@ public class AdminFeedbackActivity extends Activity {
         root.setBackgroundColor(Ui.bg(this));
         root.addView(Ui.pageBar(this, "📮 Feedback inbox"));
 
-        empty = Ui.tv(this, "No feedback yet.", 14, Ui.sub(this));
+        empty = Ui.tv(this, "Loading feedback…", 14, Ui.sub(this));
         empty.setGravity(Gravity.CENTER);
         Ui.pad(empty, 24, 60, 24, 0);
         root.addView(empty);
@@ -51,24 +55,28 @@ public class AdminFeedbackActivity extends Activity {
         adapter = new Adapter();
         rv.setAdapter(adapter);
         root.addView(rv, new LinearLayout.LayoutParams(-1, 0, 1));
+        pageControls=Ui.col(this);root.addView(pageControls);
         setContentView(root);
     }
 
     @Override
     protected void onStart() {
         super.onStart();
-        reg = Fb.db().collection("feedback")
-                .orderBy("createdAt", Query.Direction.DESCENDING).limit(100)
-                .addSnapshotListener((snap, err) -> {
+        if(adapter==null || !Admin.isAdmin() || Fb.uid()==null){finish();return;}
+        if(screenActor!=null && !screenActor.equals(Fb.uid())){finish();return;}
+        screenActor=Fb.uid();started=true;
+        reg = com.friendbook.social.core.PagedLists.attach(this,pageControls,
+                Fb.db().collection("feedback").orderBy("createdAt", Query.Direction.DESCENDING),
+                10,"admin-feedback",(snap, err) -> {
                     if (err != null || snap == null) {
                         empty.setText("Couldn't load feedback. Reopen to retry.");
                         empty.setVisibility(View.VISIBLE);
                         return;
                     }
                     items.clear();
-                    items.addAll(snap.getDocuments());
+                    for(DocumentSnapshot d:snap)if(!removed.contains(d.getId()))items.add(d);
                     adapter.notifyDataSetChanged();
-                    empty.setText("No feedback yet");
+                    empty.setText("No feedback in loaded pages");
                     empty.setVisibility(items.isEmpty() ? View.VISIBLE : View.GONE);
                 });
     }
@@ -76,7 +84,25 @@ public class AdminFeedbackActivity extends Activity {
     @Override
     protected void onStop() {
         super.onStop();
-        if (reg != null) reg.remove();
+        started=false;
+        if (reg != null) {reg.remove();reg=null;}
+    }
+
+    private void archiveFeedback(DocumentSnapshot doc) {
+        final String actor=screenActor,id=doc.getId();
+        if(!started || !java.util.Objects.equals(actor,Fb.uid()) || !Admin.isAdmin()
+                || !ModerationGate.SHARED.begin(actor,"feedback",id))return;
+        adapter.notifyDataSetChanged();
+        Fb.db().moderate("delete_content","feedback",id).addOnCompleteListener(task -> {
+            ModerationGate.SHARED.end(actor,"feedback",id);
+            if(!java.util.Objects.equals(actor,Fb.uid()))return;
+            if(task.isSuccessful()) {
+                removed.add(id);items.removeIf(d->id.equals(d.getId()));
+                if(started){adapter.notifyDataSetChanged();empty.setVisibility(items.isEmpty()?View.VISIBLE:View.GONE);Ui.toast(this,"Archived");}
+            } else if(started) {
+                adapter.notifyDataSetChanged();Ui.toast(this,"Couldn't archive feedback. Please try again.");
+            }
+        });
     }
 
     class Adapter extends RecyclerView.Adapter<Adapter.VH> {
@@ -108,11 +134,8 @@ public class AdminFeedbackActivity extends Activity {
             h.from.setText(Format.strOr(m, "name", "User"));
             h.text.setText(Format.str(m, "text"));
             h.meta.setText(Format.str(m, "app") + " · " + Format.ago(Format.ts(m == null ? null : m.get("createdAt"))));
-            h.del.setOnClickListener(v -> {
-                d.getReference().delete()
-                        .addOnSuccessListener(ignored -> Ui.toast(AdminFeedbackActivity.this, "Archived"))
-                        .addOnFailureListener(error -> Ui.toast(AdminFeedbackActivity.this, "Couldn't archive feedback. Please try again."));
-            });
+            h.del.setEnabled(!ModerationGate.SHARED.pending(screenActor,"feedback",d.getId()));
+            h.del.setOnClickListener(v -> archiveFeedback(d));
         }
 
         class VH extends RecyclerView.ViewHolder {

@@ -26,10 +26,18 @@ class ClientPushHooksTest(unittest.TestCase):
         self.assertIn('PushFanoutWorker.enqueue("chat", chatId, messageId)', source)
         self.assertIn('PushFanoutWorker.enqueue("friend_post", postId', source)
         worker = (JAVA/'push/PushFanoutWorker.java').read_text()
-        for part in ['NetworkType.CONNECTED', 'uid.equals(Fb.uid())', 'ExistingWorkPolicy.KEEP', 'getRunAttemptCount() < 8', '"friend_post_" + id + "_" + to', 'Tasks.await(ref.create(n)' ]:
+        for part in ['NetworkType.CONNECTED', 'uid.equals(Fb.uid())', 'ExistingWorkPolicy.KEEP', 'FanoutRetryPolicy.shouldRetry(e,getRunAttemptCount())', '"friend_post_" + id + "_" + to', 'Tasks.await(ref.create(n)' ]:
             self.assertIn(part, worker)
+        self.assertIn('if(checkpoint.completed(to))continue',worker)
+        self.assertLess(worker.index('Tasks.await(ref.create(n)'),worker.index('enqueue.getResult().get(20,TimeUnit.SECONDS)'))
+        self.assertLess(worker.index('enqueue.getResult().get(20,TimeUnit.SECONDS)'),worker.index('checkpoint.markQueued(to)'))
+        self.assertIn('if(retry)checkpoint.flush();else checkpoint.clear()',worker)
+        retry = (JAVA/'push/FanoutRetryPolicy.java').read_text()
+        self.assertIn('attempt>=8',retry)
+        self.assertIn('case PERMISSION_DENIED',retry)
+        self.assertIn('case NOT_FOUND',retry)
         chat = (JAVA/'chat/ChatActivity.java').read_text()
-        self.assertEqual(chat.count('FCMPush.message(chatId, msgRef.getId())'), 3)
+        self.assertEqual(chat.count('FCMPush.message(chatId, msgRef.getId(), isGroupChat ? null : peerId)'), 3)
         self.assertIn('FCMPush.friendPost(docRef.getId())', (JAVA/'post/CreatePostActivity.java').read_text())
 
     def test_gateway_is_authenticated_and_legacy_devices_do_not_need_fgs(self):

@@ -31,6 +31,8 @@ public class MonetizationActivity extends Activity {
     private ListenerRegistration subsCountReg;
     private ListenerRegistration meReg;
     private int followersCount = 0;
+    private int reelsCount = -1;
+    private int screenGeneration;
 
     private static final int FOLLOWERS_FOR_CREATOR = 100;
     private static final int REELS_FOR_CREATOR = 5;
@@ -127,9 +129,11 @@ public class MonetizationActivity extends Activity {
         super.onStart();
         String me = Fb.uid();
         if (me == null) { finish(); return; }
+        final int generation=++screenGeneration;
+        reelsCount=-1;
         meReg = Fb.db().collection("users").document(me)
                 .addSnapshotListener((d, err) -> {
-                    if (d == null || !d.exists()) return;
+                    if (generation!=screenGeneration || !java.util.Objects.equals(me,Fb.uid()) || d == null || !d.exists()) return;
                     followersCount = Format.intOf(d.getData(), "followersCountCache");
                     Object fol = d.get("followers");
                     if (fol instanceof java.util.List) followersCount = ((java.util.List<?>) fol).size();
@@ -139,10 +143,14 @@ public class MonetizationActivity extends Activity {
                     subsSwitch.setOnCheckedChangeListener(null);
                     subsSwitch.setChecked(subsOn);
                     subsSwitch.setOnCheckedChangeListener(this::toggleSubs);
-                    checkEligibility(followersCount, -1);
+                    checkEligibility(followersCount, reelsCount);
                 });
-        Fb.db().collection("reels").whereEqualTo("authorId", me).limit(50).get()
-                .addOnSuccessListener(snap -> checkEligibility(followersCount, snap.size()));
+        // Eligibility only needs to know whether the threshold has been met.
+        Fb.db().collection("reels").whereEqualTo("authorId", me).limit(REELS_FOR_CREATOR)
+                .getCachedOrFetch(false,120_000L).addOnSuccessListener(snap -> {
+                    if(generation!=screenGeneration || !java.util.Objects.equals(me,Fb.uid()))return;
+                    reelsCount=snap.size();checkEligibility(followersCount,reelsCount);
+                });
         if (subsCountReg != null) subsCountReg.remove();
         subsCountReg=com.friendbook.social.core.CountReads.once(Fb.db().collection("subscriptions")
                 .whereEqualTo("creatorId",me).whereEqualTo("status","active"),total->
@@ -160,7 +168,7 @@ public class MonetizationActivity extends Activity {
         adsBar.setProgress(pct);
         adsProgressT.setText(
                 (ok1 ? "✓" : "•") + " " + followers + "/" + FOLLOWERS_FOR_CREATOR + " followers\n"
-                        + (ok2 ? "✓" : "•") + " " + reels + "/" + REELS_FOR_CREATOR + " reels shared");
+                        + (ok2 ? "✓" : "•") + " " + reels + (ok2?"+":"") + "/" + REELS_FOR_CREATOR + " reels shared");
     }
 
     private void toggleSubs(CompoundButton btn, boolean on) {
@@ -172,6 +180,7 @@ public class MonetizationActivity extends Activity {
     @Override
     protected void onStop() {
         super.onStop();
+        screenGeneration++;
         if (meReg != null) meReg.remove();
         if (subsCountReg != null) { subsCountReg.remove(); subsCountReg = null; }
     }

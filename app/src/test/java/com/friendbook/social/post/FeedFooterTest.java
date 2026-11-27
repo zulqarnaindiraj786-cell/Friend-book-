@@ -21,6 +21,16 @@ public class FeedFooterTest {
         public void loadMore(){calls++;} public boolean hasMore(){return more;}
         public boolean automaticPaging(){return true;} public boolean isLoadingMore(){return loading;} public boolean hasPageError(){return error;}
     }
+    @Test public void duplicatePostIdsAreDiscardedAcrossAndWithinPages(){
+        Activity activity=Robolectric.buildActivity(Activity.class).setup().get();
+        FeedAdapter adapter=new FeedAdapter(activity,new Host());
+        Models.Post first=new Models.Post(), duplicate=new Models.Post(), second=new Models.Post();
+        first.id="first"; duplicate.id="first"; second.id="second";
+        adapter.setPosts(java.util.Arrays.asList(first,duplicate));
+        adapter.addPosts(java.util.Arrays.asList(duplicate,second,second));
+        assertEquals(java.util.Arrays.asList(first,second),adapter.getPosts());
+        activity.finish();
+    }
     @Test public void footerFollowsRealRequestStateAndOffersRetryOnlyOnFailure(){
         Activity activity=Robolectric.buildActivity(Activity.class).setup().get();Host host=new Host();
         FeedAdapter adapter=new FeedAdapter(activity,host);

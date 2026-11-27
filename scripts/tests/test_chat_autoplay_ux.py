@@ -4,14 +4,15 @@ JAVA=Path(__file__).resolve().parents[2]/'app/src/main/java/com/friendbook/socia
 class ChatAutoplayUx(unittest.TestCase):
     def test_ten_chats_and_ten_latest_and_older_messages(self):
         inbox=(JAVA/'chat/ConversationsActivity.java').read_text();chat=(JAVA/'chat/ChatActivity.java').read_text()
-        for token in ['cachedRooms++>=10','query.limit(10).addSnapshotListener','query.limit(10).get(com.friendbook.social.d1.documents.Source.SERVER)']:
+        for token in ['cachedRooms++>=10','inboxSwipe.setOnRefreshListener','page.getCachedOrFetch(forceRefresh)']:
             self.assertIn(token,inbox)
-        self.assertIn('.limitToLast(40)',chat);self.assertIn('startAfter(historyCursor)',chat);self.assertIn('older.limit(40)',chat)
+        self.assertNotIn('addSnapshotListener',inbox)
+        self.assertIn('.limitToLast(10)',chat);self.assertIn('startAfter(historyCursor)',chat);self.assertIn('older.limit(10)',chat);self.assertIn('Math.min(10,page.size())',chat)
     def test_metadata_does_not_render_again_and_read_dispatch_precedes_render(self):
         chat=(JAVA/'chat/ChatActivity.java').read_text();adapter=(JAVA/'chat/MessagesAdapter.java').read_text()
         self.assertIn('MetadataChanges.EXCLUDE).isEmpty()',chat)
         self.assertIn('if(oldKeys.equals(newKeys))return;',adapter)
-        live=chat.split('.limitToLast(40)',1)[1].split('private void loadOlderMessages()',1)[0]
+        live=chat.split('.limitToLast(10)',1)[1].split('private void loadOlderMessages()',1)[0]
         self.assertLess(live.index('markVisibleReceipts();\n'),live.index('adapter.setData(list)'))
         for token in ['!chatVisible','receiptInFlight.contains(m.id)','receiptFailed.contains(m.id)','batch.update(', 'receiptFailed.addAll(claimed)']:
             self.assertIn(token,chat)
@@ -28,6 +29,6 @@ class ChatAutoplayUx(unittest.TestCase):
         reel=(JAVA/'reels/ReelsFragment.java').read_text()
         self.assertNotIn('userRequestedVideo',reel);self.assertNotIn('▶ Tap to play',reel)
         self.assertIn('this.wantPlay=autoPlayNow;',reel)
-        self.assertIn('if(!visible.getAsBoolean()){pauseAll(pager);return;}',reel)
+        self.assertIn('if(!visible.getAsBoolean() || (pager!=null && pager.getScrollState()!=ViewPager2.SCROLL_STATE_IDLE)){pauseAll(pager);return;}',reel)
         self.assertIn('getBindingAdapterPosition()!=playingPos',reel)
         self.assertNotIn('ReelVideoCache.prefetchWindow(',reel)

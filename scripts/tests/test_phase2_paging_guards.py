@@ -10,8 +10,9 @@ class PagingGuards(unittest.TestCase):
         self.assertNotIn('.addSnapshotListener',source)
     def test_open_chat_window_and_lifecycle(self):
         source=(JAVA/'chat/ChatActivity.java').read_text()
-        for token in ['.limitToLast(40)','Query.Direction.DESCENDING).startAfter(historyCursor)',
-                      'chatGeneration!=historyGeneration','generation!=historyGeneration']:
+        for token in ['.limitToLast(10)','Query.Direction.DESCENDING).startAfter(historyCursor)',
+                      'activeChatRead(chatActor,chatGeneration)','generation==historyGeneration',
+                      'attempt==historyPageAttempt','historySpinner.postDelayed(deadline,15_000L)']:
             self.assertIn(token,source)
     def test_reel_fallback_cannot_prepare_offscreen(self):
         source=(JAVA/'reels/ReelsFragment.java').read_text()
@@ -22,7 +23,7 @@ class PagingGuards(unittest.TestCase):
         self.assertNotIn('ReelVideoCache.prefetchSingle(', (JAVA/'post/FeedAdapter.java').read_text())
     def test_comments_do_not_expand_frozen_map(self):
         source=(JAVA/'post/CommentsEngine.java').read_text()
-        self.assertIn('handle.query.limit(50).addSnapshotListener',source)
-        self.assertIn('query.startAfter(cursor).limit(50).get()',source)
+        self.assertIn('handle.query.limit(10).addSnapshotListener',source)
+        self.assertIn('query.startAfter(cursor).limit(10).get()',source)
         self.assertIn('patch.put("lastComment",commentMap)',source)
         self.assertNotIn('dot.put("commentsMap." + c.id + ".',source)

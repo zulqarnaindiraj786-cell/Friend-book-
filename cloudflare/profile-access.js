@@ -22,13 +22,18 @@ function withFollowSummary(view,data,uid) {
   view.followedByMe=followers.includes(uid);
   return view;
 }
-export function profileReadView(path, uid, data, admin = false) {
+export function profileReadView(path, uid, data, admin = false, moderator = false) {
   const parts=path.split('/');
   if ((parts[0] === 'users' || parts[0] === 'pushDevices') && parts[1] === uid) return data;
   if (admin && parts[0]==='users' && parts.length===2 && data) {
     const view={};
     for (const [key,value] of Object.entries(data)) if (ADMIN_FIELDS.has(key)) view[key]=value;
     return withFollowSummary(view,data,uid);
+  }
+  if (moderator && parts[0]==='users' && parts.length===2 && data) {
+    const view={};
+    for (const key of ['uid','displayName','photoUrl','banned','deactivated']) if (Object.hasOwn(data,key)) view[key]=data[key];
+    return view;
   }
   if (parts[0] === 'stories' && data && data.authorId !== uid) {
     const {viewedBy, reactions, ...publicStory}=data;
@@ -52,7 +57,8 @@ export function profileWriteAllowed(path, uid, before, after) {
   const parts=path.split('/');
   if (parts[0] !== 'users' && parts[0] !== 'pushDevices') return true;
   if (parts[1] !== uid) return false;
-  if (parts[0] !== 'users' || parts.length !== 2 || !after) return true;
+  if (parts[0] !== 'users' || parts.length !== 2) return true;
+  if (!after) return !(before?.banned || before?.deactivated || before?.suspendedLifetime || Number(before?.suspendedUntil)>Date.now());
   if (after.uid != null && after.uid !== uid) return false;
   for (const key of SERVER_FIELDS) {
     const old=before?.[key], value=after[key];

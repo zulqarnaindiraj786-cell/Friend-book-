@@ -51,7 +51,12 @@ public class ModeratorDeskActivity extends Activity {
 
     private final List<Models.Post> posts = new ArrayList<>();
     private final List<Models.User> users = new ArrayList<>();
-    private ListenerRegistration postsReg, usersReg;
+    private ListenerRegistration reg;
+    private LinearLayout pageControls;
+    private boolean started;
+    private String actor;
+    private final java.util.Set<String> removedPosts=new java.util.HashSet<>();
+    private final java.util.Map<String,Boolean> confirmedBans=new java.util.HashMap<>();
 
     @Override
     protected void onCreate(@Nullable Bundle b) {
@@ -73,7 +78,7 @@ public class ModeratorDeskActivity extends Activity {
         Ui.pad(banner, 14, 10, 14, 10);
         banner.addView(Ui.tvBold(this, "🛡 Community Safety Moderator", 14, Ui.BLUE));
         banner.addView(Ui.tv(this,
-                "Scope: Delete rule-breaking posts & ban/unban abusive accounts.", 12, Ui.sub(this)));
+                "Scope: Delete rule-breaking posts & ban/unban abusive accounts. Server checks protected accounts. Search covers loaded pages only.", 12, Ui.sub(this)));
         root.addView(banner);
 
         LinearLayout tabs = Ui.row(this);
@@ -96,7 +101,7 @@ public class ModeratorDeskActivity extends Activity {
         LinearLayout searchWrap = Ui.col(this);
         searchWrap.setBackgroundColor(Ui.card(this));
         Ui.pad(searchWrap, 12, 4, 12, 10);
-        searchBox = Ui.input(this, "🔍 Search posts or users…");
+        searchBox = Ui.input(this, "🔍 Search loaded posts or users…");
         searchBox.addTextChangedListener(new TextWatcher() {
             @Override public void beforeTextChanged(CharSequence s, int st, int c, int af) {}
             @Override public void onTextChanged(CharSequence s, int st, int bf, int c) {
@@ -114,57 +119,64 @@ public class ModeratorDeskActivity extends Activity {
         Ui.pad(listCol, 12, 10, 12, 24);
         sv.addView(listCol);
         root.addView(sv, new LinearLayout.LayoutParams(-1, 0, 1));
+        pageControls=Ui.col(this);root.addView(pageControls);
         setContentView(root);
     }
 
     @Override
     protected void onStart() {
         super.onStart();
-        postsReg = Fb.db().collection("posts")
-                .orderBy("createdAt", Query.Direction.DESCENDING)
-                .limit(100)
-                .addSnapshotListener((snap, err) -> {
-                    posts.clear();
-                    if (snap != null) {
-                        for (DocumentSnapshot d : snap.getDocuments()) {
-                            posts.add(Models.Post.fromDoc(d));
-                        }
-                    }
-                    render();
-                });
-        usersReg = Fb.db().collection("users")
-                .limit(250)
-                .addSnapshotListener((snap, err) -> {
-                    users.clear();
-                    if (snap != null) {
-                        for (DocumentSnapshot d : snap.getDocuments()) {
-                            users.add(Models.User.fromDoc(d));
-                        }
-                    }
-                    render();
-                });
+        if(!Admin.canModerate() || Fb.uid()==null){finish();return;}
+        if(actor!=null && !actor.equals(Fb.uid())){finish();return;}
+        actor=Fb.uid();started=true;loadSelectedTab();
     }
 
     @Override
     protected void onStop() {
-        super.onStop();
-        if (postsReg != null) postsReg.remove();
-        if (usersReg != null) usersReg.remove();
+        super.onStop();started=false;
+        if(reg!=null){reg.remove();reg=null;}
     }
 
     private void switchTab(int idx) {
-        activeTab = idx;
+        if(activeTab==idx)return;
+        activeTab=idx;
         tabPosts.setBackground(Ui.round(this, idx == 0 ? Ui.BLUE : Ui.inputBg(this), 20));
         tabPosts.setTextColor(idx == 0 ? 0xFFFFFFFF : Ui.txt(this));
         tabUsers.setBackground(Ui.round(this, idx == 1 ? Ui.BLUE : Ui.inputBg(this), 20));
         tabUsers.setTextColor(idx == 1 ? 0xFFFFFFFF : Ui.txt(this));
-        render();
+        if(started)loadSelectedTab();
+    }
+
+    private void loadSelectedTab() {
+        if(reg!=null){reg.remove();reg=null;}
+        posts.clear();users.clear();render();
+        final int selected=activeTab;
+        Query selectedQuery=selected==0 ? Fb.db().collection("posts").orderBy("createdAt",Query.Direction.DESCENDING)
+                : Fb.db().collection("users");
+        reg=com.friendbook.social.core.PagedLists.attach(this,pageControls,selectedQuery,10,
+                selected==0 ? "moderator-posts" : "moderator-users",(snap,err)->{
+                    if(!started || selected!=activeTab || !java.util.Objects.equals(actor,Fb.uid()) || snap==null)return;
+                    if(selected==0){
+                        posts.clear();for(DocumentSnapshot d:snap){
+                            Models.Post post=Models.Post.fromDoc(d);
+                            if(!removedPosts.contains(post.id))posts.add(post);
+                        }
+                    } else {
+                        users.clear();for(DocumentSnapshot d:snap){
+                            Models.User user=Models.User.fromDoc(d);
+                            if(confirmedBans.containsKey(user.uid))user.banned=confirmedBans.get(user.uid);
+                            users.add(user);
+                        }
+                    }
+                    render();
+                });
     }
 
     private boolean isProtectedUid(String uid) {
-        for (Models.User u : users) {
-            if (uid != null && uid.equals(u.uid)) return Admin.isProtectedStaff(u);
-        }
+        // Missing authors fail closed. The Worker checks its complete configured
+        // admin UID list; moderator profile projections omit staff/email fields.
+        if(uid==null || uid.isEmpty() || Admin.OWNER_UID.equals(uid))return true;
+        for(Models.User u:users)if(uid.equals(u.uid) && Admin.isProtectedStaff(u))return true;
         return false;
     }
 
@@ -183,7 +195,7 @@ public class ModeratorDeskActivity extends Activity {
             }
         } else {
             for (Models.User u : users) {
-                if (Admin.isProtectedStaff(u) || (Fb.uid() != null && Fb.uid().equals(u.uid))) continue;
+                if (Admin.OWNER_UID.equals(u.uid) || Admin.isProtectedStaff(u) || (Fb.uid() != null && Fb.uid().equals(u.uid))) continue;
                 if (!query.isEmpty()) {
                     boolean m = u.displayName.toLowerCase(Locale.US).contains(query);
                     if (!m) continue;
@@ -217,11 +229,20 @@ public class ModeratorDeskActivity extends Activity {
 
         TextView delBtn = Ui.btnOutline(this, "🗑 Delete Post", Ui.RED);
         Ui.pad(delBtn, 10, 6, 10, 6);
+        delBtn.setEnabled(!ModerationGate.SHARED.pending(actor,"posts",p.id));
         delBtn.setOnClickListener(v -> Ui.confirm(this, "Delete post by " + p.authorName + "?",
-                "This permanently deletes the violating post.", "Delete", () ->
-                        Fb.db().collection("posts").document(p.id).delete()
-                                .addOnSuccessListener(x -> Ui.toast(this, "Post deleted 🗑"))
-                                .addOnFailureListener(e -> Ui.toast(this, e.getMessage()))));
+                "This permanently deletes the violating post.", "Delete", () -> {
+                    final String owner=actor;
+                    if(!started || !Admin.canModerate() || !java.util.Objects.equals(owner,Fb.uid()) || isProtectedUid(p.authorId)
+                            || removedPosts.contains(p.id) || !ModerationGate.SHARED.begin(owner,"posts",p.id))return;
+                    render();
+                    Fb.db().moderate("delete_content","posts",p.id).addOnCompleteListener(task->{
+                        ModerationGate.SHARED.end(owner,"posts",p.id);
+                        if(!java.util.Objects.equals(owner,Fb.uid()))return;
+                        if(task.isSuccessful()){removedPosts.add(p.id);posts.removeIf(post->p.id.equals(post.id));}
+                        if(started){render();Ui.toast(this,task.isSuccessful()?"Post deleted":"Could not delete post. Please retry.");}
+                    });
+                }));
         head.addView(delBtn);
         card.addView(head);
 
@@ -287,27 +308,33 @@ public class ModeratorDeskActivity extends Activity {
         LinearLayout.LayoutParams sblp = new LinearLayout.LayoutParams(-2, -2);
         sblp.rightMargin = Ui.dp(this, 6);
         suspendBtn.setOnClickListener(v -> Admin.showSuspendUserDialog(this, u, this::render));
-        row.addView(suspendBtn, sblp);
+        if (Admin.isAdmin()) row.addView(suspendBtn, sblp);
 
         TextView banBtn = u.banned
                 ? Ui.btnOutline(this, "✓ Unban", Ui.GREEN)
                 : Ui.btnOutline(this, "🚫 Ban", Ui.RED);
         Ui.pad(banBtn, 12, 6, 12, 6);
+        banBtn.setEnabled(!ModerationGate.SHARED.pending(actor,"users",u.uid));
         banBtn.setOnClickListener(v -> {
             boolean nextBan = !u.banned;
             Ui.confirm(this, (nextBan ? "🚫 Ban " : "✓ Unban ") + u.displayName + "?",
                     nextBan ? "This user will be blocked from using friendbook." : "Restore account access?",
-                    nextBan ? "Ban" : "Unban", () ->
-                            Fb.db().collection("users").document(u.uid)
-                                    .set(Fb.map("banned", nextBan), SetOptions.merge())
-                                    .addOnSuccessListener(x -> {
-                                        if (nextBan) {
-                                            Notify.sendOfficialTeamMessage(u.uid, "ban",
-                                                    "Your account was suspended by a friendbook Moderator.", false);
-                                        }
-                                        Ui.toast(this, nextBan ? "Banned 🚫" : "Unbanned ✓");
-                                    })
-                                    .addOnFailureListener(e -> Ui.toast(this, e.getMessage())));
+                    nextBan ? "Ban" : "Unban", () -> {
+                        final String owner=actor;
+                        if(!started || !Admin.canModerate() || !java.util.Objects.equals(owner,Fb.uid())
+                                || isProtectedUid(u.uid) || u.uid.equals(owner)
+                                || !ModerationGate.SHARED.begin(owner,"users",u.uid))return;
+                        render();
+                        Fb.db().moderate(nextBan ? "ban_user" : "unban_user","users",u.uid).addOnCompleteListener(task->{
+                            ModerationGate.SHARED.end(owner,"users",u.uid);
+                            if(!java.util.Objects.equals(owner,Fb.uid()))return;
+                            if(task.isSuccessful()){
+                                confirmedBans.put(u.uid,nextBan);
+                                for(Models.User user:users)if(u.uid.equals(user.uid))user.banned=nextBan;
+                            }
+                            if(started){render();Ui.toast(this,task.isSuccessful()?(nextBan?"Banned":"Unbanned"):"Could not update user. Please retry.");}
+                        });
+                    });
         });
         row.addView(banBtn);
 

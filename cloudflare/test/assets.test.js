@@ -26,7 +26,8 @@ test('root/login/signup including deep links return real landing HTML without da
     const html = await response.text();
     assert.match(html, /<!DOCTYPE html>/i);
     assert.match(html, /<base href="\/"/);
-    assert.match(html, /releases\/latest\/download\/friendbook.apk/);
+    assert.match(html, /https:\/\/play\.google\.com\/store\/apps\/details\?id=com\.friendbook\.social/);
+    assert.doesNotMatch(html, /github\.com|friendbook\.apk/i);
   }
   const head = await call('/signup', env, 'HEAD');
   assert.equal(head.status, 200); assert.equal(await head.text(), '');

@@ -42,17 +42,9 @@ public final class FCMTokenManager {
             PushTrace.stage("registration_enqueue", "actor=" + PushTrace.id(uid)
                     + " device=" + PushTrace.id(deviceId(c)));
             PushDeliveryWorker.enqueue(request);
-            // A long outage or OS scheduling delay must not require the user to register manually.
-            androidx.work.PeriodicWorkRequest maintenance = new androidx.work.PeriodicWorkRequest.Builder(
-                    PushDeliveryWorker.class, 12, java.util.concurrent.TimeUnit.HOURS)
-                    .setInputData(new androidx.work.Data.Builder().putString("uid", uid)
-                            .putString("body", request.toString()).build())
-                    .setConstraints(new androidx.work.Constraints.Builder()
-                            .setRequiredNetworkType(androidx.work.NetworkType.CONNECTED).build())
-                    .setBackoffCriteria(androidx.work.BackoffPolicy.EXPONENTIAL, 30, java.util.concurrent.TimeUnit.SECONDS)
-                    .addTag("fcm_user_" + uid).build();
-            androidx.work.WorkManager.getInstance(c.getApplicationContext()).enqueueUniquePeriodicWork(
-                    "fcm_registration_maintenance", androidx.work.ExistingPeriodicWorkPolicy.UPDATE, maintenance);
+            // Cancel the old repeating job on upgrade. Token refresh and sign-in
+            // already register the device; failed registrations have durable retries.
+            androidx.work.WorkManager.getInstance(c.getApplicationContext()).cancelUniqueWork("fcm_registration_maintenance");
         } catch (Exception e) {
             android.util.Log.w("FriendBookPush", "Automatic FCM registration could not be queued", e);
         }

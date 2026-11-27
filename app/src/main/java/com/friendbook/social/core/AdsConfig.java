@@ -1,5 +1,7 @@
 package com.friendbook.social.core;
 
+import com.friendbook.social.BuildConfig;
+
 import android.content.Context;
 import android.content.SharedPreferences;
 import android.util.Log;
@@ -52,7 +54,7 @@ public class AdsConfig {
             "https://docs.google.com/document/d/1k3JAnk4U2S_cC8aLl2nNVpdglw-UxzSzBamWV-UfEkw/view";
 
     /** Official Developer Website (for app-ads.txt verification) & Google Docs Policy URLs. */
-    public static final String OFFICIAL_WEBSITE_URL = "https://zulqarnaindiraj786-cell.github.io/Friend-book-";
+    public static final String OFFICIAL_WEBSITE_URL = BuildConfig.CLOUDFLARE_API_URL;
     public static final String APP_ADS_TXT_URL = OFFICIAL_WEBSITE_URL + "/app-ads.txt";
     public static final String PRIVACY_POLICY_URL = GOOGLE_DOCS_POLICY_URL;
     public static final String TERMS_OF_SERVICE_URL = GOOGLE_DOCS_POLICY_URL;
@@ -75,6 +77,7 @@ public class AdsConfig {
     private static volatile String feedNativeUnitId = FEED_NATIVE_ID;
     private static volatile String reelsNativeUnitId = REELS_NATIVE_ID;
     private static volatile boolean masterSwitchEnabled = true;
+    private static volatile boolean quotaSaverEnabled=true;
     private static volatile boolean remoteAllowed = true;
     private static ListenerRegistration reg;
 
@@ -91,6 +94,10 @@ public class AdsConfig {
         listener = l;
     }
 
+    private static final java.util.Set<ChangeListener> placementListeners = java.util.Collections.newSetFromMap(new java.util.WeakHashMap<>());
+    public static void addPlacementListener(ChangeListener listener) { placementListeners.add(listener); }
+    public static void removePlacementListener(ChangeListener listener) { placementListeners.remove(listener); }
+
     public static void setReelsPoolListener(Runnable r) {
         reelsPoolListener = r;
     }
@@ -99,6 +106,9 @@ public class AdsConfig {
         MAIN_UI_HANDLER.post(() -> {
             if (listener != null) {
                 listener.onAdsConfigChanged(feedNativeId(), nativeAdsEnabled());
+            }
+            for (ChangeListener observer : new java.util.ArrayList<>(placementListeners)) {
+                observer.onAdsConfigChanged(feedNativeId(), nativeAdsEnabled());
             }
             if (reelsPoolListener != null) {
                 reelsPoolListener.run();
@@ -181,7 +191,7 @@ public class AdsConfig {
         if (c == null) return;
         SharedPreferences sp = prefs(c);
         String msg = detail == null ? "" : detail.trim();
-        if (msg.length() > 200) msg = msg.substring(0, 200);
+        if (msg.length() > 1200) msg = msg.substring(0, 1200);
         sp.edit()
                 .putLong(KEY_FAILS, sp.getLong(KEY_FAILS, 0L) + 1L)
                 .putInt(KEY_LAST_ERROR, errorCode)
@@ -230,13 +240,14 @@ public class AdsConfig {
                 "Mode: Real Production Only  •  Requests: %d  •  Loaded: %d\n"
                         + "Impressions: %d  •  Clicks: %d  •  Failed: %d (Last error: %s)  •  Est: $%.4f\n"
                         + "Pool now: Feed %d/%d  •  Reels %d/%d\n"
-                        + "Switches: native ads %s (Admin master %s, Remote Config %s)  •  SDK initialized: %s",
+                        + "Switches: native ads %s (Admin master %s, Remote Config %s)  •  SDK initialized: %s  •  Consent allows requests: %s",
                 req, loads, imps, clicks, fails, errLabel, usd,
                 FEED_POOL.size(), AD_POOL_SIZE, REELS_POOL.size(), AD_POOL_SIZE,
                 nativeAdsEnabled() ? "ON" : "OFF",
                 masterSwitchEnabled ? "ON" : "OFF",
                 remoteAllowed ? "ON" : "OFF",
-                ConsentManager.isAdsSdkInitialized() ? "yes" : "not yet");
+                ConsentManager.isAdsSdkInitialized() ? "yes" : "not yet",
+                ConsentManager.canRequestAds(c) ? "yes" : "no");
     }
 
     /** Reads bundled assets/app-ads.txt for instant verification inside the app. */
@@ -266,6 +277,9 @@ public class AdsConfig {
                             feedNativeUnitId = isRealProductionUnit(fId) ? fId.trim() : FEED_NATIVE_ID;
                             reelsNativeUnitId = isRealProductionUnit(rId) ? rId.trim() : REELS_NATIVE_ID;
                             if (en != null) masterSwitchEnabled = en;
+                            Boolean saver=snap.getBoolean("quota_saver_v1");
+                            quotaSaverEnabled=saver==null || saver;
+                            QuotaSaver.setEnabled(quotaSaverEnabled);
                             notifyChange();
                         }
                     });
@@ -297,10 +311,27 @@ public class AdsConfig {
         save(FEED_NATIVE_ID, REELS_NATIVE_ID, true, ctx);
     }
 
+    public static boolean quotaSaverEnabled(){return quotaSaverEnabled;}
+
+    /** Global soft saver: reuse unchanged automatic list pages longer; never caps manual actions. */
+    public static void saveQuotaSaver(boolean enabled,Context ctx){
+        if(!Admin.isAdmin())return;
+        Map<String,Object> values=new HashMap<>();
+        values.put("appId",APP_ID);values.put("feed_native_unit_v3",feedNativeId());
+        values.put("reels_native_unit_v3",reelsNativeId());values.put("ads_enabled_v3",masterSwitchEnabled);
+        values.put("websiteUrl",OFFICIAL_WEBSITE_URL);values.put("appAdsTxtUrl",APP_ADS_TXT_URL);
+        values.put("quota_saver_v1",enabled);values.put("updatedBy",Fb.uid());
+        values.put("updatedAt",FieldValue.serverTimestamp());
+        Fb.db().collection("config").document("ads").set(values,SetOptions.merge())
+                .addOnSuccessListener(v->{quotaSaverEnabled=enabled;QuotaSaver.setEnabled(enabled);notifyChange();
+                    if(ctx!=null)Ui.toast(ctx,enabled?"Global Quota Saver ON — fewer automatic page refreshes":"Global Quota Saver OFF");})
+                .addOnFailureListener(e->{notifyChange();if(ctx!=null)Ui.toast(ctx,"Quota Saver setting not saved; previous mode remains active.");});
+    }
+
     // ------------------------------------------------------------------------
-    // ⚡ Preloaded 5-Ad Pool (Separate Feed & Reels Units, Dispose-After-Show, No Retry Loop)
+    // ⚡ Preloaded 3-Ad Pool (Separate Feed & Reels Units, Dispose-After-Show, No Retry Loop)
     // ------------------------------------------------------------------------
-    public static final int AD_POOL_SIZE = 5;
+    public static final int AD_POOL_SIZE = 3;
     private static final int POOL_TARGET_SIZE = AD_POOL_SIZE;
     private static final int BATCH_PRELOAD_COUNT = AD_POOL_SIZE;
     private static final int REPLENISH_THRESHOLD = 4;
@@ -310,11 +341,9 @@ public class AdsConfig {
      * replenish — can ask again soon after a failure instead of leaving the feed ad-less for 20s.
      * Still a cooldown, never a retry loop.
      */
-    private static final long FAIL_COOLDOWN_MS = 8_000L;
-    /** ONE bounded automatic retry per pool per process after a cold-start no-fill. */
-    private static final long FIRST_FILL_RETRY_DELAY_MS = 3_000L;
-    private static boolean feedFirstFillRetryUsed = false;
-    private static boolean reelsFirstFillRetryUsed = false;
+    private static final long FAIL_COOLDOWN_MS = 10_000L;
+    // Shared opening allowance: 2 Feed + 1 Reels. Only an impression earns a replacement.
+    private static final AdRequestBudget REQUEST_BUDGET = new AdRequestBudget();
 
     public interface SlotAdReadyCallback {
         void onAdReady(com.google.android.gms.ads.nativead.NativeAd ad);
@@ -706,7 +735,7 @@ public class AdsConfig {
         }
     }
 
-    /** Preloads both 5-Ad Feed and 5-Ad Reels pools in the background so slots render in 0ms without blocking scroll. */
+    /** Preloads both 3-Ad Feed and 3-Ad Reels pools in the background so slots render in 0ms without blocking scroll. */
     public static synchronized void warmUpPools(final Context context) {
         if (context == null || !nativeAdsEnabled()) return;
         final Context appCtx = context.getApplicationContext();
@@ -717,7 +746,7 @@ public class AdsConfig {
     }
 
     /**
-     * Preloads up to `AD_POOL_SIZE` (5) Feed Native Ads using ONLY `FEED_NATIVE_ID` in the background.
+     * Preloads up to `AD_POOL_SIZE` (3) Feed Native Ads using ONLY `FEED_NATIVE_ID` in the background.
      * Never blocks feed scrolling and never retries in a loop on failure.
      */
     public static void preloadFeedBatchNow(final Context context, final int count) {
@@ -733,13 +762,7 @@ public class AdsConfig {
                 if (missing > 0 && feedInFlight <= 0) {
                     feedInFlight = 1;
                     feedInFlightSinceMs = now;
-                    // Fast first fill: with an empty pool ask for ONE ad — a single request lands
-                    // noticeably sooner than a 5-ad batch — then the pool is topped back up to 5
-                    // straight after that ad arrives (see the forNativeAd callback).
-                    int reqCount = FEED_POOL.isEmpty()
-                            ? 1
-                            : Math.min(AD_POOL_SIZE, Math.max(1, Math.max(missing, count)));
-                    preloadBatchIntoPool(appCtx, feedNativeId(), true, reqCount);
+                    preloadMediatedAd(appCtx, feedNativeId(), true);
                 }
             }
             startPoolTopUpTicker(appCtx);
@@ -747,7 +770,7 @@ public class AdsConfig {
     }
 
     /**
-     * Preloads up to `AD_POOL_SIZE` (5) Reels Video/Native Ads using ONLY `REELS_NATIVE_ID` in the background.
+     * Preloads up to `AD_POOL_SIZE` (3) Reels Video/Native Ads using ONLY `REELS_NATIVE_ID` in the background.
      * Never blocks Reels scrolling and never retries in a loop on failure.
      */
     public static void preloadReelsBatchNow(final Context context, final int count) {
@@ -763,54 +786,19 @@ public class AdsConfig {
                 if (missing > 0 && reelsInFlight <= 0) {
                     reelsInFlight = 1;
                     reelsInFlightSinceMs = now;
-                    // Fast first fill for Reels too: one ad first, the remaining four right after.
-                    int reqCount = REELS_POOL.isEmpty()
-                            ? 1
-                            : Math.min(AD_POOL_SIZE, Math.max(1, Math.max(missing, count)));
-                    preloadBatchIntoPool(appCtx, reelsNativeId(), false, reqCount);
+                    preloadMediatedAd(appCtx, reelsNativeId(), false);
                 }
             }
             startPoolTopUpTicker(appCtx);
         }));
     }
 
-    /**
-     * Foreground pool top-up: while the app is open, an under-filled pool is asked again every 30s.
-     * Bounded by design — it respects the no-fill cooldown and the in-flight guard, stops as soon as
-     * the app goes to the background, and never runs a tight retry loop. This is what makes an ad
-     * appear a few seconds after a cold-start no-fill instead of never.
-     */
-    private static final long POOL_TOP_UP_INTERVAL_MS = 30_000L;
-    private static boolean poolTopUpRunning = false;
-    private static final Runnable POOL_TOP_UP = new Runnable() {
-        @Override
-        public void run() {
-            Context ctx = cachedAppCtx;
-            if (ctx == null || !nativeAdsEnabled() || !com.friendbook.social.App.isForeground()) {
-                poolTopUpRunning = false;
-                return;
-            }
-            synchronized (AdsConfig.class) {
-                if (FEED_POOL.size() < AD_POOL_SIZE) {
-                    preloadFeedBatchNow(ctx, AD_POOL_SIZE - FEED_POOL.size());
-                }
-                if (REELS_POOL.size() < AD_POOL_SIZE) {
-                    preloadReelsBatchNow(ctx, AD_POOL_SIZE - REELS_POOL.size());
-                }
-            }
-            MAIN_UI_HANDLER.postDelayed(this, POOL_TOP_UP_INTERVAL_MS);
-        }
-    };
-
-    /** Starts (or keeps) the foreground top-up ticker. Idempotent and safe to call from any entry point. */
+    /** Compatibility entry point: remember context, never start a periodic request timer. */
     public static synchronized void startPoolTopUpTicker(Context context) {
         if (context != null) cachedAppCtx = context.getApplicationContext();
-        if (cachedAppCtx == null || poolTopUpRunning || !nativeAdsEnabled()) return;
-        poolTopUpRunning = true;
-        MAIN_UI_HANDLER.postDelayed(POOL_TOP_UP, POOL_TOP_UP_INTERVAL_MS);
     }
 
-    /** Loads a fresh Feed NativeAd in the background to replace a consumed/disposed ad and keep the 5-ad pool full. */
+    /** Loads a fresh Feed NativeAd in the background to replace a consumed/disposed ad and keep the 3-ad pool full. */
     public static synchronized void ensureFeedPoolReplenished(final Context context) {
         Context effCtx = context != null ? context.getApplicationContext() : cachedAppCtx;
         if (effCtx == null) return;
@@ -819,7 +807,7 @@ public class AdsConfig {
         }
     }
 
-    /** Loads a fresh Reels NativeAd in the background to replace a consumed/disposed ad and keep the 5-ad pool full. */
+    /** Loads a fresh Reels NativeAd in the background to replace a consumed/disposed ad and keep the 3-ad pool full. */
     public static synchronized void ensureReelsPoolReplenished(final Context context) {
         Context effCtx = context != null ? context.getApplicationContext() : cachedAppCtx;
         if (effCtx == null) return;
@@ -833,6 +821,7 @@ public class AdsConfig {
             FEED_SLOT_WAITERS.remove(slotOrdinal);
         } else {
             FEED_SLOT_WAITERS.put(slotOrdinal, cb);
+            if (lastFeedFailAtMs != 0L && cachedAppCtx != null) recoverWaitingSlot(cachedAppCtx, true);
         }
     }
 
@@ -841,6 +830,7 @@ public class AdsConfig {
             REELS_SLOT_WAITERS.remove(slotOrdinal);
         } else {
             REELS_SLOT_WAITERS.put(slotOrdinal, cb);
+            if (lastReelsFailAtMs != 0L && cachedAppCtx != null) recoverWaitingSlot(cachedAppCtx, false);
         }
     }
 
@@ -922,13 +912,8 @@ public class AdsConfig {
         }
     }
 
-    private static int requestTopicCounter = 0;
-    private static final String[] BROAD_AUCTION_TOPICS = new String[]{
-            "", "shopping", "games", "finance", "technology", "automotive", "travel", "entertainment"
-    };
-
     /**
-     * Pops a distinct preloaded Feed `NativeAd` from the 5-ad `FEED_POOL` (loaded strictly from `FEED_NATIVE_ID`).
+     * Pops a distinct preloaded Feed `NativeAd` from the 3-ad `FEED_POOL` (loaded strictly from `FEED_NATIVE_ID`).
      * Never calls `loadAd` on the caller thread, never reuses a shown ad across slots, and triggers background replenishment.
      */
     public static synchronized com.google.android.gms.ads.nativead.NativeAd getOrPollFeedAd(Context context, int slotOrdinal) {
@@ -947,6 +932,10 @@ public class AdsConfig {
         }
         ensureFeedPoolReplenished(context);
         return polled;
+    }
+
+    public static synchronized boolean isCurrentFeedSlotAd(int slot, com.google.android.gms.ads.nativead.NativeAd ad) {
+        return ad != null && FEED_SLOT_ADS.get(slot) == ad;
     }
 
     public static synchronized boolean hasFeedSlotAd(int slotOrdinal) {
@@ -969,7 +958,7 @@ public class AdsConfig {
     }
 
     /**
-     * Pops a distinct preloaded Reels `NativeAd` from the 5-ad `REELS_POOL` (loaded strictly from `REELS_NATIVE_ID`).
+     * Pops a distinct preloaded Reels `NativeAd` from the 3-ad `REELS_POOL` (loaded strictly from `REELS_NATIVE_ID`).
      * Never calls `loadAd` on the caller thread, never reuses a shown ad across slots, and triggers background replenishment.
      */
     public static synchronized com.google.android.gms.ads.nativead.NativeAd getOrPollReelsAd(Context context, int slotOrdinal) {
@@ -1120,31 +1109,6 @@ public class AdsConfig {
     }
 
     /**
-     * Builds a Production AdRequest that rotates single broad auction categories across calls
-     * so AdMob serves diverse campaigns without triggering No-Fill (Code 3).
-     */
-    public static com.google.android.gms.ads.AdRequest buildHighValueAdRequest(boolean isReels) {
-        com.google.android.gms.ads.AdRequest.Builder b = new com.google.android.gms.ads.AdRequest.Builder();
-        int idx;
-        synchronized (AdsConfig.class) {
-            idx = (requestTopicCounter++) % BROAD_AUCTION_TOPICS.length;
-        }
-        String topic = BROAD_AUCTION_TOPICS[idx];
-        if (topic != null && !topic.isEmpty()) {
-            try { b.addKeyword(topic); } catch (Throwable ignored) { }
-        }
-        return b.build();
-    }
-
-    private static void preloadOneFeedAd(final Context appCtx) {
-        preloadBatchIntoPool(appCtx, feedNativeId(), true, AD_POOL_SIZE);
-    }
-
-    private static void preloadOneReelsAd(final Context appCtx) {
-        preloadBatchIntoPool(appCtx, reelsNativeId(), false, AD_POOL_SIZE);
-    }
-
-    /**
      * Tells every waiting Feed/Reels slot "no ad yet", so the slot collapses and content shows with
      * zero gap — but it KEEPS the waiter registered, because the next preloaded ad must still fill
      * that slot. Clearing the waiters is what made a slot that collapsed once stay empty until the
@@ -1170,21 +1134,54 @@ public class AdsConfig {
         }
     }
 
-    private static void preloadBatchIntoPool(
+    // One recovery attempt per placement after cold no-fill, only with a waiting slot.
+    private static boolean feedRecoveryUsed, reelsRecoveryUsed;
+    private static synchronized void recoverWaitingSlot(Context app, boolean feed) {
+        if (feed ? feedRecoveryUsed : reelsRecoveryUsed) return;
+        if ((feed ? FEED_SLOT_WAITERS : REELS_SLOT_WAITERS).isEmpty()) return;
+        if (feed) feedRecoveryUsed = true; else reelsRecoveryUsed = true;
+        final long failedAt = feed ? lastFeedFailAtMs : lastReelsFailAtMs;
+        MAIN_UI_HANDLER.postDelayed(() -> {
+            synchronized (AdsConfig.class) {
+                if ((feed ? lastFeedFailAtMs : lastReelsFailAtMs) != failedAt) return;
+                if (!com.friendbook.social.App.isForeground() || !nativeAdsEnabled() || !ConsentManager.canRequestAds(app)
+                        || (feed ? FEED_SLOT_WAITERS : REELS_SLOT_WAITERS).isEmpty()) {
+                    if (feed) feedRecoveryUsed = false; else reelsRecoveryUsed = false;
+                    return;
+                }
+                REQUEST_BUDGET.allowSingleRecovery(feed);
+            }
+            if (feed) ensureFeedPoolReplenished(app); else ensureReelsPoolReplenished(app);
+        }, Math.max(1L, FAIL_COOLDOWN_MS - (System.currentTimeMillis() - failedAt)));
+    }
+
+    private static void preloadMediatedAd(
             final Context appCtx,
             final String unitId,
-            final boolean isFeedPool,
-            final int batchCount) {
+            final boolean isFeedPool) {
+        if (!nativeAdsEnabled() || !com.friendbook.social.App.isForeground() || !ConsentManager.canRequestAds(appCtx)) {
+            synchronized (AdsConfig.class) {
+                if (isFeedPool) feedInFlight = 0;
+                else reelsInFlight = 0;
+            }
+            return;
+        }
         if (!ConsentManager.isAdsSdkInitialized()) {
             // Never fire the first request into a half-booted SDK: it queues (or returns a
             // cold-start no-fill) and the pool then sits in the failure cooldown — the main reason
             // ads used to appear late. ConsentManager guarantees this deferred call runs, either on
             // the real `MobileAds.initialize` callback or on its 4s boot fallback.
             ConsentManager.runWhenSdkInitialized(appCtx,
-                    () -> preloadBatchIntoPool(appCtx, unitId, isFeedPool, batchCount));
+                    () -> preloadMediatedAd(appCtx, unitId, isFeedPool));
             return;
         }
         try {
+            synchronized (AdsConfig.class) {
+                if (!REQUEST_BUDGET.tryRequest(isFeedPool)) {
+                    if (isFeedPool) feedInFlight=0; else reelsInFlight=0;
+                    return;
+                }
+            }
             recordAdRequest(appCtx);
             boolean startMuted = isFeedPool || !Prefs.reelsStartWithSound(appCtx);
             com.google.android.gms.ads.VideoOptions videoOptions =
@@ -1197,42 +1194,42 @@ public class AdsConfig {
                             .setMediaAspectRatio(com.google.android.gms.ads.nativead.NativeAdOptions.NATIVE_MEDIA_ASPECT_RATIO_ANY)
                             .setVideoOptions(videoOptions)
                             .build();
-            final com.google.android.gms.ads.AdLoader[] loaderRef = new com.google.android.gms.ads.AdLoader[1];
-            MAIN_UI_HANDLER.postDelayed(() -> {
-                synchronized (AdsConfig.class) {
-                    if (isFeedPool) feedInFlight = Math.max(0, feedInFlight - 1);
-                    else reelsInFlight = Math.max(0, reelsInFlight - 1);
-                }
-            }, 5000L);
             com.google.android.gms.ads.AdLoader adLoader =
                     new com.google.android.gms.ads.AdLoader.Builder(appCtx, unitId)
                             .forNativeAd(nativeAd -> {
-                                boolean done = loaderRef[0] == null || !loaderRef[0].isLoading();
                                 synchronized (AdsConfig.class) {
-                                    if (isFeedPool) lastFeedFailAtMs = 0L;
-                                    else lastReelsFailAtMs = 0L;
-                                    if (done) {
-                                        if (isFeedPool) feedInFlight = Math.max(0, feedInFlight - 1);
-                                        else reelsInFlight = Math.max(0, reelsInFlight - 1);
-                                    }
+                                    if (isFeedPool) { lastFeedFailAtMs = 0L; feedRecoveryUsed = false; }
+                                    else { lastReelsFailAtMs = 0L; reelsRecoveryUsed = false; }
+                                    if (isFeedPool) feedInFlight = Math.max(0, feedInFlight - 1);
+                                    else reelsInFlight = Math.max(0, reelsInFlight - 1);
                                     onNativeAdLoaded(appCtx);
                                     nativeAd.setOnPaidEventListener(adValue -> recordPaidEvent(appCtx, adValue));
+                                }
+                                if (!nativeAdsEnabled() || !ConsentManager.canRequestAds(appCtx)) {
+                                    nativeAd.destroy();
+                                    return;
                                 }
                                 if (isFeedPool) {
                                     dispatchNextFeedWaiterIfPossible(nativeAd);
                                 } else {
                                     dispatchNextReelsWaiterIfPossible(nativeAd);
                                 }
-                                // Fast first fill follow-up: top the pool back up to AD_POOL_SIZE (5)
+                                // Fast first fill follow-up: top the pool back up to AD_POOL_SIZE (3)
                                 // as soon as the first ad lands. A no-op while a batch is still in
                                 // flight, so no duplicate request is ever issued.
                                 if (isFeedPool) ensureFeedPoolReplenished(appCtx);
                                 else ensureReelsPoolReplenished(appCtx);
-                                if (done) notifyChange();
+                                notifyChange();
                             })
                             .withAdListener(new com.google.android.gms.ads.AdListener() {
+                                private boolean replacementEarned;
                                 @Override
                                 public void onAdImpression() {
+                                    synchronized (AdsConfig.class) {
+                                        if (replacementEarned) return;
+                                        replacementEarned=true;
+                                        REQUEST_BUDGET.onImpression(isFeedPool);
+                                    }
                                     recordAdImpression(appCtx);
                                     if (isFeedPool) ensureFeedPoolReplenished(appCtx);
                                     else ensureReelsPoolReplenished(appCtx);
@@ -1245,43 +1242,27 @@ public class AdsConfig {
                                     String detail = adError != null
                                             ? (adError.getDomain() + ": " + adError.getMessage())
                                             : "unknown error";
-                                    onNativeAdFailed(appCtx, code, detail);
-                                    // If ad fails, do NOT retry in a loop — record cooldown and let feed/reels show content without ad.
-                                    boolean scheduleFirstFillRetry;
-                                    synchronized (AdsConfig.class) {
-                                        if (isFeedPool) {
-                                            feedInFlight = Math.max(0, feedInFlight - 1);
-                                            lastFeedFailAtMs = System.currentTimeMillis();
-                                            scheduleFirstFillRetry = !feedFirstFillRetryUsed;
-                                            feedFirstFillRetryUsed = true;
-                                        } else {
-                                            reelsInFlight = Math.max(0, reelsInFlight - 1);
-                                            lastReelsFailAtMs = System.currentTimeMillis();
-                                            scheduleFirstFillRetry = !reelsFirstFillRetryUsed;
-                                            reelsFirstFillRetryUsed = true;
+                                    if (adError != null && adError.getResponseInfo() != null) {
+                                        for (com.google.android.gms.ads.AdapterResponseInfo adapter : adError.getResponseInfo().getAdapterResponses()) {
+                                            detail += "\n" + adapter.getAdapterClassName() + " → "
+                                                    + (adapter.getAdError()==null ? "OK" : adapter.getAdError().getMessage());
                                         }
                                     }
-                                    notifyWaitersNoAdYet(isFeedPool);
-                                    // Cold-start no-fill is usually transient (SDK still warming up),
-                                    // so allow exactly ONE automatic retry per pool per process after
-                                    // 3s. The flag makes a second automatic retry impossible: this is
-                                    // a bounded single retry, never a loop.
-                                    if (scheduleFirstFillRetry) {
-                                        MAIN_UI_HANDLER.postDelayed(() -> {
-                                            synchronized (AdsConfig.class) {
-                                                if (isFeedPool) lastFeedFailAtMs = 0L;
-                                                else lastReelsFailAtMs = 0L;
-                                            }
-                                            if (isFeedPool) preloadFeedBatchNow(appCtx, 1);
-                                            else preloadReelsBatchNow(appCtx, 1);
-                                        }, FIRST_FILL_RETRY_DELAY_MS);
+                                    onNativeAdFailed(appCtx, code, (isFeedPool ? "Feed: " : "Reels: ") + detail);
+                                    // If ad fails, do NOT retry in a loop — record cooldown and let feed/reels show content without ad.
+                                    synchronized (AdsConfig.class) {
+                                        if (isFeedPool) { feedInFlight=0; lastFeedFailAtMs=System.currentTimeMillis(); }
+                                        else { reelsInFlight=0; lastReelsFailAtMs=System.currentTimeMillis(); }
                                     }
+                                    notifyWaitersNoAdYet(isFeedPool);
+                                    recoverWaitingSlot(appCtx, isFeedPool);
                                 }
                             })
                             .withNativeAdOptions(adOptions)
                             .build();
-            loaderRef[0] = adLoader;
-            adLoader.loadAds(buildHighValueAdRequest(!isFeedPool), Math.min(AD_POOL_SIZE, Math.max(1, batchCount)));
+            // Single requests participate in mediation; bulk requests do not.
+            // Let the configured ad units and mediation decide eligibility without rotating keywords.
+            adLoader.loadAd(new com.google.android.gms.ads.AdRequest.Builder().build());
         } catch (Throwable t) {
             synchronized (AdsConfig.class) {
                 if (isFeedPool) {
@@ -1293,6 +1274,7 @@ public class AdsConfig {
                 }
             }
             notifyWaitersNoAdYet(isFeedPool);
+            recoverWaitingSlot(appCtx,isFeedPool);
         }
     }
 
@@ -1303,8 +1285,11 @@ public class AdsConfig {
     // ------------------------------------------------------------------------
     private static final Map<String, com.friendbook.social.models.Models.Post> AD_POST_CACHE =
             new java.util.concurrent.ConcurrentHashMap<>();
-    private static final java.util.Set<String> AD_POST_FETCHED =
-            java.util.Collections.synchronizedSet(new java.util.HashSet<>());
+    private static final AdSocialReadGate AD_SOCIAL_READS = new AdSocialReadGate();
+
+    private static synchronized void scopeAdSocial() {
+        if (AD_SOCIAL_READS.scope(Fb.uid())) AD_POST_CACHE.clear();
+    }
 
     public static String adDocId(int slotKey) {
         SponsoredCreative cr = getCreativeForSlot(slotKey);
@@ -1383,7 +1368,8 @@ public class AdsConfig {
         return sb.length() > 0 ? sb.toString() : "AD";
     }
 
-    public static com.friendbook.social.models.Models.Post getOrCreateAdPost(int slotKey) {
+    public static synchronized com.friendbook.social.models.Models.Post getOrCreateAdPost(int slotKey) {
+        scopeAdSocial();
         int uniqueId = resolveUniqueAdId(cachedAppCtx, slotKey);
         String docId = "sponsored_ad_creative_" + uniqueId;
         com.friendbook.social.models.Models.Post p = AD_POST_CACHE.get(docId);
@@ -1404,17 +1390,26 @@ public class AdsConfig {
         return p;
     }
 
-    /** Hydrates real user likes, reactions & comment counts from Firestore `posts/{adDocId}` once per ad creative. */
+    /** On-bind hydration never retries denied reads or spins on transient failures. */
     public static void hydrateAdSocialFromFirestore(final Context c, final int slotKey, final Runnable onHydrated) {
+        hydrateAdSocial(c, slotKey, onHydrated, false);
+    }
+
+    private static void hydrateAdSocial(final Context c, final int slotKey, final Runnable onHydrated, boolean explicit) {
         final com.friendbook.social.models.Models.Post adPost = getOrCreateAdPost(slotKey);
         final String docId = adPost.id;
-        if (!AD_POST_FETCHED.add(docId)) {
+        final String actor = Fb.uid();
+        final AdSocialReadGate.Attempt attempt = AD_SOCIAL_READS.begin(actor, docId,
+                android.os.SystemClock.elapsedRealtime(), explicit);
+        if (attempt == null) {
             if (onHydrated != null) onHydrated.run();
             return;
         }
         try {
             Fb.db().collection("posts").document(docId).get()
                     .addOnSuccessListener(snap -> {
+                        scopeAdSocial();
+                        if (!AD_SOCIAL_READS.finish(Fb.uid(), attempt, true, android.os.SystemClock.elapsedRealtime())) return;
                         if (snap != null && snap.exists()) {
                             com.friendbook.social.models.Models.Post remote =
                                     com.friendbook.social.models.Models.Post.fromDoc(snap);
@@ -1450,11 +1445,16 @@ public class AdsConfig {
                         if (onHydrated != null) onHydrated.run();
                     })
                     .addOnFailureListener(e -> {
-                        AD_POST_FETCHED.remove(docId);
+                        scopeAdSocial();
+                        boolean denied = e instanceof com.friendbook.social.d1.documents.D1DocumentStoreException
+                                && ((com.friendbook.social.d1.documents.D1DocumentStoreException)e).getCode()
+                                == com.friendbook.social.d1.documents.D1DocumentStoreException.Code.PERMISSION_DENIED;
+                        if (!AD_SOCIAL_READS.finish(Fb.uid(), attempt, denied, android.os.SystemClock.elapsedRealtime())) return;
                         if (onHydrated != null) onHydrated.run();
                     });
         } catch (Throwable ignored) {
-            AD_POST_FETCHED.remove(docId);
+            scopeAdSocial();
+            AD_SOCIAL_READS.finish(Fb.uid(), attempt, false, android.os.SystemClock.elapsedRealtime());
         }
     }
 
@@ -1527,7 +1527,8 @@ public class AdsConfig {
         c.startActivity(android.content.Intent.createChooser(send, "Share Sponsored Post"));
     }
 
-    public static com.friendbook.social.models.Models.Post findCachedAdPostById(String postId) {
+    public static synchronized com.friendbook.social.models.Models.Post findCachedAdPostById(String postId) {
+        scopeAdSocial();
         if (postId == null || postId.isEmpty()) return null;
         return AD_POST_CACHE.get(postId);
     }
@@ -1539,8 +1540,7 @@ public class AdsConfig {
         if (c == null) return;
         preservedDetailSlotKey = slotKey;
         final com.friendbook.social.models.Models.Post adPost = getOrCreateAdPost(slotKey);
-        AD_POST_FETCHED.remove(adPost.id);
-        hydrateAdSocialFromFirestore(c, slotKey, onUpdated);
+        hydrateAdSocial(c, slotKey, onUpdated, true);
         android.content.Intent i = new android.content.Intent(c, com.friendbook.social.post.PostDetailActivity.class);
         i.putExtra("post_id", adPost.id);
         i.putExtra("ad_slot_ordinal", slotKey);
@@ -1556,8 +1556,7 @@ public class AdsConfig {
         if (c == null) return;
         final com.friendbook.social.models.Models.Post adPost = getOrCreateAdPost(slotKey);
         // Ensure parent doc exists in Firestore before opening full comments screen
-        AD_POST_FETCHED.remove(adPost.id);
-        hydrateAdSocialFromFirestore(c, slotKey, onUpdated);
+        hydrateAdSocial(c, slotKey, onUpdated, true);
         android.content.Intent i = new android.content.Intent(c, com.friendbook.social.reels.ReelCommentsActivity.class);
         i.putExtra("reel_id", adPost.id);
         i.putExtra("collection", "posts");

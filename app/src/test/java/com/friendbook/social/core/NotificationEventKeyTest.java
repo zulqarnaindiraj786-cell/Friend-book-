@@ -12,4 +12,18 @@ public class NotificationEventKeyTest {
   assertNull(NotificationEventKey.forAction("alice","bob","comment","post1"));
   assertNull(NotificationEventKey.forAction("alice","bob","like",null));
  }
+ @Test public void commentReplayIsStableButDistinctCommentsAndResourcesNeverCollapse() {
+  String first=NotificationEventKey.forComment("a","b","comment","posts/p","c1");
+  assertNotNull(first);
+  for(int i=0;i<100;i++)assertEquals(first,NotificationEventKey.forComment("a","b","comment","posts/p","c1"));
+  assertNotEquals(first,NotificationEventKey.forComment("a","b","comment","posts/p","c2"));
+  assertNotEquals(first,NotificationEventKey.forComment("a","b","reel_comment","reels/p","c1"));
+  assertNotEquals(first,NotificationEventKey.forComment("other","b","comment","posts/p","c1"));
+  assertNotEquals(first,NotificationEventKey.forComment("a","other","comment","posts/p","c1"));
+  assertNotEquals(first,NotificationEventKey.forComment("a","b","reply","posts/p","c1"));
+  assertEquals(first,NotificationEventKey.forComment("a","b","reel_comment","posts/p","c1"));
+  assertEquals(NotificationEventKey.forComment("a","b","reply","reels/p","c1"),
+    NotificationEventKey.forComment("a","b","reel_comment_reply","reels/p","c1"));
+  assertNull(NotificationEventKey.forComment("a","b","comment","posts/p",""));
+ }
 }

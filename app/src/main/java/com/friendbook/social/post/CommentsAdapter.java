@@ -63,6 +63,7 @@ public class CommentsAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
     private final Activity activity;
     private final Host host;
     private final List<Row> rows = new ArrayList<>();
+    private final CommentAuthorLookupGate authorLookups = new CommentAuthorLookupGate();
     private View headerView;
     private RecyclerView attachedList;
     private boolean showEmptyWhenNone = true;
@@ -329,14 +330,31 @@ public class CommentsAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
         String dispPhoto = (liveUser != null && liveUser.photoUrl != null && !liveUser.photoUrl.isEmpty())
                 ? liveUser.photoUrl : c.authorPhoto;
         if (liveUser == null && c.authorId != null && !c.authorId.isEmpty()) {
-            Fb.db().collection("users").document(c.authorId).get()
-                    .addOnSuccessListener(doc -> {
-                        if (doc != null && doc.exists()) {
-                            com.friendbook.social.models.Models.User u = com.friendbook.social.models.Models.User.fromDoc(doc);
-                            com.friendbook.social.core.FastCache.putUser(u);
-                            notifyDataSetChanged();
+            final String actor = Fb.uid(), authorId = c.authorId;
+            final long ticket = authorLookups.begin(actor, authorId, android.os.SystemClock.elapsedRealtime());
+            if (ticket >= 0) {
+                DocumentReference author = Fb.db().collection("users").document(authorId);
+                author.get(com.friendbook.social.d1.documents.Source.CACHE).<com.friendbook.social.d1.documents.DocumentSnapshot>continueWithTask(cached -> {
+                    if (!java.util.Objects.equals(actor, Fb.uid()))
+                        return com.google.android.gms.tasks.Tasks.forException(new java.io.IOException("Account changed"));
+                    if (cached.isSuccessful() && cached.getResult() != null && cached.getResult().exists())
+                        return com.google.android.gms.tasks.Tasks.forResult(cached.getResult());
+                    return author.get();
+                }).addOnSuccessListener(doc -> {
+                        if (!java.util.Objects.equals(actor, Fb.uid())) return;
+                        if (!authorLookups.finish(actor, authorId, ticket, true, android.os.SystemClock.elapsedRealtime())) return;
+                        // Missing profiles are terminal for this adapter, too.
+                        // Paint only this author's current rows, not the entire list.
+                        if (doc != null && doc.exists()) com.friendbook.social.core.FastCache.putUser(Models.User.fromDoc(doc));
+                        if (doc != null && doc.exists() && attachedList != null) {
+                            for (int i = 0; i < rows.size(); i++)
+                                if (authorId.equals(rows.get(i).c.authorId)) notifyItemChanged(i + headerOffset());
                         }
+                    }).addOnFailureListener(error -> {
+                        if (java.util.Objects.equals(actor, Fb.uid()))
+                            authorLookups.finish(actor, authorId, ticket, false, android.os.SystemClock.elapsedRealtime());
                     });
+            }
         }
 
         Ui.avatar(activity, h.av, dispPhoto);
@@ -417,6 +435,7 @@ public class CommentsAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
         h.author.setOnClickListener(v -> host.openProfile(c.authorId));
 
         h.like.setOnClickListener(v -> {
+            if(!com.friendbook.social.core.InteractionCooldown.disableBriefly(v))return;
             Ui.haptic(v);
             toggleCommentReaction(c, myReact != null ? null : "like");
         });
@@ -452,11 +471,12 @@ public class CommentsAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
             m.setOnMenuItemClickListener(it -> {
                 if (it.getItemId() == 6) {
                     boolean nextPin = !c.pinned;
-                    c.pinned = nextPin;
-                    pinnedCommentId = nextPin ? c.id : "";
+                    if(!com.friendbook.social.core.D1Client.enabled(counterCollection)){
+                        c.pinned = nextPin;pinnedCommentId = nextPin ? c.id : "";
+                    }
                     CommentsEngine.pinComment(counterCollection, counterId, c.id, nextPin);
                     notifyDataSetChanged();
-                    Ui.toast(activity, nextPin ? "Comment pinned to top 📌" : "Comment unpinned");
+                    if(!com.friendbook.social.core.D1Client.enabled(counterCollection))Ui.toast(activity, nextPin ? "Comment pinned to top 📌" : "Comment unpinned");
                 } else if (it.getItemId() == 3) {
                     Ui.copy(activity, c.content);
                 } else if (it.getItemId() == 7) {
@@ -489,6 +509,10 @@ public class CommentsAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
         if (me == null || me.isEmpty() || c == null || c.id == null) return;
         if (c.reactions == null) c.reactions = new HashMap<>();
         if (c.likedBy == null) c.likedBy = new ArrayList<>();
+        if(!com.friendbook.social.core.InteractionCooldown.acquire(me,"comment-ui:"+counterCollection+":"+counterId+":"+c.id))return;
+        final Map<String,String> previousReactions=new HashMap<>(c.reactions);
+        final List<String> previousLikedBy=new ArrayList<>(c.likedBy);
+        final int previousLikes=c.likes;
         String prev = c.reactions.get(me);
 
         Map<String, String> nextMap = new HashMap<>(c.reactions);
@@ -505,11 +529,21 @@ public class CommentsAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
         }
         c.reactions = nextMap;
         c.likedBy = nextLikedBy;
-        c.likes = nextMap.size();
+        c.likes = reactionTotalAfter(previousLikes,previousReactions.size(),prev,nextType);
         notifyDataSetChanged(); // Instant 0ms UI update!
 
         String cid = counterId != null ? counterId : c.postId;
-        CommentsEngine.updateCommentReaction(counterCollection, cid, c, me, nextType);
+        CommentsEngine.updateCommentReaction(counterCollection, cid, c, me, nextType,()->{
+            c.reactions=previousReactions;c.likedBy=previousLikedBy;c.likes=previousLikes;
+            if(!activity.isFinishing() && !activity.isDestroyed())notifyDataSetChanged();
+        });
+    }
+
+    // D1 returns the viewer's reaction, not every reactor identity. Preserve the server aggregate.
+    static int reactionTotalAfter(int total,int known,String previous,String next){
+        long base=Math.max(total,known);
+        long delta=previous==null && next!=null?1:previous!=null && next==null?-1:0;
+        return (int)Math.min(Integer.MAX_VALUE,Math.max(0L,base+delta));
     }
 
     private void editDialog(Models.Comment c) {
@@ -525,12 +559,15 @@ public class CommentsAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
                 .setPositiveButton("Save", (d, w) -> {
                     String nv = e.getText().toString().trim();
                     if (nv.isEmpty()) return;
+                    List<Map<String,Object>> previousMentions=c.mentions;
                     c.mentions = com.friendbook.social.core.Mentions.capture(e);
-                    c.content = nv;
-                    c.edited = true;
+                    if(!com.friendbook.social.core.D1Client.enabled(counterCollection)){
+                        c.content = nv;c.edited = true;
+                    }
                     notifyDataSetChanged();
                     String cid = counterId != null ? counterId : c.postId;
                     CommentsEngine.editComment(counterCollection, cid, c, nv);
+                    if(com.friendbook.social.core.D1Client.enabled(counterCollection))c.mentions=previousMentions;
                 })
                 .setNegativeButton("Cancel", null)
                 .show();
@@ -539,7 +576,7 @@ public class CommentsAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
     private void delete(Models.Comment c) {
         Ui.confirm(activity, "Delete comment?", "This cannot be undone.", "Delete", () -> {
             String cid = counterId != null ? counterId : c.postId;
-            rows.removeIf(rw -> rw.c != null && c.id != null && c.id.equals(rw.c.id));
+            if(!com.friendbook.social.core.D1Client.enabled(counterCollection))rows.removeIf(rw -> rw.c != null && c.id != null && c.id.equals(rw.c.id));
             notifyDataSetChanged();
             CommentsEngine.deleteComment(counterCollection, cid, c);
         });

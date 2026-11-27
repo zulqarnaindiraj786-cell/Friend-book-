@@ -47,7 +47,9 @@ public class CreateGroupChatActivity extends Activity {
     private ImageView groupPhotoIv;
     private EditText groupNameIn, searchIn;
     private TextView createBtn, selectedCountTv;
-    private LinearLayout usersListCol;
+    private LinearLayout usersListCol,peopleControls;
+    private com.friendbook.social.d1.documents.ListenerRegistration peopleReg;
+    private String peopleActor;
 
     private Uri pickedPhotoUri;
     private final List<Models.User> allUsers = new ArrayList<>();
@@ -122,6 +124,7 @@ public class CreateGroupChatActivity extends Activity {
         sv.addView(usersListCol);
         root.addView(sv, new LinearLayout.LayoutParams(-1, 0, 1));
 
+        peopleControls=Ui.col(this);root.addView(peopleControls);
         LinearLayout bottomBar = Ui.col(this);
         bottomBar.setBackgroundColor(Ui.card(this));
         bottomBar.addView(Ui.divider(this));
@@ -132,12 +135,25 @@ public class CreateGroupChatActivity extends Activity {
         root.addView(bottomBar);
 
         setContentView(root);
-        loadPeople();
+    }
+
+    @Override protected void onStart(){
+        super.onStart();
+        String actor=Fb.uid();if(actor==null){finish();return;}
+        if(peopleActor!=null && !java.util.Objects.equals(peopleActor,actor)){finish();return;}
+        peopleActor=actor;loadPeople();
+    }
+    @Override protected void onStop(){
+        if(peopleReg!=null){peopleReg.remove();peopleReg=null;}
+        super.onStop();
     }
 
     private void loadPeople() {
         String me = Fb.uid();
-        Fb.db().collection("users").limit(250).get().addOnSuccessListener(snap -> {
+        if(peopleReg!=null)peopleReg.remove();
+        peopleReg=com.friendbook.social.core.PagedLists.attach(this,peopleControls,Fb.db().collection("users"),10,
+                "chat-people:create-group",(snap,error)->{
+            if(!java.util.Objects.equals(me,Fb.uid()))return;
             allUsers.clear();
             if (snap != null) {
                 for (DocumentSnapshot d : snap.getDocuments()) {
@@ -224,7 +240,7 @@ public class CreateGroupChatActivity extends Activity {
     private void createGroupNow() {
         if (creating) return;
         String me = Fb.uid();
-        if (me == null) return;
+        if (me == null || !java.util.Objects.equals(peopleActor,me)) return;
         String gName = groupNameIn.getText().toString().trim();
         if (gName.isEmpty()) {
             Ui.toast(this, "Please enter a Group Name");
@@ -248,10 +264,12 @@ public class CreateGroupChatActivity extends Activity {
     }
 
     private void saveGroupDoc(String me, String gName, String photoUrl) {
+        if(!java.util.Objects.equals(me,Fb.uid()) || isFinishing() || isDestroyed())return;
         DocumentReference chatRef = Fb.db().collection("chats").document();
         List<String> parts = new ArrayList<>();
         parts.add(me);
-        parts.addAll(selectedUids);
+        for(String uid:selectedUids)if(uid!=null && !uid.isEmpty() && !parts.contains(uid))parts.add(uid);
+        if(parts.size()<2){creating=false;createBtn.setText("Create Group Chat");Ui.toast(this,"Select a valid group member");return;}
 
         Map<String, String> names = new HashMap<>();
         Map<String, String> photos = new HashMap<>();
@@ -259,7 +277,7 @@ public class CreateGroupChatActivity extends Activity {
         photos.put(me, Fb.myPhoto());
         Map<String, Object> unread = new HashMap<>();
         unread.put(me, 0);
-        for (String uid : selectedUids) {
+        for (String uid : parts.subList(1,parts.size())) {
             Models.User u = userById.get(uid);
             if (u != null) {
                 names.put(uid, u.displayName);
@@ -286,19 +304,22 @@ public class CreateGroupChatActivity extends Activity {
         doc.put("lastMessageTimeMs", now);
         doc.put("unreadCount", unread);
 
-        chatRef.set(doc).addOnSuccessListener(x -> {
-            Map<String, Object> m = new HashMap<>();
-            m.put("senderId", me);
-            m.put("senderName", Fb.myName());
-            m.put("senderPhoto", Fb.myPhoto());
-            m.put("text", sysMsg);
-            m.put("type", "system");
-            m.put("isDelivered", true);
-            m.put("isSeen", true);
-            m.put("createdAtMs", now);
-            m.put("createdAt", FieldValue.serverTimestamp());
-            chatRef.collection("messages").add(m);
+        Map<String, Object> m = new HashMap<>();
+        m.put("senderId", me);
+        m.put("senderName", Fb.myName());
+        m.put("senderPhoto", Fb.myPhoto());
+        m.put("text", sysMsg);
+        m.put("type", "system");
+        m.put("isDelivered", true);
+        m.put("isSeen", true);
+        m.put("createdAtMs", now);
+        m.put("createdAt", FieldValue.serverTimestamp());
 
+        com.friendbook.social.d1.documents.WriteBatch batch=Fb.db().batch();
+        batch.set(chatRef,doc);
+        batch.set(chatRef.collection("messages").document(),m);
+        batch.commit().addOnSuccessListener(x -> {
+            if(!java.util.Objects.equals(me,Fb.uid()) || isFinishing() || isDestroyed())return;
             Ui.toast(this, "Group \"" + gName + "\" created! 🎉");
             Intent open = new Intent(this, ChatActivity.class);
             open.putExtra("chat_id", chatRef.getId());

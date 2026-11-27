@@ -1,0 +1,20 @@
+# One capped, aggregate-only index read; no mutation or user values in output.
+name: Feed exception aggregate preflight
+on:
+  push:
+    branches: [arena/b52bc74d-friend-book]
+    paths: [.github/workflows/feed-exception-preflight.yml, scripts/loadtest/feed_exception_preflight.py, scripts/tests/test_feed_exception_preflight.py]
+permissions:
+  contents: read
+jobs:
+  preflight:
+    if: contains(github.event.head_commit.message, '[feed-exception-preflight]') && contains(github.event.head_commit.message, '[allow-production-scans]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 -m unittest scripts.tests.test_feed_exception_preflight -v
+      - name: Capped aggregate only
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: python3 scripts/loadtest/feed_exception_preflight.py

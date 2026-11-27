@@ -44,6 +44,7 @@ public class LiveHubActivity extends Activity {
 
     private LinearLayout cardsContainer;
     private LinearLayout chipRow;
+    private LinearLayout pageControls;
     private TextView activeCountTv;
     private String selectedCategory = "🔥 All";
     private final List<Map<String, Object>> allActiveLives = new ArrayList<>();
@@ -113,6 +114,9 @@ public class LiveHubActivity extends Activity {
 
         cardsContainer = Ui.col(this);
         body.addView(cardsContainer);
+        pageControls=Ui.col(this);
+        pageControls.addView(Ui.tv(this,"Categories and counts cover loaded broadcasts. Refresh for current rooms.",12,Ui.sub(this)));
+        body.addView(pageControls);
 
         setContentView(root);
     }
@@ -145,10 +149,10 @@ public class LiveHubActivity extends Activity {
     @Override
     protected void onStart() {
         super.onStart();
-        reg = Fb.db().collection("lives")
-                .whereEqualTo("status", "live")
-                .limit(40)
-                .addSnapshotListener((snap, err) -> {
+        if(Fb.uid()==null){finish();return;}
+        reg = com.friendbook.social.core.PagedLists.attach(this,pageControls,
+                Fb.db().collection("lives").whereEqualTo("status", "live"),
+                10,"live-discovery",(snap, err) -> {
                     allActiveLives.clear();
                     long now = System.currentTimeMillis();
                     if (snap != null) {
@@ -198,15 +202,15 @@ public class LiveHubActivity extends Activity {
         }
 
         activeCountTv.setText(filtered.isEmpty()
-                ? "No active broadcasts in this category right now"
-                : "🔴 " + filtered.size() + " Live broadcast" + (filtered.size() == 1 ? "" : "s") + " on air now");
+                ? "No loaded broadcasts in this category"
+                : "🔴 " + filtered.size() + " Live broadcast" + (filtered.size() == 1 ? "" : "s") + " loaded");
 
         if (filtered.isEmpty()) {
             LinearLayout empty = Ui.col(this);
             empty.setGravity(Gravity.CENTER);
             empty.setBackground(Ui.roundStroke(this, Ui.card(this), 16, Ui.div(this), 1));
             Ui.pad(empty, 24, 32, 24, 32);
-            empty.addView(Ui.tvBold(this, "📡 Nobody is streaming here right now", 15, Ui.txt(this)));
+            empty.addView(Ui.tvBold(this, "📡 No loaded broadcasts in this category", 15, Ui.txt(this)));
             TextView sub = Ui.tv(this,
                     "Be the first to go live! Your followers and friends will see your stream immediately on Home.",
                     13, Ui.sub(this));

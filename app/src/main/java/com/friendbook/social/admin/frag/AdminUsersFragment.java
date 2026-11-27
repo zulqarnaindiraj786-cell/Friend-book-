@@ -39,6 +39,10 @@ public class AdminUsersFragment extends Fragment {
     private TextView countT;
     private final List<Models.User> all = new ArrayList<>();
     private ListenerRegistration reg;
+    private com.friendbook.social.core.CursorPager userPages;
+    private TextView more;
+    private boolean started;
+    private String actor;
     private String filter = "";
     private final Handler h = new Handler(Looper.getMainLooper());
     private Runnable pending;
@@ -59,7 +63,7 @@ public class AdminUsersFragment extends Fragment {
             @Override public void onTextChanged(CharSequence s, int x, int y, int z) {
                 if (pending != null) h.removeCallbacks(pending);
                 pending = () -> { filter = s.toString().toLowerCase(Locale.ROOT); render(); };
-                h.postDelayed(pending, 250);
+                h.postDelayed(pending,com.friendbook.social.core.SearchReadPolicy.DEBOUNCE_MS);
             }
             @Override public void afterTextChanged(Editable s) { }
         });
@@ -67,6 +71,8 @@ public class AdminUsersFragment extends Fragment {
         countT = Ui.tv(a, "", 12, Ui.sub(a));
         Ui.pad(countT, 14, 4, 14, 2);
         root.addView(countT);
+        TextView hint=Ui.tv(a,"Filters and counts apply to loaded users. Refresh after changing an older user, then load their page again.",12,Ui.sub(a));
+        Ui.pad(hint,14,2,14,4);root.addView(hint);
 
         RecyclerView rv = new RecyclerView(a);
         rv.setLayoutManager(new LinearLayoutManager(a));
@@ -86,25 +92,55 @@ public class AdminUsersFragment extends Fragment {
         });
         rv.setAdapter(adapter);
         root.addView(rv, new LinearLayout.LayoutParams(-1, 0, 1));
+        LinearLayout controls=Ui.row(a);
+        TextView refresh=Ui.tvBold(a,"Refresh users",13,Ui.BLUE);Ui.pad(refresh,14,10,14,10);
+        refresh.setOnClickListener(v->startUserPages());controls.addView(refresh);
+        more=Ui.tvBold(a,"Load 10 more",13,Ui.BLUE);Ui.pad(more,14,10,14,10);
+        more.setOnClickListener(v->{if(userPages!=null)userPages.next();});controls.addView(more);
+        root.addView(controls);
         return root;
     }
 
     @Override
     public void onStart() {
         super.onStart();
-        reg = Fb.db().collection("users")
-                .orderBy("createdAt", Query.Direction.DESCENDING).limit(300)
-                .addSnapshotListener((snap, err) -> {
-                    all.clear();
-                    if (snap != null) for (DocumentSnapshot d : snap) all.add(Models.User.fromDoc(d));
-                    render();
-                });
+        android.app.Activity a=getActivity();
+        if(a==null || !Admin.isAdmin() || Fb.uid()==null)return;
+        if(actor!=null && !actor.equals(Fb.uid())){a.finish();return;}
+        actor=Fb.uid();started=true;
+        startUserPages();
+    }
+
+    private void startUserPages() {
+        if(!started || !java.util.Objects.equals(actor,Fb.uid()) || getActivity()==null)return;
+        if(reg!=null){reg.remove();reg=null;}
+        if(userPages!=null){userPages.close();userPages=null;}
+        all.clear();render();
+        Query query=Fb.db().collection("users").orderBy("createdAt",Query.Direction.DESCENDING);
+        userPages=new com.friendbook.social.core.CursorPager(query,10,"admin-users",(docs,hasMore,busy,error)->{
+            if(!started || !java.util.Objects.equals(actor,Fb.uid()) || getActivity()==null)return;
+            more.setText(busy?"Loading…":!error.isEmpty()?"Retry page":hasMore?"Load 10 more":"All loaded");
+            more.setEnabled(!busy && hasMore);
+            if(!busy && (error.isEmpty() || !docs.isEmpty())) {
+                all.clear();for(DocumentSnapshot doc:docs)all.add(Models.User.fromDoc(doc));render();
+            }
+            if(!error.isEmpty())Ui.toast(getActivity(),error);
+        });
+        userPages.startObserved();
+        reg=query.limit(10).addSnapshotListener((snap,err)->{
+            if(!started || !java.util.Objects.equals(actor,Fb.uid()) || userPages==null)return;
+            if(err!=null){userPages.observedError();return;}
+            if(snap!=null)userPages.acceptObservedFirstPage(snap);
+        });
     }
 
     @Override
     public void onStop() {
         super.onStop();
-        if (reg != null) reg.remove();
+        started=false;
+        if(pending!=null){h.removeCallbacks(pending);pending=null;}
+        if(reg!=null){reg.remove();reg=null;}
+        if(userPages!=null){userPages.close();userPages=null;}
     }
 
     private void render() {
@@ -135,7 +171,7 @@ public class AdminUsersFragment extends Fragment {
             rows.add(r);
         }
         adapter.setData(rows);
-        countT.setText(rows.size() + " users · " + verifiedCount + " have the blue tick ✓");
+        countT.setText(rows.size() + " shown · " + verifiedCount + " verified in loaded users ✓");
     }
 
     private void moreActions(Models.User u) {
@@ -154,9 +190,8 @@ public class AdminUsersFragment extends Fragment {
             opts.add(u.isModerator
                     ? "➖ Remove App Moderator"
                     : "🛡 Make App Moderator (Posts & Ban only)");
-            opts.add(u.isAdmin ? "➖ Remove FULL Admin" : "👑 Make FULL Admin");
             opts.add(u.banned ? "✅ Unban user" : "🚫 Ban user");
-            opts.add("🗑 Delete user data");
+            opts.add(u.deactivated ? "Reactivate account" : "Deactivate account");
         }
         String[] arr = opts.toArray(new String[0]);
         Ui.choose(a, u.displayName + "\n" + u.email, arr, w -> {
@@ -171,10 +206,6 @@ public class AdminUsersFragment extends Fragment {
                 Admin.setGlobalModerator(a, u.uid, u.displayName, true);
             else if (sel.contains("Remove App Moderator"))
                 Admin.setGlobalModerator(a, u.uid, u.displayName, false);
-            else if (sel.contains("Make FULL Admin"))
-                Fb.db().collection("users").document(u.uid).update("isAdmin", true);
-            else if (sel.contains("Remove FULL Admin"))
-                Fb.db().collection("users").document(u.uid).update("isAdmin", false);
             else if (sel.contains("Unban"))
                 Fb.db().moderate("unban_user", "users", u.uid)
                         .addOnSuccessListener(v -> Ui.toast(a, "User unbanned ✓"))
@@ -184,9 +215,15 @@ public class AdminUsersFragment extends Fragment {
                         "Ban", () -> Fb.db().moderate("ban_user", "users", u.uid)
                                 .addOnSuccessListener(v -> Ui.toast(a, "User banned ✓"))
                                 .addOnFailureListener(e -> Ui.toast(a, "Couldn't ban user. Please retry.")));
-            else if (sel.contains("Delete user data"))
-                Ui.confirm(a, "Delete " + u.displayName + "'s profile?", "Removes the Firestore profile doc.",
-                        "Delete", () -> Fb.db().collection("users").document(u.uid).delete());
+            else if (sel.equals("Reactivate account"))
+                Fb.db().moderate("reactivate_user", "users", u.uid)
+                        .addOnSuccessListener(v -> Ui.toast(a, "Account reactivated"))
+                        .addOnFailureListener(e -> Ui.toast(a, "Could not reactivate account"));
+            else if (sel.equals("Deactivate account"))
+                Ui.confirm(a, "Deactivate " + u.displayName + "?", "Blocks app access and preserves existing data.",
+                        "Deactivate", () -> Fb.db().moderate("deactivate_user", "users", u.uid)
+                                .addOnSuccessListener(v -> Ui.toast(a, "Account deactivated"))
+                                .addOnFailureListener(e -> Ui.toast(a, "Could not deactivate account")));
         });
     }
 }

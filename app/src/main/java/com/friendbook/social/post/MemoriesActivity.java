@@ -23,6 +23,8 @@ import java.util.List;
  * exactly like friendbook's Memories. Read-only, realtime.
  */
 public class MemoriesActivity extends Activity implements FeedAdapter.Host {
+    private LinearLayout pageControls;
+    private com.friendbook.social.d1.documents.ListenerRegistration memoriesReg;
 
     private LinearLayout slots;
     private TextView countT;
@@ -65,17 +67,20 @@ public class MemoriesActivity extends Activity implements FeedAdapter.Host {
         Ui.pad(hint, 14, 0, 14, 6);
         wrap.addView(hint);
         wrap.addView(rv, new LinearLayout.LayoutParams(-1, 0, 1));
+        pageControls=Ui.col(this);
+        pageControls.addView(Ui.tv(this,"Memories from loaded posts; load more to search older posts.",12,Ui.sub(this)));
+        wrap.addView(pageControls);
         root.addView(wrap, new LinearLayout.LayoutParams(-1, 0, 1));
         setContentView(root);
-        load();
     }
 
-    private void load() {
+    @Override protected void onStart() {
+        super.onStart();
         String me = Fb.uid();
         if (me == null) { finish(); return; }
-        Fb.db().collection("posts").whereEqualTo("authorId", me)
-                .orderBy("createdAt", Query.Direction.DESCENDING).limit(300)
-                .get().addOnSuccessListener(snap -> {
+        memoriesReg=com.friendbook.social.core.PagedLists.attach(this,pageControls,
+                Fb.db().collection("posts").whereEqualTo("authorId", me)
+                .orderBy("createdAt", Query.Direction.DESCENDING),10,"memory-posts",(snap,err)-> {
                     memories.clear();
                     Calendar today = Calendar.getInstance();
                     int m = today.get(Calendar.MONTH), d = today.get(Calendar.DAY_OF_MONTH), y = today.get(Calendar.YEAR);
@@ -93,6 +98,11 @@ public class MemoriesActivity extends Activity implements FeedAdapter.Host {
                             : memories.size() + " memor" + (memories.size() == 1 ? "y" : "ies")
                             + " — " + y + " se pehle ke aaj");
                 });
+    }
+
+    @Override protected void onStop() {
+        super.onStop();
+        if(memoriesReg!=null){memoriesReg.remove();memoriesReg=null;}
     }
 
     // -------- FeedAdapter.Host --------

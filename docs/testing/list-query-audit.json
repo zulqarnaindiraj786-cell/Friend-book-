@@ -1,30 +1,5 @@
 {
   "method": "heuristic lexical inventory; variable-built/helper queries need manual review",
   "all_app_bounded": false,
-  "findings": [
-    {
-      "file": "app/src/main/java/com/friendbook/social/main/HomeFragment.java",
-      "line": 516,
-      "kind": "collection query needs manual limit/cursor review",
-      "query": "Fb.db().collection(\"friends\").whereArrayContains(\"participants\", me)\n                .addSnapshotListener("
-    },
-    {
-      "file": "app/src/main/java/com/friendbook/social/main/MainActivity.java",
-      "line": 469,
-      "kind": "collection query needs manual limit/cursor review",
-      "query": "Fb.db().collection(\"notifications\")\n                .whereEqualTo(\"toUserId\", me).whereEqualTo(\"isRead\", false)\n                .addSnapshotListener("
-    },
-    {
-      "file": "app/src/main/java/com/friendbook/social/main/MainActivity.java",
-      "line": 505,
-      "kind": "collection query needs manual limit/cursor review",
-      "query": "Fb.db().collection(\"chats\")\n                .whereArrayContains(\"participants\", me)\n                .addSnapshotListener("
-    },
-    {
-      "file": "app/src/main/java/com/friendbook/social/main/MainActivity.java",
-      "line": 543,
-      "kind": "collection query needs manual limit/cursor review",
-      "query": "Fb.db().collection(\"friend_requests\")\n                .whereEqualTo(\"toUid\", me).whereEqualTo(\"status\", \"pending\")\n                .addSnapshotListener("
-    }
-  ]
+  "findings": []
 }

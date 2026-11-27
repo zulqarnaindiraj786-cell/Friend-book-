@@ -44,7 +44,39 @@ public class SearchActivity extends Activity implements UsersAdapter.Handler, Fe
     private Runnable pending;
     private com.friendbook.social.core.CursorPager peopleA,peopleB,postPages;
     private TextView morePeople,morePosts;
-    private void closePages(){if(peopleA!=null)peopleA.close();if(peopleB!=null)peopleB.close();if(postPages!=null)postPages.close();}
+    private boolean searchStarted;
+    private String searchActor;
+    private boolean prepareSearchActor(){
+        String actor=Fb.uid();
+        if(!java.util.Objects.equals(searchActor,actor)){
+            closePages();searchActor=actor;
+            if(usersAdapter!=null)usersAdapter.setData(new ArrayList<>());
+            if(postsAdapter!=null){postsAdapter.feedEngagementInPage=true;postsAdapter.setAuthorLookupsEnabled(false);postsAdapter.setPosts(new ArrayList<>());}
+            if(peopleTitle!=null)peopleTitle.setVisibility(View.GONE);
+            if(postsTitle!=null)postsTitle.setVisibility(View.GONE);
+        }
+        return actor!=null;
+    }
+    private void closePages(){
+        if(peopleA!=null)peopleA.close();if(peopleB!=null)peopleB.close();if(postPages!=null)postPages.close();
+        peopleA=null;peopleB=null;postPages=null;
+    }
+    private void queueSearch(String q){
+        if(pending!=null)handler.removeCallbacks(pending);
+        if(!searchStarted || !prepareSearchActor())return;
+        final String expectedActor=searchActor;
+        pending=()->{pending=null;if(searchStarted && java.util.Objects.equals(expectedActor,Fb.uid()) && !isFinishing() && !isDestroyed())search(q);};
+        handler.postDelayed(pending, com.friendbook.social.core.SearchReadPolicy.DEBOUNCE_MS);
+    }
+    @Override protected void onStart(){
+        super.onStart();searchStarted=true;prepareSearchActor();
+        if(input!=null && input.length()>0)queueSearch(input.getText().toString().trim());
+    }
+    @Override protected void onStop(){
+        searchStarted=false;if(pending!=null){handler.removeCallbacks(pending);pending=null;}
+        closePages();if(postsAdapter!=null){postsAdapter.feedEngagementInPage=true;postsAdapter.setAuthorLookupsEnabled(false);}
+        super.onStop();
+    }
     @Override protected void onDestroy(){closePages();if(pending!=null)handler.removeCallbacks(pending);super.onDestroy();}
 
     @Override
@@ -85,7 +117,8 @@ public class SearchActivity extends Activity implements UsersAdapter.Handler, Fe
         peopleTitle = section("People");
         body.addView(peopleTitle);
         RecyclerView usersRv = new RecyclerView(this);
-        usersRv.setLayoutManager(new LinearLayoutManager(this));
+        LinearLayoutManager peopleLayout=new LinearLayoutManager(this);peopleLayout.setItemPrefetchEnabled(false);
+        usersRv.setLayoutManager(peopleLayout);
         usersRv.setNestedScrollingEnabled(false);
         usersAdapter = new UsersAdapter(this, this);
         usersRv.setAdapter(usersAdapter);
@@ -96,23 +129,22 @@ public class SearchActivity extends Activity implements UsersAdapter.Handler, Fe
         postsTitle = section("Posts");
         body.addView(postsTitle);
         RecyclerView postsRv = new RecyclerView(this);
-        postsRv.setLayoutManager(new LinearLayoutManager(this));
+        LinearLayoutManager postsLayout=new LinearLayoutManager(this);postsLayout.setItemPrefetchEnabled(false);
+        postsRv.setLayoutManager(postsLayout);
         postsRv.setNestedScrollingEnabled(false);
         postsAdapter = new FeedAdapter(this, this);
         postsAdapter.showHeader = false;
         postsAdapter.showFooter = false;
+        // Keystroke previews are local-only; a real result page opts into row demand.
+        postsAdapter.feedEngagementInPage = true;postsAdapter.setAuthorLookupsEnabled(false);
         postsRv.setAdapter(postsAdapter);
         body.addView(postsRv, new LinearLayout.LayoutParams(-1, -2));
 
         morePosts=Ui.tvBold(this,"More post results",14,Ui.BLUE);morePosts.setVisibility(View.GONE);body.addView(morePosts);
         morePosts.setOnClickListener(v->{if(postPages!=null)postPages.next();});
         sv.addView(body);
-        final com.friendbook.social.core.ScrollPageGate searchGate=new com.friendbook.social.core.ScrollPageGate();
-        sv.setOnScrollChangeListener((View.OnScrollChangeListener)(view,x,y,oldX,oldY)->{
-            if(body.getHeight()-(y+sv.getHeight())<Ui.dp(this,650) && searchGate.shouldLoad(y-oldY,true,usersAdapter.getItemCount()+postsAdapter.getItemCount())){
-                if(peopleA!=null)peopleA.next();if(peopleB!=null)peopleB.next();if(postPages!=null)postPages.next();
-            }else if(body.getHeight()-(y+sv.getHeight())>=Ui.dp(this,650))searchGate.shouldLoad(y-oldY,false,1);
-        });
+        // A scroll in one section must not advance all three independent result
+        // streams. The two More controls above are the only next-page demand.
         root.addView(sv, new LinearLayout.LayoutParams(-1, 0, 1));
         setContentView(root);
 
@@ -120,7 +152,9 @@ public class SearchActivity extends Activity implements UsersAdapter.Handler, Fe
             @Override public void beforeTextChanged(CharSequence s, int a, int b2, int c) { }
             @Override public void onTextChanged(CharSequence s, int a, int b2, int c) {
                 closePages();
-                if (pending != null) handler.removeCallbacks(pending);
+                if (pending != null) {handler.removeCallbacks(pending);pending=null;}
+                if(!searchStarted || !prepareSearchActor())return;
+                postsAdapter.feedEngagementInPage=true;postsAdapter.setAuthorLookupsEnabled(false);
                 final String q = s.toString().trim();
                 // ⚡ 0.0ms immediate local FastCache search on every keystroke!
                 if (!q.isEmpty()) {
@@ -130,7 +164,9 @@ public class SearchActivity extends Activity implements UsersAdapter.Handler, Fe
                         if (p == null) continue;
                         String hay = ((p.authorName == null ? "" : p.authorName) + " "
                                 + (p.content == null ? "" : p.content)).toLowerCase();
-                        if (hay.contains(ql) && fastPosts.size()<20) fastPosts.add(p);
+                        if (hay.contains(ql) && fastPosts.size()<10) {
+                            com.friendbook.social.post.D1Reactions.hydrate(p);fastPosts.add(p);
+                        }
                     }
                     if (!fastPosts.isEmpty()) {
                         historyBox.setVisibility(View.GONE);
@@ -139,8 +175,7 @@ public class SearchActivity extends Activity implements UsersAdapter.Handler, Fe
                         postsAdapter.setPosts(fastPosts);
                     }
                 }
-                pending = () -> search(q);
-                handler.postDelayed(pending, 120);
+                queueSearch(q);
             }
             @Override public void afterTextChanged(Editable s) { }
         });
@@ -179,6 +214,7 @@ public class SearchActivity extends Activity implements UsersAdapter.Handler, Fe
     }
 
     private void search(String q) {
+        if(!searchStarted || !prepareSearchActor() || isFinishing() || isDestroyed())return;
         if (q.isEmpty()) {
             morePeople.setVisibility(View.GONE);morePosts.setVisibility(View.GONE);
             peopleTitle.setVisibility(View.GONE);
@@ -214,27 +250,35 @@ public class SearchActivity extends Activity implements UsersAdapter.Handler, Fe
         };
         String cap = q.isEmpty() ? q : Character.toUpperCase(q.charAt(0)) + q.substring(1);
         boolean same=cap.equals(q);
-        peopleA=new com.friendbook.social.core.CursorPager(Fb.db().collection("users").whereGreaterThanOrEqualTo("displayName",q).whereLessThanOrEqualTo("displayName",q+"\uf8ff"),same?20:10,"search-people:"+q,(docs,more,loading,error)->{
+        peopleA=new com.friendbook.social.core.CursorPager(Fb.db().collection("users").orderBy("displayName",Query.Direction.ASCENDING).startAt(q).endAt(q+"\uf8ff"),10,"search-people:"+q,(docs,more,loading,error)->{
             if(loading)return;
             firstSpelling.clear();for(DocumentSnapshot doc:docs)firstSpelling.put(doc.getId(),Models.User.fromDoc(doc));mergePeople.run();finishPeople.run();
             morePeople.setText(!error.isEmpty()?"Retry people":"More people");
         });
-        peopleB=same?null:new com.friendbook.social.core.CursorPager(Fb.db().collection("users").whereGreaterThanOrEqualTo("displayName",cap).whereLessThanOrEqualTo("displayName",cap+"\uf8ff"),10,"search-people:"+cap,(docs,more,loading,error)->{
+        peopleB=same?null:new com.friendbook.social.core.CursorPager(Fb.db().collection("users").orderBy("displayName",Query.Direction.ASCENDING).startAt(cap).endAt(cap+"\uf8ff"),10,"search-people:"+cap,(docs,more,loading,error)->{
             if(loading)return;
             secondSpelling.clear();for(DocumentSnapshot doc:docs)secondSpelling.put(doc.getId(),Models.User.fromDoc(doc));mergePeople.run();finishPeople.run();
         });
-        peopleA.start();if(peopleB!=null)peopleB.start();
-        // Bounded recent-post scan, not a server full-text search index. Explicit next page even after zero matches.
-        postPages=new com.friendbook.social.core.CursorPager(Fb.db().collection("posts").orderBy("createdAt",Query.Direction.DESCENDING),20,"search-posts:"+q,(docs,more,loading,error)->{
+        peopleA.startCachedFor(com.friendbook.social.core.SearchReadPolicy.EXACT_PAGE_REUSE_MS);
+        if(peopleB!=null)peopleB.startCachedFor(com.friendbook.social.core.SearchReadPolicy.EXACT_PAGE_REUSE_MS);
+        boolean tagSearch=q.matches("[#@][\\p{L}\\p{N}_]{1,80}");
+        Query postQuery=Fb.db().collection("posts").orderBy("createdAt",Query.Direction.DESCENDING);
+        if(tagSearch)postQuery=postQuery.matchingPostTag(q);
+        postPages=new com.friendbook.social.core.CursorPager(postQuery,10,"search-posts:"+q,(docs,more,loading,error)->{
             if(loading){morePosts.setText("Loading…");morePosts.setEnabled(false);return;}
             List<Models.Post> list=new ArrayList<>();String needle=q.toLowerCase(Locale.ROOT);
             for(DocumentSnapshot doc:docs){Models.Post p=Models.Post.fromDoc(doc);
                 if(p.archived || p.trashedAt>0 || ("Only me".equalsIgnoreCase(p.privacy) && !p.authorId.equals(Fb.uid())) || (Fb.me!=null && Fb.me.blocked.contains(p.authorId)))continue;
-                String hay=(p.content+" "+p.authorName).toLowerCase(Locale.ROOT);if(hay.contains(needle))list.add(p);
+                String hay=(p.content+" "+p.authorName).toLowerCase(Locale.ROOT);if(tagSearch || hay.contains(needle))list.add(p);
             }
+            postsAdapter.feedEngagementInPage=false;postsAdapter.setAuthorLookupsEnabled(true);
             postsAdapter.setPosts(list);postsTitle.setVisibility(list.isEmpty()?View.GONE:View.VISIBLE);
             morePosts.setText(loading?"Loading…":!error.isEmpty()?"Retry posts":more?"More post results":"All scanned");morePosts.setEnabled(!loading && more);
-        });postPages.start();
+        });
+        // Ordinary terms filter the same recent-post page locally. Reuse its
+        // exact response briefly instead of refetching ten posts per term.
+        // Hashtag queries have distinct serialized keys and cannot mix results.
+        postPages.startCachedFor(com.friendbook.social.core.SearchReadPolicy.EXACT_PAGE_REUSE_MS);
     }
 
     // ---- UsersAdapter.Handler ----

@@ -114,4 +114,4 @@ class CloudinaryOnlySourceGuards(unittest.TestCase):
             self.assertIn(token, source)
         self.assertNotIn('putFile(', source)
         self.assertNotIn('getDownloadUrl(', source)
-        self.assertIn('spec.put("mediaProvider", "cloudinary")', source)
+        self.assertIn('queueOfficialBroadcast(jobId, text, mediaUrl, mediaType)', source)

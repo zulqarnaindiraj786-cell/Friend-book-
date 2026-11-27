@@ -33,6 +33,10 @@ public class AdminContentActivity extends Activity {
     private String tab = "posts";
     private ContentAdapter adapter;
     private ListenerRegistration reg;
+    private boolean started;
+    private String screenActor;
+    private LinearLayout pageControls;
+    private final java.util.Set<java.util.List<String>> removed=new java.util.HashSet<>();
     private TextView empty;
 
     static class Item {
@@ -75,6 +79,7 @@ public class AdminContentActivity extends Activity {
         adapter = new ContentAdapter();
         rv.setAdapter(adapter);
         root.addView(rv, new LinearLayout.LayoutParams(-1, 0, 1));
+        pageControls=Ui.col(this);root.addView(pageControls);
         setContentView(root);
         switchTab("posts");
     }
@@ -86,27 +91,34 @@ public class AdminContentActivity extends Activity {
             tabViews[i].setBackground(Ui.round(this, on ? Ui.BLUE : Ui.inputBg(this), 16));
             tabViews[i].setTextColor(on ? 0xFFFFFFFF : Ui.sub(this));
         }
-        listen();
+        if(started)listen();
     }
 
     @Override
     protected void onStart() {
         super.onStart();
+        if(adapter==null || !Admin.isAdmin() || Fb.uid()==null){finish();return;}
+        if(screenActor!=null && !screenActor.equals(Fb.uid())){finish();return;}
+        screenActor=Fb.uid();started=true;
         if (adapter != null) listen();
     }
 
     @Override
     protected void onStop() {
         super.onStop();
+        started=false;
         if (reg != null) { reg.remove(); reg = null; }
     }
 
     private void listen() {
-        if (reg != null) reg.remove();
+        if (reg != null) {reg.remove();reg=null;}
+        items.clear();adapter.notifyDataSetChanged();
+        empty.setText("Loading " + tab + "…");empty.setVisibility(View.VISIBLE);
         String orderField = tab.equals("chats") ? "lastMessageTime" : "createdAt";
-        reg = Fb.db().collection(tab)
-                .orderBy(orderField, Query.Direction.DESCENDING).limit(100)
-                .addSnapshotListener((snap, err) -> {
+        final String collection=tab;
+        reg = com.friendbook.social.core.PagedLists.attach(this,pageControls,
+                Fb.db().collection(collection).orderBy(orderField, Query.Direction.DESCENDING),
+                10,"admin-content:"+collection,(snap, err) -> {
                     if (err != null || snap == null) {
                         empty.setText("Couldn't load " + tab + ". Please retry.");
                         empty.setVisibility(View.VISIBLE);
@@ -115,6 +127,7 @@ public class AdminContentActivity extends Activity {
                     items.clear();
                     if (snap != null) {
                         for (DocumentSnapshot d : snap) {
+                            if(removed.contains(java.util.Arrays.asList(collection,d.getId())))continue;
                             Item it = new Item();
                             it.id = d.getId();
                             switch (tab) {
@@ -142,7 +155,7 @@ public class AdminContentActivity extends Activity {
                         }
                     }
                     adapter.notifyDataSetChanged();
-                    empty.setText("No " + tab + " found.");
+                    empty.setText("No " + tab + " in loaded pages.");
                     empty.setVisibility(items.isEmpty() ? View.VISIBLE : View.GONE);
                 });
     }
@@ -160,9 +173,22 @@ public class AdminContentActivity extends Activity {
                         Ui.toast(this, "Comment moderation is not available here.");
                         return;
                     }
-                    Fb.db().moderate("delete_content", collection, it.id)
-                            .addOnSuccessListener(v -> Ui.toast(this, "Deleted ✓"))
-                            .addOnFailureListener(e -> Ui.toast(this, "Couldn't delete content. Please retry."));
+                    final String actor=screenActor;
+                    if(!started || !java.util.Objects.equals(actor,Fb.uid()) || !Admin.isAdmin()
+                            || !ModerationGate.SHARED.begin(actor,collection,it.id))return;
+                    Fb.db().moderate("delete_content",collection,it.id).addOnCompleteListener(task->{
+                        ModerationGate.SHARED.end(actor,collection,it.id);
+                        if(!java.util.Objects.equals(actor,Fb.uid()))return;
+                        if(task.isSuccessful()) {
+                            removed.add(java.util.Arrays.asList(collection,it.id));
+                            if("posts".equals(collection))com.friendbook.social.core.FastCache.removeFeedPost(this,it.id);
+                            if(started && collection.equals(tab)) {
+                                items.removeIf(row->it.id.equals(row.id));adapter.notifyDataSetChanged();
+                                empty.setVisibility(items.isEmpty()?View.VISIBLE:View.GONE);
+                            }
+                            if(started)Ui.toast(this,"Deleted ✓");
+                        } else if(started)Ui.toast(this,"Couldn't delete content. Please retry.");
+                    });
                 });
     }
 

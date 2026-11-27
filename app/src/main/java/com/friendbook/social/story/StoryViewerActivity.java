@@ -61,6 +61,7 @@ public class StoryViewerActivity extends Activity {
     private TextView moreStories;
     private boolean storyMore=true,storyBusy,advanceAfterPage;
     private int storyRequest;
+    private android.app.AlertDialog viewersDialog;
 
     private ImageView img, headerAvatar;
     private VideoView video;
@@ -70,11 +71,17 @@ public class StoryViewerActivity extends Activity {
     private static final Handler H = new Handler(Looper.getMainLooper());
     private Runnable timer;
     private ValueAnimator anim;
+    private TextView storyStatus;
+    private Runnable mediaTimeout;
+    private int playbackToken;
+    private boolean ready;
+    private final java.util.Set<String> recordingViews=new java.util.HashSet<>();
+
 
     @Override
     protected void onCreate(Bundle b) {
         super.onCreate(b);
-        getWindow().setStatusBarColor(Color.BLACK);
+        com.friendbook.social.core.Ui.statusBar(getWindow(), Color.BLACK);
         authorId = getIntent().getStringExtra("author");
         specificStoryId = getIntent().getStringExtra("story_id");
         if (authorId == null) { finish(); return; }
@@ -225,7 +232,11 @@ public class StoryViewerActivity extends Activity {
         Ui.pad(moreStories,12,8,12,8);moreStories.setBackgroundColor(0x88000000);
         FrameLayout.LayoutParams moreParams=new FrameLayout.LayoutParams(-2,-2,Gravity.TOP|Gravity.END);
         moreParams.topMargin=Ui.dp(this,92);root.addView(moreStories,moreParams);
-        moreStories.setOnClickListener(v->{if(storyPages!=null)storyPages.next();});
+        moreStories.setOnClickListener(v->{if(storyPages!=null){advanceAfterPage=!stories.isEmpty();storyPages.next();}});
+        storyStatus=Ui.tvBold(this,"Loading story…",16,Color.WHITE);
+        Ui.pad(storyStatus,16,10,16,10);
+        storyStatus.setBackgroundColor(0xCC202020);
+        root.addView(storyStatus,new FrameLayout.LayoutParams(-2,-2,Gravity.CENTER));
         setContentView(root);
     }
 
@@ -238,6 +249,11 @@ public class StoryViewerActivity extends Activity {
     @Override
     protected void onStart() {
         super.onStart();
+        if(storyStatus!=null)loadStories();
+    }
+
+    private void loadStories(){
+        status("Loading story…",null);
         final int request=++storyRequest;final String actor=Fb.uid();viewerActor=actor;
         if(actor==null){finish();return;}
         if(actor.equals(authorId)){viewerFriend=true;loadStoryPages(request);return;}
@@ -245,8 +261,8 @@ public class StoryViewerActivity extends Activity {
                 .count().get(com.friendbook.social.d1.documents.AggregateSource.SERVER).addOnSuccessListener(count->{
                     if(request!=storyRequest || !java.util.Objects.equals(actor,Fb.uid()) || isFinishing())return;
                     viewerFriend=count.getCount()>0;
-                    if(viewerFriend || (Fb.me!=null && Fb.me.following.contains(authorId)))loadStoryPages(request);else finish();
-                }).addOnFailureListener(error->{if(request==storyRequest)finish();});
+                    if(viewerFriend || (Fb.me!=null && Fb.me.following.contains(authorId)))loadStoryPages(request);else status("This story is unavailable",null);
+                }).addOnFailureListener(error->{if(request==storyRequest)status("Story could not load · Tap to retry",this::reload);});
     }
     private boolean allowedStory(Models.Story story){
         return java.util.Objects.equals(viewerActor,Fb.uid()) && com.friendbook.social.core.StoryAudience.visible(Fb.uid(),story.authorId,story.privacy,viewerFriend,
@@ -257,26 +273,31 @@ public class StoryViewerActivity extends Activity {
             moreStories.setVisibility(View.GONE);
             Fb.db().collection("stories").document(specificStoryId).get().addOnSuccessListener(doc->{
                 if(request!=storyRequest || isFinishing())return;
-                if(!doc.exists()){finish();return;}Models.Story story=Models.Story.fromDoc(doc);
-                if(!authorId.equals(story.authorId) || !allowedStory(story)){finish();return;}stories.clear();stories.add(story);index=0;show();
-            }).addOnFailureListener(e->{if(request==storyRequest)Ui.toast(this,"Couldn't load story. Reopen to retry.");});
+                if(!doc.exists()){status("This story is no longer available",null);return;}Models.Story story=Models.Story.fromDoc(doc);
+                if(!authorId.equals(story.authorId) || !allowedStory(story)
+                        || (getIntent().getBooleanExtra("active_story_only",false) && story.expired())){status("This story is unavailable",null);return;}stories.clear();stories.add(story);index=0;show();
+            }).addOnFailureListener(e->{if(request==storyRequest)status("Story could not load · Tap to retry",this::reload);});
             return;
         }
         storyPages=new com.friendbook.social.core.CursorPager(Fb.db().collection("stories").whereEqualTo("authorId",authorId),10,"story-viewer:"+authorId,(docs,more,busy,error)->{
             if(request!=storyRequest || isFinishing())return;
             storyMore=more;storyBusy=busy;moreStories.setEnabled(!busy && more);
             moreStories.setText(busy?"Loading…":!error.isEmpty()?"Retry stories":more?"More stories":"All loaded");
-            if(busy || !error.isEmpty())return;
+            if(!error.isEmpty()){if(stories.isEmpty() || advanceAfterPage)status("Stories could not load · Tap to retry",this::reload);return;}
+            if(busy)return;
             String current=stories.isEmpty()?null:stories.get(Math.min(index,stories.size()-1)).id;
             stories.clear();for(DocumentSnapshot doc:docs){Models.Story story=Models.Story.fromDoc(doc);if(!story.expired() && allowedStory(story))stories.add(story);}
             // Keep append order stable: cursor doc-ID order, never re-sort a growing sequence under the viewer.
             if(advanceAfterPage){advanceAfterPage=false;int found=-1;for(int i=0;i<stories.size();i++)if(stories.get(i).id.equals(current))found=i;
-                if(found+1<stories.size())index=found+1;else if(!more){finish();return;}
+                if(found+1<stories.size())index=found+1;
+                else if(!more){finish();return;}
+                else {stopTimer();status("No active stories on this page · Tap More stories",null);return;}
             }else if(current!=null){for(int i=0;i<stories.size();i++)if(stories.get(i).id.equals(current))index=i;}
-            // A page can contain only expired or audience-filtered stories. Do
-            // not leave an empty viewer waiting for the user to discover paging.
+            // Never drain filtered or expired pages in the background. A user
+            // can explicitly request the next page when this one is empty.
             if(stories.isEmpty()){
-                if(!more)finish();else if(storyPages!=null)storyPages.next();
+                if(!more)status("No active stories",null);
+                else status("No active stories on this page · Tap More stories",null);
                 return;
             }
             index=Math.min(index,stories.size()-1);show();
@@ -286,13 +307,69 @@ public class StoryViewerActivity extends Activity {
     @Override
     protected void onStop() {
         super.onStop();
+        if(viewersDialog!=null){viewersDialog.dismiss();viewersDialog=null;}
         if (reg != null) reg.remove();
         storyRequest++;if(storyPages!=null){storyPages.close();storyPages=null;}
+        if(video!=null)clearMedia();
+    }
+
+    private void reload(){
+        clearMedia();
+        if(storyPages!=null){storyPages.close();storyPages=null;}
+        advanceAfterPage=false;
+        status("Loading story…",null);
+        loadStories();
+    }
+
+    private void status(String message,Runnable retry){
+        storyStatus.setText(message);
+        storyStatus.setVisibility(View.VISIBLE);
+        storyStatus.setOnClickListener(retry==null?null:v->retry.run());
+        storyStatus.setClickable(retry!=null);
+    }
+
+    private void clearMedia(){
+        playbackToken++;
+        ready=false;
+        if(mediaTimeout!=null)H.removeCallbacks(mediaTimeout);
         stopTimer();
+        video.setOnPreparedListener(null);
+        video.setOnCompletionListener(null);
+        video.setOnErrorListener(null);
+        video.stopPlayback();
+        com.bumptech.glide.Glide.with(this).clear(img);
+    }
+
+    private void failed(int token){
+        if(token!=playbackToken || isFinishing())return;
+        clearMedia();
+        status("Story media could not load · Tap to retry",this::show);
+    }
+
+    private void ready(int token,Models.Story story,boolean isVideo){
+        if(token!=playbackToken || ready || isFinishing())return;
+        if(mediaTimeout!=null)H.removeCallbacks(mediaTimeout);
+        ready=true;
+        storyStatus.setVisibility(View.GONE);
+        animateSegment(isVideo?Math.max(1,video.getDuration()):5500);
+        if(!isVideo){timer=()->{if(token==playbackToken)step(1);};H.postDelayed(timer,5500);}
+        String actor=Fb.uid();
+        String viewKey=actor+":"+story.id;
+        if(actor!=null && !actor.equals(story.authorId) && !story.viewedBy.contains(actor) && recordingViews.add(viewKey)){
+            Fb.db().storyEngagement(story.id,"view",null).addOnCompleteListener(task -> {
+                recordingViews.remove(viewKey);
+                if(task.isSuccessful() && actor.equals(Fb.uid()) && !story.viewedBy.contains(actor)) story.viewedBy.add(actor);
+            });
+        }
     }
 
     private void show() {
-        stopTimer();
+        if(stories.isEmpty())return;
+        clearMedia();
+        final int token=playbackToken;
+        status("Loading story…",null);
+        mediaTimeout=()->failed(token);
+        H.postDelayed(mediaTimeout,20000L);
         Models.Story s = stories.get(index);
         nameT.setText(s.authorName);
         timeT.setText(Format.ago(s.createdAt) + ("Friends".equalsIgnoreCase(s.privacy) ? " · 👥" : " · 🌐"));
@@ -311,7 +388,7 @@ public class StoryViewerActivity extends Activity {
 
         buildSegments();
 
-        if ("text".equals(s.mediaType) || s.mediaUrl == null || s.mediaUrl.isEmpty()) {
+        if ("text".equalsIgnoreCase(s.mediaType)) {
             video.stopPlayback();
             video.setVisibility(View.GONE);
             img.setVisibility(View.GONE);
@@ -323,15 +400,35 @@ public class StoryViewerActivity extends Activity {
                     : s.fontStyle == 2 ? Typeface.MONOSPACE : Typeface.DEFAULT_BOLD;
             textCanvas.setTypeface(tf, Typeface.BOLD);
             textCanvas.setText(s.caption == null ? "" : s.caption);
-        } else if ("video".equals(s.mediaType)) {
+            ready(token,s,false);
+        } else if(s.mediaUrl==null || s.mediaUrl.isEmpty()){
+            failed(token);
+        } else if ("video".equalsIgnoreCase(s.mediaType)) {
             textCanvas.setVisibility(View.GONE);
             img.setVisibility(View.GONE);
             video.setVisibility(View.VISIBLE);
             captionT.setText(s.caption == null ? "" : s.caption);
             captionT.setVisibility(s.caption == null || s.caption.isEmpty() ? View.GONE : View.VISIBLE);
-            video.setVideoURI(Uri.parse(s.mediaUrl));
-            video.setOnPreparedListener(mp -> video.start());
-            video.setOnCompletionListener(mp -> step(1));
+            video.setOnPreparedListener(mp -> {
+                if(token!=playbackToken)return;
+                mp.setOnInfoListener((player,what,extra)->{
+                    if(what==android.media.MediaPlayer.MEDIA_INFO_VIDEO_RENDERING_START)ready(token,s,true);
+                    return false;
+                });
+                video.start();
+            });
+            video.setOnCompletionListener(mp -> {if(token==playbackToken && ready)step(1);});
+            String stream = com.friendbook.social.reels.ReelVideoCache.optimizeStreamUrl(this, s.mediaUrl);
+            boolean[] fallback = {stream.equals(s.mediaUrl)};
+            video.setOnErrorListener((mp,what,extra)->{
+                H.post(() -> {
+                    if (token != playbackToken) return;
+                    if (!fallback[0]) { fallback[0] = true; video.setVideoURI(Uri.parse(s.mediaUrl)); }
+                    else failed(token);
+                });
+                return true;
+            });
+            video.setVideoURI(com.friendbook.social.core.MediaDiskCache.uriForPlayback(this, stream)); // STEP 6: play from disk cache
         } else {
             video.stopPlayback();
             video.setVisibility(View.GONE);
@@ -339,25 +436,27 @@ public class StoryViewerActivity extends Activity {
             img.setVisibility(View.VISIBLE);
             captionT.setText(s.caption == null ? "" : s.caption);
             captionT.setVisibility(s.caption == null || s.caption.isEmpty() ? View.GONE : View.VISIBLE);
-            Ui.imgFeedModerated(this, img, s.mediaUrl, "stories", s.id, s.authorId, s.caption, () -> {
-                Ui.toast(this, "🛡 Unsafe story automatically deleted");
-                finish();
-            });
+            loadImage(token,s,Ui.optimizeImageUrl(this,s.mediaUrl,false));
         }
+    }
 
-        String me = Fb.uid();
-        if (me != null && !mine && !s.viewedBy.contains(me)) {
-            Fb.db().storyEngagement(s.id, "view", null)
-                    .addOnSuccessListener(v -> { if (me.equals(Fb.uid()) && !s.viewedBy.contains(me)) s.viewedBy.add(me); });
-        }
-
-        if (!"video".equals(s.mediaType)) {
-            animateSegment(5500);
-            timer = () -> step(1);
-            H.postDelayed(timer, 5500);
-        } else {
-            animateSegment(15000);
-        }
+    private void loadImage(int token,Models.Story s,String url){
+            com.bumptech.glide.Glide.with(this).load(url).fitCenter().dontAnimate()
+                    .diskCacheStrategy(com.bumptech.glide.load.engine.DiskCacheStrategy.ALL)
+                    .listener(new com.bumptech.glide.request.RequestListener<android.graphics.drawable.Drawable>() {
+                        @Override public boolean onLoadFailed(com.bumptech.glide.load.engine.GlideException error,Object model,
+                                com.bumptech.glide.request.target.Target<android.graphics.drawable.Drawable> target,boolean first){
+                            H.post(()->{
+                                if(token!=playbackToken || isFinishing())return;
+                                if(!s.mediaUrl.equals(url))loadImage(token,s,s.mediaUrl);
+                                else failed(token);
+                            });return true;
+                        }
+                        @Override public boolean onResourceReady(android.graphics.drawable.Drawable drawable,Object model,
+                                com.bumptech.glide.request.target.Target<android.graphics.drawable.Drawable> target,com.bumptech.glide.load.DataSource source,boolean first){
+                            H.post(()->ready(token,s,false));return token!=playbackToken;
+                        }
+                    }).into(img);
     }
 
     private void storyMenu(View anchor) {
@@ -494,6 +593,7 @@ public class StoryViewerActivity extends Activity {
     }
 
     private void step(int delta) {
+        if(stories.isEmpty())return;
         int next = index + delta;
         if (next < 0) next = 0;
         if (next >= stories.size()) {
@@ -517,22 +617,53 @@ public class StoryViewerActivity extends Activity {
 
     private void showViewers() {
         if (stories.isEmpty()) return;
-        Models.Story s = stories.get(index);
-        List<String> viewers = new ArrayList<>(s.viewedBy);
-        if (viewers.isEmpty()) { Ui.toast(this, "No views yet"); return; }
-        String actor=Fb.uid();
-        List<String> lines = new ArrayList<>(java.util.Collections.nCopies(viewers.size(), "User"));
-        final int[] remaining={viewers.size()};
-        for (int i=0;i<viewers.size();i++) {
-            final int position=i;String uid=viewers.get(i);
-            Fb.getUser(uid).addOnCompleteListener(task -> {
-                if (isFinishing() || !java.util.Objects.equals(actor,Fb.uid())) return;
-                Models.User u=task.isSuccessful()?task.getResult():null;
-                String r=s.reactions.get(uid);
-                lines.set(position,(u!=null && u.displayName!=null && !u.displayName.isEmpty()?u.displayName:"User")+(r!=null?"  "+r:""));
-                if (--remaining[0]==0) Ui.info(this, "👁 Story viewers ("+viewers.size()+")", TextUtils.join("\n",lines));
-            });
-        }
+        Models.Story story=stories.get(index);
+        List<String> viewers=new ArrayList<>(new java.util.LinkedHashSet<>(story.viewedBy));
+        if(viewers.isEmpty()){Ui.toast(this,"No views yet");return;}
+        if(viewersDialog!=null)viewersDialog.dismiss();
+        final String actor=Fb.uid();
+        final int request=storyRequest;
+        LinearLayout content=Ui.col(this);Ui.pad(content,16,8,16,8);
+        TextView linesView=Ui.tv(this,"Loading…",14,Ui.txt(this));
+        android.widget.ScrollView scroll=new android.widget.ScrollView(this);
+        scroll.addView(linesView);content.addView(scroll);
+        android.app.AlertDialog dialog=new android.app.AlertDialog.Builder(this)
+                .setTitle("👁 Story viewers ("+viewers.size()+")")
+                .setView(content).setPositiveButton("Load 10 more",null)
+                .setNegativeButton("Close",(d,w)->d.dismiss()).create();
+        viewersDialog=dialog;
+        dialog.setOnDismissListener(d->{if(viewersDialog==dialog)viewersDialog=null;});
+        dialog.show();
+        final List<String> lines=new ArrayList<>();
+        final int[] offset={0};
+        final boolean[] busy={false};
+        Runnable next=()->{
+            if(busy[0] || !dialog.isShowing() || request!=storyRequest || !java.util.Objects.equals(actor,Fb.uid()))return;
+            int start=offset[0],end=Math.min(start+10,viewers.size());
+            if(start>=end)return;
+            busy[0]=true;offset[0]=end;
+            android.widget.Button more=dialog.getButton(android.app.AlertDialog.BUTTON_POSITIVE);
+            more.setEnabled(false);more.setText("Loading…");
+            for(int i=start;i<end;i++)lines.add("User");
+            final int[] remaining={end-start};
+            for(int i=start;i<end;i++){
+                final int position=i;String uid=viewers.get(i);
+                Fb.getUser(uid).addOnCompleteListener(task -> {
+                    if(!dialog.isShowing() || request!=storyRequest || !java.util.Objects.equals(actor,Fb.uid()))return;
+                    Models.User user=task.isSuccessful()?task.getResult():null;
+                    String reaction=story.reactions.get(uid);
+                    lines.set(position,(user!=null && user.displayName!=null && !user.displayName.isEmpty()?user.displayName:"User")+(reaction!=null?"  "+reaction:""));
+                    linesView.setText(TextUtils.join("\n",lines));
+                    if(--remaining[0]==0){
+                        busy[0]=false;
+                        more.setText(end<viewers.size()?"Load 10 more":"All loaded");
+                        more.setEnabled(end<viewers.size());
+                    }
+                });
+            }
+        };
+        dialog.getButton(android.app.AlertDialog.BUTTON_POSITIVE).setOnClickListener(v->next.run());
+        next.run();
     }
 
     private void sendReply() {

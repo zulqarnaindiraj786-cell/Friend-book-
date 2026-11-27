@@ -12,6 +12,7 @@ import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
+import android.widget.Switch;
 
 import com.friendbook.social.admin.frag.AdminModeratorsFragment;
 import com.friendbook.social.admin.frag.AdminEarningsFragment;
@@ -44,6 +45,10 @@ public class AdminPanelActivity extends Activity {
     private final ImageView[] tabIcons = new ImageView[6];
     private final TextView[] tabLabels = new TextView[6];
     private int active = -1;
+    private Switch quotaSaverSwitch;
+    private boolean bindingQuotaSaver;
+    private final com.friendbook.social.core.AdsConfig.ChangeListener quotaSaverObserver=(unit,ads)->
+            renderQuotaSaverSwitch();
 
     private static final String[] TAB_NAMES = {"Users", "Moderators", "Referrals", "Requests", "Live", "Analytics"};
     private static final int[] TAB_ICONS = {
@@ -61,6 +66,39 @@ public class AdminPanelActivity extends Activity {
         TextView recovery = Ui.btnGrey(this, "Review legacy group / chat recovery");
         recovery.setOnClickListener(v -> showRecoveryKind());
         root.addView(recovery);
+        TextView tools = Ui.btnGrey(this, "More admin tools");
+        tools.setOnClickListener(v -> new AlertDialog.Builder(this).setTitle("Admin tools")
+                .setItems(new String[]{"Official Broadcast", "Reports", "Feedback", "Content", "AdMob"}, (dialog, action) -> {
+                    Class<?>[] screens = {OfficialBroadcastActivity.class, AdminReportsActivity.class,
+                            AdminFeedbackActivity.class, AdminContentActivity.class, AdMobSettingsActivity.class};
+                    startActivity(new android.content.Intent(this, screens[action]));
+                }).show());
+        root.addView(tools);
+
+        LinearLayout quotaRow=Ui.row(this);
+        quotaRow.setGravity(Gravity.CENTER_VERTICAL);
+        Ui.pad(quotaRow,16,8,16,4);
+        TextView quotaLabel=Ui.tvBold(this,"Global Quota Saver",14,Ui.txt(this));
+        quotaRow.addView(quotaLabel,new LinearLayout.LayoutParams(0,-2,1));
+        quotaSaverSwitch=new Switch(this);
+        quotaSaverSwitch.setChecked(com.friendbook.social.core.AdsConfig.quotaSaverEnabled());
+        quotaSaverSwitch.setOnCheckedChangeListener((button,on)->{
+            if(bindingQuotaSaver)return;
+            boolean old=!on;
+            new AlertDialog.Builder(this).setTitle(on?"Enable Global Quota Saver?":"Disable Global Quota Saver?")
+                    .setMessage(on
+                            ?"Unchanged automatic list pages may be reused for up to 15 minutes. Manual refreshes, scrolling to more pages, writes, authorization and privacy checks still work. This is not a hard quota cap."
+                            :"Automatic page refresh intervals return to each screen's normal setting.")
+                    .setNegativeButton("Cancel",(dialog,which)->setQuotaSaverSwitch(old))
+                    .setPositiveButton(on?"Turn ON":"Turn OFF",(dialog,which)->
+                            com.friendbook.social.core.AdsConfig.saveQuotaSaver(on,this))
+                    .setOnCancelListener(dialog->setQuotaSaverSwitch(old)).show();
+        });
+        quotaRow.addView(quotaSaverSwitch);
+        root.addView(quotaRow);
+        TextView quotaHint=Ui.tv(this,"Soft saver only · no per-user hard cap · manual actions stay available",11,Ui.sub(this));
+        quotaHint.setPadding(Ui.dp(this,16),0,Ui.dp(this,16),Ui.dp(this,8));root.addView(quotaHint);
+
         root.addView(Ui.divider(this));
 
         container = new FrameLayout(this);
@@ -92,6 +130,18 @@ public class AdminPanelActivity extends Activity {
 
         setContentView(root);
         select(0);
+    }
+
+    private void setQuotaSaverSwitch(boolean enabled){
+        if(quotaSaverSwitch==null)return;
+        bindingQuotaSaver=true;quotaSaverSwitch.setChecked(enabled);bindingQuotaSaver=false;
+    }
+    private void renderQuotaSaverSwitch(){setQuotaSaverSwitch(com.friendbook.social.core.AdsConfig.quotaSaverEnabled());}
+    @Override protected void onStart(){
+        super.onStart();com.friendbook.social.core.AdsConfig.addPlacementListener(quotaSaverObserver);renderQuotaSaverSwitch();
+    }
+    @Override protected void onStop(){
+        com.friendbook.social.core.AdsConfig.removePlacementListener(quotaSaverObserver);super.onStop();
     }
 
     public void select(int tab) {

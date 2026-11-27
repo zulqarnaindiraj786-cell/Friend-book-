@@ -1,0 +1,31 @@
+# Read-only guard: no migrations, app requests, raw IDs or data export.
+name: Notification index bounded preflight
+on:
+  push:
+    branches: ['arena/7c7ddb7b-friend-book']
+    paths:
+      - '.github/workflows/notification-index-preflight.yml'
+      - 'scripts/loadtest/notification_index_preflight.py'
+      - 'scripts/tests/test_notification_index_preflight.py'
+permissions: {}
+jobs:
+  preflight:
+    if: contains(github.event.head_commit.message, '[notification-index-preflight]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Offline safety tests
+        run: |
+          python3 -m unittest discover -s scripts/tests -p 'test_notification_index_preflight.py' -v
+          python3 -m unittest discover -s scripts/tests -p 'test_d1_account_usage_analytics.py' -v
+      # This workflow only inspects at most 5,001 entries per index; it cannot
+      # drop or build indexes. Migration decisions retain their separate 50k gate.
+      - name: Require reserve for bounded read-only inspection
+        run: python3 scripts/loadtest/d1_account_usage_analytics.py --notification-inspection-budget
+      - name: Read capped aggregate only
+        run: python3 scripts/loadtest/notification_index_preflight.py --require-bounds
+      - name: Recheck account headroom after read
+        run: python3 scripts/loadtest/d1_account_usage_analytics.py --notification-inspection-budget

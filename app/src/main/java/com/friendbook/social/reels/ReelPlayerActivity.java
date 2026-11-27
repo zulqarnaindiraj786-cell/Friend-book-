@@ -13,18 +13,22 @@ import android.widget.FrameLayout;
  */
 public class ReelPlayerActivity extends Activity {
 
+    private static final String CONTAINER_ID = "reel_container_id";
+    private int containerId;
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        getWindow().setStatusBarColor(Color.BLACK);
+        com.friendbook.social.core.Ui.statusBar(getWindow(), Color.BLACK);
 
         FrameLayout root = new FrameLayout(this);
         root.setBackgroundColor(Color.BLACK);
-        int id = View.generateViewId();
-        root.setId(id);
+        containerId = savedInstanceState == null ? View.generateViewId() : savedInstanceState.getInt(CONTAINER_ID);
+        if (containerId == View.NO_ID || containerId == 0) containerId = View.generateViewId();
+        root.setId(containerId);
         setContentView(root);
 
-        if (savedInstanceState == null) {
+        if (getFragmentManager().findFragmentById(containerId) == null) {
             ReelsFragment frag = new ReelsFragment();
             Bundle args = new Bundle();
             if (getIntent() != null && getIntent().getExtras() != null) {
@@ -33,7 +37,11 @@ public class ReelPlayerActivity extends Activity {
             args.putString("initial_reel_id", getIntent().getStringExtra("reel_id"));
             args.putBoolean("show_back", true);
             frag.setArguments(args);
-            getFragmentManager().beginTransaction().replace(id, frag).commit();
+            getFragmentManager().beginTransaction().replace(containerId, frag).commit();
         }
+    }
+    @Override protected void onSaveInstanceState(Bundle outState) {
+        outState.putInt(CONTAINER_ID,containerId);
+        super.onSaveInstanceState(outState);
     }
 }

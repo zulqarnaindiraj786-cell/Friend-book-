@@ -53,9 +53,19 @@ public class UsersAdapter extends RecyclerView.Adapter<UsersAdapter.VH> {
     }
 
     public void setData(List<Row> list) {
-        rows.clear();
-        rows.addAll(list);
-        notifyDataSetChanged();
+        List<Row> before = new ArrayList<>(rows);
+        androidx.recyclerview.widget.DiffUtil.DiffResult diff = androidx.recyclerview.widget.DiffUtil.calculateDiff(new androidx.recyclerview.widget.DiffUtil.Callback() {
+            public int getOldListSize() { return before.size(); }
+            public int getNewListSize() { return list.size(); }
+            public boolean areItemsTheSame(int a, int b) {
+                Row old=before.get(a), next=list.get(b);
+                if(old.user==null || next.user==null) return old.user==null && next.user==null && a==b;
+                return java.util.Objects.equals(old.user.uid,next.user.uid) && java.util.Objects.equals(old.requestId,next.requestId);
+            }
+            public boolean areContentsTheSame(int a,int b) { return false; }
+        },false);
+        rows.clear(); rows.addAll(list);
+        diff.dispatchUpdatesTo(this);
     }
 
     public boolean isEmpty() { return rows.isEmpty(); }
@@ -146,7 +156,7 @@ public class UsersAdapter extends RecyclerView.Adapter<UsersAdapter.VH> {
             h.primary.setVisibility(View.VISIBLE);
             h.primary.setText(r.primaryLabel);
             h.primary.setOnClickListener(v -> {
-                if (handler != null) handler.primary(r);
+                if (handler != null && com.friendbook.social.core.InteractionCooldown.disableBriefly(v)) handler.primary(r);
             });
         } else h.primary.setVisibility(View.GONE);
 
@@ -154,7 +164,7 @@ public class UsersAdapter extends RecyclerView.Adapter<UsersAdapter.VH> {
             h.secondary.setVisibility(View.VISIBLE);
             h.secondary.setText(r.secondaryLabel);
             h.secondary.setOnClickListener(v -> {
-                if (handler != null) handler.secondary(r);
+                if (handler != null && com.friendbook.social.core.InteractionCooldown.disableBriefly(v)) handler.secondary(r);
             });
         } else h.secondary.setVisibility(View.GONE);
 

@@ -194,7 +194,7 @@ public final class LivePkAndGiftsUi {
             GiftItem g = GIFTS[selectedIdx[0]];
             String who = (pkActive && targetSideB[0] && hostBName != null && !hostBName.isEmpty())
                     ? shortName(hostBName) : shortName(hostAName);
-            sendCta.setText("Send " + g.name + " (" + g.coins + " Stars) to " + who);
+            sendCta.setText("Send " + g.name + " (" + g.coins + " non-cash points) to " + who);
         };
 
         for (int rowIdx = 0; rowIdx < 2; rowIdx++) {
@@ -739,116 +739,20 @@ public final class LivePkAndGiftsUi {
         final String resolvedHostUid = hostUid.isEmpty() ? me : hostUid;
         final String resolvedHostPhoto = !hostPhoto.isEmpty() ? hostPhoto : (Fb.myPhoto() == null ? "" : Fb.myPhoto());
 
-        final AlertDialog dialog = new AlertDialog.Builder(a).create();
-        LinearLayout sheet = Ui.col(a);
-        GradientDrawable bg = new GradientDrawable();
-        bg.setColor(0xF214161E);
-        bg.setCornerRadii(new float[]{
-                Ui.dp(a, 22), Ui.dp(a, 22), Ui.dp(a, 22), Ui.dp(a, 22), 0, 0, 0, 0});
-        sheet.setBackground(bg);
-        Ui.pad(sheet, 16, 16, 16, 20);
-
-        LinearLayout head = Ui.row(a);
-        head.setGravity(Gravity.CENTER_VERTICAL);
-        head.addView(com.friendbook.social.core.StudioVectorIcons.iconChip(
-                        a, "users", "Invite Friends to Live", 16f, 0, Color.WHITE, Color.WHITE),
-                new LinearLayout.LayoutParams(0, -2, 1f));
-        ImageView close = com.friendbook.social.core.StudioVectorIcons.iconView(a, "close", 18, 0xAAFFFFFF);
-        close.setOnClickListener(v -> dialog.dismiss());
-        head.addView(close, new LinearLayout.LayoutParams(Ui.dp(a, 30), Ui.dp(a, 30)));
-        sheet.addView(head);
-
-        final TextView inviteAllBtn = com.friendbook.social.core.StudioVectorIcons.iconChip(
-                a, "bell", "Send Live Video Invite to All Friends", 13f, 0, Color.WHITE, Color.WHITE);
-        inviteAllBtn.setGravity(Gravity.CENTER);
-        inviteAllBtn.setBackground(Ui.round(a, 0xFFFE2C55, 20));
-        Ui.pad(inviteAllBtn, 14, 10, 14, 10);
-        LinearLayout.LayoutParams iaLp = new LinearLayout.LayoutParams(-1, -2);
-        iaLp.topMargin = Ui.dp(a, 12);
-        iaLp.bottomMargin = Ui.dp(a, 10);
-        sheet.addView(inviteAllBtn, iaLp);
-
-        ScrollView sv = new ScrollView(a);
-        final LinearLayout listCol = Ui.col(a);
-        TextView loadingTv = Ui.tv(a, "Loading friends...", 13, 0xAAFFFFFF);
-        Ui.pad(loadingTv, 8, 16, 8, 16);
-        listCol.addView(loadingTv);
-        sv.addView(listCol);
-        sheet.addView(sv, new LinearLayout.LayoutParams(-1, Ui.dp(a, 270)));
-
-        final List<Models.User> friendUsers = new ArrayList<>();
-        Fb.db().collection("users").limit(50).get().addOnSuccessListener(snap -> {
-            if (a.isFinishing() || snap == null) return;
-            listCol.removeAllViews();
-            for (DocumentSnapshot d : snap.getDocuments()) {
-                Models.User u = Models.User.fromDoc(d);
-                if (u.uid == null || u.uid.equals(me) || u.deactivated) continue;
-                if (Fb.me != null && Fb.me.blocked != null && Fb.me.blocked.contains(u.uid)) continue;
-                FastCache.putUser(u);
-                friendUsers.add(u);
+        // The old drawer scanned arbitrary users, not friends. Select from the
+        // authenticated friendship list and send only to explicitly checked people.
+        com.friendbook.social.core.FriendPicker.multi(a,"Select friends to invite",new LinkedHashMap<>(),selected->{
+            if(!me.equals(Fb.uid()) || a.isFinishing() || a.isDestroyed())return;
+            int queued=0;
+            for(String uid:selected.keySet()){
+                if(uid==null || uid.isEmpty() || uid.equals(me)
+                        || (Fb.me!=null && Fb.me.blocked!=null && Fb.me.blocked.contains(uid)))continue;
+                if(!com.friendbook.social.core.InteractionCooldown.acquire(me,"live-invite:"+liveId+":"+uid))continue;
+                sendDirectLiveInviteToUser(me,uid,resolvedHostUid,hostName,resolvedHostPhoto,liveTitle,liveId);
+                queued++;
             }
-            friendUsers.sort((u1, u2) -> Boolean.compare(u2.isOnline, u1.isOnline));
-
-            if (friendUsers.isEmpty()) {
-                listCol.addView(Ui.tv(a, "No users available to invite right now.", 13, 0xAAFFFFFF));
-                return;
-            }
-
-            for (final Models.User u : friendUsers) {
-                LinearLayout row = Ui.row(a);
-                row.setGravity(Gravity.CENTER_VERTICAL);
-                Ui.pad(row, 4, 8, 4, 8);
-
-                FrameLayout avWrap = new FrameLayout(a);
-                ImageView av = new ImageView(a);
-                Ui.avatar(a, av, u.photoUrl);
-                avWrap.addView(av, new FrameLayout.LayoutParams(Ui.dp(a, 40), Ui.dp(a, 40)));
-                if (u.isOnline) {
-                    View dot = new View(a);
-                    GradientDrawable gd = new GradientDrawable();
-                    gd.setShape(GradientDrawable.OVAL);
-                    gd.setColor(0xFF31A24C);
-                    gd.setStroke(Ui.dp(a, 1.5f), 0xFF14161E);
-                    dot.setBackground(gd);
-                    avWrap.addView(dot, new FrameLayout.LayoutParams(
-                            Ui.dp(a, 11), Ui.dp(a, 11), Gravity.BOTTOM | Gravity.END));
-                }
-                row.addView(avWrap);
-
-                LinearLayout info = Ui.col(a);
-                info.setPadding(Ui.dp(a, 10), 0, Ui.dp(a, 8), 0);
-                info.addView(Ui.tvBold(a, u.displayName, 13.5f, Color.WHITE));
-                info.addView(Ui.tv(a, u.isOnline ? "Active now · Sends Live Video to Inbox" : "Tap Invite · Sends Live Video to Inbox", 11f,
-                        u.isOnline ? 0xFF69F0AE : 0x99FFFFFF));
-                row.addView(info, new LinearLayout.LayoutParams(0, -2, 1f));
-
-                final TextView invBtn = Ui.roundChip(a, "Invite", 0xFFFE2C55, Color.WHITE, 12);
-                Ui.pad(invBtn, 14, 7, 14, 7);
-                invBtn.setOnClickListener(v -> {
-                    invBtn.setText("Sent to Inbox");
-                    invBtn.setEnabled(false);
-                    invBtn.setBackground(Ui.round(a, 0x33FFFFFF, 16));
-                    sendDirectLiveInviteToUser(me, u.uid, resolvedHostUid, hostName, resolvedHostPhoto, liveTitle, liveId);
-                    Ui.toast(a, "Live video invite sent to " + u.displayName + "'s inbox");
-                });
-                row.addView(invBtn);
-                listCol.addView(row);
-            }
+            Ui.toast(a,queued==0?"No eligible friends selected":"Requested "+queued+" live invite(s)");
         });
-
-        inviteAllBtn.setOnClickListener(v -> {
-            int sent = 0;
-            for (Models.User u : friendUsers) {
-                sendDirectLiveInviteToUser(me, u.uid, resolvedHostUid, hostName, resolvedHostPhoto, liveTitle, liveId);
-                if (++sent >= 25) break;
-            }
-            inviteAllBtn.setText("Sent Live Video to " + sent + " Inboxes");
-            inviteAllBtn.setEnabled(false);
-            inviteAllBtn.setBackground(Ui.round(a, 0xFF2E7D32, 20));
-            Ui.toast(a, "Live video invite sent to " + sent + " friends' inboxes");
-        });
-
-        presentBottomDialog(dialog, sheet);
     }
 
     public static void sendDirectLiveInviteToUser(@NonNull String me,
@@ -867,7 +771,7 @@ public final class LivePkAndGiftsUi {
                                                   @NonNull String hostPhoto,
                                                   @NonNull String liveTitle,
                                                   @NonNull String liveId) {
-        if (me.isEmpty() || targetUid.isEmpty() || me.equals(targetUid)) return;
+        if (me.isEmpty() || targetUid.isEmpty() || me.equals(targetUid) || !me.equals(Fb.uid())) return;
         String cleanHostUid = hostUid.isEmpty() ? me : hostUid;
         String cleanHostName = hostName.isEmpty() ? Fb.myName() : hostName;
         String cleanHostPhoto = !hostPhoto.isEmpty() ? hostPhoto : (Fb.myPhoto() == null ? "" : Fb.myPhoto());
@@ -1007,7 +911,7 @@ public final class LivePkAndGiftsUi {
         // Quick Random Match Button
         final List<Map<String, Object>> otherLiveRooms = new ArrayList<>();
         final TextView quickMatchBtn = com.friendbook.social.core.StudioVectorIcons.iconChip(
-                a, "dice", "Random Quick Match (Auto-Pair)", 13.5f, 0, Color.WHITE, Color.WHITE);
+                a, "dice", "Quick Match from Loaded Rooms", 13.5f, 0, Color.WHITE, Color.WHITE);
         quickMatchBtn.setGravity(Gravity.CENTER);
         GradientDrawable qmBg = new GradientDrawable(
                 GradientDrawable.Orientation.LEFT_RIGHT,
@@ -1020,6 +924,70 @@ public final class LivePkAndGiftsUi {
         qmLp.bottomMargin = Ui.dp(a, 10);
         sheet.addView(quickMatchBtn, qmLp);
 
+        LinearLayout searchRow = Ui.row(a);
+        android.widget.EditText pkSearch = new android.widget.EditText(a);
+        pkSearch.setTextColor(Color.WHITE);
+        pkSearch.setHintTextColor(0xAAFFFFFF);
+        pkSearch.setHint("Search name (first 10 matches)");
+        pkSearch.setSingleLine(true);
+        pkSearch.setImeOptions(android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH);
+        searchRow.addView(pkSearch, new LinearLayout.LayoutParams(0, -2, 1f));
+        TextView searchBtn = Ui.tvBold(a, "Search", 14, Color.WHITE);
+        Ui.pad(searchBtn, 12, 10, 12, 10);
+        searchRow.addView(searchBtn);
+        sheet.addView(searchRow);
+        LinearLayout searchResults = Ui.col(a);
+        ScrollView searchScroll = new ScrollView(a);
+        searchScroll.addView(searchResults);
+        searchScroll.setVisibility(View.GONE);
+        sheet.addView(searchScroll, new LinearLayout.LayoutParams(-1, Ui.dp(a, 145)));
+        final int[] searchVersion = {0};
+        final java.util.Set<String> pendingSearches = new java.util.HashSet<>();
+        Runnable runSearch = () -> {
+            String typed = pkSearch.getText().toString().trim();
+            if (typed.length() < 2 || typed.length() > 60) { pkSearch.setError("Enter 2–60 characters"); return; }
+            // The Search button and IME action can fire back-to-back for the
+            // same input. Do not create a second billed prefix query while the
+            // first one (including its optional casing fallback) is pending.
+            if (!pendingSearches.add(typed)) return;
+            int version = ++searchVersion[0];
+            searchScroll.setVisibility(View.VISIBLE);
+            searchResults.removeAllViews();
+            searchResults.addView(Ui.tv(a, "Searching…", 13, Color.WHITE));
+            String name = typed.substring(0, 1).toUpperCase(java.util.Locale.ROOT) + typed.substring(1);
+            pkPeoplePrefix(typed).get().continueWithTask(task -> {
+                if (!task.isSuccessful() || name.equals(typed)) return task;
+                if (!task.getResult().isEmpty() || version != searchVersion[0] || !dialog.isShowing() || !me.equals(Fb.uid())) return task;
+                return pkPeoplePrefix(name).get();
+            }).addOnSuccessListener(found -> {
+                pendingSearches.remove(typed);
+                if (version != searchVersion[0]) return;
+                if (!dialog.isShowing() || !me.equals(Fb.uid())) return;
+                searchResults.removeAllViews();
+                for (DocumentSnapshot d : found) {
+                    Models.User u = Models.User.fromDoc(d);
+                    if (me.equals(u.uid) || u.deactivated || Boolean.TRUE.equals(d.getBoolean("banned"))
+                            || "Only me".equalsIgnoreCase(u.lookupPrivacy) || (Fb.me != null && Fb.me.blocked != null && Fb.me.blocked.contains(u.uid))) continue;
+                    searchResults.addView(buildOpponentRow(a, u.photoUrl, u.displayName, "Invite to your PK match", "Invite PK", v -> {
+                        dialog.dismiss();
+                        cb.onChallengeViewerOrFriend(u.uid, u.displayName, u.photoUrl, durationsSec[selDurIdx[0]]);
+                    }));
+                }
+                if (searchResults.getChildCount() == 0) searchResults.addView(Ui.tv(a, "No matching people found", 13, Color.WHITE));
+            }).addOnFailureListener(error -> {
+                pendingSearches.remove(typed);
+                if (version != searchVersion[0]) return;
+                if (!dialog.isShowing()) return;
+                searchResults.removeAllViews();
+                searchResults.addView(Ui.tv(a, "Couldn't search. Tap Search to retry.", 13, Color.WHITE));
+            });
+        };
+        searchBtn.setOnClickListener(v -> runSearch.run());
+        pkSearch.setOnEditorActionListener((v, action, event) -> {
+            if (action != android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH) return false;
+            runSearch.run();return true;
+        });
+
         ScrollView sv = new ScrollView(a);
         final LinearLayout listCol = Ui.col(a);
         sv.addView(listCol);
@@ -1029,9 +997,53 @@ public final class LivePkAndGiftsUi {
         Ui.pad(loading, 4, 10, 4, 10);
         listCol.addView(loading);
 
-        Fb.db().collection("lives").whereEqualTo("status", "live").limit(25).get()
-                .addOnSuccessListener(snap -> {
-                    if (a.isFinishing()) return;
+        final LinearLayout liveControls=Ui.col(a);sheet.addView(liveControls);
+        final com.friendbook.social.d1.documents.ListenerRegistration[] livePages={null};
+
+        quickMatchBtn.setOnClickListener(v -> {
+            if (!otherLiveRooms.isEmpty()) {
+                Map<String, Object> rm = otherLiveRooms.get(0);
+                dialog.dismiss();
+                cb.onChallengeLiveHost(
+                        Format.str(rm, "_id"),
+                        Format.str(rm, "hostId"),
+                        Format.strOr(rm, "hostName", "Creator"),
+                        Format.strOr(rm, "hostPhotoUrl", Format.str(rm, "hostPhoto")),
+                        durationsSec[selDurIdx[0]]);
+            } else {
+                for (Map.Entry<String, String> e : roomViewerNames.entrySet()) {
+                    if (!e.getKey().equals(me)) {
+                        dialog.dismiss();
+                        cb.onChallengeViewerOrFriend(
+                                e.getKey(), e.getValue(),
+                                roomViewerPhotos.getOrDefault(e.getKey(), ""),
+                                durationsSec[selDurIdx[0]]);
+                        return;
+                    }
+                }
+                Ui.toast(a, "No creator in loaded rooms or viewer available — load more or search");
+            }
+        });
+
+        android.app.Application.ActivityLifecycleCallbacks lifecycle=new android.app.Application.ActivityLifecycleCallbacks(){
+            public void onActivityCreated(Activity activity,android.os.Bundle state){}
+            public void onActivityStarted(Activity activity){}
+            public void onActivityResumed(Activity activity){}
+            public void onActivityPaused(Activity activity){}
+            public void onActivityStopped(Activity activity){if(activity==a && dialog.isShowing())dialog.dismiss();}
+            public void onActivitySaveInstanceState(Activity activity,android.os.Bundle state){}
+            public void onActivityDestroyed(Activity activity){if(activity==a && dialog.isShowing())dialog.dismiss();}
+        };
+        a.getApplication().registerActivityLifecycleCallbacks(lifecycle);
+        dialog.setOnDismissListener(ignored->{
+            searchVersion[0]++;
+            if(livePages[0]!=null){livePages[0].remove();livePages[0]=null;}
+            a.getApplication().unregisterActivityLifecycleCallbacks(lifecycle);
+        });
+        presentBottomDialog(dialog, sheet);
+        livePages[0]=com.friendbook.social.core.PagedLists.attach(a,liveControls,
+                Fb.db().collection("lives").whereEqualTo("status","live"),10,"live-discovery-pk:"+myLiveId,(snap,err)->{
+                    if (!dialog.isShowing() || a.isFinishing() || a.isDestroyed() || !me.equals(Fb.uid()) || snap==null) return;
                     listCol.removeAllViews();
                     otherLiveRooms.clear();
                     long now = System.currentTimeMillis();
@@ -1052,13 +1064,13 @@ public final class LivePkAndGiftsUi {
                     }
 
                     // 1. Active Live Streamers Section
-                    TextView sec1 = Ui.tvBold(a, "CREATORS LIVE RIGHT NOW (" + otherLiveRooms.size() + ")", 11f, 0xFFFFD54F);
+                    TextView sec1 = Ui.tvBold(a, "LIVE CREATORS IN LOADED ROOMS (" + otherLiveRooms.size() + ")", 11f, 0xFFFFD54F);
                     sec1.setPadding(0, Ui.dp(a, 4), 0, Ui.dp(a, 6));
                     listCol.addView(sec1);
 
                     if (otherLiveRooms.isEmpty()) {
                         TextView none = Ui.tv(a,
-                                "No other solo hosts live right now — invite any Viewer below to battle side-by-side!",
+                                "No other hosts in loaded rooms — load more or invite a viewer below.",
                                 12f, 0x99FFFFFF);
                         none.setPadding(0, 0, 0, Ui.dp(a, 10));
                         listCol.addView(none);
@@ -1110,68 +1122,14 @@ public final class LivePkAndGiftsUi {
                         }
                     }
 
-                    // 3. Invite Any Friend via Inbox Live Video Card!
-                    final LinearLayout friendsSecCol = Ui.col(a);
-                    listCol.addView(friendsSecCol);
-                    Fb.db().collection("users").limit(25).get().addOnSuccessListener(uSnap -> {
-                        if (a.isFinishing() || uSnap == null) return;
-                        List<Models.User> fList = new ArrayList<>();
-                        for (DocumentSnapshot ud : uSnap.getDocuments()) {
-                            Models.User u = Models.User.fromDoc(ud);
-                            if (u.uid == null || u.uid.equals(me) || u.deactivated) continue;
-                            if (candidates.containsKey(u.uid)) continue;
-                            if (Fb.me != null && Fb.me.blocked != null && Fb.me.blocked.contains(u.uid)) continue;
-                            FastCache.putUser(u);
-                            fList.add(u);
-                        }
-                        if (fList.isEmpty()) return;
-                        fList.sort((u1, u2) -> Boolean.compare(u2.isOnline, u1.isOnline));
-                        TextView sec3 = Ui.tvBold(a, "INVITE FRIENDS VIA INBOX LIVE VIDEO (" + fList.size() + ")", 11f, 0xFF69F0AE);
-                        sec3.setPadding(0, Ui.dp(a, 12), 0, Ui.dp(a, 6));
-                        friendsSecCol.addView(sec3);
-                        for (final Models.User fu : fList) {
-                            LinearLayout row = buildOpponentRow(a, fu.photoUrl, fu.displayName,
-                                    (fu.isOnline ? "Online · " : "") + "Sends clickable Live Video to Inbox",
-                                    "Invite Match",
-                                    v -> {
-                                        dialog.dismiss();
-                                        cb.onChallengeViewerOrFriend(
-                                                fu.uid,
-                                                fu.displayName == null ? "Friend" : fu.displayName,
-                                                fu.photoUrl == null ? "" : fu.photoUrl,
-                                                durationsSec[selDurIdx[0]]);
-                                    });
-                            friendsSecCol.addView(row);
-                        }
-                    });
+                    listCol.addView(Ui.tv(a, "Use Search by name to invite someone outside this room.", 12f, 0xAAFFFFFF));
                 });
 
-        quickMatchBtn.setOnClickListener(v -> {
-            if (!otherLiveRooms.isEmpty()) {
-                Map<String, Object> rm = otherLiveRooms.get(0);
-                dialog.dismiss();
-                cb.onChallengeLiveHost(
-                        Format.str(rm, "_id"),
-                        Format.str(rm, "hostId"),
-                        Format.strOr(rm, "hostName", "Creator"),
-                        Format.strOr(rm, "hostPhotoUrl", Format.str(rm, "hostPhoto")),
-                        durationsSec[selDurIdx[0]]);
-            } else {
-                for (Map.Entry<String, String> e : roomViewerNames.entrySet()) {
-                    if (!e.getKey().equals(me)) {
-                        dialog.dismiss();
-                        cb.onChallengeViewerOrFriend(
-                                e.getKey(), e.getValue(),
-                                roomViewerPhotos.getOrDefault(e.getKey(), ""),
-                                durationsSec[selDurIdx[0]]);
-                        return;
-                    }
-                }
-                Ui.toast(a, "No other creator or viewer online right now — tap Invite first");
-            }
-        });
+    }
 
-        presentBottomDialog(dialog, sheet);
+    private static com.friendbook.social.d1.documents.Query pkPeoplePrefix(String name) {
+        return Fb.db().collection("users").whereGreaterThanOrEqualTo("displayName", name)
+                .whereLessThanOrEqualTo("displayName", name + "\uf8ff").limit(10);
     }
 
     private static LinearLayout buildOpponentRow(Activity a, String photo, String name,

@@ -11,9 +11,6 @@ captures/
 .cxx/
 local.properties
 *.apk
-# Local Android release signing material is never committed.
-*.p12
-*.keystore
 
 # Firebase admin credentials must only be deployed through the secret store.
 **/service_account*.json
@@ -36,3 +33,8 @@ __pycache__/
 
 # Private migration exports, generated SQL, counts and verification reports.
 migration-artifacts/
+
+# Keep release signing material outside the repository.
+*.p12
+*.keystore
+*.jks

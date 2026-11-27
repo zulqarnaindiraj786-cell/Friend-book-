@@ -42,6 +42,84 @@ public final class PushManager {
             manager.createNotificationChannel(n);
         }
     }
+    public static void testThisPhone(Context context, android.widget.TextView result) {
+        channel(context);
+        if (!NotificationManagerCompat.from(context).areNotificationsEnabled()) {
+            result.setText("Android notifications are off. Open Android notification settings above.");
+            return;
+        }
+        if (Build.VERSION.SDK_INT >= 26) {
+            NotificationChannel n = context.getSystemService(NotificationManager.class).getNotificationChannel(CHANNEL);
+            if (n != null && n.getImportance() < NotificationManager.IMPORTANCE_HIGH) {
+                result.setText("Enable banners for FriendBook in Android notification settings, then retry.");
+                return;
+            }
+        }
+        String actor = Fb.uid();
+        if (actor == null || !result.isEnabled()) return;
+        result.setEnabled(false);
+        result.setText("Registering and sending a real FCM test…");
+        new Thread(() -> {
+            String report;
+            try {
+                String device = FCMTokenManager.deviceId(context);
+                String bearer = PushGateway.idToken();
+                report = "Push test unavailable";
+                com.google.firebase.messaging.FirebaseMessaging messaging = com.google.firebase.messaging.FirebaseMessaging.getInstance();
+                for (int attempt = 0; attempt < 2; attempt++) {
+                    String token = com.google.android.gms.tasks.Tasks.await(messaging.getToken(), 15, java.util.concurrent.TimeUnit.SECONDS);
+                    if (!actor.equals(Fb.uid())) throw new IllegalStateException("Account changed");
+                    PushGateway.Response registration = PushGateway.call(new org.json.JSONObject().put("action", "register")
+                            .put("device_id", device).put("token", token), bearer);
+                    if (registration.status != 200 || !registration.data.optBoolean("registered")) {
+                        report = "Registration failed (HTTP " + registration.status + ")";
+                        break;
+                    }
+                    if (!actor.equals(Fb.uid())) throw new IllegalStateException("Account changed");
+                    PushGateway.Response test = PushGateway.call(new org.json.JSONObject().put("action", "self_test")
+                            .put("device_id", device), bearer);
+                    org.json.JSONArray reasons = test.data.optJSONArray("reasons");
+                    String reason = reasons == null ? "" : reasons.optString(0);
+                    String code = test.data.optString("error", "HTTP " + test.status);
+                    if (attempt == 0 && actor.equals(Fb.uid()) && ("NO_VALID_RECIPIENT_DEVICE".equals(code) || "SENDER_ID_MISMATCH".equals(reason))) {
+                        com.google.android.gms.tasks.Tasks.await(messaging.deleteToken(), 15, java.util.concurrent.TimeUnit.SECONDS);
+                        continue;
+                    }
+                    report = test.data.optInt("accepted") > 0 ? "FCM accepted the test. Check your notification shade."
+                            : test.data.optInt("duplicate") > 0 ? "Already sent this minute. Retry after a minute."
+                            : "Push test failed: " + code + (reason.isEmpty() ? "" : " (" + reason + ")");
+                    break;
+                }
+            } catch (Exception error) { report = "Couldn't reach the push service. Tap to retry."; }
+            final String text = report;
+            new android.os.Handler(android.os.Looper.getMainLooper()).post(() -> {
+                if (actor.equals(Fb.uid())) { result.setText(text); result.setEnabled(true); }
+            });
+        }, "FriendBook push test").start();
+    }
+
+    /** Fallback for a fresh server-authenticated inbox event observed while Main is visible. */
+    public static void showForegroundInbox(Context c, com.friendbook.social.d1.documents.DocumentSnapshot doc, long since) {
+        if (doc.getMetadata().isFromCache() || doc.getMetadata().hasPendingWrites() || Prefs.quiet(c)) return;
+        long at = com.friendbook.social.core.Format.ts(doc.get("createdAt"));
+        long now = System.currentTimeMillis();
+        if (at < Math.max(since, now - 30_000L) || at > now + 5_000L) return;
+        String type = doc.getString("type");
+        if (type == null || "announcement".equals(type) || "message".equals(type)) return;
+        java.util.HashMap<String,String> payload = new java.util.HashMap<>();
+        for (String key : new String[]{"type","toUserId","fromUserId","postId","contentType","groupId"}) {
+            String value = doc.getString(key);
+            if (value != null) payload.put(key, value);
+        }
+        payload.put("eventId", "notification_" + doc.getId());
+        payload.put("notificationId", doc.getId());
+        String title = doc.getString("fromUserName");
+        String body = doc.getString("text");
+        if (title != null && !title.isEmpty()) payload.put("title", title);
+        if (body != null && !body.isEmpty()) payload.put("body", body);
+        show(c, payload);
+    }
+
     public static synchronized void show(Context c, Map<String, String> d) {
         String uid = Fb.uid();
         if (uid == null || !uid.equals(d.get("toUserId"))) {

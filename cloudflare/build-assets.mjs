@@ -14,9 +14,7 @@ export async function buildAssets() {
     await copyFile(new URL(file, source), new URL(file, output));
   }
   const index = await readFile(new URL('index.html', output), 'utf8');
-  // Deep links use root-relative assets. APKs remain on GitHub Releases, not D1.
-  await writeFile(new URL('index.html', output), index.replace('<head>', '<head>\n  <base href="/" />')
-    .replace('href="./friendbook.apk"',
-      'href="https://github.com/zulqarnaindiraj786-cell/Friend-book-/releases/latest/download/friendbook.apk"'));
+  // Public pages share assets from the site root.
+  await writeFile(new URL('index.html', output), index.replace('<head>', '<head>\n  <base href="/" />'));
 }
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) await buildAssets();

@@ -1,0 +1,7 @@
+# Post-rollout analytics refresh (database-wide, not a device trace)
+
+Analytics-only [run 45361499297](https://github.com/zulqarnaindiraj786-cell/Friend-book-/actions/runs/45361499297), ending 2026-11-24T09:03:10Z, reports primary D1 5m **656 reads / 36 writes**, 15m **1,336 / 36**, 60m **5,097 / 353**, and 6h **85,595 / 2,728**. Windows overlap and most of the last 60 minutes predates the group-page rollout. The report is delayed, database-wide provider query analytics, not account billing or a matched device session. Index creation and ongoing write maintenance are not certified by these windows.
+
+Largest reported read shapes at 60m are engagement summary/preview **1,657 reads / 246 executions**, and document point lookups **941 / 945**; 15m historical comment count **360 / 90** and summary **459 / 81** remain material. The 60m largest reported write shapes include user legacy-mirror upserts **192 writes / 24 executions** and FCM devices **90 / 55**. Truncated 6h ranking shows canonical notification create **516 / 86** and a notification mirror shape **320 / 48**; these are shapes, not proof of redundant operations. No security checks, required mirror or delivery writes were removed merely from those counts.
+
+These observations do not demonstrate that all consumers are fixed or establish a representative full day below 100k reads / 5k writes. Installed APK181 lacks the subsequent Android changes. No device trace, APK download, release or PR merge was requested or performed.

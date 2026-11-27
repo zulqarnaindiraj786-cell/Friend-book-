@@ -1,0 +1,7 @@
+# Native waterfall rollout
+
+Feed and Reels continue requesting through their existing AdMob native unit IDs. Add AppLovin as a **Waterfall** source in each matching Android Native mediation group, map the AppLovin SDK key and native zone supplied by your AppLovin dashboard, and disable any unwanted sources in those groups. The existing Meta adapter is pinned at 6.16.0.0 for compatibility but its placement should not be mapped to these groups. Unity cannot be set up as a new waterfall placement; Google lists that support as ended January 31, 2026.
+
+Verify consent and AppLovin's native-zone eligibility, then check both native units separately in Ad Inspector on a device. Never substitute provider IDs for the AdMob native unit IDs in the app. Adapter compilation does not verify dashboard changes or ad fill.
+
+The opening request budget is three total per app process (two Feed, one Reels). Only a recorded impression earns one replacement for its unit. Slot binds, no-fill, and idle time do not grant extra attempts. The admin check uses the same allowance. If a request fails with “Unable to instantiate mediation adapter class,” inspect the per-adapter errors and keep only correctly mapped supported Android Native waterfall sources enabled in AdMob. In **Privacy & messaging**, publish the applicable consent message for app ID `ca-app-pub-3387480177023669~1513026594`; that publisher-side setting cannot be changed in the APK.

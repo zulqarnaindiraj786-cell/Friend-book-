@@ -1,0 +1,14 @@
+{
+  "evidence": "ILLUSTRATION ONLY: not observed app rates. Limits are the owner's stricter target, not asserted Cloudflare Free allowances.",
+  "daily_users": 1000,
+  "sessions_per_user": 1,
+  "reads_per_session": 100,
+  "writes_per_session": 5,
+  "invocations_per_session": 30,
+  "background_reads_per_day": 0,
+  "background_writes_per_day": 0,
+  "background_invocations_per_day": 0,
+  "reads_daily_limit": 100000,
+  "writes_daily_limit": 5000,
+  "invocations_daily_limit": 100000
+}

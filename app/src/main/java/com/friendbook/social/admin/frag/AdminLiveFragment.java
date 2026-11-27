@@ -17,7 +17,6 @@ import com.friendbook.social.core.Fb;
 import com.friendbook.social.core.Format;
 import com.friendbook.social.core.Ui;
 import com.friendbook.social.d1.documents.DocumentSnapshot;
-import com.friendbook.social.d1.documents.FieldValue;
 import com.friendbook.social.d1.documents.ListenerRegistration;
 import com.friendbook.social.d1.documents.Query;
 
@@ -29,6 +28,14 @@ public class AdminLiveFragment extends Fragment {
     private LinearLayout list;
     private TextView countT;
     private ListenerRegistration reg;
+    private com.friendbook.social.core.CursorPager pages;
+    private LinearLayout cards;
+    private TextView more;
+    private String actor;
+    private boolean started;
+    private final java.util.Set<String> pendingEnds=new java.util.HashSet<>();
+    private final java.util.Set<String> endedIds=new java.util.HashSet<>();
+    private final java.util.List<DocumentSnapshot> loaded=new java.util.ArrayList<>();
 
     @Nullable
     @Override
@@ -42,45 +49,68 @@ public class AdminLiveFragment extends Fragment {
         countT = Ui.tv(a, "🔴 Live rooms", 12, Ui.sub(a));
         Ui.pad(countT, 2, 0, 2, 8);
         list.addView(countT);
+        cards=Ui.col(a);list.addView(cards);
+        LinearLayout controls=Ui.row(a);list.addView(controls);
+        TextView refresh=Ui.tvBold(a,"Refresh rooms",13,Ui.BLUE);Ui.pad(refresh,8,10,8,10);
+        refresh.setOnClickListener(v->startPages());controls.addView(refresh);
+        more=Ui.tvBold(a,"Load 10 more",13,Ui.BLUE);Ui.pad(more,8,10,8,10);
+        more.setOnClickListener(v->{if(pages!=null)pages.next();});controls.addView(more);
         return sv;
     }
 
     @Override
     public void onStart() {
         super.onStart();
-        reg = Fb.db().collection("lives")
-                .limit(50)
-                .addSnapshotListener((snap, err) -> {
-                    android.app.Activity a = getActivity();
-                    if (a == null) return;
-                    while (list.getChildCount() > 1) list.removeViewAt(1);
-                    java.util.List<DocumentSnapshot> docs = snap == null
-                            ? new java.util.ArrayList<>()
-                            : new java.util.ArrayList<>(snap.getDocuments());
-                    java.util.Collections.sort(docs, (d1, d2) -> Long.compare(
-                            Format.longOf(d2.getData(), "startedAtMs"),
-                            Format.longOf(d1.getData(), "startedAtMs")));
-                    int n = docs.size();
-                    countT.setText(n + " room(s) — newest first");
-                    if (n == 0) {
-                        TextView e = Ui.tv(a, "🔴 No live rooms yet.", 13, Ui.sub(a));
-                        Ui.pad(e, 4, 14, 4, 0);
-                        list.addView(e);
-                        return;
-                    }
-                    for (DocumentSnapshot d : docs) list.addView(row(a, d));
-                });
+        android.app.Activity a=getActivity();
+        if(a==null || !Admin.isAdmin() || Fb.uid()==null)return;
+        if(actor!=null && !actor.equals(Fb.uid())){a.finish();return;}
+        actor=Fb.uid();started=true;startPages();
+    }
+
+    private void startPages() {
+        if(!started || !java.util.Objects.equals(actor,Fb.uid()) || getActivity()==null)return;
+        if(reg!=null){reg.remove();reg=null;}
+        if(pages!=null){pages.close();pages=null;}
+        loaded.clear();renderRooms();
+        Query query=Fb.db().collection("lives");
+        pages=new com.friendbook.social.core.CursorPager(query,10,"admin-live",(docs,hasMore,busy,error)->{
+            if(!started || !java.util.Objects.equals(actor,Fb.uid()) || getActivity()==null)return;
+            more.setText(busy?"Loading…":!error.isEmpty()?"Retry page":hasMore?"Load 10 more":"All loaded");
+            more.setEnabled(!busy && hasMore);
+            if(!busy && (error.isEmpty() || !docs.isEmpty())){loaded.clear();loaded.addAll(docs);renderRooms();}
+            if(!error.isEmpty())Ui.toast(getActivity(),error);
+        });
+        final com.friendbook.social.core.CursorPager observed=pages;
+        observed.startObserved();
+        reg=query.limit(10).addSnapshotListener((snap,err)->{
+            // A removed observer can still have a queued callback after refresh.
+            if(!started || !java.util.Objects.equals(actor,Fb.uid()) || pages!=observed)return;
+            if(err!=null){observed.observedError();return;}
+            if(snap!=null)observed.acceptObservedFirstPage(snap);
+        });
+    }
+
+    private void renderRooms() {
+        android.app.Activity a=getActivity();
+        if(!started || a==null || cards==null)return;
+        cards.removeAllViews();
+        java.util.List<DocumentSnapshot> docs=new java.util.ArrayList<>(loaded);
+        java.util.Collections.sort(docs,(x,y)->Long.compare(Format.longOf(y.getData(),"startedAtMs"),Format.longOf(x.getData(),"startedAtMs")));
+        countT.setText(docs.size()+" loaded room(s) — sorted within loaded pages");
+        if(docs.isEmpty())cards.addView(Ui.tv(a,"No rooms in loaded pages.",13,Ui.sub(a)));
+        for(DocumentSnapshot d:docs)cards.addView(row(a,d));
     }
 
     @Override
     public void onStop() {
-        super.onStop();
-        if (reg != null) reg.remove();
+        super.onStop();started=false;
+        if(reg!=null){reg.remove();reg=null;}
+        if(pages!=null){pages.close();pages=null;}
     }
 
     private View row(android.app.Activity a, DocumentSnapshot d) {
         Map<String, Object> m = d.getData();
-        boolean live = "live".equals(Format.str(m, "status"));
+        boolean live = "live".equals(Format.str(m, "status")) && !endedIds.contains(d.getId());
 
         LinearLayout card = Ui.row(a);
         card.setBackground(Ui.round(a, Ui.card(a), 14));
@@ -114,9 +144,19 @@ public class AdminLiveFragment extends Fragment {
         if (live) {
             TextView end = Ui.tvBold(a, "End", 12, Ui.RED);
             end.setPadding(Ui.dp(a, 8), Ui.dp(a, 8), 0, 0);
+            end.setEnabled(!pendingEnds.contains(d.getId()));
             end.setOnClickListener(v -> Ui.confirm(a, "End this live?",
-                    "Viewers will see it end immediately.", "End live", () ->
-                            d.getReference().update("status", "ended", "endedAt", FieldValue.serverTimestamp())));
+                    "Viewers will see it end immediately.", "End live", () -> {
+                        final String owner=actor,id=d.getId();
+                        if(!started || !Admin.isAdmin() || !java.util.Objects.equals(owner,Fb.uid()) || !pendingEnds.add(id))return;
+                        renderRooms();
+                        Fb.db().moderate("end_live","lives",id).addOnCompleteListener(task->{
+                            pendingEnds.remove(id);
+                            if(!java.util.Objects.equals(owner,Fb.uid()))return;
+                            if(task.isSuccessful())endedIds.add(id);
+                            if(started){renderRooms();if(!task.isSuccessful())Ui.toast(a,"Could not end live. Please retry.");}
+                        });
+                    }));
             right.addView(end);
         }
         card.addView(right);

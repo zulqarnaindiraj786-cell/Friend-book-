@@ -267,13 +267,8 @@ public final class ReelUploadManager {
                                            final String actor) {
         emit(true, 4, 0L, totalBytes, "Uploading Reel… 4%", false, null);
 
-        // Upload tiny ~15 KB poster JPEG in parallel so viewers get a 0.0ms cover image!
-        final String[] uploadedThumbHolder = new String[]{""};
-        if (meta != null && meta.posterJpeg != null && meta.posterJpeg.length > 0) {
-            Cloudinary.uploadJpegBytes(meta.posterJpeg).addOnSuccessListener(url -> {
-                if (url != null) uploadedThumbHolder[0] = url;
-            });
-        }
+        final com.google.android.gms.tasks.Task<String> posterUpload = meta != null && meta.posterJpeg != null && meta.posterJpeg.length > 0
+                ? Cloudinary.uploadJpegBytes(meta.posterJpeg) : com.google.android.gms.tasks.Tasks.forResult("");
 
         String storagePath = "reels/" + actor + "_" + System.currentTimeMillis() + ".mp4";
         Cloudinary.uploadOrFirebaseWithProgress(appCtx, storagePath, stagedUri,
@@ -290,10 +285,7 @@ public final class ReelUploadManager {
                 emit(false,0,0L,0L,"",false,"Account changed. Reel was not published.");
                 return;
             }
-            // Seed local SSD cache immediately under the remote videoUrl so playback is 0.0ms!
-            ReelVideoCache.seedLocalUriToCache(appCtx, stagedUri, videoUrl);
-
-            String thumbUrl = uploadedThumbHolder[0];
+            String thumbUrl = posterUpload.isSuccessful() ? posterUpload.getResult() : "";
             if (thumbUrl == null || thumbUrl.isEmpty()) {
                 thumbUrl = ReelVideoCache.deriveThumbUrl(videoUrl, "");
             }
@@ -364,7 +356,12 @@ public final class ReelUploadManager {
             // fire-and-forget path silently swallowed errors and stayed at 99%.
             final com.friendbook.social.d1.documents.DocumentReference ref=Fb.db().collection("reels")
                     .document("reel_"+java.util.UUID.randomUUID().toString());
+            final boolean posterMissing = thumbUrl == null || thumbUrl.isEmpty();
             Runnable published=() -> {
+                // Do not block publishing on the poster, but persist a late successful upload.
+                if (posterMissing) posterUpload.addOnSuccessListener(url -> {
+                    if (actor.equals(Fb.uid()) && url != null && !url.isEmpty()) ref.update("thumbUrl", url);
+                });
                 optimisticReel = null;
                 MAIN.postDelayed(() -> stagedFile.delete(), 8000L);
                 emit(false, 100, totalBytes, totalBytes, "Your Reel is Live!", true, null);

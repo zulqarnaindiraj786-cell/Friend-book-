@@ -7,19 +7,28 @@ import com.google.firebase.auth.FirebaseUser;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
-import java.io.BufferedReader;
-import java.io.InputStream;
-import java.io.InputStreamReader;
-import java.io.OutputStream;
-import java.net.HttpURLConnection;
-import java.net.URL;
+import com.friendbook.social.core.CloudflareHttp;
+import okhttp3.Response;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.TimeUnit;
 
 /** Authenticated HTTP transport to the Cloudflare Worker D1 document API. */
 final class D1DocumentTransport {
-    static final String BASE = "https://rough-firefly-dd7b.zulqarnaindiraj786.workers.dev";
+    static final String BASE = com.friendbook.social.BuildConfig.CLOUDFLARE_API_URL;
     private D1DocumentTransport() {}
+    private static final java.util.concurrent.atomic.AtomicLong PERIODIC_PAUSED_UNTIL = new java.util.concurrent.atomic.AtomicLong();
+
+    static boolean periodicAllowed(long elapsedMs) { return elapsedMs >= PERIODIC_PAUSED_UNTIL.get(); }
+
+    private static void pausePeriodicReads(String retryAfter) {
+        long delaySeconds = 60;
+        if (retryAfter != null) {
+            try { delaySeconds = Math.max(30, Math.min(300, Long.parseLong(retryAfter.trim()))); }
+            catch (NumberFormatException ignored) { /* Use default for unavailable or date-form headers. */ }
+        }
+        PERIODIC_PAUSED_UNTIL.accumulateAndGet(android.os.SystemClock.elapsedRealtime() + delaySeconds * 1000L, Math::max);
+    }
+
     private static final ThreadLocal<String> REQUEST_ACTOR = new ThreadLocal<>();
 
     static <T> T runForActor(String actor, java.util.concurrent.Callable<T> task) throws Exception {
@@ -47,45 +56,31 @@ final class D1DocumentTransport {
     static JSONObject request(String method, String pathAndQuery, JSONObject body) throws Exception {
         String actor=REQUEST_ACTOR.get();
         if (actor==null) throw new D1DocumentStoreException(D1DocumentStoreException.Code.CANCELLED, "Missing request actor");
-        try { return requestOnce(method,pathAndQuery,body,actor,false); }
+        JSONObject response;
+        try { response=requestOnce(method,pathAndQuery,body,actor,false); }
         catch (D1DocumentStoreException error) {
             if (error.getCode()!=D1DocumentStoreException.Code.UNAUTHENTICATED) throw error;
             // Worker authenticates before touching D1. Retry a rejected token once,
             // without replaying successful or ambiguous writes.
-            return requestOnce(method,pathAndQuery,body,actor,true);
+            response=requestOnce(method,pathAndQuery,body,actor,true);
         }
+        if (!"GET".equals(method) && !"/v1/firestore/query".equals(pathAndQuery)
+                && !pathAndQuery.startsWith("/v1/firestore/count?")
+                && !"/v1/firestore/friendship-facts".equals(pathAndQuery)) READ_EPOCH.incrementAndGet();
+        return response;
     }
 
     private static JSONObject requestOnce(String method,String pathAndQuery,JSONObject body,String actor,boolean refresh) throws Exception {
         String token = idToken(actor,refresh);
         requireActor(actor);
-        HttpURLConnection conn = (HttpURLConnection) new URL(BASE + pathAndQuery).openConnection();
-        try {
-            conn.setConnectTimeout(15000);
-            conn.setReadTimeout(30000);
-            conn.setInstanceFollowRedirects(false);
-            conn.setRequestMethod(method);
-            conn.setRequestProperty("Authorization", "Bearer " + token);
-            conn.setRequestProperty("Accept", "application/json");
-            if (body != null) {
-                byte[] bytes = body.toString().getBytes(StandardCharsets.UTF_8);
-                conn.setDoOutput(true);
-                conn.setFixedLengthStreamingMode(bytes.length);
-                conn.setRequestProperty("Content-Type", "application/json");
-                try (OutputStream out = conn.getOutputStream()) { out.write(bytes); }
-            }
-            int code = conn.getResponseCode();
-            InputStream rs = (code >= 200 && code < 300) ? conn.getInputStream() : conn.getErrorStream();
-            StringBuilder sb = new StringBuilder();
-            if (rs != null) {
-                try (BufferedReader br = new BufferedReader(new InputStreamReader(rs, StandardCharsets.UTF_8))) {
-                    String line;
-                    while ((line = br.readLine()) != null) sb.append(line);
-                }
-            }
+        byte[] bytes = body == null ? null : body.toString().getBytes(StandardCharsets.UTF_8);
+        try (Response response = CloudflareHttp.openDocument(pathAndQuery, method, token, bytes)) {
+            int code = response.code();
+            if (code == 429) pausePeriodicReads(response.header("Retry-After"));
+            String json = CloudflareHttp.readUtf8(response.body(), 16 * 1024 * 1024);
             requireActor(actor);
             JSONObject data;
-            try { data = sb.length() > 0 ? new JSONObject(sb.toString()) : new JSONObject(); }
+            try { data = !json.isEmpty() ? new JSONObject(json) : new JSONObject(); }
             catch (Exception e) {
                 if (code >= 200 && code < 300)
                     throw new D1DocumentStoreException(D1DocumentStoreException.Code.UNAVAILABLE, "Invalid server response", e);
@@ -102,12 +97,11 @@ final class D1DocumentTransport {
                 if ("NOT_FOUND".equals(err)) throw new D1DocumentStoreException(D1DocumentStoreException.Code.NOT_FOUND, err);
                 if ("ALREADY_EXISTS".equals(err)) throw new D1DocumentStoreException(D1DocumentStoreException.Code.ALREADY_EXISTS, err);
                 if (code == 401) throw new D1DocumentStoreException(D1DocumentStoreException.Code.UNAUTHENTICATED, err);
+                if (code == 429) throw new D1DocumentStoreException(D1DocumentStoreException.Code.RESOURCE_EXHAUSTED, err);
                 if (code == 403) throw new D1DocumentStoreException(D1DocumentStoreException.Code.PERMISSION_DENIED, err);
                 throw new D1DocumentStoreException(D1DocumentStoreException.Code.UNAVAILABLE, err + " HTTP " + code);
             }
             return data;
-        } finally {
-            conn.disconnect();
         }
     }
 
@@ -115,8 +109,33 @@ final class D1DocumentTransport {
         return android.net.Uri.encode(s);
     }
 
-    static JSONObject getDocument(String path) throws Exception {
-        JSONObject data = request("GET", "/v1/firestore/document?path=" + enc(path), null);
+    private static final java.util.concurrent.atomic.AtomicLong READ_EPOCH = new java.util.concurrent.atomic.AtomicLong();
+    private static final ReadCoalescer READS = new ReadCoalescer();
+
+    private static JSONObject read(String method, String path, JSONObject body) throws Exception {
+        String actor=REQUEST_ACTOR.get();
+        if (actor==null) throw new D1DocumentStoreException(D1DocumentStoreException.Code.CANCELLED, "Missing request actor");
+        requireActor(actor);
+        String key=READ_EPOCH.get()+"\n"+actor+"\n"+method+"\n"+path+"\n"+(body==null?"":body.toString());
+        String response=READS.read(key, () -> request(method,path,body).toString());
+        requireActor(actor);
+        return new JSONObject(response); // Never share mutable JSON across consumers.
+    }
+
+    static JSONObject referralStatus() throws Exception {
+        return read("POST","/v1/firestore/referral-status",new JSONObject());
+    }
+
+    static JSONObject friendshipFacts(java.util.List<String> candidates) throws Exception {
+        return read("POST","/v1/firestore/friendship-facts",
+                new JSONObject().put("candidates",new JSONArray(candidates)));
+    }
+
+    static JSONObject getDocument(String path) throws Exception {return getDocument(path,false);}
+
+    static JSONObject getDocument(String path, boolean profileAudience) throws Exception {
+        JSONObject data = read("GET", "/v1/firestore/document?path=" + enc(path)
+                + (profileAudience ? "&profileAudience=1" : ""), null);
         boolean present = data.optJSONObject("data") != null;
         if ((!data.has("exists") && !present) || (data.optBoolean("exists", false) && !present)
                 || (data.has("exists") && !(data.opt("exists") instanceof Boolean)))
@@ -140,8 +159,12 @@ final class D1DocumentTransport {
         return request("POST", "/v1/firestore/document?parent=" + enc(parent), body);
     }
 
+    static JSONObject listenerQuery(JSONObject body) throws Exception {
+        return read("POST", "/v1/firestore/query", body);
+    }
+
     static JSONArray query(JSONObject body) throws Exception {
-        JSONObject data = request("POST", "/v1/firestore/query", body);
+        JSONObject data = read("POST", "/v1/firestore/query", body);
         JSONArray arr = data.optJSONArray("documents");
         if (arr == null) throw new D1DocumentStoreException(D1DocumentStoreException.Code.UNAVAILABLE, "Invalid query response");
         return arr;
@@ -159,8 +182,13 @@ final class D1DocumentTransport {
     }
 
     static void batch(JSONArray operations) throws Exception {
+        batch(operations,false);
+    }
+
+    static boolean batch(JSONArray operations,boolean chatSend) throws Exception {
         JSONObject body = new JSONObject().put("operations", operations);
-        request("POST", "/v1/firestore/batch", body);
+        if(chatSend)body.put("chatPush",true);
+        return request("POST", "/v1/firestore/batch", body).optBoolean("pushScheduled");
     }
 
     static void transaction(JSONArray operations) throws Exception {

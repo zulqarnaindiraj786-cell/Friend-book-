@@ -20,9 +20,8 @@ import java.util.Set;
 public class CommentsEngine {
     public static void showD1Drafts(android.app.Activity activity,String collection,String id){
         D1Drafts.show(activity,collection,id,data->{d1Changed(collection,id,data);
-            String me=Fb.uid(),owner=data.optString("owner"),reply=data.optString("replyTo");org.json.JSONObject row=data.optJSONObject("comment");if(me==null||row==null)return;
-            if(!owner.isEmpty()&&!owner.equals(me))com.friendbook.social.core.Notify.send(owner,"posts".equals(collection)?"comment":"reel_comment",Fb.myName()+" commented",id);
-            if(!reply.isEmpty()&&!reply.equals(me))com.friendbook.social.core.Notify.send(reply,"reply",Fb.myName()+" replied to your comment",id);
+            String me=Fb.uid();org.json.JSONObject row=data.optJSONObject("comment");if(me==null||row==null)return;
+            com.friendbook.social.core.Notify.pushCommittedEvents(data);
             Models.Comment comment=fromD1(row,id);if("posts".equals(collection)&&com.friendbook.social.core.Mentions.hasBulk(comment.mentions))com.friendbook.social.push.FCMPush.bulkMention(id,comment.id);
         });
     }
@@ -33,27 +32,54 @@ public class CommentsEngine {
         catch(org.json.JSONException e){throw new IllegalArgumentException("Invalid D1 comment",e);}
     }
     private static void d1Changed(String collection,String id,org.json.JSONObject data){
+        d1Changed(collection,id,data,null,null,null);
+    }
+    private static void d1Changed(String collection,String id,org.json.JSONObject data,String operation){
+        d1Changed(collection,id,data,operation,null,null);
+    }
+    private static void d1Changed(String collection,String id,org.json.JSONObject data,String operation,String commentId,D1Reactions.CommentBaseline before){
         for(Handle h:new ArrayList<>(D1_HANDLES))if(h.active() && collection.equals(h.collection) && id.equals(h.docId)){
             h.revision++;h.error="";if(data.has("pinned"))h.pinned=data.optString("pinned");
             if(data.has("removed")){String removed=data.optString("removed");h.pendingD1.remove(removed);h.deleted.add(removed);h.latest.remove(removed);h.older.remove(removed);}
             org.json.JSONObject row=data.optJSONObject("comment");if(row!=null){Models.Comment c=fromD1(row,h.key);h.pendingD1.remove(c.id);h.deleted.remove(c.id);if(h.older.containsKey(c.id))h.older.put(c.id,c);else h.latest.put(c.id,c);}
             h.emit();
         }
-        D1Reactions.invalidate(collection,id);
+        if(!"create".equals(operation) || !D1Reactions.commentCreated(collection,id,commentId,data,before))
+            D1Reactions.commentChanged(collection,id,data,operation);
         com.friendbook.social.core.D1Client.changed(com.friendbook.social.core.D1Client.key(collection,id));
     }
-    private static void d1Mutation(String collection,String id,org.json.JSONObject body){
-        final String actor=Fb.uid();com.friendbook.social.core.D1Client.request(collection,id,"comments","PUT",body,null)
-            .addOnSuccessListener(data->{if(java.util.Objects.equals(actor,Fb.uid()))d1Changed(collection,id,data);})
-            .addOnFailureListener(error->{if(java.util.Objects.equals(actor,Fb.uid()))for(Handle h:new ArrayList<>(D1_HANDLES))if(h.active() && collection.equals(h.collection)&&id.equals(h.docId)){h.error="D1 change failed. Reopen comments to restore server state; no Firebase write was made.";h.emit();}});
+    private static final Set<List<String>> MUTATIONS=new HashSet<>();
+    private static void d1Mutation(String collection,String id,org.json.JSONObject body){d1Mutation(collection,id,body,null);}
+    private static void d1Mutation(String collection,String id,org.json.JSONObject body,Runnable failed){
+        final String actor=Fb.uid();
+        final List<String> key=java.util.Arrays.asList(actor,collection,id,body.optString("op"),body.optString("id"));
+        if(actor==null || id==null || id.isEmpty() || MUTATIONS.contains(key)
+                || !com.friendbook.social.core.InteractionCooldown.acquire(actor,"comment:"+key.toString())){
+            if(failed!=null)failed.run();return;
+        }
+        MUTATIONS.add(key);
+        com.friendbook.social.core.D1Client.request(collection,id,"comments","PUT",body,null)
+            .addOnSuccessListener(data->{
+                MUTATIONS.remove(key);
+                if(java.util.Objects.equals(actor,Fb.uid()))d1Changed(collection,id,data,body.optString("op"));
+            })
+            .addOnFailureListener(error->{
+                MUTATIONS.remove(key);
+                if(!java.util.Objects.equals(actor,Fb.uid()))return;
+                if(failed!=null)failed.run();
+                for(Handle h:new ArrayList<>(D1_HANDLES))if(h.active() && collection.equals(h.collection)&&id.equals(h.docId)){
+                    h.error="Comment change failed. Tap to retry.";h.emit();
+                }
+            });
     }
+
 
 
     public interface Listener {
         void onComments(List<Models.Comment> allComments, String pinnedCommentId);
     }
 
-    /** One latest-50 listener; older pages are explicit one-shot cursor reads. */
+    /** One latest-10 listener; older pages are explicit one-shot cursor reads. */
     public static class Handle {
         private final List<ListenerRegistration> regs=new ArrayList<>();
         private final Map<String,Models.Comment> latest=new LinkedHashMap<>(), older=new LinkedHashMap<>();
@@ -63,30 +89,98 @@ public class CommentsEngine {
         private Listener listener;
         private String pinned="", actor=Fb.uid();
         private final Set<String> deleted=new HashSet<>();
-        private boolean closed, loading, more=true, cursorReady;
-        private int legacyLoaded=50, visible=50;
-        private boolean d1Mode,loadedOlderD1;private String collection,docId,key,nextD1;
+        private boolean closed, paused, loading, more=true, cursorReady;
+        private long pausedAt;
+        public void pause(){pausedAt=android.os.SystemClock.elapsedRealtime();paused=true;pageAttempt++;loading=false;cancelConflictRetry();clearPageDeadline();}
+        public void resume(){
+            if(!active() || !paused)return;
+            boolean expired=android.os.SystemClock.elapsedRealtime()-pausedAt>=120_000L;
+            paused=false;
+            if(d1Mode && (!firstPageReady || expired))d1Page(true,firstPageReady);else emit();
+        }
+        private int legacyLoaded=10, visible=10;
+        private boolean d1Mode,loadedOlderD1,firstPageReady;private String collection,docId,key,nextD1;
         private long revision;
+        private boolean detailBundle,quietPage;
+        private String deltaCursor;
+        private Runnable accessDenied;
+        private static String cursorFor(Models.Comment comment) {
+            if(comment==null || comment.id==null || !comment.id.matches("[A-Za-z0-9_-]{1,128}") || comment.createdAt<=0)return null;
+            return android.util.Base64.encodeToString(new org.json.JSONArray()
+                    .put(comment.createdAt).put(comment.id).toString().getBytes(java.nio.charset.StandardCharsets.UTF_8),android.util.Base64.NO_WRAP);
+        }
+        public void publishCached() { emit(); }
+
+        private int pageAttempt;
+        private int conflictAttempts;
+        private Runnable conflictRetry;
+        private void cancelConflictRetry() {
+            if(conflictRetry!=null)pageHandler.removeCallbacks(conflictRetry);
+            conflictRetry=null;
+        }
+        private Runnable pageDeadline;
+        private final android.os.Handler pageHandler=new android.os.Handler(android.os.Looper.getMainLooper());
+        private void clearPageDeadline() {
+            if(pageDeadline!=null)pageHandler.removeCallbacks(pageDeadline);
+            pageDeadline=null;
+        }
         private final Set<String> pendingD1=new HashSet<>();
-        private final android.os.Handler d1PollHandler=new android.os.Handler(android.os.Looper.getMainLooper());
-        private final Runnable d1Poll=new Runnable(){@Override public void run(){
-            if(!active())return;
-            if(!loading)d1Page(true,true);
-            d1PollHandler.postDelayed(this,8000);
-        }};
         private void d1Page(boolean first){d1Page(first,false);}
         private void d1Page(boolean first,boolean background){
-            if(!active()||loading)return;loading=true;if(!background){error="";emit();}
-            String query=first||nextD1==null?null:"?before="+android.net.Uri.encode(nextD1);
+            if(!active()||paused||loading)return;
+            cancelConflictRetry();conflictAttempts=0;
+            d1PageAttempt(first,background);
+        }
+        private void d1PageAttempt(boolean first,boolean background){
+            if(!active()||paused||loading)return;conflictAttempts++;loading=true;quietPage=background;if(!background){error="";emit();}
+            if(!active())return;
+            final int attempt=++pageAttempt;
+            pageDeadline=()->{
+                if(!active() || attempt!=pageAttempt)return;
+                pageDeadline=null;pageAttempt++;loading=false;
+                if(!background || detailBundle){error="Comments are taking too long. Tap to retry.";emit();}
+            };
+            pageHandler.postDelayed(pageDeadline,15000L);
+            final boolean requestingDelta=first && detailBundle && deltaCursor!=null;
+            String query="?limit=10"+(requestingDelta?"&after="+android.net.Uri.encode(deltaCursor)
+                    :first||nextD1==null?"":"&before="+android.net.Uri.encode(nextD1));
+            if(detailBundle && first)query+="&includeReactions=1";
+            final long requestedAt=android.os.SystemClock.elapsedRealtime();
             final long requestedAtRevision=revision;
             com.friendbook.social.core.D1Client.request(collection,docId,"comments","GET",null,query).addOnSuccessListener(data->{
-                if(!active())return;loading=false;
+                if(!active() || attempt!=pageAttempt)return;
+                clearPageDeadline();loading=false;
                 org.json.JSONArray rows=data.optJSONArray("comments");if(rows==null){error="Invalid D1 response";emit();return;}
                 // A response started before a local mutation must not overwrite its result.
-                if(requestedAtRevision!=revision){if(!background)d1Page(first);return;}
+                if(requestedAtRevision!=revision){
+                    // Local ACKs must win, but immediate refetch-on-conflict can
+                    // sustain an unbounded GET chain while edits keep arriving.
+                    if(background && !detailBundle)return;
+                    if(conflictAttempts>=3){error="Comments changed while loading. Tap to retry.";emit();return;}
+                    loading=true;
+                    conflictRetry=()->{
+                        conflictRetry=null;
+                        if(!active())return;
+                        loading=false;d1PageAttempt(first,background);
+                    };
+                    pageHandler.postDelayed(conflictRetry,2_000L);
+                    return;
+                }
+                if(detailBundle && first){
+                    org.json.JSONArray totals=data.optJSONArray("reactions");
+                    if(totals!=null)D1Reactions.acceptDetailTotals(docId,totals,requestedAt);
+                    else D1Reactions.refreshDetailTotals(docId); // Compatibility with an older Worker.
+                }
                 try{Map<String,Models.Comment> received=new LinkedHashMap<>();
                     for(int i=0;i<rows.length();i++){Models.Comment c=fromD1(rows.getJSONObject(i),key);received.put(c.id,c);}
+                    if(requestingDelta && data.optBoolean("delta")) {
+                        for(Map.Entry<String,Models.Comment> item:received.entrySet())if(!pendingD1.contains(item.getKey()))latest.put(item.getKey(),item.getValue());
+                        visible=Math.max(visible,latest.size()+older.size());
+                        deltaCursor=data.isNull("next")?null:data.optString("next",null);
+                        error="";firstPageReady=true;pinned=data.optString("pinned");emit();return;
+                    }
                     if(first){
+                        deltaCursor=null;
                         // Replace the polled window, otherwise deleted/blocked comments stay forever.
                         // Keep optimistic unsent comments until their write resolves.
                         for(String id:new ArrayList<>(latest.keySet())) if(!pendingD1.contains(id)) older.remove(id);
@@ -95,23 +189,29 @@ public class CommentsEngine {
                             older.remove(entry.getKey());latest.put(entry.getKey(),entry.getValue());
                         }
                     }else older.putAll(received);
-                    if(!first){visible+=20;loadedOlderD1=true;}
+                    if(!first){visible+=10;loadedOlderD1=true;}
                     if(!first || !loadedOlderD1){nextD1=data.isNull("next")?null:data.optString("next",null);more=nextD1!=null;}
-                    error="";pinned=data.optString("pinned");emit();
+                    error="";if(first)firstPageReady=true;pinned=data.optString("pinned");emit();
                 }catch(Exception e){error="Invalid D1 response";emit();}
-            }).addOnFailureListener(e->{if(active()){loading=false;if(!background){error="D1 page unavailable. Tap to retry.";emit();}}});
+            }).addOnFailureListener(e->{
+                if(!active() || attempt!=pageAttempt)return;
+                clearPageDeadline();loading=false;
+                if(detailBundle && com.friendbook.social.core.D1Client.isAccessDenied(e) && accessDenied!=null){accessDenied.run();return;}
+                if(!background || detailBundle){error="D1 page unavailable. Tap to retry.";emit();}
+            });
         }
         public String error="";
         public void add(ListenerRegistration r) { if(r!=null) regs.add(r); }
         private boolean active() { return !closed && java.util.Objects.equals(actor,Fb.uid()); }
         public boolean hasMore() {
-            if(d1Mode)return more || !error.isEmpty();
+            if(d1Mode)return more || deltaCursor!=null || !error.isEmpty();
             Set<String> loaded=new HashSet<>(older.keySet()); loaded.addAll(latest.keySet()); loaded.removeAll(deleted);
             return more || legacyLoaded<legacy.size() || loaded.size()>visible;
         }
-        public boolean isLoading() { return loading; }
+        public boolean isLoading() { return (loading && !quietPage) || (!firstPageReady && error.isEmpty()); }
+        public boolean hasInitialPage() { return firstPageReady; }
         private void emit() {
-            if(!active()) return;
+            if(!active() || paused) return;
             Map<String,Models.Comment> all=new LinkedHashMap<>();
             for(int i=0;i<Math.min(legacyLoaded,legacy.size());i++) all.put(legacy.get(i).id,legacy.get(i));
             all.putAll(older); all.putAll(latest);
@@ -124,20 +224,41 @@ public class CommentsEngine {
             if(listener!=null) listener.onComments(result,pinned);
         }
         public void loadMore() {
-            if(!active() || loading || !hasMore()) return;
-            if(d1Mode){d1Page(nextD1==null);return;}
-            if(!more) { legacyLoaded+=50; visible+=50; emit(); return; }
+            if(!active() || paused || loading || !hasMore()) return;
+            if(d1Mode){d1Page(deltaCursor!=null || nextD1==null);return;}
+            if(!more) { legacyLoaded+=10; visible+=10; emit(); return; }
             if(!cursorReady || cursor==null) return;
             loading=true; error=""; emit();
-            query.startAfter(cursor).limit(50).get().addOnSuccessListener(page -> {
-                if(!active()) return; loading=false; visible+=50; legacyLoaded+=50;
-                more=page.size()==50;
+            query.startAfter(cursor).limit(10).get().addOnSuccessListener(page -> {
+                if(!active()) return; loading=false; visible+=10; legacyLoaded+=10;
+                more=page.size()==10;
                 if(!page.isEmpty()) cursor=page.getDocuments().get(page.size()-1);
                 for(DocumentSnapshot doc:page) { Models.Comment c=Models.Comment.fromDoc(doc); older.put(c.id,c); }
                 emit();
             }).addOnFailureListener(e -> { if(active()) { loading=false; error="Couldn't load older comments. Tap again to retry."; emit(); } });
         }
-        public void remove() { closed=true;d1PollHandler.removeCallbacks(d1Poll); for(ListenerRegistration reg:regs) reg.remove(); regs.clear(); }
+        public void remove() { closed=true;D1_HANDLES.remove(this);listener=null;cancelConflictRetry();clearPageDeadline();for(ListenerRegistration reg:regs) reg.remove(); regs.clear(); }
+    }
+
+    public static Handle watchPostDetail(String id,Models.Post bundled,Listener listener,Runnable denied) {
+        if(!d1("posts") || id.startsWith("sponsored_ad_"))return watch("posts",id,id,listener);
+        Handle handle=new Handle();handle.listener=listener;handle.accessDenied=denied;
+        handle.d1Mode=true;handle.detailBundle=true;handle.collection="posts";handle.docId=id;handle.key=id;
+        if(bundled!=null){
+            List<Models.Comment> preview=new ArrayList<>(bundled.detailPreview());
+            preview.removeIf(c->c==null || c.id==null || c.id.isEmpty());
+            preview.sort(java.util.Comparator.comparingLong((Models.Comment c)->c.createdAt).thenComparing(c->c.id));
+            for(Models.Comment c:preview)handle.latest.put(c.id,c);
+            if(!preview.isEmpty()){
+                handle.firstPageReady=true;handle.pinned=bundled.pinnedCommentId;
+                handle.deltaCursor=Handle.cursorFor(preview.get(preview.size()-1));
+                handle.nextD1=Handle.cursorFor(preview.get(0));
+                handle.more=handle.nextD1!=null && bundled.comments>=preview.size();
+            }
+        }
+        D1_HANDLES.add(handle);handle.add(()->D1_HANDLES.remove(handle));
+        handle.d1Page(true,handle.firstPageReady);
+        return handle;
     }
 
     public static Handle watch(String collection,String docId,String queryKey,Listener listener) {
@@ -146,7 +267,7 @@ public class CommentsEngine {
         if(d1(collection)){
             handle.d1Mode=true;handle.collection=collection;handle.docId=docId;handle.key=queryKey;
             D1_HANDLES.add(handle);handle.add(()->D1_HANDLES.remove(handle));handle.d1Page(true);
-            handle.d1PollHandler.postDelayed(handle.d1Poll,8000);return handle;
+            return handle;
         }
         DocumentReference parent=Fb.db().collection(collection).document(docId);
         handle.query=parent.collection("comments").orderBy("createdAt",com.friendbook.social.d1.documents.Query.Direction.DESCENDING);
@@ -157,7 +278,7 @@ public class CommentsEngine {
             handle.legacy.addAll(Models.Comment.parseEmbeddedComments(queryKey,doc.getData(),handle.pinned));
             handle.legacy.sort((x,y)->Long.compare(y.createdAt,x.createdAt)); handle.emit();
         });
-        handle.add(handle.query.limit(50).addSnapshotListener((page,error) -> {
+        handle.add(handle.query.limit(10).addSnapshotListener((page,error) -> {
             if(!handle.active()) return;
             if(page==null) { handle.error="Comments unavailable. Reopen to retry."; handle.emit(); return; }
             handle.older.putAll(handle.latest);
@@ -174,7 +295,7 @@ public class CommentsEngine {
             handle.latest.clear();
             for(DocumentSnapshot doc:page) { Models.Comment c=Models.Comment.fromDoc(doc); handle.latest.put(c.id,c); handle.deleted.remove(c.id); }
             if(!handle.cursorReady && !page.getMetadata().isFromCache() && !page.getMetadata().hasPendingWrites()) {
-                handle.cursorReady=true; handle.more=page.size()==50;
+                handle.cursorReady=true; handle.firstPageReady=true; handle.error=""; handle.more=page.size()==10;
                 if(!page.isEmpty()) handle.cursor=page.getDocuments().get(page.size()-1);
             }
             handle.emit();
@@ -205,6 +326,7 @@ public class CommentsEngine {
 
     public interface PostCallback {
         void onComplete(boolean success, String errorMessage);
+        default void onSaved(String commentId) { onComplete(true,null); }
     }
 
     /**
@@ -238,6 +360,9 @@ public class CommentsEngine {
             if (cb != null) cb.onComplete(false, "Not signed in");
             return null;
         }
+        if((text==null || text.trim().isEmpty()) && (mediaUrl==null || mediaUrl.isEmpty())){
+            if(cb!=null)cb.onComplete(false,"Write a comment first");return null;
+        }
         final String newId = d1(collection)?java.util.UUID.randomUUID().toString():Fb.db().collection("comments").document().getId();
         final long now = System.currentTimeMillis();
 
@@ -254,16 +379,19 @@ public class CommentsEngine {
         local.createdAt = now;
 
         if(d1(collection)){
-            org.json.JSONObject body=com.friendbook.social.core.D1Client.object("id",newId,"text",local.content,"mediaUrl",local.imageUrl,"parentId",local.parentId.isEmpty()?null:local.parentId,"mentions",new org.json.JSONArray(local.mentions));
+            org.json.JSONObject body=com.friendbook.social.core.D1Client.object("id",newId,"text",local.content,"mediaUrl",local.imageUrl,"parentId",local.parentId.isEmpty()?null:local.parentId,"mentions",new org.json.JSONArray(local.mentions),"notify",true);
             if(!D1Drafts.keep(com.friendbook.social.App.instance,me,collection,docId,body)){if(cb!=null)cb.onComplete(false,"Couldn't save draft. Nothing sent.");return null;}
             // Keep the optimistic comment in each active handle as well as the screen.
             // An in-flight page response must not erase it before the POST resolves.
             for(Handle h:new ArrayList<>(D1_HANDLES))if(h.active() && collection.equals(h.collection) && docId.equals(h.docId)){
                 h.revision++;h.pendingD1.add(local.id);h.deleted.remove(local.id);h.latest.put(local.id,local);
             }
+            D1Reactions.CommentBaseline baseline=D1Reactions.commentBaseline(collection,docId);
+            D1Drafts.sending(me,collection,docId,newId);
             com.friendbook.social.core.D1Client.request(collection,docId,"comments","POST",body,null).addOnSuccessListener(data->{
-                if(!java.util.Objects.equals(me,Fb.uid()))return;D1Drafts.ack(com.friendbook.social.App.instance,me,collection,docId,newId);d1Changed(collection,docId,data);if("posts".equals(collection)&&com.friendbook.social.core.Mentions.hasBulk(local.mentions))com.friendbook.social.push.FCMPush.bulkMention(docId,newId);if(cb!=null)cb.onComplete(true,null);
-            }).addOnFailureListener(e->{if(!java.util.Objects.equals(me,Fb.uid()))return;
+                D1Drafts.settled(me,collection,docId,newId);
+                D1Drafts.ack(com.friendbook.social.App.instance,me,collection,docId,newId);if(!java.util.Objects.equals(me,Fb.uid()))return;com.friendbook.social.core.Notify.pushCommittedEvents(data);d1Changed(collection,docId,data,"create",newId,baseline);if("posts".equals(collection)&&com.friendbook.social.core.Mentions.hasBulk(local.mentions))com.friendbook.social.push.FCMPush.bulkMention(docId,newId);if(cb!=null)cb.onSaved(newId);
+            }).addOnFailureListener(e->{D1Drafts.settled(me,collection,docId,newId);if(!java.util.Objects.equals(me,Fb.uid()))return;
                 d1Changed(collection,docId,com.friendbook.social.core.D1Client.object("removed",newId));if(cb!=null)cb.onComplete(false,"Comment not confirmed. Use Unsent comments to retry the same draft safely.");});
             return local;
         }
@@ -282,7 +410,7 @@ public class CommentsEngine {
         batch.update(parentRef,patch);
         batch.commit().addOnSuccessListener(v -> {
             if(me.equals(Fb.uid()) && "posts".equals(collection) && com.friendbook.social.core.Mentions.hasBulk(local.mentions)) com.friendbook.social.push.FCMPush.bulkMention(docId,newId);
-            if(cb!=null) cb.onComplete(true,null);
+            if(cb!=null) cb.onSaved(newId);
         }).addOnFailureListener(error -> { if(cb!=null) cb.onComplete(false,error.getMessage()); });
 
         return local;
@@ -291,9 +419,12 @@ public class CommentsEngine {
     /** Updates only the acting user reaction in canonical + moderation records. */
     public static void updateCommentReaction(String collection, String docId, Models.Comment c,
                                              String userId, String nextType) {
+        updateCommentReaction(collection,docId,c,userId,nextType,null);
+    }
+    public static void updateCommentReaction(String collection,String docId,Models.Comment c,String userId,String nextType,Runnable failed) {
         if (c == null || c.id == null || docId == null || docId.isEmpty()
                 || userId == null || userId.isEmpty()) return;
-        if(d1(collection)){if(java.util.Objects.equals(userId,Fb.uid()))d1Mutation(collection,docId,com.friendbook.social.core.D1Client.object("op","react","id",c.id,"type",nextType));return;}
+        if(d1(collection)){if(java.util.Objects.equals(userId,Fb.uid()))d1Mutation(collection,docId,com.friendbook.social.core.D1Client.object("op","react","id",c.id,"type",nextType),failed);return;}
         Object rxVal = nextType == null ? FieldValue.delete() : nextType;
         Object likedByVal = nextType == null ? FieldValue.arrayRemove(userId) : FieldValue.arrayUnion(userId);
 
