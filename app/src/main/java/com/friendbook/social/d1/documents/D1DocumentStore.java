@@ -430,7 +430,11 @@ public class D1DocumentStore {
     void cacheDoc(String path, DocumentSnapshot snap, String actor) {
         if (path != null && snap != null) {
             docCache.put(scopedCacheKey(actor, path), snap);
-            if(path.equals("users/"+actor) && snap.exists() && !snap.getMetadata().isFromCache())docCachedAt.put(actor,android.os.SystemClock.elapsedRealtime());
+            if(!snap.getMetadata().isFromCache()) {
+                long fetchedAt=android.os.SystemClock.elapsedRealtime();
+                docFetchedAt.put(scopedCacheKey(actor,path),fetchedAt);
+                if(path.equals("users/"+actor) && snap.exists())docCachedAt.put(actor,fetchedAt);
+            }
         }
     }
 
@@ -440,19 +444,12 @@ public class D1DocumentStore {
 
     private final java.util.Map<String,Long> docFetchedAt = new java.util.concurrent.ConcurrentHashMap<>();
 
-    private void markDocFetched(String path) {
-        if (path != null) docFetchedAt.put(scopedCacheKey(authenticatedUid(), path),
-                android.os.SystemClock.elapsedRealtime());
-    }
-
     /** True when a cached snapshot can be shown without touching the network. */
     private boolean serveFromCacheOnly(String path) {
-        long freshMs = ListenerPollingPolicy.cacheFreshMs(path);
-        if (freshMs <= 0 || getCachedDoc(path) == null) return false;
+        if (getCachedDoc(path) == null) return false;
         Long fetchedAt = docFetchedAt.get(scopedCacheKey(authenticatedUid(), path));
-        if (fetchedAt == null) return false;
-        long now = android.os.SystemClock.elapsedRealtime();
-        return now >= fetchedAt && now - fetchedAt < freshMs;
+        return fetchedAt!=null && ListenerPollingPolicy.documentCacheFresh(path,
+                android.os.SystemClock.elapsedRealtime(),fetchedAt);
     }
 
     void invalidateDoc(String path) {

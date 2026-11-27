@@ -50,6 +50,14 @@ public class ListenerPollingPolicyTest {
   assertEquals(0L, ListenerPollingPolicy.cacheFreshMs(null));
  }
 
+ @Test public void documentListenersReuseOnlyRecentlyNetworkFetchedSnapshots() {
+  assertTrue(ListenerPollingPolicy.documentCacheFresh("posts/p1",120_999L,1_000L));
+  assertFalse(ListenerPollingPolicy.documentCacheFresh("posts/p1",121_000L,1_000L));
+  assertFalse(ListenerPollingPolicy.documentCacheFresh("lives/r1",2_000L,1_000L));
+  assertFalse(ListenerPollingPolicy.documentCacheFresh("posts/p1",500L,1_000L));
+  assertFalse(ListenerPollingPolicy.documentCacheFresh("posts/p1",2_000L,0L));
+ }
+
  @Test public void lifecycleResumeReusesFreshListenerReadsButRefreshesExpiredOrLiveData() {
   assertFalse(ListenerPollingPolicy.foregroundRefreshDue("posts/p1", 50_000L, 1_000L));
   assertTrue(ListenerPollingPolicy.foregroundRefreshDue("posts/p1", 121_000L, 1_000L));

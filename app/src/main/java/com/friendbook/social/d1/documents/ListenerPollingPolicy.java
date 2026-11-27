@@ -15,6 +15,12 @@ final class ListenerPollingPolicy {
      * Live rooms and an open call room stay fresh; everything else is served
      * from cache and refreshed only on an explicit open, refresh or push.
      */
+    static boolean documentCacheFresh(String path,long nowElapsedMs,long fetchedAtElapsedMs) {
+        long age=cacheFreshMs(path);
+        return age>0 && fetchedAtElapsedMs>0 && nowElapsedMs>=fetchedAtElapsedMs
+                && nowElapsedMs-fetchedAtElapsedMs<age;
+    }
+
     static long cacheFreshMs(String path) {
         if (path == null) return 0;
         if (path.equals("lives") || path.startsWith("lives/")) return 0;
