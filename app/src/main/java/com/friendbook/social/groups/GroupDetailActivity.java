@@ -828,6 +828,9 @@ public class GroupDetailActivity extends Activity implements FeedAdapter.Host {
                 .setNegativeButton("Close", null)
                 .show();
 
+        final Map<String,TextView> requestNames=new LinkedHashMap<>();
+        final Map<String,ImageView> requestAvatars=new LinkedHashMap<>();
+        final String requestActor=Fb.uid();final int generation=screenGeneration;
         for (final String reqUid : new ArrayList<>(group.pendingMemberIds)) {
             final LinearLayout row = Ui.row(this);
             row.setGravity(Gravity.CENTER_VERTICAL);
@@ -866,14 +869,16 @@ public class GroupDetailActivity extends Activity implements FeedAdapter.Host {
             row.addView(ok);
             row.addView(no, nlp);
             list.addView(row);
-
-            Fb.getUser(reqUid).addOnSuccessListener(u -> {
-                if (u != null && !isFinishing()) {
-                    nm.setText(u.displayName);
-                    Ui.avatar(this, av, u.photoUrl);
-                }
-            });
+            requestNames.put(reqUid,nm);requestAvatars.put(reqUid,av);
         }
+        com.friendbook.social.core.UserBatchLookup.load(new ArrayList<>(requestNames.keySet()),users->{
+            if(generation!=screenGeneration || !java.util.Objects.equals(requestActor,Fb.uid()) || isFinishing())return;
+            for(Map.Entry<String,TextView> entry:requestNames.entrySet()){
+                Models.User user=users.get(entry.getKey());if(user==null)continue;
+                entry.getValue().setText(user.displayName);
+                ImageView avatar=requestAvatars.get(entry.getKey());if(avatar!=null)Ui.avatar(this,avatar,user.photoUrl);
+            }
+        });
     }
 
     private void showModerateGroupPostsDialog() {
@@ -965,6 +970,8 @@ public class GroupDetailActivity extends Activity implements FeedAdapter.Host {
                 .setView(sv)
                 .setNegativeButton("Close", null)
                 .show();
+        final Map<String,TextView> bannedNames=new LinkedHashMap<>();
+        final String actor=Fb.uid();final int generation=screenGeneration;
         for (final String bUid : new ArrayList<>(group.bannedMemberIds)) {
             final LinearLayout row = Ui.row(this);
             row.setGravity(Gravity.CENTER_VERTICAL);
@@ -981,8 +988,14 @@ public class GroupDetailActivity extends Activity implements FeedAdapter.Host {
             });
             row.addView(unban);
             list.addView(row);
-            Fb.getUser(bUid).addOnSuccessListener(u -> { if (u != null) nm.setText(u.displayName); });
+            bannedNames.put(bUid,nm);
         }
+        com.friendbook.social.core.UserBatchLookup.load(new ArrayList<>(bannedNames.keySet()),users->{
+            if(generation!=screenGeneration || !java.util.Objects.equals(actor,Fb.uid()) || isFinishing())return;
+            for(Map.Entry<String,TextView> entry:bannedNames.entrySet()){
+                Models.User user=users.get(entry.getKey());if(user!=null)entry.getValue().setText(user.displayName);
+            }
+        });
     }
 
     private void showGroupSettingsDialog() {
