@@ -7,6 +7,7 @@ import { contentReadAllowed } from './cloudflare/document-policy.js';
 import { uploadVideo, uploadPhoto, uploadPhoneVideo } from './cloudflare/video-r2.js';
 import { androidRelease } from './cloudflare/android-release.js';
 import { interactions } from './cloudflare/interactions.js';
+import { scanUploadMedia } from './cloudflare/content-safety.js';
 import { appDocuments, requestAccountReads, saveProfileProjection } from './cloudflare/app-documents.js';
 import { firestoreDocuments, readProfileMutationSnapshot } from './cloudflare/firestore-documents.js';
 import { fcmGateway, pushIncomingCall } from './cloudflare/fcm-push.js';
@@ -81,6 +82,7 @@ export function createWorker(verify = verifyFirebaseToken) {
       const phoneVideo = /^\/v1\/videos\/(preview|full)$/.exec(path);
       const video = path === '/v1/videos' || Boolean(phoneVideo);
       const photo = path === '/v1/photos';
+      const safety = path === '/v1/safety/scan';
       const firestore = path === '/v1/chat/call' || path === '/v1/firestore/friendship-facts' || path === '/v1/firestore/referral-status' || path === '/v1/firestore/claim-referral' || path === '/v1/live/pk' || path === '/v1/firestore/document' || path === '/v1/firestore/query' || path === '/v1/firestore/profile-bootstrap'
         || path === '/v1/firestore/batch' || path === '/v1/firestore/transaction' || path === '/v1/firestore/count'
         || path === '/v1/admin/recover-social' || path === '/v1/admin/moderation' || path === '/v1/admin/broadcast' || path === '/v1/firestore/story-engagement';
@@ -90,7 +92,7 @@ export function createWorker(verify = verifyFirebaseToken) {
       // Real view counters live in Cloudflare D1 (Firebase is auth only, never view data).
       const viewsMatch = /^\/v1\/views\/(posts|reels)\/([^/]+)$/.exec(path);
       const views = path === '/v1/views' || Boolean(viewsMatch);
-      if (path !== '/health' && path !== '/health/r2' && path !== '/v1/me' && !engagement && !video && !photo && !docs && !views && !firestore && !fcm && !live && !callMedia) return json({ error: 'Not found' }, 404);
+      if (path !== '/health' && path !== '/health/r2' && path !== '/v1/me' && !engagement && !video && !photo && !safety && !docs && !views && !firestore && !fcm && !live && !callMedia) return json({ error: 'Not found' }, 404);
       if ((path === '/health' || path === '/health/r2') && request.method !== 'GET') return json({ error: 'Method not allowed' }, 405);
       if (path === '/v1/me' && request.method !== 'GET' && request.method !== 'PUT') return json({ error: 'Method not allowed' }, 405);
       if (path === '/health/r2') {
@@ -144,7 +146,7 @@ export function createWorker(verify = verifyFirebaseToken) {
         } catch { return json({error:'Account status unavailable'},503); }
       }
       if (suspended && ((engagement && engagement[3]==='comments' && request.method!=='GET')
-          || ((video || photo) && ['POST','PUT'].includes(request.method)) || (live && live[2]!=='watch'))) return json({error:'Account suspended'},403);
+          || ((video || photo) && ['POST','PUT'].includes(request.method)) || (safety && request.method==='POST') || (live && live[2]!=='watch'))) return json({error:'Account suspended'},403);
       if (callMedia) {
         if (suspended) return json({error:'Account suspended'},403);
         const [,chat,call]=callMedia;
@@ -152,6 +154,7 @@ export function createWorker(verify = verifyFirebaseToken) {
         return relay.fetch(new Request(`https://call.internal/?${new URLSearchParams({chat,call,uid})}`, {headers:request.headers}));
       }
       if (live) return openLiveRelay(request,env,uid,live[1],live[2]);
+      if (safety) return scanUploadMedia(request,env);
       if (phoneVideo) return uploadPhoneVideo(request, env, uid, phoneVideo[1]);
       if (video) return uploadVideo(request, env, uid);
       if (photo) return uploadPhoto(request, env, uid);

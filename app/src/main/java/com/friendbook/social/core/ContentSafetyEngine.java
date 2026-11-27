@@ -191,11 +191,13 @@ public final class ContentSafetyEngine {
             return analyzeVideoUri(ctx, uri);
         } else {
             Bitmap bmp = decodeSampledBitmap(ctx, uri, 96);
-            // Do not let unreadable media bypass pre-upload safety scanning.
+            // Never treat an unreadable/unsupported upload as verified safe. Upload callers
+            // must retry with a decodable image rather than silently bypassing the scan.
             if (bmp == null) return Verdict.block("scan_unavailable",
                     "Could not scan this photo safely. Please choose another image and try again.");
             try {
-                return analyzeBitmap(bmp);
+                Verdict local = analyzeBitmap(bmp);
+                return local.unsafe ? local : CloudflareContentSafety.scan(java.util.Collections.singletonList(bmp));
             } finally {
                 try { bmp.recycle(); } catch (Throwable ignored) {}
             }
@@ -205,6 +207,7 @@ public final class ContentSafetyEngine {
     /** Multi-frame video visual safety scanner using MediaMetadataRetriever. */
     private static Verdict analyzeVideoUri(Context ctx, Uri uri) {
         MediaMetadataRetriever mmr = new MediaMetadataRetriever();
+        java.util.ArrayList<Bitmap> aiFrames = new java.util.ArrayList<>(4);
         try {
             mmr.setDataSource(ctx, uri);
             String durStr = mmr.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION);
@@ -212,7 +215,7 @@ public final class ContentSafetyEngine {
             if (durStr != null) {
                 try { durMs = Math.max(1000L, Long.parseLong(durStr)); } catch (NumberFormatException ignored) {}
             }
-            // More evenly spaced samples reduce the chance of missing short explicit segments.
+            // Sample more evenly so short explicit segments are less likely to slip between keyframes.
             double[] fracs = {0.05, 0.13, 0.21, 0.29, 0.37, 0.45, 0.53, 0.61, 0.69, 0.77, 0.85, 0.93};
             int unsafeFrames = 0;
             int decodedFrames = 0;
@@ -226,10 +229,12 @@ public final class ContentSafetyEngine {
                     Bitmap small = Bitmap.createScaledBitmap(frame, 96, 96, true);
                     Verdict v = analyzeBitmap(small);
                     if (small != frame) small.recycle();
+                    if (!v.unsafe && aiFrames.size() < 4 && (decodedFrames == 1 || decodedFrames % 3 == 1))
+                        aiFrames.add(Bitmap.createScaledBitmap(frame, 256, 256, true));
                     if (v.unsafe) {
                         unsafeFrames++;
                         if (firstHit == null) firstHit = v;
-                        // A single positive unsafe frame is sufficient to stop publication.
+                        // One positively classified keyframe is enough to stop publication.
                         if (unsafeFrames >= 1) return firstHit;
                     }
                 } finally {
@@ -238,11 +243,12 @@ public final class ContentSafetyEngine {
             }
             if (decodedFrames == 0) return Verdict.block("scan_unavailable",
                     "Could not inspect this video. Please re-export or choose another video and try again.");
-            return Verdict.safe();
+            return CloudflareContentSafety.scan(aiFrames);
         } catch (Throwable ignored) {
             return Verdict.block("scan_unavailable",
                     "Could not scan this video safely. Please choose another video and try again.");
         } finally {
+            for (Bitmap frame : aiFrames) try { frame.recycle(); } catch (Throwable ignored) {}
             try { mmr.release(); } catch (Throwable ignored) {}
         }
     }
