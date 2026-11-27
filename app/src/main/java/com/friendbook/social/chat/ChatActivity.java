@@ -775,7 +775,7 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
     /** Dispatch receipts before rendering; only the foreground open conversation, no history scan. */
     private void markVisibleReceipts(){
         String me=Fb.uid();if(!chatVisible || me==null || !me.equals(messageActor) || messageSnapshots.isEmpty())return;
-        WriteBatch batch=Fb.db().batch();List<String> claimed=new ArrayList<>();Set<String> hidden=hiddenMsgs();
+        WriteBatch batch=null;List<String> claimed=new ArrayList<>();Set<String> hidden=hiddenMsgs();
         final boolean markSeen=Prefs.readReceipts(this);
         for(Models.Message m:messageSnapshots.values()){
             if(!me.equals(m.receiverId) || m.isDeleted || hidden.contains(m.id) || receiptInFlight.contains(m.id) || receiptFailed.contains(m.id))continue;
@@ -783,6 +783,7 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
             Boolean confirmed=confirmedReceipts.get(m.id);
             if(confirmed!=null && (confirmed || !markSeen))continue;
             Map<String,Object> patch=Fb.map("isDelivered",true);if(markSeen)patch.put("isSeen", true);
+            if(batch==null)batch=Fb.db().batch();
             batch.update(Fb.db().collection("chats").document(chatId).collection("messages").document(m.id),patch);
             receiptInFlight.add(m.id);claimed.add(m.id);
         }
@@ -791,6 +792,7 @@ public class ChatActivity extends Activity implements MessagesAdapter.Actions {
         // this user's unread counter is positive.
         if(claimed.isEmpty() && unreadResetOnce)return;
         if(claimed.isEmpty() && currentUnreadForMe<=0)return;
+        if(batch==null)batch=Fb.db().batch();
         unreadResetOnce=true;
         batch.update(Fb.db().collection("chats").document(chatId),com.friendbook.social.d1.documents.FieldPath.of("unreadCount",me),0);
         batch.commit().addOnCompleteListener(done->{
