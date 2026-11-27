@@ -734,7 +734,7 @@ public class CreatePostActivity extends Activity {
     }
 
     private void loadForEdit() {
-        Fb.db().collection("posts").document(editId).getCachedOrFetch(false, 120_000L).addOnSuccessListener(d -> {
+        Fb.db().collection("posts").document(editId).getCachedOrFetch(120_000L).addOnSuccessListener(d -> {
             if (!d.exists()) { Ui.toast(this, "Post not found"); finish(); return; }
             com.friendbook.social.core.Mentions.restore(text, d.getString("content"), com.friendbook.social.core.Mentions.read(d.get("mentions")));
             String f = d.getString("feeling");
