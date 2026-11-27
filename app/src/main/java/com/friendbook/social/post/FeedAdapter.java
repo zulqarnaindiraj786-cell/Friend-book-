@@ -1475,7 +1475,9 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         boolean hideCounts = Prefs.hideReactionCounts(c)
                 || (Fb.me != null && Fb.me.hideReactionCounts);
         boolean iReacted = mine != null && !mine.isEmpty();
-        int effectiveTotal = iReacted ? Math.max(1, total) : Math.max(0, total);
+        int embeddedReactionCount = p.reactionsMap == null ? 0 : p.reactionsMap.size();
+        int knownTotal = Math.max(Math.max(0, total), embeddedReactionCount);
+        int effectiveTotal = iReacted ? Math.max(1, knownTotal) : knownTotal;
 
         // 1. Separate Total Count Summary Row above the buttons:
         //    Shows total count ("1", "5", or "You and 4 others") separately from the user's own reaction button!
@@ -1538,8 +1540,9 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         // 2. Right clickable comments & shares summary -> opens PostDetailActivity (All comments)!
         if (vh.commentsSummary != null) {
             StringBuilder right = new StringBuilder();
-            if (p.comments > 0) right.append(Format.count(p.comments))
-                    .append(p.comments == 1 ? " comment" : " comments");
+            int visibleCommentCount = Math.max(p.comments, p.inlineComments == null ? 0 : p.inlineComments.size());
+            if (visibleCommentCount > 0) right.append(Format.count(visibleCommentCount))
+                    .append(visibleCommentCount == 1 ? " comment" : " comments");
             if (p.shares > 0) {
                 if (right.length() > 0) right.append(" · ");
                 right.append(Format.count(p.shares)).append(p.shares == 1 ? " share" : " shares");
@@ -1549,7 +1552,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             vh.commentsSummary.setOnClickListener(v -> { if (host != null) host.openComments(p); });
         }
         if (vh.summaryRow != null) {
-            boolean anySummary = effectiveTotal > 0 || p.comments > 0 || p.shares > 0;
+            boolean anySummary = effectiveTotal > 0 || Math.max(p.comments, p.inlineComments == null ? 0 : p.inlineComments.size()) > 0 || p.shares > 0;
             vh.summaryRow.setVisibility(anySummary ? View.VISIBLE : View.GONE);
         }
 

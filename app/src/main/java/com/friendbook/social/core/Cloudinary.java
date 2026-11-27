@@ -240,8 +240,10 @@ public class Cloudinary {
             if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null;
 
             boolean slow2g = FastCache.isSlow2G(ctx) || Prefs.dataSaver(ctx);
-            int maxDim = slow2g ? 720 : 1080;
-            int quality = slow2g ? 60 : 78;
+            // Upload target: approximately 100–150 KB while retaining a social-feed
+            // resolution. Only reduce dimensions modestly if quality tuning alone cannot fit.
+            int maxDim = slow2g ? 960 : 1440;
+            int quality = slow2g ? 76 : 84;
 
             int sample = 1;
             int w = bounds.outWidth, h = bounds.outHeight;
@@ -268,10 +270,28 @@ public class Cloudinary {
                 bmp = scaled;
             }
 
-            ByteArrayOutputStream bos = new ByteArrayOutputStream(64 * 1024);
-            bmp.compress(Bitmap.CompressFormat.JPEG, quality, bos);
+            byte[] compressed = null;
+            // Tune JPEG quality first (no dimension loss), then make one gentle
+            // downscale if needed. Very small originals are never enlarged.
+            for (int q = quality; q >= 58; q -= 6) {
+                ByteArrayOutputStream bos = new ByteArrayOutputStream(64 * 1024);
+                if (!bmp.compress(Bitmap.CompressFormat.JPEG, q, bos)) continue;
+                compressed = bos.toByteArray();
+                if (compressed.length <= 150_000) break;
+            }
+            if (compressed != null && compressed.length > 150_000
+                    && Math.max(bmp.getWidth(), bmp.getHeight()) > 960) {
+                float ratio = 960f / Math.max(bmp.getWidth(), bmp.getHeight());
+                Bitmap smaller = Bitmap.createScaledBitmap(bmp,
+                        Math.max(1, Math.round(bmp.getWidth() * ratio)),
+                        Math.max(1, Math.round(bmp.getHeight() * ratio)), true);
+                if (smaller != bmp) bmp.recycle();
+                bmp = smaller;
+                ByteArrayOutputStream bos = new ByteArrayOutputStream(64 * 1024);
+                bmp.compress(Bitmap.CompressFormat.JPEG, 70, bos);
+                compressed = bos.toByteArray();
+            }
             bmp.recycle();
-            byte[] compressed = bos.toByteArray();
             Prefs.recordBytes(ctx, compressed.length, Math.max(0L, 1_800_000L - compressed.length));
             return compressed;
         } catch (Throwable t) {
