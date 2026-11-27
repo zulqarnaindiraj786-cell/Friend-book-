@@ -15,7 +15,10 @@ public final class D1Reactions {
  private static final android.os.Handler MAIN=new android.os.Handler(android.os.Looper.getMainLooper());
  private static final android.util.LruCache<String,JSONObject> CACHE=new android.util.LruCache<>(512);
  private static final android.util.LruCache<String,Long> FETCHED_AT=new android.util.LruCache<>(512);
- private static final long REFRESH_MS=com.friendbook.social.core.FeedReadPolicy.REUSE_MS;
+ // Reactions/comments summaries are read-only and cached by actor/resource.
+ // Keep them warm longer than the document feed; local mutations invalidate
+ // immediately, while remote totals may lag by at most five minutes.
+ private static final long REFRESH_MS=300_000L;
  private static final android.util.LruCache<String,java.lang.ref.WeakReference<Models.Post>> POSTS=new android.util.LruCache<>(512);
  private static final Set<String> LOADING=new HashSet<>(),FAILED=new HashSet<>(),WRITING=new HashSet<>();
  private static final Set<String> UNCONFIRMED=new HashSet<>();
