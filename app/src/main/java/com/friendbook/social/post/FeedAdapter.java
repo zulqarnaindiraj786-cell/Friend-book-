@@ -189,7 +189,7 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         }
         for(List<String> chunk:Ui.chunks(ids,10)) {
             Fb.db().collection("users").whereIn(com.friendbook.social.d1.documents.FieldPath.documentId(),chunk)
-                    .limit(10).get().addOnSuccessListener(loaded->{
+                    .limit(10).getCachedOrFetch(false, 300_000L).addOnSuccessListener(loaded->{
                 if(generation!=authorReadGeneration || !java.util.Objects.equals(actor, Fb.uid())
                         || activity.isFinishing() || activity.isDestroyed())return;
                 for(com.friendbook.social.d1.documents.DocumentSnapshot doc:loaded)

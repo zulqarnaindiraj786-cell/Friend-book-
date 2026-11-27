@@ -1406,7 +1406,7 @@ public class AdsConfig {
             return;
         }
         try {
-            Fb.db().collection("posts").document(docId).get()
+            Fb.db().collection("posts").document(docId).getCachedOrFetch(false, 120_000L)
                     .addOnSuccessListener(snap -> {
                         scopeAdSocial();
                         if (!AD_SOCIAL_READS.finish(Fb.uid(), attempt, true, android.os.SystemClock.elapsedRealtime())) return;
