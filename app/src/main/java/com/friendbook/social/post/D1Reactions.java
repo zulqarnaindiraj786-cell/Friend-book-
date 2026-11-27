@@ -200,7 +200,7 @@ public final class D1Reactions {
  private static void loadPost(Context context,Models.Post post,boolean requireComments,Runnable render){
   if(post==null || post.id==null)return;
   hydrate(post);
-  fetch(context.getApplicationContext(),"posts",post.id,requireComments,()->{hydrate(post);render.run();});
+  fetch(context.getApplicationContext(),"posts",post.id,true,requireComments,()->{hydrate(post);render.run();});
  }
  public static void hydrate(Models.Post post){
   scope();POSTS.put(D1Client.key("posts",post.id),new java.lang.ref.WeakReference<>(post));
