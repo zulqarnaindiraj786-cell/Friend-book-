@@ -31,7 +31,7 @@ public class ReactionMutationSummaryFreshnessTest {
    D1Reactions.tapLike(RuntimeEnvironment.getApplication(),"posts","mutation-age",()->{});Shadows.shadowOf(Looper.getMainLooper()).idle();
    D1Reactions.loadPost(RuntimeEnvironment.getApplication(),p,()->{});Shadows.shadowOf(Looper.getMainLooper()).idle();
    d.verify(()->D1Client.request("posts","mutation-age","reactions","GET",null,null),times(1));assertEquals(3,p.comments);
-   Shadows.shadowOf(Looper.getMainLooper()).idleFor(189,TimeUnit.SECONDS);
+   Shadows.shadowOf(Looper.getMainLooper()).idleFor(299,TimeUnit.SECONDS);
    D1Reactions.loadPost(RuntimeEnvironment.getApplication(),p,()->{});Shadows.shadowOf(Looper.getMainLooper()).idle();
    d.verify(()->D1Client.request("posts","mutation-age","reactions","GET",null,null),times(1));assertEquals(3,p.comments);
    Shadows.shadowOf(Looper.getMainLooper()).idleFor(2,TimeUnit.SECONDS);

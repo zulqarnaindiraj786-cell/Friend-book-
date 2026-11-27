@@ -69,7 +69,7 @@ public class ReactionPartialSummaryFreshnessTest {
    D1Reactions.loadPost(RuntimeEnvironment.getApplication(),post,()->{});Shadows.shadowOf(Looper.getMainLooper()).idle();
    client.verify(()->D1Client.request("posts","partial-age","reactions","GET",null,null),times(1));
    assertEquals(3,post.comments);assertEquals(1,post.likes);
-   Shadows.shadowOf(Looper.getMainLooper()).idleFor(189,TimeUnit.SECONDS);
+   Shadows.shadowOf(Looper.getMainLooper()).idleFor(299,TimeUnit.SECONDS);
    D1Reactions.loadPost(RuntimeEnvironment.getApplication(),post,()->{});Shadows.shadowOf(Looper.getMainLooper()).idle();
    client.verify(()->D1Client.request("posts","partial-age","reactions","GET",null,null),times(1));assertEquals(3,post.comments);
    Shadows.shadowOf(Looper.getMainLooper()).idleFor(2,TimeUnit.SECONDS);
