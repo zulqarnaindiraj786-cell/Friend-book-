@@ -127,12 +127,13 @@ public final class D1Reactions {
    long now=android.os.SystemClock.elapsedRealtime();
    Long reactionsFetched=REACTION_FETCHED_AT.get(key);
    boolean reactionsFresh=reactionsFetched!=null && now-reactionsFetched<REFRESH_MS;
-   // A reaction-only response cannot satisfy the feed's comment counter. Keep
-   // it useful for likes, but fetch a full summary until count+preview exist.
-   boolean hasCommentSummary=cached.has("comments") && cached.optJSONArray("preview")!=null;
+   // A reaction-only response cannot satisfy the feed's comment counter when
+   // no count is cached. Preserve the independent reaction freshness window
+   // for rows that already have a comment count; don't turn every bind into a
+   // full-summary read just because an older cache lacks a preview.
+   if(reactionsFresh && cached.has("comments"))return;
    Long summaryFetched=FETCHED_AT.get(key);
-   boolean summaryFresh=hasCommentSummary && summaryFetched!=null && now-summaryFetched<REFRESH_MS;
-   if(reactionsFresh && summaryFresh)return;
+   if(cached.has("comments") && summaryFetched!=null && now-summaryFetched<REFRESH_MS)return;
   }if(FAILED.contains(key)||WRITING.contains(key))return;
   WAITERS.computeIfAbsent(key,k->new ArrayList<>()).add(ready);
   if(LOADING.contains(key))return;
