@@ -2065,6 +2065,15 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         }
     }
 
+    static boolean isDuplicateFriendRequest(Throwable error) {
+        for (Throwable current=error;current!=null;current=current.getCause()) {
+            if (current instanceof com.friendbook.social.d1.documents.D1DocumentStoreException
+                    && ((com.friendbook.social.d1.documents.D1DocumentStoreException)current).getCode()
+                    == com.friendbook.social.d1.documents.D1DocumentStoreException.Code.ALREADY_EXISTS) return true;
+        }
+        return false;
+    }
+
     private void sendQuickFriendRequest(Models.User target, TextView btn) {
         String me = Fb.uid();
         if (me == null || target == null || target.uid == null) return;
@@ -2075,30 +2084,26 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                 "fromUserPhotoUrl", Fb.myPhoto(),
                 "status", "pending",
                 "createdAt", FieldValue.serverTimestamp());
+        // The Worker atomically rejects duplicate pending requests. Avoid a
+        // preflight SELECT here; disabling the button also prevents local double taps.
         btn.setEnabled(false);
-        Fb.db().collection("friend_requests").whereEqualTo("fromUid", me)
-                .whereEqualTo("toUid", target.uid).whereEqualTo("status", "pending").limit(1).get()
-                .addOnSuccessListener(page -> {
-                    if (!me.equals(Fb.uid())) return;
-                    if (page.getMetadata().isFromCache()) {
-                        btn.setEnabled(true);
-                        Ui.toast(activity, "Reconnect to check requests");
-                    } else if (!page.isEmpty()) {
-                        btn.setText("Requested ✓");
-                    } else {
-                        Fb.db().collection("friend_requests").add(req).addOnSuccessListener(x -> {
-                            if (!me.equals(Fb.uid())) return;
-                            btn.setText("Requested ✓");
-                            btn.setBackground(Ui.round(activity, Ui.inputBg(activity), 12));
-                            btn.setTextColor(Ui.sub(activity));
-                            Notify.send(target.uid, "friend_request", "sent you a friend request", "");
-                        }).addOnFailureListener(error -> {
-                            if (me.equals(Fb.uid())) { btn.setEnabled(true); Ui.toast(activity, "Couldn't send request"); }
-                        });
-                    }
-                }).addOnFailureListener(error -> {
-                    if (me.equals(Fb.uid())) { btn.setEnabled(true); Ui.toast(activity, "Couldn't check request"); }
-                });
+        Fb.db().collection("friend_requests").add(req).addOnSuccessListener(x -> {
+            if (!me.equals(Fb.uid())) return;
+            btn.setText("Requested ✓");
+            btn.setBackground(Ui.round(activity, Ui.inputBg(activity), 12));
+            btn.setTextColor(Ui.sub(activity));
+            Notify.send(target.uid, "friend_request", "sent you a friend request", "");
+        }).addOnFailureListener(error -> {
+            if (!me.equals(Fb.uid())) return;
+            if (isDuplicateFriendRequest(error)) {
+                btn.setText("Requested ✓");
+                btn.setBackground(Ui.round(activity, Ui.inputBg(activity), 12));
+                btn.setTextColor(Ui.sub(activity));
+            } else {
+                btn.setEnabled(true);
+                Ui.toast(activity, "Couldn't send request");
+            }
+        });
     }
 
     // ================= ViewHolders (views built in constructors) =================

@@ -16,6 +16,14 @@ import static org.mockito.Mockito.*;
 @org.junit.runner.RunWith(RobolectricTestRunner.class)
 @org.robolectric.annotation.Config(sdk=28,application=android.app.Application.class,manifest=org.robolectric.annotation.Config.NONE)
 public class FeedAuthorBatchDemandTest {
+ @Test public void duplicateFriendRequestConflictsAreHandledWithoutPreflightReads() {
+  com.friendbook.social.d1.documents.D1DocumentStoreException duplicate = new com.friendbook.social.d1.documents.D1DocumentStoreException(
+          com.friendbook.social.d1.documents.D1DocumentStoreException.Code.ALREADY_EXISTS,"ALREADY_EXISTS");
+  assertTrue(FeedAdapter.isDuplicateFriendRequest(new RuntimeException("wrapped",duplicate)));
+  assertFalse(FeedAdapter.isDuplicateFriendRequest(new com.friendbook.social.d1.documents.D1DocumentStoreException(
+          com.friendbook.social.d1.documents.D1DocumentStoreException.Code.UNAVAILABLE,"unavailable")));
+ }
+
  @Test public void tenMissingAuthorsUseOneQueryAndRepeatedSubmissionDoesNotRetry() throws Exception {
   try(MockedStatic<Fb> fb=mockStatic(Fb.class);MockedStatic<FastCache> cache=mockStatic(FastCache.class);
       MockedStatic<AdsConfig> ads=mockStatic(AdsConfig.class);MockedStatic<ConsentManager> consent=mockStatic(ConsentManager.class)) {
