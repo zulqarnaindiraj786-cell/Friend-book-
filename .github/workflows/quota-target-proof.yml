@@ -3,6 +3,7 @@
 # Refresh the account-wide counters; no production load or deployment.
 name: Strict quota target verification (not a guarantee)
 on:
+  workflow_dispatch:
   push:
     branches: [arena/b52bc74d-friend-book]
     paths:
