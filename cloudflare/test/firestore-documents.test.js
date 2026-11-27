@@ -13,6 +13,8 @@ const resourcesSchema = readFileSync(new URL('../migrations/0003_additive_intera
 const schema = readFileSync(new URL('../migrations/0014_additive_firestore_documents.sql', import.meta.url), 'utf8');
 const socialGuardSchema = readFileSync(new URL('../migrations/0018_social_guards.sql', import.meta.url), 'utf8');
 const appSchema = readFileSync(new URL('../migrations/0011_additive_app_documents.sql', import.meta.url), 'utf8');
+const requestStatusSchema = readFileSync(new URL('../migrations/0049_friend_request_status_indexes.sql', import.meta.url), 'utf8');
+const requestPageSchema = readFileSync(new URL('../migrations/0112_friend_request_page_indexes.sql', import.meta.url), 'utf8');
 const mirrorMigration = readFileSync(new URL('../migrations/0017_sync_firestore_app_documents.sql', import.meta.url), 'utf8');
 
 test('Firestore-compatible D1 endpoint accepts Firebase UIDs containing x', async () => {
@@ -337,6 +339,38 @@ test('Android batch operations persist chat messages and apply update and delete
   res=await post([{op:'delete',path:'chats/room/messages/m1'}]);
   assert.equal(res.status,200);
   assert.equal(sql.prepare('SELECT path FROM friendbook_cf_firestore_documents WHERE path=?').get('chats/room/messages/m1'),undefined);
+  sql.close();
+});
+
+test('friend request newest-first pages seek the status index and avoid reading the full request history', async () => {
+  const sql=new DatabaseSync(':memory:');
+  sql.exec(resourcesSchema);sql.exec(appSchema);sql.exec(schema);sql.exec(socialGuardSchema);
+  sql.exec(requestStatusSchema);sql.exec(requestPageSchema);
+  const insert=sql.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES(?,?,?,?,?,?,?,?)');
+  for(let i=1;i<=120;i++){
+    const id=`r${String(i).padStart(3,'0')}`,millis=1_700_000_000_000+i;
+    insert.run(`friend_requests/${id}`,'friend_requests','friend_requests',id,'sender',JSON.stringify({fromUid:`sender${i}`,toUid:'viewer',status:'pending',createdAt:{__type:'timestamp',millis}}),millis,millis);
+  }
+  const db={prepare(query){const stmt=sql.prepare(query);return{bind(...args){return{
+    run:async()=>stmt.run(...args),all:async()=>({results:stmt.all(...args)}),first:async()=>stmt.get(...args)||null,
+  };}};},async batch(statements){return statements.map(statement=>statement.run());}};
+  const app=createWorker(async()=> 'viewer'),env={DB:db,FIREBASE_PROJECT_ID:'friendbook-test'};
+  const page=async(cursor)=>{
+    const spec={parent:'friend_requests',filters:[{field:'toUid',op:'==',value:'viewer'},{field:'status',op:'==',value:'pending'}],
+      orderBy:[{field:'createdAt',direction:'DESCENDING'}],limit:10,...(cursor?{startAfter:cursor}:{})};
+    const response=await app.fetch(new Request('https://example.test/v1/firestore/query',{method:'POST',headers:{authorization:'Bearer token','content-type':'application/json'},body:JSON.stringify(spec)}),env);
+    assert.equal(response.status,200,await response.clone().text());return (await response.json()).documents;
+  };
+  const first=await page(),last=first.at(-1);
+  assert.equal(first.length,10);assert.equal(first[0].id,'r120');assert.equal(last.id,'r111');
+  const second=await page([{__type:'timestamp',millis:last.data.createdAt.millis},last.id]);
+  assert.equal(second.length,10);assert.equal(second[0].id,'r110');assert.equal(second[9].id,'r101');
+  const indexes=sql.prepare("SELECT name FROM sqlite_master WHERE type='index' AND name LIKE 'idx_cf_request_canonical_%_status'").all().map(row=>row.name);
+  assert.ok(indexes.includes('idx_cf_request_canonical_in_status'));
+  const plan=sql.prepare(`EXPLAIN QUERY PLAN SELECT path FROM friendbook_cf_firestore_documents INDEXED BY idx_cf_request_canonical_in_status
+    WHERE parent_path='friend_requests' AND json_extract(document_json,'$.toUid')=? AND json_extract(document_json,'$.status')=?
+    ORDER BY ${`CASE WHEN json_type(document_json,'$.createdAt') IS NULL OR json_type(document_json,'$.createdAt')='null' THEN 0 WHEN json_type(document_json,'$.createdAt') IN ('true','false') THEN 1 WHEN json_type(document_json,'$.createdAt') IN ('integer','real') THEN 2 WHEN json_type(document_json,'$.createdAt')='text' THEN 3 WHEN json_type(document_json,'$.createdAt')='object' AND json_extract(document_json,'$.createdAt.__type')='timestamp' THEN 4 WHEN json_type(document_json,'$.createdAt')='array' THEN 5 ELSE 6 END`} DESC LIMIT 10`).all('viewer','pending');
+  assert.ok(plan.some(row=>row.detail.includes('idx_cf_request_canonical_in_status')));
   sql.close();
 });
 

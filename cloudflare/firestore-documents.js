@@ -524,6 +524,69 @@ async function boundedChatRows(db,parent,spec) {
   return result?.results || [];
 }
 
+const requestCreatedRankSql=`CASE
+  WHEN json_type(document_json,'$.createdAt') IS NULL OR json_type(document_json,'$.createdAt')='null' THEN 0
+  WHEN json_type(document_json,'$.createdAt') IN ('true','false') THEN 1
+  WHEN json_type(document_json,'$.createdAt') IN ('integer','real') THEN 2
+  WHEN json_type(document_json,'$.createdAt')='text' THEN 3
+  WHEN json_type(document_json,'$.createdAt')='object'
+    AND json_extract(document_json,'$.createdAt.__type')='timestamp' THEN 4
+  WHEN json_type(document_json,'$.createdAt')='array' THEN 5
+  ELSE 6 END`;
+const requestCreatedNumberSql=`CASE
+  WHEN json_type(document_json,'$.createdAt') IN ('true','false') THEN CAST(json_extract(document_json,'$.createdAt') AS REAL)
+  WHEN json_type(document_json,'$.createdAt') IN ('integer','real') THEN CAST(json_extract(document_json,'$.createdAt') AS REAL)
+  WHEN json_type(document_json,'$.createdAt')='object'
+    AND json_extract(document_json,'$.createdAt.__type')='timestamp' THEN CAST(json_extract(document_json,'$.createdAt.millis') AS REAL)
+  ELSE 0 END`;
+const requestCreatedTextSql=`COALESCE(CASE
+  WHEN json_type(document_json,'$.createdAt') IN ('text','array','object')
+    AND NOT (json_type(document_json,'$.createdAt')='object' AND json_extract(document_json,'$.createdAt.__type')='timestamp')
+  THEN json_extract(document_json,'$.createdAt') END,'')`;
+
+// Seek request pages from the requesting account's status index, rather than
+// reading every pending request and slicing the first page in JavaScript.
+async function boundedFriendRequestPage(db,uid,spec) {
+  if(spec?.parent!=='friend_requests' || !Number.isInteger(spec.limit) || spec.limit<1 || spec.limit>100
+      || spec.limitToLast || spec.orderBy?.length!==1 || spec.orderBy[0]?.field!=='createdAt'
+      || spec.orderBy[0]?.direction!=='DESCENDING' || spec.startAt || spec.endBefore || spec.endAt) return null;
+  const filters=Array.isArray(spec.filters)?spec.filters:[];
+  const eq=field=>filters.find(f=>f.field===field && f.op==='==' && typeof f.value==='string');
+  const status=eq('status');
+  const side=['toUid','fromUid'].find(field=>eq(field)?.value===uid);
+  if(!side || !status || filters.some(f=>!['toUid','fromUid','status'].includes(f.field)))return null;
+  const other=side==='toUid'?'fromUid':'toUid',peerEq=eq(other);
+  const peerIn=filters.find(f=>f.field===other && f.op==='in' && Array.isArray(f.value)
+    && f.value.length>0 && f.value.length<=20 && f.value.every(v=>typeof v==='string'));
+  if(filters.some(f=>f.field===other && f!==peerEq && f!==peerIn))return null;
+  let cursor=null;
+  if(spec.startAfter!==undefined){
+    if(!Array.isArray(spec.startAfter) || spec.startAfter.length!==2 || typeof spec.startAfter[1]!=='string')return null;
+    const value=decodeValue(spec.startAfter[0]);
+    if(value===null || value===undefined)cursor=[0,0,'',spec.startAfter[1]];
+    else if(typeof value==='boolean')cursor=[1,value?1:0,'',spec.startAfter[1]];
+    else if(typeof value==='number' && Number.isFinite(value))cursor=[2,value,'',spec.startAfter[1]];
+    else if(typeof value==='string')cursor=[3,0,value,spec.startAfter[1]];
+    else if(value?.__type==='timestamp' && Number.isFinite(value.millis))cursor=[4,value.millis,'',spec.startAfter[1]];
+    else if(Array.isArray(value))cursor=[5,0,JSON.stringify(value),spec.startAfter[1]];
+    else if(typeof value==='object')cursor=[6,0,JSON.stringify(value),spec.startAfter[1]];
+    else return null;
+  }
+  const index=side==='toUid'?'idx_cf_request_canonical_in_status':'idx_cf_request_canonical_out_status';
+  const sideExpr=`json_extract(document_json,'$.${side}')`;
+  let sql=`SELECT path,parent_path,collection_id,doc_id,owner_uid,document_json,create_time,update_time
+    FROM friendbook_cf_firestore_documents INDEXED BY ${index}
+    WHERE parent_path='friend_requests' AND ${sideExpr}=? AND json_extract(document_json,'$.status')=?`;
+  const args=[uid,status.value];
+  if(peerEq){sql+=` AND json_extract(document_json,'$.${other}')=?`;args.push(peerEq.value);}
+  if(peerIn){sql+=` AND json_extract(document_json,'$.${other}') IN (${peerIn.value.map(()=>'?').join(',')})`;args.push(...peerIn.value);}
+  if(cursor){sql+=` AND (${requestCreatedRankSql},${requestCreatedNumberSql},${requestCreatedTextSql},doc_id)<(?,?,?,?)`;args.push(...cursor);}
+  sql+=` ORDER BY ${requestCreatedRankSql} DESC,${requestCreatedNumberSql} DESC,${requestCreatedTextSql} DESC,doc_id DESC LIMIT ?`;
+  args.push(spec.limit);
+  try {const result=await db.prepare(sql).bind(...args).all();return result?.results||[];}
+  catch(error){if(/no such index: idx_cf_request_canonical_(?:in|out)_status/.test(String(error)))return null;throw error;}
+}
+
 // Participant and status filters must run before loading historical request payloads.
 async function filteredRequestRows(db,uid,filters) {
   if (!Array.isArray(filters)) return null;
@@ -752,6 +815,8 @@ async function readCollectionRows(db, parent, uid, filters, spec, env) {
     return [...(canonical?.results || [])];
   }
   if (parent === 'friend_requests') {
+    const bounded=spec ? await boundedFriendRequestPage(db,uid,spec) : null;
+    if(bounded!==null)return bounded;
     const filtered=await filteredRequestRows(db,uid,filters);
     if (filtered!==null) return filtered;
     // Only participants can read requests, regardless of query filter supplied by the client.
