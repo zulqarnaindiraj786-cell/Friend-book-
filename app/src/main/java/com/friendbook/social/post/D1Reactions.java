@@ -122,8 +122,17 @@ public final class D1Reactions {
  }
  private static void fetch(Context context,String collection,String id,Runnable ready){fetch(context,collection,id,true,ready);}
  private static void fetch(Context context,String collection,String id,boolean renderCached,Runnable ready){
-  scope();String key=D1Client.key(collection,id);if(CACHE.get(key)!=null){
-   if(renderCached)ready.run();Long fetched=REACTION_FETCHED_AT.get(key);if(fetched!=null && android.os.SystemClock.elapsedRealtime()-fetched<REFRESH_MS)return;
+  scope();String key=D1Client.key(collection,id);JSONObject cached=CACHE.get(key);if(cached!=null){
+   if(renderCached)ready.run();
+   long now=android.os.SystemClock.elapsedRealtime();
+   Long reactionsFetched=REACTION_FETCHED_AT.get(key);
+   boolean reactionsFresh=reactionsFetched!=null && now-reactionsFetched<REFRESH_MS;
+   // A reaction-only response cannot satisfy the feed's comment counter. Keep
+   // it useful for likes, but fetch a full summary until count+preview exist.
+   boolean hasCommentSummary=cached.has("comments") && cached.optJSONArray("preview")!=null;
+   Long summaryFetched=FETCHED_AT.get(key);
+   boolean summaryFresh=hasCommentSummary && summaryFetched!=null && now-summaryFetched<REFRESH_MS;
+   if(reactionsFresh && summaryFresh)return;
   }if(FAILED.contains(key)||WRITING.contains(key))return;
   WAITERS.computeIfAbsent(key,k->new ArrayList<>()).add(ready);
   if(LOADING.contains(key))return;

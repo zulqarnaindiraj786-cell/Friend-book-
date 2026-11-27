@@ -1359,7 +1359,10 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         String myReact = Reactions.resolveCurrentUserReaction(p);
         renderReactionBar(c, vh, p, myReact, totalLikes);
         bindInlineComments(c, vh, p);
-        if (!feedEngagementInPage && com.friendbook.social.core.D1Client.enabled("posts")) {
+        // Feed-page enrichment is best-effort (it can be disabled or omitted for
+        // unverified legacy rows). Hydrate missing/stale summaries on demand;
+        // loadPost reuses fresh page-seeded cache entries and coalesces in-flight reads.
+        if (com.friendbook.social.core.D1Client.enabled("posts")) {
             D1Reactions.loadPost(c, p, () -> {
                 if (!p.id.equals(vh.itemView.getTag())) return;
                 renderReactionBar(c, vh, p, Reactions.resolveCurrentUserReaction(p),
