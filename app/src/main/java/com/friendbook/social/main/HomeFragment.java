@@ -199,6 +199,7 @@ public class HomeFragment extends Fragment implements FeedAdapter.Host {
         rv.getRecycledViewPool().setMaxRecycledViews(1, 30);
         adapter = new FeedAdapter(a, this, true);
         adapter.feedEngagementInPage = true;
+        adapter.fillMissingFeedEngagement = true;
         rv.setAdapter(adapter);
         rv.addOnScrollListener(new RecyclerView.OnScrollListener() {
             @Override public void onScrolled(RecyclerView view,int dx,int dy) {

@@ -330,6 +330,8 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
 
     /** Home receives engagement with the page; detail adapters still hydrate on demand. */
     public boolean feedEngagementInPage;
+    /** Home-page enrichment is best-effort; fill only counters omitted by that page. */
+    public boolean fillMissingFeedEngagement;
 
     private static List<Models.Post> uniquePosts(List<Models.Post> list, java.util.Set<String> seen) {
         List<Models.Post> unique=new ArrayList<>();
@@ -1359,10 +1361,10 @@ public class FeedAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         String myReact = Reactions.resolveCurrentUserReaction(p);
         renderReactionBar(c, vh, p, myReact, totalLikes);
         bindInlineComments(c, vh, p);
-        // Feed-page enrichment is best-effort (it can be disabled or omitted for
-        // unverified legacy rows). Hydrate missing/stale summaries on demand;
-        // loadPost reuses fresh page-seeded cache entries and coalesces in-flight reads.
-        if (com.friendbook.social.core.D1Client.enabled("posts")) {
+        // Home-page enrichment is best-effort; other page types (profile/detail)
+        // already provide authoritative summaries and must not fan out reads.
+        if ((!feedEngagementInPage || fillMissingFeedEngagement)
+                && com.friendbook.social.core.D1Client.enabled("posts")) {
             D1Reactions.loadFeedPost(c, p, () -> {
                 if (!p.id.equals(vh.itemView.getTag())) return;
                 renderReactionBar(c, vh, p, Reactions.resolveCurrentUserReaction(p),

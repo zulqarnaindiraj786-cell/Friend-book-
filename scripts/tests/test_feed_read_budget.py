@@ -30,8 +30,11 @@ class FeedReadBudgetTest(unittest.TestCase):
         policy=(JAVA/'core/FeedReadPolicy.java').read_text()
         self.assertIn('FEED_REUSE_MS=60_000L',policy)
         self.assertIn('REUSE_MS=120_000L',policy,'story cache policy stays independent')
+        home=(JAVA/'main/HomeFragment.java').read_text()
+        self.assertIn('adapter.fillMissingFeedEngagement = true;', home)
         adapter=(JAVA/'post/FeedAdapter.java').read_text()
-        self.assertIn('!feedEngagementInPage &&', adapter)
+        self.assertIn('(!feedEngagementInPage || fillMissingFeedEngagement)', adapter)
+        self.assertIn('loadFeedPost(c, p,', adapter)
     def test_pages_reuse_query_guard_duplicates_and_unlock_on_error(self):
         source=(JAVA/'main/HomeFragment.java').read_text()
         more=source.split('public void loadMore()',1)[1].split('public boolean hasMore()',1)[0]
