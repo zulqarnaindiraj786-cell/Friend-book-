@@ -65,19 +65,20 @@ public final class D1Client {
         // Feed cards need only the viewer's reaction state and aggregate
         // totals. A full engagement summary also scans comment history and is
         // fetched only by an explicit comments/detail flow.
-        if("GET".equals(method) && "reactions".equals(kind) && query==null)query="?response=reaction";
+        final String effectiveQuery=("GET".equals(method) && "reactions".equals(kind) && query==null)
+                ? "?response=reaction" : query;
         if(!"GET".equals(method) || body!=null){
             // A read started before or during this resource's write cannot satisfy a later read.
             invalidateResourceReads(READ_OPERATIONS,collection,id);
-            Task<JSONObject> write=executeRequest(collection,id,kind,method,body,query,interactive);
+            Task<JSONObject> write=executeRequest(collection,id,kind,method,body,effectiveQuery,interactive);
             write.addOnCompleteListener(Runnable::run,ignored->invalidateResourceReads(READ_OPERATIONS,collection,id));
             return write;
         }
         final String actor=Fb.uid();
         // Share before queueing/token acquisition, not only while HTTP overlaps.
         // Interactive recovery reads retain their own priority/freshness lane.
-        List<String> key=Arrays.asList(actor,collection,id,kind,query,interactive?"interactive":"normal");
-        Task<String> shared=READ_OPERATIONS.read(key,()->executeRequest(collection,id,kind,method,body,query,interactive)
+        List<String> key=Arrays.asList(actor,collection,id,kind,effectiveQuery,interactive?"interactive":"normal");
+        Task<String> shared=READ_OPERATIONS.read(key,()->executeRequest(collection,id,kind,method,body,effectiveQuery,interactive)
                 .continueWith(Runnable::run,completed->completed.getResult().toString()));
         return shared.continueWith(Runnable::run,completed->{
             if(!Objects.equals(actor,Fb.uid()))throw new IOException("Account changed");
