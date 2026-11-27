@@ -25,16 +25,16 @@ public class FeedAuthorBatchDemandTest {
    when(db.collection("users")).thenReturn(users);
    when(users.whereIn(any(FieldPath.class),anyList())).thenReturn(bounded);
    when(bounded.limit(10)).thenReturn(bounded);
-   when(bounded.get()).thenReturn(Tasks.forResult(new QuerySnapshot(Collections.emptyList(),null,new SnapshotMetadata(false,false))));
+   when(bounded.getCachedOrFetch(false,300_000L)).thenReturn(Tasks.forResult(new QuerySnapshot(Collections.emptyList(),null,new SnapshotMetadata(false,false))));
    FeedAdapter adapter=new FeedAdapter(activity,null);
    List<Models.Post> page=new ArrayList<>();for(int i=0;i<10;i++){Models.Post p=new Models.Post();p.id="p"+i;p.authorId="u"+i;p.authorName="";page.add(p);}
    java.lang.reflect.Method hydrate=FeedAdapter.class.getDeclaredMethod("hydrateMissingAuthors",List.class);hydrate.setAccessible(true);
    hydrate.invoke(adapter,page);Shadows.shadowOf(Looper.getMainLooper()).idle();
    for(int i=0;i<100;i++)hydrate.invoke(adapter,page);
-   verify(bounded,times(1)).get();
+   verify(bounded,times(1)).getCachedOrFetch(false,300_000L);
    verify(users,times(1)).whereIn(any(FieldPath.class),argThat(ids->ids.size()==10));
    fb.verify(()->Fb.getUserFresh(anyString()),never());
-   adapter.resetAuthorLookupAttempts();hydrate.invoke(adapter,page);verify(bounded,times(2)).get();
+   adapter.resetAuthorLookupAttempts();hydrate.invoke(adapter,page);verify(bounded,times(2)).getCachedOrFetch(false,300_000L);
   }
  }
  @Test public void detachedAdapterRejectsLateAuthorResponse() throws Exception {
@@ -44,7 +44,7 @@ public class FeedAuthorBatchDemandTest {
    D1DocumentStore db=mock(D1DocumentStore.class);CollectionReference users=mock(CollectionReference.class);Query bounded=mock(Query.class);
    fb.when(Fb::uid).thenReturn("late-author-actor");fb.when(Fb::db).thenReturn(db);
    when(db.collection("users")).thenReturn(users);when(users.whereIn(any(FieldPath.class),anyList())).thenReturn(bounded);when(bounded.limit(10)).thenReturn(bounded);
-   com.google.android.gms.tasks.TaskCompletionSource<QuerySnapshot> pending=new com.google.android.gms.tasks.TaskCompletionSource<>();when(bounded.get()).thenReturn(pending.getTask());
+   com.google.android.gms.tasks.TaskCompletionSource<QuerySnapshot> pending=new com.google.android.gms.tasks.TaskCompletionSource<>();when(bounded.getCachedOrFetch(false,300_000L)).thenReturn(pending.getTask());
    FeedAdapter adapter=new FeedAdapter(activity,null);Models.Post post=new Models.Post();post.id="post";post.authorId="author";post.authorName="";
    java.lang.reflect.Method hydrate=FeedAdapter.class.getDeclaredMethod("hydrateMissingAuthors",List.class);hydrate.setAccessible(true);hydrate.invoke(adapter,Collections.singletonList(post));
    adapter.onDetachedFromRecyclerView(new androidx.recyclerview.widget.RecyclerView(activity));
@@ -61,12 +61,12 @@ public class FeedAuthorBatchDemandTest {
    D1DocumentStore db=mock(D1DocumentStore.class);CollectionReference users=mock(CollectionReference.class);Query bounded=mock(Query.class);
    fb.when(Fb::uid).thenReturn("local-preview-actor");fb.when(Fb::db).thenReturn(db);
    when(db.collection("users")).thenReturn(users);when(users.whereIn(any(FieldPath.class),anyList())).thenReturn(bounded);when(bounded.limit(10)).thenReturn(bounded);
-   com.google.android.gms.tasks.TaskCompletionSource<QuerySnapshot> pending=new com.google.android.gms.tasks.TaskCompletionSource<>();when(bounded.get()).thenReturn(pending.getTask());
+   com.google.android.gms.tasks.TaskCompletionSource<QuerySnapshot> pending=new com.google.android.gms.tasks.TaskCompletionSource<>();when(bounded.getCachedOrFetch(false,300_000L)).thenReturn(pending.getTask());
    FeedAdapter adapter=new FeedAdapter(activity,null);Models.Post post=new Models.Post();post.id="post";post.authorId="author";post.authorName="";
    java.lang.reflect.Method hydrate=FeedAdapter.class.getDeclaredMethod("hydrateMissingAuthors",List.class);hydrate.setAccessible(true);
    adapter.setAuthorLookupsEnabled(false);for(int i=0;i<100;i++)hydrate.invoke(adapter,Collections.singletonList(post));
    fb.verify(Fb::db,never());
-   adapter.setAuthorLookupsEnabled(true);hydrate.invoke(adapter,Collections.singletonList(post));verify(bounded,times(1)).get();
+   adapter.setAuthorLookupsEnabled(true);hydrate.invoke(adapter,Collections.singletonList(post));verify(bounded,times(1)).getCachedOrFetch(false,300_000L);
    adapter.setAuthorLookupsEnabled(false);QueryDocumentSnapshot row=mock(QueryDocumentSnapshot.class);
    pending.setResult(new QuerySnapshot(Collections.singletonList(row),null,new SnapshotMetadata(false,false)));Shadows.shadowOf(Looper.getMainLooper()).idle();
    cache.verify(()->FastCache.putUser(any()),never());verifyNoInteractions(row);
