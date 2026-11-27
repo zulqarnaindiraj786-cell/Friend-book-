@@ -17,9 +17,11 @@ public final class PushFanoutWorker extends Worker {
     public static void enqueue(String kind, String documentId, String messageId) {
         String uid = Fb.uid();
         if (uid == null || documentId == null) return;
+        long friendPostWindow = FriendPostNotificationId.windowBucket(System.currentTimeMillis());
         OneTimeWorkRequest.Builder builder = new OneTimeWorkRequest.Builder(PushFanoutWorker.class)
                 .setInputData(new Data.Builder().putString("uid", uid).putString("kind", kind)
-                        .putString("document", documentId).putString("message", messageId).build())
+                        .putString("document", documentId).putString("message", messageId)
+                        .putLong("friend_post_window", friendPostWindow).build())
                 .setConstraints(new Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
                 .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 10, TimeUnit.SECONDS)
                 .addTag("fcm_user_" + uid);
@@ -57,6 +59,10 @@ public final class PushFanoutWorker extends Worker {
                 if (!post.exists() || !uid.equals(post.getString("authorId"))) {checkpoint.clear();return Result.failure();}
                 QuerySnapshot friends = Tasks.await(Fb.db().collection("friends")
                         .whereArrayContains("participants", uid).get(Source.SERVER), 20, TimeUnit.SECONDS);
+                // Retries keep the bucket assigned when WorkManager accepted this event,
+                // including retries that happen after a 12-hour boundary.
+                long windowBucket = getInputData().getLong("friend_post_window",
+                        FriendPostNotificationId.windowBucket(System.currentTimeMillis()));
                 Set<String> recipients = new TreeSet<>();
                 for (DocumentSnapshot friend : friends) {
                     Object members = friend.get("participants");
@@ -66,9 +72,11 @@ public final class PushFanoutWorker extends Worker {
                 for (String to : recipients) {
                     if (!uid.equals(Fb.uid())) {checkpoint.clear();return Result.success();}
                     if(checkpoint.completed(to))continue;
-                    // Stable document/event ID makes replay safe if a partial fan-out is retried.
+                    // One inbox row per author/friend per 12-hour bucket. Even on
+                    // ALREADY_EXISTS, enqueue the push: the gateway's durable per-device
+                    // claim key includes this notification ID and suppresses duplicate sends.
                     DocumentReference ref = Fb.db().collection("notifications")
-                            .document("friend_post_" + id + "_" + to);
+                            .document(FriendPostNotificationId.of(uid, to, windowBucket));
                     Map<String, Object> n = new HashMap<>();
                     n.put("toUserId", to); n.put("fromUserId", uid); n.put("fromUserName", Fb.myName());
                     n.put("fromUserPhotoUrl", Fb.myPhoto()); n.put("type", "friend_post");

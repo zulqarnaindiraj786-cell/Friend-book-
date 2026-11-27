@@ -16,6 +16,15 @@ import static org.mockito.Mockito.*;
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk=28,application=android.app.Application.class)
 public class PushFanoutDemandTest {
+ @Test public void friendPostIdsShareOnlyTheirAuthorRecipientTwelveHourWindow() {
+  long bucket=FriendPostNotificationId.windowBucket(1_800_000_000_000L);
+  String event=FriendPostNotificationId.of("actor","alice",bucket);
+  assertEquals(event,FriendPostNotificationId.of("actor","alice",bucket)); // second post in same window
+  assertNotEquals(event,FriendPostNotificationId.of("actor","alice",bucket+1));
+  assertNotEquals(event,FriendPostNotificationId.of("other","alice",bucket));
+  assertNotEquals(event,FriendPostNotificationId.of("actor","bob",bucket));
+  assertEquals(bucket+1,FriendPostNotificationId.windowBucket((bucket+1)*FriendPostNotificationId.WINDOW_MS));
+ }
  @Test public void durableEnqueueRejectsChangedOrSignedOutAccount() throws Exception {
   try(MockedStatic<Fb> fb=mockStatic(Fb.class)){
    fb.when(Fb::uid).thenReturn("other",null);
@@ -60,8 +69,8 @@ public class PushFanoutDemandTest {
      CollectionReference posts=mock(CollectionReference.class),friends=mock(CollectionReference.class),notifications=mock(CollectionReference.class);
      when(store.collection("posts")).thenReturn(posts);when(store.collection("friends")).thenReturn(friends);when(store.collection("notifications")).thenReturn(notifications);
      DocumentReference postRef=mock(DocumentReference.class),alice=mock(DocumentReference.class),bob=mock(DocumentReference.class);
-     when(posts.document("post")).thenReturn(postRef);when(notifications.document("friend_post_post_alice")).thenReturn(alice);when(notifications.document("friend_post_post_bob")).thenReturn(bob);
-     when(alice.getId()).thenReturn("friend_post_post_alice");when(bob.getId()).thenReturn("friend_post_post_bob");
+     when(posts.document("post")).thenReturn(postRef);when(notifications.document("friend_post_actor_alice_123")).thenReturn(alice);when(notifications.document("friend_post_actor_bob_123")).thenReturn(bob);
+     when(alice.getId()).thenReturn("friend_post_actor_alice_123");when(bob.getId()).thenReturn("friend_post_actor_bob_123");
      DocumentSnapshot post=mock(DocumentSnapshot.class);when(post.exists()).thenReturn(true);when(post.getString("authorId")).thenReturn("actor");when(postRef.get(Source.SERVER)).thenReturn(Tasks.forResult(post));
      Query query=mock(Query.class);when(friends.whereArrayContains("participants","actor")).thenReturn(query);
      QueryDocumentSnapshot first=mock(QueryDocumentSnapshot.class),second=mock(QueryDocumentSnapshot.class);
@@ -72,16 +81,53 @@ public class PushFanoutDemandTest {
      Operation operation=mock(Operation.class);when(operation.getResult()).thenReturn(com.google.common.util.concurrent.Futures.immediateFuture(null));
      push.when(()->FCMPush.enqueueNotificationDurable(anyString(),anyString(),anyMap())).thenReturn(operation);
      WorkerParameters params=mock(WorkerParameters.class);
-     when(params.getInputData()).thenReturn(new Data.Builder().putString("uid","actor").putString("kind","friend_post").putString("document","post").build());
+     when(params.getInputData()).thenReturn(new Data.Builder().putString("uid","actor").putString("kind","friend_post").putString("document","post").putLong("friend_post_window",123).build());
      when(params.getRunAttemptCount()).thenReturn(0,1);
      assertEquals(ListenableWorker.Result.retry(),new PushFanoutWorker(RuntimeEnvironment.getApplication(),params).doWork());
      assertEquals(ListenableWorker.Result.success(),new PushFanoutWorker(RuntimeEnvironment.getApplication(),params).doWork());
      verify(alice,times(1)).create(anyMap());verify(bob,times(2)).create(anyMap());verify(query,times(2)).get(Source.SERVER);
-     push.verify(()->FCMPush.enqueueNotificationDurable(eq("actor"),eq("friend_post_post_alice"),anyMap()),times(1));
-     push.verify(()->FCMPush.enqueueNotificationDurable(eq("actor"),eq("friend_post_post_bob"),anyMap()),times(1));
+     push.verify(()->FCMPush.enqueueNotificationDurable(eq("actor"),eq("friend_post_actor_alice_123"),anyMap()),times(1));
+     push.verify(()->FCMPush.enqueueNotificationDurable(eq("actor"),eq("friend_post_actor_bob_123"),anyMap()),times(1));
     }return null;
    }).get(15,TimeUnit.SECONDS);
   }finally{executor.shutdownNow();}
+ }
+
+ @Test public void postsInSameWindowCreateOneInboxRowAndGatewayEventIdentityIsShared()throws Exception{
+  java.util.concurrent.ExecutorService executor=Executors.newSingleThreadExecutor();
+  try{executor.submit(()->{
+   try(MockedStatic<Fb> fb=mockStatic(Fb.class);MockedStatic<FCMPush> push=mockStatic(FCMPush.class)){
+    RuntimeEnvironment.getApplication().getSharedPreferences("friend_post_fanout_progress",0).edit().clear().commit();
+    fb.when(Fb::uid).thenReturn("actor");fb.when(Fb::myName).thenReturn("Actor");fb.when(Fb::myPhoto).thenReturn("");
+    D1DocumentStore store=mock(D1DocumentStore.class);fb.when(Fb::db).thenReturn(store);
+    CollectionReference posts=mock(CollectionReference.class),friends=mock(CollectionReference.class),notifications=mock(CollectionReference.class);
+    when(store.collection("posts")).thenReturn(posts);when(store.collection("friends")).thenReturn(friends);when(store.collection("notifications")).thenReturn(notifications);
+    DocumentReference postA=mock(DocumentReference.class),postB=mock(DocumentReference.class),note=mock(DocumentReference.class);
+    when(posts.document("postA")).thenReturn(postA);when(posts.document("postB")).thenReturn(postB);
+    String event=FriendPostNotificationId.of("actor","alice",123);
+    when(notifications.document(event)).thenReturn(note);when(note.getId()).thenReturn(event);
+    for(DocumentReference ref:new DocumentReference[]{postA,postB}){
+     DocumentSnapshot post=mock(DocumentSnapshot.class);when(post.exists()).thenReturn(true);when(post.getString("authorId")).thenReturn("actor");
+     when(ref.get(Source.SERVER)).thenReturn(Tasks.forResult(post));
+    }
+    Query query=mock(Query.class);when(friends.whereArrayContains("participants","actor")).thenReturn(query);
+    QueryDocumentSnapshot friend=mock(QueryDocumentSnapshot.class);when(friend.get("participants")).thenReturn(java.util.Arrays.asList("actor","alice"));
+    QuerySnapshot friendsResult=new QuerySnapshot(java.util.Collections.singletonList(friend),null,new SnapshotMetadata(false,false));
+    when(query.get(Source.SERVER)).thenReturn(Tasks.forResult(friendsResult));
+    when(note.create(anyMap())).thenReturn(Tasks.forResult(null),Tasks.forException(new D1DocumentStoreException(D1DocumentStoreException.Code.ALREADY_EXISTS,"exists")));
+    Operation operation=mock(Operation.class);when(operation.getResult()).thenReturn(com.google.common.util.concurrent.Futures.immediateFuture(null));
+    push.when(()->FCMPush.enqueueNotificationDurable(anyString(),anyString(),anyMap())).thenReturn(operation);
+    WorkerParameters params=mock(WorkerParameters.class);
+    when(params.getInputData()).thenReturn(
+      new Data.Builder().putString("uid","actor").putString("kind","friend_post").putString("document","postA").putLong("friend_post_window",123).build(),
+      new Data.Builder().putString("uid","actor").putString("kind","friend_post").putString("document","postB").putLong("friend_post_window",123).build());
+    when(params.getRunAttemptCount()).thenReturn(0);
+    assertEquals(ListenableWorker.Result.success(),new PushFanoutWorker(RuntimeEnvironment.getApplication(),params).doWork());
+    assertEquals(ListenableWorker.Result.success(),new PushFanoutWorker(RuntimeEnvironment.getApplication(),params).doWork());
+    verify(note,times(2)).create(anyMap()); // create-only: exactly one insert succeeds
+    push.verify(()->FCMPush.enqueueNotificationDurable(eq("actor"),eq(event),anyMap()),times(2));
+   }return null;
+  }).get(15,TimeUnit.SECONDS);}finally{executor.shutdownNow();}
  }
 
  @Test public void failedEnqueueIsNotCheckpointedAndExistingNotificationCanRetry()throws Exception{
@@ -94,7 +140,7 @@ public class PushFanoutDemandTest {
     CollectionReference posts=mock(CollectionReference.class),friends=mock(CollectionReference.class),notifications=mock(CollectionReference.class);
     when(store.collection("posts")).thenReturn(posts);when(store.collection("friends")).thenReturn(friends);when(store.collection("notifications")).thenReturn(notifications);
     DocumentReference postRef=mock(DocumentReference.class),target=mock(DocumentReference.class);when(posts.document("post")).thenReturn(postRef);
-    when(notifications.document("friend_post_post_alice")).thenReturn(target);when(target.getId()).thenReturn("friend_post_post_alice");
+    when(notifications.document("friend_post_actor_alice_123")).thenReturn(target);when(target.getId()).thenReturn("friend_post_actor_alice_123");
     DocumentSnapshot post=mock(DocumentSnapshot.class);when(post.exists()).thenReturn(true);when(post.getString("authorId")).thenReturn("actor");when(postRef.get(Source.SERVER)).thenReturn(Tasks.forResult(post));
     Query query=mock(Query.class);when(friends.whereArrayContains("participants","actor")).thenReturn(query);
     QueryDocumentSnapshot friend=mock(QueryDocumentSnapshot.class);when(friend.get("participants")).thenReturn(java.util.Arrays.asList("actor","alice"));
@@ -104,11 +150,11 @@ public class PushFanoutDemandTest {
     when(failed.getResult()).thenReturn(com.google.common.util.concurrent.Futures.immediateFailedFuture(new java.io.IOException("queue unavailable")));
     when(success.getResult()).thenReturn(com.google.common.util.concurrent.Futures.immediateFuture(null));
     push.when(()->FCMPush.enqueueNotificationDurable(anyString(),anyString(),anyMap())).thenReturn(failed,success);
-    WorkerParameters params=mock(WorkerParameters.class);when(params.getInputData()).thenReturn(new Data.Builder().putString("uid","actor").putString("kind","friend_post").putString("document","post").build());
+    WorkerParameters params=mock(WorkerParameters.class);when(params.getInputData()).thenReturn(new Data.Builder().putString("uid","actor").putString("kind","friend_post").putString("document","post").putLong("friend_post_window",123).build());
     when(params.getRunAttemptCount()).thenReturn(0);
     assertEquals(ListenableWorker.Result.retry(),new PushFanoutWorker(RuntimeEnvironment.getApplication(),params).doWork());
     assertEquals(ListenableWorker.Result.success(),new PushFanoutWorker(RuntimeEnvironment.getApplication(),params).doWork());
-    verify(target,times(2)).create(anyMap());push.verify(()->FCMPush.enqueueNotificationDurable(eq("actor"),eq("friend_post_post_alice"),anyMap()),times(2));
+    verify(target,times(2)).create(anyMap());push.verify(()->FCMPush.enqueueNotificationDurable(eq("actor"),eq("friend_post_actor_alice_123"),anyMap()),times(2));
    }return null;
   }).get(15,TimeUnit.SECONDS);}finally{executor.shutdownNow();}
  }
