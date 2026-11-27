@@ -62,6 +62,10 @@ public final class D1Client {
         reads.invalidateMatching(key->key.size()<3 || (collection.equals(key.get(1)) && id.equals(key.get(2))));
     }
     private static Task<JSONObject> request(String collection,String id,String kind,String method,JSONObject body,String query,boolean interactive){
+        // Feed cards need only the viewer's reaction state and aggregate
+        // totals. A full engagement summary also scans comment history and is
+        // fetched only by an explicit comments/detail flow.
+        if("GET".equals(method) && "reactions".equals(kind) && query==null)query="?response=reaction";
         if(!"GET".equals(method) || body!=null){
             // A read started before or during this resource's write cannot satisfy a later read.
             invalidateResourceReads(READ_OPERATIONS,collection,id);

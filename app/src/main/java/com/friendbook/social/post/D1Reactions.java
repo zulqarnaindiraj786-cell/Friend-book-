@@ -15,6 +15,7 @@ public final class D1Reactions {
  private static final android.os.Handler MAIN=new android.os.Handler(android.os.Looper.getMainLooper());
  private static final android.util.LruCache<String,JSONObject> CACHE=new android.util.LruCache<>(512);
  private static final android.util.LruCache<String,Long> FETCHED_AT=new android.util.LruCache<>(512);
+ private static final android.util.LruCache<String,Long> REACTION_FETCHED_AT=new android.util.LruCache<>(512);
  // Reactions/comments summaries are read-only and cached by actor/resource.
  // Keep them warm longer than the document feed; local mutations invalidate
  // immediately, while remote totals may lag by at most five minutes.
@@ -26,12 +27,12 @@ public final class D1Reactions {
  private static final Map<String,Integer> GENERATION=new HashMap<>();
  private static final Map<String,List<Runnable>> WAITERS=new HashMap<>();
  private static final Map<String,Object> READ_TOKENS=new HashMap<>();
- private static void scope(){if(!Objects.equals(actor,Fb.uid())){actor=Fb.uid();CACHE.evictAll();FETCHED_AT.evictAll();POSTS.evictAll();LOADING.clear();FAILED.clear();WRITING.clear();UNCONFIRMED.clear();MUTATIONS.clear();GENERATION.clear();WAITERS.clear();READ_TOKENS.clear();}}
+ private static void scope(){if(!Objects.equals(actor,Fb.uid())){actor=Fb.uid();CACHE.evictAll();FETCHED_AT.evictAll();REACTION_FETCHED_AT.evictAll();POSTS.evictAll();LOADING.clear();FAILED.clear();WRITING.clear();UNCONFIRMED.clear();MUTATIONS.clear();GENERATION.clear();WAITERS.clear();READ_TOKENS.clear();}}
  public static String mine(JSONObject summary){JSONArray a=summary.optJSONArray("types");if(a!=null)for(int i=0;i<a.length();i++){JSONObject r=a.optJSONObject(i);if(r!=null&&r.optInt("mine")>0)return r.optString("type");}return null;}
  public static int total(JSONObject summary){int n=0;JSONArray a=summary.optJSONArray("types");if(a!=null)for(int i=0;i<a.length();i++){JSONObject r=a.optJSONObject(i);if(r!=null)n+=r.optInt("count");}return n;}
  public static JSONObject cached(String collection,String id){scope();return CACHE.get(D1Client.key(collection,id));}
  public static String mine(String collection,String id){JSONObject data=cached(collection,id);return data==null?null:mine(data);}
- public static void invalidate(String collection,String id){scope();String key=D1Client.key(collection,id);GENERATION.put(key,GENERATION.getOrDefault(key,0)+1);FETCHED_AT.remove(key);FAILED.remove(key);java.lang.ref.WeakReference<Models.Post> reference=POSTS.get(key);Models.Post post=reference==null?null:reference.get();if(post!=null)fetch(null,collection,id,false,()->hydrate(post));}
+ public static void invalidate(String collection,String id){scope();String key=D1Client.key(collection,id);GENERATION.put(key,GENERATION.getOrDefault(key,0)+1);FETCHED_AT.remove(key);REACTION_FETCHED_AT.remove(key);FAILED.remove(key);java.lang.ref.WeakReference<Models.Post> reference=POSTS.get(key);Models.Post post=reference==null?null:reference.get();if(post!=null)fetch(null,collection,id,false,()->hydrate(post));}
  /** Snapshot only a fresh, idle summary before sending a new comment. */
  static final class CommentBaseline {
   final String actor,key;final JSONObject summary;final int generation;
@@ -102,10 +103,17 @@ public final class D1Reactions {
   remember(context,collection,id,data,true);
  }
  private static void remember(Context context,String collection,String id,JSONObject data,boolean fullSummary){
-  String key=D1Client.key(collection,id);JSONObject previous=CACHE.put(key,data);
+  String key=D1Client.key(collection,id);JSONObject previous=CACHE.get(key);
+  if(!fullSummary && previous!=null && data.optJSONArray("types")!=null)try{
+   JSONObject merged=new JSONObject(previous.toString()).put("types",data.optJSONArray("types"));
+   merged.remove("reactionStateUnknown");data=merged;
+  }catch(JSONException ignored){}
+  previous=CACHE.put(key,data);
   // A reactions-only response says nothing about the age (or existence) of
   // the comment count and preview in this shared summary.
-  if(fullSummary)FETCHED_AT.put(key,android.os.SystemClock.elapsedRealtime());
+  long now=android.os.SystemClock.elapsedRealtime();
+  if(data.optJSONArray("types")!=null)REACTION_FETCHED_AT.put(key,now);
+  if(fullSummary && data.has("comments") && data.optJSONArray("preview")!=null)FETCHED_AT.put(key,now);
   else if(previous==null)FETCHED_AT.remove(key);
   if(previous!=null && previous.toString().equals(data.toString()))return;
   List<String> types=new ArrayList<>();JSONArray a=data.optJSONArray("types");
@@ -115,7 +123,7 @@ public final class D1Reactions {
  private static void fetch(Context context,String collection,String id,Runnable ready){fetch(context,collection,id,true,ready);}
  private static void fetch(Context context,String collection,String id,boolean renderCached,Runnable ready){
   scope();String key=D1Client.key(collection,id);if(CACHE.get(key)!=null){
-   if(renderCached)ready.run();Long fetched=FETCHED_AT.get(key);if(fetched!=null && android.os.SystemClock.elapsedRealtime()-fetched<REFRESH_MS)return;
+   if(renderCached)ready.run();Long fetched=REACTION_FETCHED_AT.get(key);if(fetched!=null && android.os.SystemClock.elapsedRealtime()-fetched<REFRESH_MS)return;
   }if(FAILED.contains(key)||WRITING.contains(key))return;
   WAITERS.computeIfAbsent(key,k->new ArrayList<>()).add(ready);
   if(LOADING.contains(key))return;
@@ -143,7 +151,9 @@ public final class D1Reactions {
     return;
    }
    LOADING.remove(key);READ_TOKENS.remove(key);UNCONFIRMED.remove(key);
-   remember(context,collection,id,data);List<Runnable> pending=WAITERS.remove(key);if(pending!=null)for(Runnable callback:pending)callback.run();
+   if(data.optBoolean("reactionOnly"))acceptReactionState(collection,id,data.optJSONArray("types"),android.os.SystemClock.elapsedRealtime());
+   else remember(context,collection,id,data);
+   List<Runnable> pending=WAITERS.remove(key);if(pending!=null)for(Runnable callback:pending)callback.run();
   }).addOnFailureListener(e->{
    if(Objects.equals(uid,Fb.uid()) && READ_TOKENS.get(key)==token)readFailed(uid,key,token);
   });
@@ -161,7 +171,10 @@ public final class D1Reactions {
  }
  public static void refreshDetailTotals(String id){fetch(null,"posts",id,false,()->{});}
  public static void acceptDetailTotals(String id,JSONArray types,long requestedAt){
-  scope();String key=D1Client.key("posts",id);Long last=FETCHED_AT.get(key);
+  acceptReactionState("posts",id,types,requestedAt);
+ }
+ private static void acceptReactionState(String collection,String id,JSONArray types,long requestedAt){
+  scope();String key=D1Client.key(collection,id);Long last=FETCHED_AT.get(key);
   if(types==null || WRITING.contains(key) || UNCONFIRMED.contains(key) || (last!=null && last>requestedAt))return;
   try{
    JSONObject old=CACHE.get(key);
@@ -173,7 +186,8 @@ public final class D1Reactions {
    // In-flight full reads started before this partial response must not
    // overwrite its reaction state; they will retry under the existing limit.
    GENERATION.put(key,GENERATION.getOrDefault(key,0)+1);
-   remember(null,"posts",id,next,false);
+   remember(null,collection,id,next,false);
+   REACTION_FETCHED_AT.put(key,android.os.SystemClock.elapsedRealtime());
   }catch(JSONException ignored){}
  }
  public static void loadPost(Context context,Models.Post post,Runnable render){
@@ -183,7 +197,7 @@ public final class D1Reactions {
  }
  public static void hydrate(Models.Post post){
   scope();POSTS.put(D1Client.key("posts",post.id),new java.lang.ref.WeakReference<>(post));
-  JSONObject summary=cached("posts",post.id);if(summary!=null){post.comments=summary.optInt("comments",post.comments);
+  JSONObject summary=cached("posts",post.id);if(summary!=null){if(summary.has("comments"))post.comments=summary.optInt("comments",post.comments);
    if(!summary.optBoolean("reactionStateUnknown")){
     post.likes=total(summary);post.reactionsMap.clear();
     String type=mine(summary);if(type!=null){Map<String,Object> row=new HashMap<>();row.put("type",type);post.reactionsMap.put(Fb.uid(),row);}
@@ -194,7 +208,7 @@ public final class D1Reactions {
  /** Cache-only paint: rendering a save/share/metadata change must not start HTTP. */
  public static void hydrateReel(Models.Reel reel){
   String collection=reel.isFromPost?"posts":"reels";JSONObject summary=cached(collection,reel.id);
-  if(summary!=null){reel.likes=total(summary);reel.comments=summary.optInt("comments",reel.comments);reel.reactions.clear();reel.likedBy.clear();String type=mine(summary);if(type!=null){reel.reactions.put(Fb.uid(),type);reel.likedBy.add(Fb.uid());}}
+  if(summary!=null){reel.likes=total(summary);if(summary.has("comments"))reel.comments=summary.optInt("comments",reel.comments);reel.reactions.clear();reel.likedBy.clear();String type=mine(summary);if(type!=null){reel.reactions.put(Fb.uid(),type);reel.likedBy.add(Fb.uid());}}
  }
  public static void reel(Context context,Models.Reel reel,Runnable render){
   hydrateReel(reel);
@@ -245,9 +259,14 @@ public final class D1Reactions {
   // Only a complete response, unchanged by another local operation while it
   // was in flight, can renew the shared comment-summary freshness.
   void acceptFullSummary(JSONObject data,int generation){
-   if(generation==GENERATION.getOrDefault(key,0) && data.opt("comments") instanceof Number && data.optJSONArray("preview")!=null)
+   if(generation!=GENERATION.getOrDefault(key,0)){FETCHED_AT.remove(key);REACTION_FETCHED_AT.remove(key);return;}
+   if(data.optBoolean("reactionOnly")){
+    acceptReactionState(collection,id,data.optJSONArray("types"),android.os.SystemClock.elapsedRealtime());
+   }else if(data.opt("comments") instanceof Number && data.optJSONArray("preview")!=null){
     remember(context,collection,id,data);
-   else FETCHED_AT.remove(key);
+   }else if(data.optJSONArray("types")!=null){
+    acceptReactionState(collection,id,data.optJSONArray("types"),android.os.SystemClock.elapsedRealtime());
+   }
   }
   void loadInitial(int attempt){
    final int generation=GENERATION.getOrDefault(key,0);

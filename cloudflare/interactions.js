@@ -304,6 +304,10 @@ export async function interactions(request, env, identity, match, authorize = au
         }
         await db.batch(writes);
       }
+      if (new URL(request.url).searchParams.get('response') === 'reaction') {
+        const state=await db.prepare(`SELECT ${reactionTypesSql} AS types_json`).bind(identity.uid,resource).first();
+        return json({reactionOnly:true,owner:context.owner,types:JSON.parse(state?.types_json||'[]')});
+      }
       return json(await engagementSummary(db, resource, identity.uid, context.owner, context.blocked || []));
     }
   } catch { return json({ error: 'D1 interactions unavailable' }, 503); }

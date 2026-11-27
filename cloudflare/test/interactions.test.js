@@ -50,6 +50,26 @@ test('deployment flag, migration marker, auth and authorization fail closed', as
   assert.equal((await app.fetch(new Request('https://example.invalid/v1/engagement/posts/p1/reactions',
     { headers: { Authorization: 'Bearer invalid' } }), { FIREBASE_PROJECT_ID: identity.project })).status, 401);
 });
+test('reaction-only reads skip canonical and legacy comment-count/preview queries', async t => {
+  const f=fixture();t.after(f.close);
+  const db=f.env.DB,prepare=db.prepare;let commentReads=0;
+  db.prepare=function(sql){if(/friendbook_cf_(?:comment|visible_comment|legacy_comment)/i.test(sql))commentReads++;return prepare.call(this,sql);};
+  const response=await call(f.env,'reactions','GET',undefined,{query:'?response=reaction'});
+  assert.equal(response.status,200);
+  const payload=await response.json();
+  assert.equal(payload.reactionOnly,true);assert.deepEqual(payload.types,[]);
+  assert.equal(commentReads,0,'reaction-only views must not execute comment aggregate or preview SQL');
+});
+test('reaction-only reads skip canonical and legacy comment-count/preview queries', async t => {
+  const f=fixture();t.after(f.close);
+  const db=f.env.DB,prepare=db.prepare;let commentReads=0;
+  db.prepare=function(sql){if(/friendbook_cf_(?:comment|visible_comment|legacy_comment)/i.test(sql))commentReads++;return prepare.call(this,sql);};
+  const response=await call(f.env,'reactions','GET',undefined,{query:'?response=reaction'});
+  assert.equal(response.status,200);
+  const payload=await response.json();
+  assert.equal(payload.reactionOnly,true);assert.deepEqual(payload.types,[]);
+  assert.equal(commentReads,0,'reaction-only views must not execute comment aggregate or preview SQL');
+});
 test('engagement summary binds the comment actor to parameter one, not an unbound fourth parameter', async t => {
   const f=fixture(); t.after(f.close);
   const db=f.env.DB; const prepare=db.prepare; let summarySql='';

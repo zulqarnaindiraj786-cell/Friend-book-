@@ -31,4 +31,19 @@ public class ReactionSummaryReuseTest {
    D1Reactions.loadPost(RuntimeEnvironment.getApplication(),post,()->{});Shadows.shadowOf(Looper.getMainLooper()).idle();assertEquals(3,calls.get());
   }
  }
+ @Test public void reactionOnlyResponsePreservesDocumentCommentStateAndCachesForFiveMinutes() throws Exception {
+  try(MockedStatic<Fb> fb=mockStatic(Fb.class);MockedStatic<FastCache> cache=mockStatic(FastCache.class);
+      MockedStatic<D1Client> client=mockStatic(D1Client.class,call->"key".equals(call.getMethod().getName())?call.callRealMethod():RETURNS_DEFAULTS.answer(call))){
+   fb.when(Fb::uid).thenReturn("reaction-only-actor");AtomicInteger calls=new AtomicInteger();
+   client.when(()->D1Client.request("posts","reaction-only","reactions","GET",null,null)).thenAnswer(c->{
+    calls.incrementAndGet();return Tasks.forResult(new JSONObject().put("reactionOnly",true).put("types",new JSONArray()
+      .put(new JSONObject().put("type","love").put("count",7).put("mine",1))));
+   });
+   Models.Post post=new Models.Post();post.id="reaction-only";post.comments=19;
+   D1Reactions.loadPost(RuntimeEnvironment.getApplication(),post,()->{});Shadows.shadowOf(Looper.getMainLooper()).idle();
+   assertEquals(19,post.comments);assertEquals("love",D1Reactions.mine("posts","reaction-only"));assertEquals(1,calls.get());
+   D1Reactions.loadPost(RuntimeEnvironment.getApplication(),post,()->{});Shadows.shadowOf(Looper.getMainLooper()).idle();assertEquals(1,calls.get());
+   D1Reactions.invalidate("posts","reaction-only");Shadows.shadowOf(Looper.getMainLooper()).idle();assertEquals(2,calls.get());
+  }
+ }
 }
