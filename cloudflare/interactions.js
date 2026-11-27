@@ -11,7 +11,10 @@ async function stableEventId(prefix,fields) {
     new Uint8Array(fields.flatMap(value=>{const bytes=encoder.encode(value);return [bytes.length>>>24,(bytes.length>>>16)&255,(bytes.length>>>8)&255,bytes.length&255,...bytes];}))));
   return prefix+[...digest].map(byte=>byte.toString(16).padStart(2,'0')).join('');
 }
-const reactionNotificationId=(actor,recipient,type,window)=>stableEventId('action_',[actor,recipient,type,`window:${window}`]);
+// Group all likers for one recipient/resource/type into the same six-hour window.
+// Actor is intentionally excluded so later likers do not add inbox rows or pushes.
+const reactionNotificationId=(recipient,type,resource,window)=>stableEventId('action_',
+  [recipient,type,resource,String(window)]);
 const commentNotificationId=(actor,recipient,type,resource,commentId)=>stableEventId('comment_',
   [actor,recipient,type==='reply'?'reply':'comment',resource,commentId]);
 function identifier(value) {
@@ -267,14 +270,15 @@ export async function interactions(request, env, identity, match, authorize = au
           // absolute reaction. The server derives its recipient and sender from
           // the authorized resource/request, never from client-supplied identity.
           const notificationTime=Date.now();
-          // Collapse repeated likes from one actor to one owner/type notification
-          // per ten-minute window. Existing rows stay immutable; later likes in
-          // the window return no new notification and trigger no additional push.
-          const notificationWindow=Math.floor(notificationTime/(10*60*1000));
+          // Collapse likes from every actor to one owner/resource/type notification
+          // per six-hour window. Existing rows stay immutable; later likes in the
+          // window return no new notification and trigger no additional push.
+          const notificationWindow=Math.floor(notificationTime/(6*60*60*1000));
+          const reactionType=collection==='posts'?'like':'reel_like';
+          const reactionResource=`${collection}/${id}`;
           const notificationId=(data.notify===true || new URL(request.url).searchParams.get('notify')==='1')
             && context.owner && context.owner!==identity.uid
-            ? await reactionNotificationId(identity.uid,context.owner,
-                collection==='posts'?'like':'reel_like',notificationWindow) : null;
+            ? await reactionNotificationId(context.owner,reactionType,reactionResource,notificationWindow) : null;
           const notification=notificationId?{
             toUserId:context.owner,fromUserId:identity.uid,fromUserName:context.name||'',
             fromUserPhotoUrl:context.photo||'',type:collection==='posts'?'like':'reel_like',

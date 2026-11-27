@@ -5,12 +5,23 @@ import java.security.MessageDigest;
 
 /** Stable identity only for notifications explicitly deduplicated by actor/recipient/type/subject. */
 public final class NotificationEventKey {
+    private static final long REACTION_WINDOW_MS=6L*60*60*1000;
     private NotificationEventKey() { }
     public static String forAction(String actor,String recipient,String type,String subject) {
+        return forAction(actor,recipient,type,subject,System.currentTimeMillis());
+    }
+    public static String forAction(String actor,String recipient,String type,String subject,long nowMs) {
         if (actor==null || actor.isEmpty() || recipient==null || recipient.isEmpty() || type==null) return null;
         boolean reaction=("like".equals(type) || "reel_like".equals(type));
-        if (!reaction && !"friend_request".equals(type)) return null;
+        // Friend-request and acceptance notifications are idempotent per actor,
+        // recipient and type; retries cannot add another inbox document.
+        if (!reaction && !"friend_request".equals(type) && !"friend_accept".equals(type)) return null;
         if (reaction && (subject==null || subject.isEmpty())) return null;
+        if (reaction) {
+            String resource=("reel_like".equals(type)?"reels/":"posts/")+subject;
+            return hash("action_",new String[]{recipient,type,resource,
+                    Long.toString(Math.floorDiv(nowMs,REACTION_WINDOW_MS))});
+        }
         return hash("action_",new String[]{actor,recipient,type,subject==null?"":subject});
     }
 
