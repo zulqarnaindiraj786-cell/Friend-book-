@@ -72,13 +72,6 @@ test('Firestore-compatible D1 endpoint accepts Firebase UIDs containing x', asyn
   }), {DB:db,FIREBASE_PROJECT_ID:'friendbook-test'});
   assert.equal(legacyPatch.status,200);
   assert.equal(JSON.parse(sql.prepare('SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?').get(`users/${uid}`).document_json).displayName,'Patched legacy payload');
-  const changesBeforeDuplicate = sql.totalChanges;
-  const duplicatePatch = await app.fetch(new Request(`https://example.test/v1/firestore/document?path=users/${uid}`, {
-    method:'PATCH', headers:{authorization:'Bearer proof-token','content-type':'application/json'},
-    body:JSON.stringify({updates:{displayName:'Patched legacy payload'}}),
-  }), {DB:db,FIREBASE_PROJECT_ID:'friendbook-test'});
-  assert.equal(duplicatePatch.status,200,await duplicatePatch.text());
-  assert.equal(sql.totalChanges,changesBeforeDuplicate,'repeating an identical non-root document update must not incur D1 writes');
   const appRow = sql.prepare('SELECT path, owner_uid, document_json FROM friendbook_cf_documents WHERE path = ?').get(`users/${uid}`);
   assert.equal(appRow.owner_uid, uid);
   assert.match(appRow.document_json, /d1-only/);
@@ -337,6 +330,10 @@ test('Android batch operations persist chat messages and apply update and delete
   assert.equal(res.status,200);
   let doc=JSON.parse(sql.prepare('SELECT document_json FROM friendbook_cf_firestore_documents WHERE path=?').get('chats/room/messages/m1').document_json);
   assert.equal(doc.isSeen,true); assert.equal(doc.text,'hello');
+  const writesBeforeDuplicate=sql.totalChanges;
+  res=await post([{op:'update',path:'chats/room/messages/m1',updates:{isSeen:true}}]);
+  assert.equal(res.status,200);
+  assert.equal(sql.totalChanges,writesBeforeDuplicate,'repeating an identical batch update must not write the same document again');
   res=await post([{op:'delete',path:'chats/room/messages/m1'}]);
   assert.equal(res.status,200);
   assert.equal(sql.prepare('SELECT path FROM friendbook_cf_firestore_documents WHERE path=?').get('chats/room/messages/m1'),undefined);
