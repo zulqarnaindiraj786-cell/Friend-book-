@@ -20,4 +20,4 @@ class GroupPostDemand(unittest.TestCase):
   self.assertIn('.whereEqualTo("groupApprovalStatus","pending")',s)
  def test_pin_is_resolved_by_id_and_rejects_other_group_pending_or_stale_callback(self):
   s=(JAVA/'groups/GroupDetailActivity.java').read_text().split('private void requestPinnedPost()',1)[1].split('@Override',1)[0]
-  for text in ['document(pin).get()','generation!=screenGeneration','!id.equals(post.groupId)','"pending".equals(post.groupApprovalStatus)','pin.equals(requestedPinnedId)']:self.assertIn(text,s)
+  for text in ['document(pin).getCachedOrFetch()','generation!=screenGeneration','!id.equals(post.groupId)','"pending".equals(post.groupApprovalStatus)','pin.equals(requestedPinnedId)']:self.assertIn(text,s)

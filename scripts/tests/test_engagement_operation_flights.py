@@ -9,7 +9,7 @@ class EngagementOperationFlights(unittest.TestCase):
         source = (JAVA / 'D1Client.java').read_text()
         wrapper = source.split('private static Task<JSONObject> request(', 1)[1].split('private static Task<JSONObject> executeRequest', 1)[0]
         self.assertIn('READ_OPERATIONS.read(key,()->executeRequest(', wrapper)
-        self.assertIn('Arrays.asList(actor,collection,id,kind,query,interactive?', wrapper)
+        self.assertIn('Arrays.asList(actor,collection,id,kind,effectiveQuery,interactive?', wrapper)
         self.assertIn('return new JSONObject(completed.getResult())', wrapper)
         self.assertIn('if(!Objects.equals(actor,Fb.uid()))throw new IOException', wrapper)
         self.assertNotIn('pool.execute', wrapper)
