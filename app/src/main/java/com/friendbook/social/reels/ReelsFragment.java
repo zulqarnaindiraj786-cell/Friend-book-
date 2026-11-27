@@ -845,6 +845,7 @@ public class ReelsFragment extends Fragment {
         private final Activity activity;
         private final List<Models.Reel> data = new ArrayList<>();
         private int playingPos = 0;
+        private int profileHydrationGeneration;
 
         private final java.util.function.BooleanSupplier visible;
         ReelAdapter(Activity a,java.util.function.BooleanSupplier visible) { this.activity = a;this.visible=visible; }
@@ -864,6 +865,7 @@ public class ReelsFragment extends Fragment {
                     data.set(i, incoming.get(i));
                 }
                 refreshVisibleHoldersInPlace(pager);
+                hydrateReelAuthors(data,pager);
                 return;
             }
             // Prefix-append fast path: when new Reels/VideoPosts arrive at the end, append without touching active Reel!
@@ -881,11 +883,31 @@ public class ReelsFragment extends Fragment {
                 if (newAdapterCount > oldAdapterCount) {
                     notifyItemRangeInserted(oldAdapterCount, newAdapterCount - oldAdapterCount);
                 }
+                hydrateReelAuthors(data,pager);
                 return;
             }
             data.clear();
             data.addAll(incoming);
             notifyDataSetChanged();
+            hydrateReelAuthors(data,pager);
+        }
+
+        /** One cached batch for loaded creators; holder binding never performs a profile read. */
+        private void hydrateReelAuthors(List<Models.Reel> reels,ViewPager2 pager){
+            String actor=Fb.uid();if(actor==null || reels==null || reels.isEmpty())return;
+            int generation=++profileHydrationGeneration;
+            java.util.LinkedHashSet<String> ids=new java.util.LinkedHashSet<>();
+            for(Models.Reel reel:reels)if(reel!=null && reel.authorId!=null && !reel.authorId.isEmpty()
+                    && com.friendbook.social.core.FastCache.getUser(reel.authorId)==null)ids.add(reel.authorId);
+            if(ids.isEmpty())return;
+            com.friendbook.social.core.UserBatchLookup.load(new ArrayList<>(ids),users->{
+                if(generation!=profileHydrationGeneration || !java.util.Objects.equals(actor,Fb.uid())
+                        || activity.isFinishing() || activity.isDestroyed())return;
+                for(java.util.Map.Entry<String,Models.User> entry:users.entrySet()){
+                    Models.User user=entry.getValue();if(user!=null)com.friendbook.social.core.TickCache.put(entry.getKey(),user.tickLevel);
+                }
+                refreshVisibleHoldersInPlace(pager);
+            });
         }
 
         private void refreshVisibleHoldersInPlace(ViewPager2 pager) {
@@ -1455,7 +1477,7 @@ public class ReelsFragment extends Fragment {
                 Context c = itemView.getContext();
                 Ui.avatar(c, avatar, reel.authorPhoto);
                 nameT.setText(reel.authorName == null ? "User" : reel.authorName);
-                TickCache.attach(tick, reel.authorId);
+                TickCache.attachCached(tick, reel.authorId);
 
                 boolean hasCap = reel.caption != null && !reel.caption.trim().isEmpty();
                 captionT.setText(hasCap ? reel.caption : "");

@@ -5,6 +5,14 @@ ROOT=Path(__file__).resolve().parents[2]
 JAVA=ROOT/'app/src/main/java/com/friendbook/social'
 
 class ReelRenderNoFetch(unittest.TestCase):
+    def test_reel_creator_badges_use_page_batch_not_per_holder_reads(self):
+        source=(JAVA/'reels/ReelsFragment.java').read_text()
+        adapter=source.split('static class ReelAdapter',1)[1].split('private static boolean isPrefixMatch',1)[0]
+        holder=source.split('private void renderCreatorAndCaption()',1)[1].split('boolean hasCap',1)[0]
+        self.assertIn('UserBatchLookup.load(new ArrayList<>(ids)',adapter)
+        self.assertIn('TickCache.attachCached(tick, reel.authorId)',holder)
+        self.assertNotIn('TickCache.attach(tick, reel.authorId)',source)
+
     def test_counter_render_only_hydrates_cache(self):
         source=(JAVA/'reels/ReelsFragment.java').read_text()
         render=source.split('private void renderCounts() {',1)[1].split('private void ',1)[0]
