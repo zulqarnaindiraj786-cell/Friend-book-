@@ -126,26 +126,17 @@ public class AdminReferralsFragment extends Fragment {
 
         final int generation=++loadGeneration;
         final String owner=actor;
-        final int[] pendingNames={inviters.size()};
-        for (Inviter it : inviters) {
-            Fb.getUser(it.uid).addOnCompleteListener(task -> {
-                if(!started || generation!=loadGeneration || !java.util.Objects.equals(owner,Fb.uid()) || getActivity()==null)return;
-                Models.User u=task.isSuccessful()?task.getResult():null;
-                if (u != null) {
-                    it.name = u.displayName;
-                    it.email = u.email;
-                    it.photo = u.photoUrl;
-                    it.verified = u.isVerified;
-                }
-                if (--pendingNames[0] == 0) {
-                    int done = 0;
-                    for (Inviter i2 : inviters) if (i2.count >= Admin.REFERRALS_BLUE) done++;
-                    summary.setText(total + " loaded referrals · " + inviters.size() + " inviters · "
-                            + done + " with 5+ in loaded pages");
-                }
-                adapter.notifyDataSetChanged();
-            });
-        }
+        List<String> inviterIds=new ArrayList<>();for(Inviter inviter:inviters)inviterIds.add(inviter.uid);
+        com.friendbook.social.core.UserBatchLookup.load(inviterIds,users->{
+            if(!started || generation!=loadGeneration || !java.util.Objects.equals(owner,Fb.uid()) || getActivity()==null)return;
+            for(Inviter inviter:inviters){
+                Models.User user=users.get(inviter.uid);
+                if(user!=null){inviter.name=user.displayName;inviter.email=user.email;inviter.photo=user.photoUrl;inviter.verified=user.isVerified;}
+            }
+            int done=0;for(Inviter inviter:inviters)if(inviter.count>=Admin.REFERRALS_BLUE)done++;
+            summary.setText(total + " loaded referrals · " + inviters.size() + " inviters · " + done + " with 5+ in loaded pages");
+            adapter.notifyDataSetChanged();
+        });
     }
 
     @Override

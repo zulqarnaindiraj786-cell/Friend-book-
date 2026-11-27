@@ -109,11 +109,10 @@ public class BirthdaysActivity extends Activity {
         final String actor=Fb.uid();
         final int generation=++loadGeneration;
         java.util.Set<String> unique=new java.util.LinkedHashSet<>(friendIds);
-        final int[] pendingUsers={unique.size()};
-        for (String uid : unique) {
-            Fb.getUser(uid).addOnCompleteListener(task -> {
-                if(!started || generation!=loadGeneration || !java.util.Objects.equals(actor,Fb.uid()))return;
-                Models.User u=task.isSuccessful()?task.getResult():null;
+        com.friendbook.social.core.UserBatchLookup.load(new ArrayList<>(unique),users->{
+            if(!started || generation!=loadGeneration || !java.util.Objects.equals(actor,Fb.uid()))return;
+            for(String uid:unique){
+                Models.User u=users.get(uid);
                 if (u != null && u.birthday != null && !u.birthday.isEmpty()) {
                     int days = daysUntil(u.birthday);
                     if (days >= 0 && days <= 30) {
@@ -124,9 +123,9 @@ public class BirthdaysActivity extends Activity {
                         rows.add(r);
                     }
                 }
-                if (--pendingUsers[0] == 0) render();
-            });
-        }
+            }
+            render();
+        });
     }
 
     private void render() {

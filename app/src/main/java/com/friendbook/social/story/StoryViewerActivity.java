@@ -645,22 +645,27 @@ public class StoryViewerActivity extends Activity {
             android.widget.Button more=dialog.getButton(android.app.AlertDialog.BUTTON_POSITIVE);
             more.setEnabled(false);more.setText("Loading…");
             for(int i=start;i<end;i++)lines.add("User");
-            final int[] remaining={end-start};
-            for(int i=start;i<end;i++){
-                final int position=i;String uid=viewers.get(i);
-                Fb.getUser(uid).addOnCompleteListener(task -> {
-                    if(!dialog.isShowing() || request!=storyRequest || !java.util.Objects.equals(actor,Fb.uid()))return;
-                    Models.User user=task.isSuccessful()?task.getResult():null;
+            List<String> pageIds=new ArrayList<>(viewers.subList(start,end));
+            Fb.db().collection("users").whereIn(com.friendbook.social.d1.documents.FieldPath.documentId(),pageIds)
+                    .limit(10).getCachedOrFetch(false,300_000L).addOnCompleteListener(task -> {
+                if(!dialog.isShowing() || request!=storyRequest || !java.util.Objects.equals(actor,Fb.uid()))return;
+                Map<String,Models.User> profiles=new HashMap<>();
+                if(task.isSuccessful() && task.getResult()!=null)for(DocumentSnapshot doc:task.getResult()){
+                    Models.User user=Models.User.fromDoc(doc);
+                    if(user.uid==null || user.uid.isEmpty())user.uid=doc.getId();
+                    profiles.put(user.uid,user);
+                    com.friendbook.social.core.FastCache.putUser(user);
+                }
+                for(int i=start;i<end;i++){
+                    String uid=viewers.get(i);Models.User user=profiles.get(uid);
                     String reaction=story.reactions.get(uid);
-                    lines.set(position,(user!=null && user.displayName!=null && !user.displayName.isEmpty()?user.displayName:"User")+(reaction!=null?"  "+reaction:""));
-                    linesView.setText(TextUtils.join("\n",lines));
-                    if(--remaining[0]==0){
-                        busy[0]=false;
-                        more.setText(end<viewers.size()?"Load 10 more":"All loaded");
-                        more.setEnabled(end<viewers.size());
-                    }
-                });
-            }
+                    lines.set(i,(user!=null && user.displayName!=null && !user.displayName.isEmpty()?user.displayName:"User")+(reaction!=null?"  "+reaction:""));
+                }
+                linesView.setText(TextUtils.join("\n",lines));
+                busy[0]=false;
+                more.setText(end<viewers.size()?"Load 10 more":"All loaded");
+                more.setEnabled(end<viewers.size());
+            });
         };
         dialog.getButton(android.app.AlertDialog.BUTTON_POSITIVE).setOnClickListener(v->next.run());
         next.run();

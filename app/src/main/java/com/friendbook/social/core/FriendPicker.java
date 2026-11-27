@@ -22,18 +22,21 @@ public final class FriendPicker {
         ListenerRegistration reg=PagedLists.attach(a,controls,Fb.db().collection("friends").whereArrayContains("participants",actor),20,"friend-picker",(page,error)->{
             int request=++generation[0];rows.removeAllViews();Set<String> ids=new LinkedHashSet<>();
             for(DocumentSnapshot doc:page)for(String uid:Models.ChatRoom.fromDoc(doc).participants)if(!actor.equals(uid))ids.add(uid);
-            if(ids.isEmpty())rows.addView(Ui.tv(a,"No friends on this page.",14,Ui.sub(a)));
-            for(String uid:ids){TextView row=selected==null?Ui.tv(a,"Loading…",15,Ui.txt(a)):new CheckBox(a);Ui.pad(row,12,8,12,8);rows.addView(row);
-                Fb.getUser(uid).addOnSuccessListener(user->{
-                    if(user==null || !dialog.isShowing() || request!=generation[0] || !Objects.equals(actor,Fb.uid()))return;
+            if(ids.isEmpty()){rows.addView(Ui.tv(a,"No friends on this page.",14,Ui.sub(a)));return;}
+            Map<String,TextView> itemRows=new LinkedHashMap<>();
+            for(String uid:ids){TextView row=selected==null?Ui.tv(a,"Loading…",15,Ui.txt(a)):new CheckBox(a);Ui.pad(row,12,8,12,8);rows.addView(row);itemRows.put(uid,row);}
+            UserBatchLookup.load(new ArrayList<>(ids),users->{
+                if(!dialog.isShowing() || request!=generation[0] || !Objects.equals(actor,Fb.uid()))return;
+                for(String uid:ids){
+                    Models.User user=users.get(uid);TextView row=itemRows.get(uid);if(user==null || row==null)continue;
                     row.setText(user.displayName);
                     if(selected==null)row.setOnClickListener(v->{
                         if(!dialog.isShowing() || !Objects.equals(actor,Fb.uid()) || a.isFinishing() || a.isDestroyed())return;
                         dialog.dismiss();single.accept(user);
                     });
                     else {CheckBox check=(CheckBox)row;check.setChecked(selected.containsKey(uid));check.setOnCheckedChangeListener((button,on)->{if(on)selected.put(uid,user.displayName);else selected.remove(uid);});}
-                });
-            }
+                }
+            });
         });
         android.app.Application.ActivityLifecycleCallbacks lifecycle=new android.app.Application.ActivityLifecycleCallbacks(){
             public void onActivityCreated(Activity activity,android.os.Bundle state){}

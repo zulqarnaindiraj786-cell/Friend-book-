@@ -25,6 +25,7 @@ public class BlockedUsersActivity extends Activity implements UsersAdapter.Handl
     private UsersAdapter adapter;
     private TextView empty;
     private ListenerRegistration reg;
+    private int loadGeneration;
 
     @Override
     protected void onCreate(Bundle b) {
@@ -58,35 +59,32 @@ public class BlockedUsersActivity extends Activity implements UsersAdapter.Handl
                     Models.User me2 = Models.User.fromDoc(d);
                     List<UsersAdapter.Row> rows = new ArrayList<>();
                     if (me2.blocked.isEmpty()) {
+                        loadGeneration++;
                         adapter.setData(rows);
                         empty.setVisibility(android.view.View.VISIBLE);
                         return;
                     }
                     empty.setVisibility(android.view.View.GONE);
-                    final List<UsersAdapter.Row> out = new ArrayList<>();
-                    final int[] pending = {me2.blocked.size()};
-                    for (String uid : me2.blocked) {
-                        Fb.getUser(uid).addOnSuccessListener(u -> {
-                            if (u != null) {
-                                UsersAdapter.Row r = new UsersAdapter.Row();
-                                r.user = u;
-                                r.subtitle = "Blocked";
-                                r.primaryLabel = "Unblock";
-                                out.add(r);
-                            }
-                            if (--pending[0] <= 0) {
-                                out.sort((a, b2) -> a.user.displayName.compareToIgnoreCase(b2.user.displayName));
-                                adapter.setData(out);
-                            }
-                        });
-                    }
+                    final int generation=++loadGeneration;final String actor=me;
+                    com.friendbook.social.core.UserBatchLookup.load(me2.blocked,users->{
+                        if(generation!=loadGeneration || !java.util.Objects.equals(actor,Fb.uid()) || isFinishing())return;
+                        final List<UsersAdapter.Row> out = new ArrayList<>();
+                        for(String uid:me2.blocked){
+                            Models.User u=users.get(uid);if(u==null)continue;
+                            UsersAdapter.Row r = new UsersAdapter.Row();
+                            r.user = u;r.subtitle = "Blocked";r.primaryLabel = "Unblock";out.add(r);
+                        }
+                        out.sort((a, b2) -> a.user.displayName.compareToIgnoreCase(b2.user.displayName));
+                        adapter.setData(out);
+                    });
                 });
     }
 
     @Override
     protected void onStop() {
         super.onStop();
-        if (reg != null) reg.remove();
+        loadGeneration++;
+        if (reg != null) { reg.remove(); reg=null; }
     }
 
     @Override

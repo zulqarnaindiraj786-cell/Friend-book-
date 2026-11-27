@@ -33,7 +33,7 @@ class AdminDemand(unittest.TestCase):
 
     def test_referrals_page_and_names_are_lifecycle_scoped(self):
         code=(JAVA/'admin/frag/AdminReferralsFragment.java').read_text()
-        for token in ['PagedLists.attach','10,"admin-referrals"','loaded referrals','loadGeneration++','generation!=loadGeneration','addOnCompleteListener(task ->','Objects.equals(owner,Fb.uid())']:
+        for token in ['PagedLists.attach','10,"admin-referrals"','loaded referrals','loadGeneration++','generation!=loadGeneration','UserBatchLookup.load(','Objects.equals(owner,Fb.uid())']:
             self.assertIn(token,code)
         self.assertNotIn('.limit(400)',code)
         self.assertNotIn('total referral signups',code)

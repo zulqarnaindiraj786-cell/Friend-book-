@@ -40,5 +40,5 @@ class RemainingAppQuota(unittest.TestCase):
         self.assertNotIn('.limit(50)',code)
     def test_birthdays_ignore_old_generations_and_finish_failures(self):
         code=(JAVA/'friends/BirthdaysActivity.java').read_text()
-        for token in ['loadGeneration++','generation!=loadGeneration','addOnCompleteListener','!java.util.Objects.equals(actor,Fb.uid())','new java.util.LinkedHashSet<>(friendIds)']:
+        for token in ['loadGeneration++','generation!=loadGeneration','UserBatchLookup.load(','!java.util.Objects.equals(actor,Fb.uid())','new java.util.LinkedHashSet<>(friendIds)']:
             self.assertIn(token,code)

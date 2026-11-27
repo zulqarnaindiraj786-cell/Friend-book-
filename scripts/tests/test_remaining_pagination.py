@@ -23,6 +23,13 @@ class RemainingPaging(unittest.TestCase):
     def test_story_links_and_next_ten(self):
         source=(JAVA/'story/StoryViewerActivity.java').read_text()
         for token in ['document(specificStoryId).getCachedOrFetch()','10,"story-viewer:"','advanceAfterPage=true','storyPages.next()','storyPages.close()','storyPages.forget(s.id)']:self.assertIn(token,source)
+
+    def test_story_viewer_profiles_use_one_bounded_cached_page(self):
+        source=(JAVA/'story/StoryViewerActivity.java').read_text().split('private void showViewers()',1)[1].split('private void sendReply()',1)[0]
+        self.assertIn('viewers.subList(start,end)',source)
+        self.assertIn('FieldPath.documentId(),pageIds',source)
+        self.assertIn('.limit(10).getCachedOrFetch(false,300_000L)',source)
+        self.assertNotIn('Fb.getUser(uid)',source)
     def test_no_migration_executed_by_application(self):
         # No runtime admin sweep or silent removal of old user data accompanies this rollout.
         for p in JAVA.rglob('*.java'):
