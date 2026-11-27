@@ -28,6 +28,13 @@ final class ListenerPollingPolicy {
         return elapsedMs >= intervalMs(path, foreground);
     }
 
+    /** A lifecycle resume is a demand, but not a reason to reread a still-fresh listener. */
+    static boolean foregroundRefreshDue(String path, long nowElapsedMs, long lastAttemptElapsedMs) {
+        long freshMs = cacheFreshMs(path);
+        return freshMs == 0 || lastAttemptElapsedMs <= 0 || nowElapsedMs < lastAttemptElapsedMs
+                || nowElapsedMs - lastAttemptElapsedMs >= freshMs;
+    }
+
     static boolean isChatMessages(String path) {
         if(path==null) return false;
         String[] parts=path.split("/",-1);

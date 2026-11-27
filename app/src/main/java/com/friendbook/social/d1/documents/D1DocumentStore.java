@@ -178,8 +178,10 @@ public class D1DocumentStore {
     public void refreshOnForeground() {
         long now=android.os.SystemClock.elapsedRealtime();
         for (CopyOnWriteArrayList<DocListenerEntry> entries : docListeners.values())
-            for (DocListenerEntry e : entries) if (now-e.lastAttemptMs>5000) scheduleDocRead(e);
-        for (QueryListenerEntry e : queryListeners) if (now-e.lastAttemptMs>5000) scheduleQueryRead(e);
+            for (DocListenerEntry e : entries) if (e.refreshPending.get()
+                    || ListenerPollingPolicy.foregroundRefreshDue(e.ref.getPath(),now,e.lastAttemptMs)) scheduleDocRead(e);
+        for (QueryListenerEntry e : queryListeners) if (e.refreshPending.get()
+                || ListenerPollingPolicy.foregroundRefreshDue(e.query.parentPath,now,e.lastAttemptMs)) scheduleQueryRead(e);
     }
 
     public static D1DocumentStore getInstance() {

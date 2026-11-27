@@ -50,6 +50,14 @@ public class ListenerPollingPolicyTest {
   assertEquals(0L, ListenerPollingPolicy.cacheFreshMs(null));
  }
 
+ @Test public void lifecycleResumeReusesFreshListenerReadsButRefreshesExpiredOrLiveData() {
+  assertFalse(ListenerPollingPolicy.foregroundRefreshDue("posts/p1", 50_000L, 1_000L));
+  assertTrue(ListenerPollingPolicy.foregroundRefreshDue("posts/p1", 121_000L, 1_000L));
+  assertTrue(ListenerPollingPolicy.foregroundRefreshDue("users/u1", 301_000L, 1_000L));
+  assertTrue(ListenerPollingPolicy.foregroundRefreshDue("lives/room1", 2_000L, 1_000L));
+  assertTrue(ListenerPollingPolicy.foregroundRefreshDue("posts/p1", 500L, 1_000L));
+ }
+
  /** Only the demand-armed store ticker may exist; no fixed-rate loops anywhere. */
  @Test public void noFixedRateDocumentLoopsRemain() throws Exception {
   List<File> sources = new ArrayList<>();
