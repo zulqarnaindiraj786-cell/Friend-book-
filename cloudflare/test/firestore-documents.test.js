@@ -11,7 +11,7 @@ import { hasD1Friendship } from '../app-documents.js';
 
 const resourcesSchema = readFileSync(new URL('../migrations/0003_additive_interactions.sql', import.meta.url), 'utf8');
 const schema = readFileSync(new URL('../migrations/0014_additive_firestore_documents.sql', import.meta.url), 'utf8');
-const socialGuardSchema = readFileSync(new URL('../migrations/0018_social_guards.sql', import.meta.url), 'utf8');
+const socialGuardSchema = readFileSync(new URL('../migrations/0018_social_guards.sql', import.meta.url), 'utf8') + '\n' + readFileSync(new URL('../migrations/0113_row_free_social_guards.sql', import.meta.url), 'utf8');
 const appSchema = readFileSync(new URL('../migrations/0011_additive_app_documents.sql', import.meta.url), 'utf8');
 const requestStatusSchema = readFileSync(new URL('../migrations/0049_friend_request_status_indexes.sql', import.meta.url), 'utf8');
 const requestPageSchema = readFileSync(new URL('../migrations/0112_friend_request_page_indexes.sql', import.meta.url), 'utf8');
@@ -525,7 +525,7 @@ test('profiles and chats: private fields, membership and write bypasses across A
   const beforeReset=profileChanges();
   assert.equal((await call('bob','/v1/firestore/batch','POST',resetBatch)).status,200);
   assert.equal(roomGuards,1,'first unread reset still commits');
-  assert.equal(profileChanges()-beforeReset,3,'only the room update and guard insert/delete write rows');
+  assert.equal(profileChanges()-beforeReset,1,'only the room update writes a row; guard validation is storage-free');
   assert.deepEqual(sql.prepare("SELECT doc_id,update_time FROM friendbook_cf_firestore_documents WHERE parent_path='chats/c1/messages' ORDER BY doc_id").all(),unchangedBefore);
   assert.deepEqual(exactMirror(),oldMirror,'receipt does not rewrite historical room mirror');
   sql.prepare("UPDATE friendbook_cf_documents SET updated_at=1 WHERE path='chats/c1'").run();
