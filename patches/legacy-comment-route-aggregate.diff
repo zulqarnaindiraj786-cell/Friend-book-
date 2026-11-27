@@ -1,0 +1,350 @@
+--- a/cloudflare/comment-api.js
++++ b/cloudflare/comment-api.js
+@@ -73,42 +73,24 @@
+ export function legacyCommentCountsWithCandidatesStatement(db,resources,blocked=[]) {
+   if(!Array.isArray(resources) || resources.length<1 || resources.length>20)throw Error('Invalid count batch');
+   const bindings=[JSON.stringify(blocked||[])];
+-  const requested=[],values=[];
+-  resources.forEach((resource,i)=>{
+-    const post=resource.slice(resource.indexOf('/')+1);
+-    bindings.push(resource,post);
+-    const res=`?${2+i*2}`,id=`?${3+i*2}`;
+-    requested.push(`(${i},${res},${id})`);
++  const requested=resources.map((resource,slot)=>{
++    bindings.push(resource);
++    return `(${slot},?${slot+2})`;
+   });
+-  // Seek the three historical route shapes through their matching partial
+-  // indexes. The old OR predicate scanned the whole comments partition once
+-  // per candidate batch; keeping requested resources outermost makes each
+-  // route a bounded index lookup. UNION deduplicates multi-key legacy rows.
+-  // Keep the UNION's deduplication key narrow. The route indexes identify
+-  // candidate paths; fetching document_json in every UNION arm forces repeated
+-  // table-row reads for documents matching more than one historical key. Join
+-  // each distinct path back to the document table once, after deduplication.
+-  const candidates=`quota_comment_candidates_0 AS MATERIALIZED (
+-    SELECT q.slot,a.path
+-    FROM requested q CROSS JOIN friendbook_cf_firestore_documents a INDEXED BY idx_cf_canonical_comment_page_post
+-    WHERE a.parent_path='comments' AND ${legacyField('postId')}=q.post_id
+-    UNION
+-    SELECT q.slot,a.path
+-    FROM requested q CROSS JOIN friendbook_cf_firestore_documents a INDEXED BY idx_cf_canonical_comment_page_post_legacy
+-    WHERE a.parent_path='comments' AND ${legacyField('post_id')}=q.post_id
+-    UNION
+-    SELECT q.slot,a.path
+-    FROM requested q CROSS JOIN friendbook_cf_firestore_documents a INDEXED BY idx_cf_canonical_comment_page_resource
+-    WHERE a.parent_path='comments' AND ${legacyField('resource')}=q.resource
+-  )`;
+-  const selects=resources.map((_,i)=>`SELECT ${i} AS slot,
+-    (SELECT COUNT(*) FROM quota_comment_candidates_0 q
+-      JOIN friendbook_cf_firestore_documents a ON a.path=q.path
+-      WHERE q.slot=${i}
+-        AND ${legacyRowGuard('?1',`(SELECT resource FROM requested WHERE slot=${i})`)}) AS n,
+-    EXISTS(SELECT 1 FROM quota_comment_candidates_0 WHERE slot=${i}) AS has_candidates`);
+-  return db.prepare(`WITH requested(slot,resource,post_id) AS (VALUES ${requested.join(',')}), ${candidates}
+-    ${selects.join(' UNION ALL ')}`).bind(...bindings);
++  // Pre-aggregated author counts are transactionally maintained by migration
++  // 0108. A blocked set subtracts author buckets, rather than re-reading and
++  // reparsing every legacy comment document on each feed request.
++  if(!blocked?.length) return db.prepare(`WITH requested(slot,resource) AS (VALUES ${requested.join(',')})
++    SELECT r.slot,COALESCE(c.comment_count,0) AS n,
++      CASE WHEN c.resource IS NULL THEN 0 ELSE 1 END AS has_candidates
++    FROM requested r LEFT JOIN friendbook_cf_legacy_comment_route_counts c
++      ON c.resource=r.resource AND c.author_uid=''`).bind(...bindings);
++  return db.prepare(`WITH requested(slot,resource) AS (VALUES ${requested.join(',')})
++    SELECT r.slot,
++      COALESCE(SUM(CASE WHEN c.author_uid<>'' AND c.author_uid NOT IN (SELECT value FROM json_each(?1)) THEN c.comment_count ELSE 0 END),0) AS n,
++      MAX(CASE WHEN c.resource IS NOT NULL THEN 1 ELSE 0 END) AS has_candidates
++    FROM requested r LEFT JOIN friendbook_cf_legacy_comment_route_counts c ON c.resource=r.resource
++    GROUP BY r.slot`).bind(...bindings);
+ }
+ 
+ export async function legacyCommentCount(db,resource,blocked=[]) {
+--- /dev/null
++++ b/cloudflare/migrations/0108_legacy_comment_route_counts.sql
+@@ -0,0 +1,138 @@
++-- Store only route, author and count metadata; never comment body/text. This
++-- turns repeated historical JSON scans into bounded reads from author counts.
++CREATE TABLE IF NOT EXISTS friendbook_cf_legacy_comment_route_sources (
++  path TEXT NOT NULL, resource TEXT NOT NULL, doc_id TEXT NOT NULL, author_uid TEXT NOT NULL,
++  PRIMARY KEY(path,resource)
++) WITHOUT ROWID;
++CREATE INDEX IF NOT EXISTS idx_cf_legacy_comment_route_source_resource_author
++  ON friendbook_cf_legacy_comment_route_sources(resource,author_uid,doc_id);
++CREATE TABLE IF NOT EXISTS friendbook_cf_legacy_comment_route_counts (
++  resource TEXT NOT NULL, author_uid TEXT NOT NULL,
++  comment_count INTEGER NOT NULL CHECK(comment_count>=0),
++  PRIMARY KEY(resource,author_uid)
++) WITHOUT ROWID;
++
++-- Expand only routes accepted by the Worker (posts/reels) and preserve the
++-- existing postId, post_id and exact resource matching semantics.
++CREATE VIEW IF NOT EXISTS friendbook_cf_legacy_comment_route_candidates AS
++WITH parsed AS (
++ SELECT path,doc_id,
++   CASE WHEN json_valid(document_json)=1 AND json_type(document_json,'$.fields')='object' THEN json_extract(document_json,'$.fields.postId.stringValue') WHEN json_valid(document_json)=1 THEN json_extract(document_json,'$.postId') END AS post_id,
++   CASE WHEN json_valid(document_json)=1 AND json_type(document_json,'$.fields')='object' THEN json_extract(document_json,'$.fields.post_id.stringValue') WHEN json_valid(document_json)=1 THEN json_extract(document_json,'$.post_id') END AS post_id_legacy,
++   CASE WHEN json_valid(document_json)=1 AND json_type(document_json,'$.fields')='object' THEN json_extract(document_json,'$.fields.resource.stringValue') WHEN json_valid(document_json)=1 THEN json_extract(document_json,'$.resource') END AS resource_value,
++   COALESCE(NULLIF(CASE WHEN json_valid(document_json)=1 AND json_type(document_json,'$.fields')='object' THEN json_extract(document_json,'$.fields.authorId.stringValue') WHEN json_valid(document_json)=1 THEN json_extract(document_json,'$.authorId') END,''),
++     NULLIF(CASE WHEN json_valid(document_json)=1 AND json_type(document_json,'$.fields')='object' THEN json_extract(document_json,'$.fields.userId.stringValue') WHEN json_valid(document_json)=1 THEN json_extract(document_json,'$.userId') END,''),
++     NULLIF(CASE WHEN json_valid(document_json)=1 AND json_type(document_json,'$.fields')='object' THEN json_extract(document_json,'$.fields.uid.stringValue') WHEN json_valid(document_json)=1 THEN json_extract(document_json,'$.uid') END,'')) AS author_uid,
++   COALESCE(CASE WHEN json_valid(document_json)=1 AND json_type(document_json,'$.fields')='object' THEN json_extract(document_json,'$.fields.removed.booleanValue') WHEN json_valid(document_json)=1 THEN json_extract(document_json,'$.removed') END,0) AS removed,
++   COALESCE(CASE WHEN json_valid(document_json)=1 AND json_type(document_json,'$.fields')='object' THEN json_extract(document_json,'$.fields.deleted.booleanValue') WHEN json_valid(document_json)=1 THEN json_extract(document_json,'$.deleted') END,0) AS deleted,
++   COALESCE(CASE WHEN json_valid(document_json)=1 AND json_type(document_json,'$.fields')='object' THEN json_extract(document_json,'$.fields.isDeleted.booleanValue') WHEN json_valid(document_json)=1 THEN json_extract(document_json,'$.isDeleted') END,0) AS is_deleted
++ FROM friendbook_cf_firestore_documents WHERE parent_path='comments' AND json_valid(document_json)=1
++), routes AS (
++ SELECT path,doc_id,author_uid,'posts/'||post_id AS resource FROM parsed WHERE typeof(post_id)='text' AND post_id<>''
++ UNION SELECT path,doc_id,author_uid,'reels/'||post_id FROM parsed WHERE typeof(post_id)='text' AND post_id<>''
++ UNION SELECT path,doc_id,author_uid,'posts/'||post_id_legacy FROM parsed WHERE typeof(post_id_legacy)='text' AND post_id_legacy<>''
++ UNION SELECT path,doc_id,author_uid,'reels/'||post_id_legacy FROM parsed WHERE typeof(post_id_legacy)='text' AND post_id_legacy<>''
++ UNION SELECT path,doc_id,author_uid,resource_value FROM parsed WHERE typeof(resource_value)='text' AND (resource_value LIKE 'posts/%' OR resource_value LIKE 'reels/%')
++)
++SELECT DISTINCT r.path,r.resource,r.doc_id,r.author_uid FROM routes r
++JOIN parsed p ON p.path=r.path
++WHERE typeof(r.author_uid)='text' AND length(r.author_uid)>0
++ AND p.removed=0 AND p.deleted=0 AND p.is_deleted=0
++ AND NOT EXISTS (SELECT 1 FROM friendbook_cf_comments c WHERE c.resource=r.resource AND c.id=r.doc_id);
++
++INSERT OR IGNORE INTO friendbook_cf_legacy_comment_route_sources(path,resource,doc_id,author_uid)
++ SELECT path,resource,doc_id,author_uid FROM friendbook_cf_legacy_comment_route_candidates;
++DELETE FROM friendbook_cf_legacy_comment_route_counts;
++INSERT INTO friendbook_cf_legacy_comment_route_counts(resource,author_uid,comment_count)
++ SELECT resource,author_uid,COUNT(*) FROM friendbook_cf_legacy_comment_route_sources GROUP BY resource,author_uid
++ ON CONFLICT(resource,author_uid) DO UPDATE SET comment_count=excluded.comment_count;
++-- The empty author key is reserved for the per-resource total; real route
++-- sources always have a non-empty author. Unblocked feed batches use one row
++-- per resource instead of reading every author bucket.
++INSERT INTO friendbook_cf_legacy_comment_route_counts(resource,author_uid,comment_count)
++ SELECT resource,'',COUNT(*) FROM friendbook_cf_legacy_comment_route_sources GROUP BY resource;
++CREATE TRIGGER IF NOT EXISTS cf_legacy_comment_route_total_insert
++AFTER INSERT ON friendbook_cf_legacy_comment_route_sources BEGIN
++ INSERT INTO friendbook_cf_legacy_comment_route_counts(resource,author_uid,comment_count)
++ VALUES(NEW.resource,'',1) ON CONFLICT(resource,author_uid) DO UPDATE SET comment_count=comment_count+1;
++END;
++CREATE TRIGGER IF NOT EXISTS cf_legacy_comment_route_total_delete
++AFTER DELETE ON friendbook_cf_legacy_comment_route_sources BEGIN
++ UPDATE friendbook_cf_legacy_comment_route_counts SET comment_count=comment_count-1
++  WHERE resource=OLD.resource AND author_uid='';
++ DELETE FROM friendbook_cf_legacy_comment_route_counts
++  WHERE resource=OLD.resource AND author_uid='' AND comment_count<=0;
++END;
++
++CREATE TRIGGER IF NOT EXISTS cf_legacy_comment_routes_insert
++AFTER INSERT ON friendbook_cf_firestore_documents WHEN NEW.parent_path='comments'
++BEGIN
++ INSERT OR IGNORE INTO friendbook_cf_legacy_comment_route_sources(path,resource,doc_id,author_uid)
++  SELECT path,resource,doc_id,author_uid FROM friendbook_cf_legacy_comment_route_candidates WHERE path=NEW.path;
++ INSERT INTO friendbook_cf_legacy_comment_route_counts(resource,author_uid,comment_count)
++  SELECT resource,author_uid,COUNT(*) FROM friendbook_cf_legacy_comment_route_sources WHERE path=NEW.path GROUP BY resource,author_uid
++  ON CONFLICT(resource,author_uid) DO UPDATE SET comment_count=comment_count+excluded.comment_count;
++END;
++CREATE TRIGGER IF NOT EXISTS cf_legacy_comment_routes_delete
++AFTER DELETE ON friendbook_cf_firestore_documents WHEN OLD.parent_path='comments'
++BEGIN
++ UPDATE friendbook_cf_legacy_comment_route_counts SET comment_count=comment_count-(SELECT COUNT(*) FROM friendbook_cf_legacy_comment_route_sources s WHERE s.path=OLD.path AND s.resource=friendbook_cf_legacy_comment_route_counts.resource AND s.author_uid=friendbook_cf_legacy_comment_route_counts.author_uid)
++  WHERE EXISTS(SELECT 1 FROM friendbook_cf_legacy_comment_route_sources s WHERE s.path=OLD.path AND s.resource=friendbook_cf_legacy_comment_route_counts.resource AND s.author_uid=friendbook_cf_legacy_comment_route_counts.author_uid);
++ DELETE FROM friendbook_cf_legacy_comment_route_sources WHERE path=OLD.path;
++ DELETE FROM friendbook_cf_legacy_comment_route_counts WHERE comment_count<=0;
++END;
++CREATE TRIGGER IF NOT EXISTS cf_legacy_comment_routes_update
++AFTER UPDATE OF path,parent_path,doc_id,document_json ON friendbook_cf_firestore_documents
++WHEN OLD.parent_path='comments' OR NEW.parent_path='comments'
++BEGIN
++ UPDATE friendbook_cf_legacy_comment_route_counts SET comment_count=comment_count-(SELECT COUNT(*) FROM friendbook_cf_legacy_comment_route_sources s WHERE s.path=OLD.path AND s.resource=friendbook_cf_legacy_comment_route_counts.resource AND s.author_uid=friendbook_cf_legacy_comment_route_counts.author_uid)
++  WHERE EXISTS(SELECT 1 FROM friendbook_cf_legacy_comment_route_sources s WHERE s.path=OLD.path AND s.resource=friendbook_cf_legacy_comment_route_counts.resource AND s.author_uid=friendbook_cf_legacy_comment_route_counts.author_uid);
++ DELETE FROM friendbook_cf_legacy_comment_route_sources WHERE path=OLD.path;
++ DELETE FROM friendbook_cf_legacy_comment_route_counts WHERE comment_count<=0;
++ INSERT OR IGNORE INTO friendbook_cf_legacy_comment_route_sources(path,resource,doc_id,author_uid)
++  SELECT path,resource,doc_id,author_uid FROM friendbook_cf_legacy_comment_route_candidates WHERE path=NEW.path;
++ INSERT INTO friendbook_cf_legacy_comment_route_counts(resource,author_uid,comment_count)
++  SELECT resource,author_uid,COUNT(*) FROM friendbook_cf_legacy_comment_route_sources WHERE path=NEW.path GROUP BY resource,author_uid
++  ON CONFLICT(resource,author_uid) DO UPDATE SET comment_count=comment_count+excluded.comment_count;
++END;
++
++CREATE TRIGGER IF NOT EXISTS cf_legacy_comment_routes_canonical_insert
++AFTER INSERT ON friendbook_cf_comments
++BEGIN
++ UPDATE friendbook_cf_legacy_comment_route_counts SET comment_count=comment_count-(SELECT COUNT(*) FROM friendbook_cf_legacy_comment_route_sources s WHERE s.resource=NEW.resource AND s.doc_id=NEW.id AND s.resource=friendbook_cf_legacy_comment_route_counts.resource AND s.author_uid=friendbook_cf_legacy_comment_route_counts.author_uid)
++  WHERE EXISTS(SELECT 1 FROM friendbook_cf_legacy_comment_route_sources s WHERE s.resource=NEW.resource AND s.doc_id=NEW.id AND s.resource=friendbook_cf_legacy_comment_route_counts.resource AND s.author_uid=friendbook_cf_legacy_comment_route_counts.author_uid);
++ DELETE FROM friendbook_cf_legacy_comment_route_sources WHERE resource=NEW.resource AND doc_id=NEW.id;
++ DELETE FROM friendbook_cf_legacy_comment_route_counts WHERE comment_count<=0;
++END;
++CREATE TRIGGER IF NOT EXISTS cf_legacy_comment_routes_canonical_delete
++AFTER DELETE ON friendbook_cf_comments
++BEGIN
++ INSERT OR IGNORE INTO friendbook_cf_legacy_comment_route_sources(path,resource,doc_id,author_uid)
++  SELECT path,resource,doc_id,author_uid FROM friendbook_cf_legacy_comment_route_candidates WHERE doc_id=OLD.id;
++ DELETE FROM friendbook_cf_legacy_comment_route_counts WHERE resource=OLD.resource
++   OR resource IN (SELECT resource FROM friendbook_cf_legacy_comment_route_candidates WHERE doc_id=OLD.id);
++ INSERT INTO friendbook_cf_legacy_comment_route_counts(resource,author_uid,comment_count)
++  SELECT resource,author_uid,COUNT(*) FROM friendbook_cf_legacy_comment_route_sources
++   WHERE resource=OLD.resource OR resource IN (SELECT resource FROM friendbook_cf_legacy_comment_route_candidates WHERE doc_id=OLD.id)
++   GROUP BY resource,author_uid;
++ INSERT INTO friendbook_cf_legacy_comment_route_counts(resource,author_uid,comment_count)
++  SELECT resource,'',COUNT(*) FROM friendbook_cf_legacy_comment_route_sources
++   WHERE resource=OLD.resource OR resource IN (SELECT resource FROM friendbook_cf_legacy_comment_route_candidates WHERE doc_id=OLD.id)
++   GROUP BY resource;
++END;
++CREATE TRIGGER IF NOT EXISTS cf_legacy_comment_routes_canonical_update
++AFTER UPDATE OF resource,id ON friendbook_cf_comments
++WHEN OLD.resource IS NOT NEW.resource OR OLD.id IS NOT NEW.id
++BEGIN
++ DELETE FROM friendbook_cf_legacy_comment_route_sources WHERE doc_id IN (OLD.id,NEW.id) AND resource IN (OLD.resource,NEW.resource);
++ INSERT OR IGNORE INTO friendbook_cf_legacy_comment_route_sources(path,resource,doc_id,author_uid)
++  SELECT path,resource,doc_id,author_uid FROM friendbook_cf_legacy_comment_route_candidates
++   WHERE doc_id IN (OLD.id,NEW.id) AND resource IN (OLD.resource,NEW.resource);
++ DELETE FROM friendbook_cf_legacy_comment_route_counts WHERE resource IN (OLD.resource,NEW.resource);
++ INSERT INTO friendbook_cf_legacy_comment_route_counts(resource,author_uid,comment_count)
++  SELECT resource,author_uid,COUNT(*) FROM friendbook_cf_legacy_comment_route_sources
++   WHERE resource IN (OLD.resource,NEW.resource) GROUP BY resource,author_uid;
++ INSERT INTO friendbook_cf_legacy_comment_route_counts(resource,author_uid,comment_count)
++  SELECT resource,'',COUNT(*) FROM friendbook_cf_legacy_comment_route_sources
++   WHERE resource IN (OLD.resource,NEW.resource) GROUP BY resource;
++END;
+--- /dev/null
++++ b/cloudflare/test/legacy-comment-route-counts.test.js
+@@ -0,0 +1,51 @@
++import test from 'node:test';
++import assert from 'node:assert/strict';
++import {readFileSync} from 'node:fs';
++import {fixture} from './fixtures/interaction-db.js';
++import {canonicalSeed} from './fixtures/canonical.js';
++import {legacyCommentCount,legacyCommentCountsWithCandidatesStatement} from '../comment-api.js';
++const migration=name=>readFileSync(new URL(`../migrations/${name}.sql`,import.meta.url),'utf8');
++function setup(t){
++ const f=fixture();t.after(f.close);
++ for(const name of ['0032_legacy_comment_lookup','0087_canonical_comment_page_indexes','0101_legacy_comment_epoch','0106_canonical_comment_shadow_epoch','0108_legacy_comment_route_counts'])f.sql.exec(migration(name));
++ return f;
++}
++async function cachedCount(db,resource,blocked=[]){
++ return (await legacyCommentCountsWithCandidatesStatement(db,[resource],blocked).first()).n;
++}
++
++test('author aggregate exactly matches historical route, filter, shadow and block semantics',async t=>{
++ const f=setup(t),add=canonicalSeed(f.sql);
++ add.run('comments/a','comments','a','',JSON.stringify({postId:'p0',authorId:'alice'}),1);
++ add.run('comments/b','comments','b','',JSON.stringify({post_id:'p0',uid:'bob'}),1);
++ add.run('comments/c','comments','c','',JSON.stringify({resource:'posts/p0',userId:'cara'}),1);
++ add.run('comments/multi','comments','multi','',JSON.stringify({postId:'p0',post_id:'p0',resource:'posts/p0',authorId:'alice'}),1);
++ add.run('comments/deleted','comments','deleted','',JSON.stringify({postId:'p0',authorId:'alice',deleted:true}),1);
++ add.run('comments/empty','comments','empty','',JSON.stringify({postId:'p0',authorId:''}),1);
++ add.run('comments/shadow','comments','shadow','',JSON.stringify({postId:'p1',authorId:'alice'}),1);
++ f.sql.prepare('INSERT INTO friendbook_cf_comments VALUES (?,?,?,?,?,?)').run('posts/p1','shadow','alice','body',null,1);
++ for(const [resource,blocked] of [['posts/p0',[]],['posts/p0',['bob']],['reels/p0',[]],['posts/p1',[]]])
++   assert.equal(await cachedCount(f.env.DB,resource,blocked),await legacyCommentCount(f.env.DB,resource,blocked),`${resource} ${blocked}`);
++ assert.equal((await legacyCommentCountsWithCandidatesStatement(f.env.DB,['posts/p1']).first()).has_candidates,0);
++ f.sql.exec(migration('0108_legacy_comment_route_counts'));
++ assert.equal(await cachedCount(f.env.DB,'posts/p0'),await legacyCommentCount(f.env.DB,'posts/p0'),'reapplying the additive migration rebuilds aggregates idempotently');
++});
++
++test('route-count triggers track comment insert, update, delete and canonical shadow transitions',async t=>{
++ const f=setup(t),add=canonicalSeed(f.sql),insert=f.sql.prepare('INSERT INTO friendbook_cf_firestore_documents VALUES (?,?,?,?,?,?,?,?)');
++ f.sql.prepare("INSERT INTO friendbook_cf_interaction_resources VALUES ('posts/p3','verified')").run();
++ insert.run('comments/x','comments','comments','x','',JSON.stringify({postId:'p2',authorId:'alice'}),1,1);
++ assert.equal(await cachedCount(f.env.DB,'posts/p2'),1);
++ f.sql.prepare("UPDATE friendbook_cf_firestore_documents SET document_json=? WHERE path='comments/x'").run(JSON.stringify({resource:'posts/p3',authorId:'bob'}));
++ assert.equal(await cachedCount(f.env.DB,'posts/p2'),0);assert.equal(await cachedCount(f.env.DB,'posts/p3'),1);
++ f.sql.prepare('INSERT INTO friendbook_cf_comments VALUES (?,?,?,?,?,?)').run('posts/p3','x','bob','body',null,1);
++ assert.equal(await cachedCount(f.env.DB,'posts/p3'),0);
++ f.sql.prepare("DELETE FROM friendbook_cf_comments WHERE resource='posts/p3' AND id='x'").run();
++ assert.equal(await cachedCount(f.env.DB,'posts/p3'),1);
++ f.sql.prepare("INSERT INTO friendbook_cf_comments VALUES (?,?,?,?,?,?)").run('posts/p3','x','bob','body',null,1);
++ f.sql.prepare("INSERT INTO friendbook_cf_interaction_resources VALUES ('posts/p4','verified')").run();
++ f.sql.prepare("UPDATE friendbook_cf_comments SET resource='posts/p4' WHERE resource='posts/p3' AND id='x'").run();
++ assert.equal(await cachedCount(f.env.DB,'posts/p3'),1,'moving a canonical shadow restores its old legacy route');
++ f.sql.prepare("DELETE FROM friendbook_cf_firestore_documents WHERE path='comments/x'").run();
++ assert.equal(await cachedCount(f.env.DB,'posts/p3'),0);
++});
+--- a/cloudflare/test/legacy-comment-epoch-demand.test.js
++++ b/cloudflare/test/legacy-comment-epoch-demand.test.js
+@@ -8,7 +8,7 @@
+ const migration=n=>readFileSync(new URL(`../migrations/${n}.sql`,import.meta.url),'utf8');
+ 
+ function setup(t){
+- const f=fixture();t.after(f.close);f.sql.exec(migration('0032_legacy_comment_lookup'));f.sql.exec(migration('0087_canonical_comment_page_indexes'));f.sql.exec(migration('0101_legacy_comment_epoch'));f.sql.exec(migration('0106_canonical_comment_shadow_epoch'));
++ const f=fixture();t.after(f.close);f.sql.exec(migration('0032_legacy_comment_lookup'));f.sql.exec(migration('0087_canonical_comment_page_indexes'));f.sql.exec(migration('0101_legacy_comment_epoch'));f.sql.exec(migration('0106_canonical_comment_shadow_epoch'));f.sql.exec(migration('0108_legacy_comment_route_counts'));
+  return f;
+ }
+ 
+@@ -24,15 +24,14 @@
+  const resources=Array.from({length:20},(_,i)=>`posts/p${i}`);resources.push('posts/empty_count','posts/["str"]','reels/p0');
+  let plan='';const planDb={prepare(query){return {bind(...args){plan=f.sql.prepare('EXPLAIN QUERY PLAN '+query).all(...args).map(row=>row.detail).join('\n');return f.env.DB.prepare(query).bind(...args);}};}};
+  await legacyCommentCountsWithCandidatesStatement(planDb,['posts/p0'],[]).all();
+- assert.match(plan,/MATERIALIZE quota_comment_candidates_0/);
+- for(const index of ['idx_cf_canonical_comment_page_post','idx_cf_canonical_comment_page_post_legacy','idx_cf_canonical_comment_page_resource'])
+-  assert.match(plan,new RegExp('SEARCH a USING INDEX '+index),'each historical route must seek its matching partial index');
+- assert.doesNotMatch(plan,/SCAN a USING INDEX idx_friendbook_cf_firestore_parent/,'candidate lookup must not scan the comments partition');
++ assert.match(plan,/SEARCH c USING PRIMARY KEY \(resource=\? AND author_uid=\?\)/);
++ assert.doesNotMatch(plan,/SUM\(CASE WHEN c\.author_uid/,'unblocked requests use only the total row');
++ assert.doesNotMatch(plan,/SCAN friendbook_cf_firestore_documents/,'runtime aggregate must not re-read historical comment documents');
+  for(const blocked of [[],['blocked','blocked']])for(let offset=0;offset<resources.length;offset+=10){
+   const page=resources.slice(offset,offset+10),expected=await Promise.all(page.map(r=>legacyCommentCount(f.env.DB,r,blocked)));
+   const rows=(await legacyCommentCountsWithCandidatesStatement(f.env.DB,page,blocked).all()).results;
+   assert.deepEqual(rows.map(r=>r.n),expected);
+-  assert.equal(rows.find(r=>page[r.slot]==='posts/empty_count')?.has_candidates,offset===20?1:undefined);
++  assert.equal(rows.find(r=>page[r.slot]==='posts/empty_count')?.has_candidates,offset===20?0:undefined);
+  }
+ });
+ 
+@@ -40,7 +39,7 @@
+  const f=setup(t),add=canonicalSeed(f.sql);let candidateQueries=0,legacyQueries=0,epochReads=0,batches=0,inject=null,epochFail=false;
+  const base=f.env.DB,db={...base,withSession(mode){assert.equal(mode,'first-primary');return this;},prepare(q){
+   if(q.includes('FROM friendbook_cf_legacy_comment_epoch WHERE id=1')){epochReads++;if(epochFail)throw Error('storage unavailable');}
+-  if(q.includes('quota_comment_candidates_'))candidateQueries++;
++  if(q.includes('friendbook_cf_legacy_comment_route_counts'))candidateQueries++;
+   else if(q.includes('COUNT(*) AS n FROM friendbook_cf_firestore_documents'))legacyQueries++;
+   return base.prepare(q);
+  },async batch(statements){batches++;if(inject){const callback=inject;inject=null;callback();}return base.batch(statements);}};
+@@ -160,7 +159,7 @@
+  }
+  add.run('comments/legacy','comments','legacy','author',JSON.stringify({postId:'p1',authorId:'author',content:'old comment',createdAt:7}),1);
+  let candidateQueries=0,primarySessions=0;
+- const base=f.env.DB,db={...base,withSession(mode){assert.equal(mode,'first-primary');primarySessions++;return this;},prepare(q){if(q.includes('quota_comment_candidates_'))candidateQueries++;return base.prepare(q);}};
++ const base=f.env.DB,db={...base,withSession(mode){assert.equal(mode,'first-primary');primarySessions++;return this;},prepare(q){if(q.includes('friendbook_cf_legacy_comment_route_counts'))candidateQueries++;return base.prepare(q);}};
+  const app=createWorker(async token=>token),env={...f.env,DB:db,FIREBASE_PROJECT_ID:'test'};
+  const body={parent:'posts',filters:[],orderBy:[{field:'createdAt',direction:'DESCENDING'}],limit:2,feedEngagement:true};
+  async function request(){const response=await app.fetch(new Request('https://example.test/v1/firestore/query',{method:'POST',headers:{authorization:'Bearer user1','content-type':'application/json'},body:JSON.stringify(body)}),env);assert.equal(response.status,200,await response.clone().text());return (await response.json()).documents;}
+@@ -178,7 +177,7 @@
+  let grouped=0,batches=0,epochError=false;
+  const db={...base,withSession(){return this;},prepare(q){
+   if(epochError && q.includes('FROM friendbook_cf_legacy_comment_epoch WHERE id=1'))throw Error('unavailable');
+-  if(q.includes('AS slot')){grouped++;assert.ok((q.match(/AS slot/g)||[]).length<=5,'D1 compound SELECT limit');}
++  if(q.includes('friendbook_cf_legacy_comment_route_counts')){grouped++;assert.doesNotMatch(q,/UNION ALL/,'aggregate batch uses one grouped query, not per-resource compounds');}
+   return base.prepare(q);
+  },async batch(statements){batches++;return base.batch(statements);}};
+  let result=await batchEngagementReads(db,resources,'user1',[],db);
+--- a/cloudflare/test/feed-engagement-batch.test.js
++++ b/cloudflare/test/feed-engagement-batch.test.js
+@@ -13,9 +13,9 @@
+       assert.equal(statements.length,24);
+       return statements.map(({args,sql},i)=>{
+         if(i>=20) {
+-          assert.equal(args.length,11);
++          assert.equal(args.length,6);
+           assert.equal(args[0],'["blocked"]');
+-          assert.equal((sql.match(/COUNT\(\*\)/g)||[]).length,5);
++          assert.equal((sql.match(/SUM\(CASE WHEN c\.author_uid/g)||[]).length,1);
+           // Do not depend on a database preserving compound-result ordering.
+           return {results:Array.from({length:5},(_,slot)=>({slot,n:0})).reverse()};
+         }
+--- a/cloudflare/test/comment-epoch-smoke.test.js
++++ b/cloudflare/test/comment-epoch-smoke.test.js
+@@ -7,14 +7,14 @@
+  const fake=async(url,options)=>{
+   calls++;assert.match(url,/\/d1\/database\//);const body=JSON.parse(options.body);
+   assert.ok(body.sql);assert.ok(Array.isArray(body.params));
+-  if(calls>11)return {ok:false,json:async()=>({errors:[{message:'too many terms in compound SELECT'}]})};
+-  const candidate=body.sql.includes('quota_comment_candidates_0');
+-  const size=(body.params.length-1)/2;
++  const candidate=body.sql.includes('friendbook_cf_legacy_comment_route_counts');
++  if(calls>11 && !candidate)return {ok:false,json:async()=>({errors:[{message:'too many terms in compound SELECT'}]})};
++  const size=candidate?body.params.length-1:(body.params.length-1)/2;
+   const rows=calls===1?[{n:1}]:Array.from({length:size},(_,slot)=>({slot,n:0,...(candidate?{has_candidates:0}:{})}));
+   return {ok:true,json:async()=>({success:true,result:[{success:true,results:rows,meta:{rows_read:10}}]})};
+  };
+  const output=await checkCommentEpoch(fake,'SYNTHETIC_TOKEN','abcdefghijklmnop');
+- assert.equal(calls,15);assert.equal(output.measurements.length,14);assert.equal(output.measurements.filter(x=>x.compound_limit).length,4);
++ assert.equal(calls,15);assert.equal(output.measurements.length,14);assert.equal(output.measurements.filter(x=>x.compound_limit).length,2);
+  assert.ok(!JSON.stringify(output).includes('SYNTHETIC_TOKEN'));
+  await assert.rejects(checkCommentEpoch(async()=>({ok:false,json:async()=>({})}),'token','abcdefghijklmnop'));
+ });

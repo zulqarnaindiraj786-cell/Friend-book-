@@ -1,0 +1,86 @@
+--- a/cloudflare/legacy-comment-negative-cache.js
++++ b/cloudflare/legacy-comment-negative-cache.js
+@@ -1,11 +1,19 @@
+ // Isolate-local quota hints only. Every cached count is bound to a fresh primary epoch
+ // and the exact blocked-author set; no comment body or author data is cached.
+ const scopes=new WeakMap();
++const countScopes=new WeakMap();
+ const MAX_HINTS=1024;
++let sharedScopeMap=null;
++let sharedCountMap=null;
++function sessionBinding(scope) {
++  return !!scope && (typeof scope==='object' || typeof scope==='function')
++    && typeof scope.withSession==='function';
++}
+ function scopeMap(scope,create=false) {
+   if(!scope || (typeof scope!=='object' && typeof scope!=='function'))return null;
+-  let map=scopes.get(scope);
+-  if(!map && create){map=new Map();scopes.set(scope,map);}
++  const shared=sessionBinding(scope);
++  let map=shared?sharedScopeMap:scopes.get(scope);
++  if(!map && create){map=new Map();if(shared)sharedScopeMap=map;else scopes.set(scope,map);}
+   return map;
+ }
+ export async function legacyEpoch(db) {
+@@ -26,20 +34,19 @@
+   while(map.size>MAX_HINTS)map.delete(map.keys().next().value);
+ }
+ 
+-const countScopes=new WeakMap();
+ function countMap(scope,create=false) {
+   if(!scope || (typeof scope!=='object' && typeof scope!=='function'))return null;
+-  let map=countScopes.get(scope);
+-  if(!map && create){map=new Map();countScopes.set(scope,map);}
++  const shared=sessionBinding(scope);
++  let map=shared?sharedCountMap:countScopes.get(scope);
++  if(!map && create){map=new Map();if(shared)sharedCountMap=map;else countScopes.set(scope,map);}
+   return map;
+ }
+ function countKey(resource,blocked) {
+   const actors=[...new Set(Array.isArray(blocked)?blocked:[])].sort();
+   return JSON.stringify([resource,actors]);
+ }
+-// Cached counts are safe only for the same database binding, primary-backed
+-// epoch, resource and blocked-author set. Epoch triggers cover legacy comment
+-// inserts, edits, moves and deletes. The cache is bounded per binding.
++// Session-backed scopes share bounded isolate-local hints. Counts remain gated
++// by the database's random generation/revision, resource and blocked authors.
+ export function legacyCachedCount(scope,resource,blocked,epoch) {
+   if(!epoch)return undefined;
+   const entry=countMap(scope)?.get(countKey(resource,blocked));
+--- a/cloudflare/test/legacy-comment-epoch-demand.test.js
++++ b/cloudflare/test/legacy-comment-epoch-demand.test.js
+@@ -124,12 +124,11 @@
+  assert.deepEqual(res.map(r=>oldSchema.get(r).count),res.map(r=>withEpoch.get(r).count));
+ });
+ 
+-test('negative hints never cross database binding scopes, even with equal epochs',async t=>{
++test('random primary epochs namespace shared session caches across D1 databases',async t=>{
+  const a=setup(t),b=setup(t),res=['posts/a','posts/b'];
+- const stamp='a'.repeat(32);
+- a.sql.prepare('UPDATE friendbook_cf_legacy_comment_epoch SET generation=?,revision=7 WHERE id=1').run(stamp);
++ a.sql.prepare('UPDATE friendbook_cf_legacy_comment_epoch SET generation=?,revision=7 WHERE id=1').run('a'.repeat(32));
+  canonicalSeed(b.sql).run('comments/x','comments','x','author',JSON.stringify({postId:'a',authorId:'author'}),1);
+- b.sql.prepare('UPDATE friendbook_cf_legacy_comment_epoch SET generation=?,revision=7 WHERE id=1').run(stamp);
++ b.sql.prepare('UPDATE friendbook_cf_legacy_comment_epoch SET generation=?,revision=7 WHERE id=1').run('b'.repeat(32));
+  const first=await batchEngagementReads(a.env.DB,res,'user1',[],a.env.DB);
+  assert.deepEqual(res.map(r=>first.get(r).count),[0,0]);
+  const other=await batchEngagementReads(b.env.DB,res,'user1',[],b.env.DB);
+@@ -160,10 +159,14 @@
+  }
+  add.run('comments/legacy','comments','legacy','author',JSON.stringify({postId:'p1',authorId:'author',content:'old comment',createdAt:7}),1);
+  let candidateQueries=0,primarySessions=0;
+- const base=f.env.DB,db={...base,withSession(mode){assert.equal(mode,'first-primary');primarySessions++;return this;},prepare(q){if(q.includes('quota_comment_candidates_'))candidateQueries++;return base.prepare(q);}};
+- const app=createWorker(async token=>token),env={...f.env,DB:db,FIREBASE_PROJECT_ID:'test'};
++ const base=f.env.DB,app=createWorker(async token=>token);
+  const body={parent:'posts',filters:[],orderBy:[{field:'createdAt',direction:'DESCENDING'}],limit:2,feedEngagement:true};
+- async function request(){const response=await app.fetch(new Request('https://example.test/v1/firestore/query',{method:'POST',headers:{authorization:'Bearer user1','content-type':'application/json'},body:JSON.stringify(body)}),env);assert.equal(response.status,200,await response.clone().text());return (await response.json()).documents;}
++ async function request(){
++  const db={...base,withSession(mode){assert.equal(mode,'first-primary');primarySessions++;return this;},prepare(q){if(q.includes('quota_comment_candidates_'))candidateQueries++;return base.prepare(q);}};
++  const env={...f.env,DB:db,FIREBASE_PROJECT_ID:'test'};
++  const response=await app.fetch(new Request('https://example.test/v1/firestore/query',{method:'POST',headers:{authorization:'Bearer user1','content-type':'application/json'},body:JSON.stringify(body)}),env);
++  assert.equal(response.status,200,await response.clone().text());return (await response.json()).documents;
++ }
+  const first=await request();assert.equal(first.length,2);assert.equal(candidateQueries,1);
+  assert.equal(first.find(d=>d.id==='p1').engagement.comments,1);
+  assert.deepEqual(await request(),first);assert.equal(candidateQueries,1,'unchanged second feed reuses positive legacy count results');
