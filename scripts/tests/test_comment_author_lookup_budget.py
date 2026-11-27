@@ -3,14 +3,13 @@ import unittest
 ROOT=Path(__file__).resolve().parents[2]
 
 class CommentAuthorLookupBudget(unittest.TestCase):
-    def test_comment_bind_uses_gate_disk_cache_and_targeted_repaint(self):
+    def test_comment_authors_hydrate_in_bounded_batches_not_per_row(self):
         source=(ROOT/'app/src/main/java/com/friendbook/social/post/CommentsAdapter.java').read_text()
-        lookup=source.split('if (liveUser == null && c.authorId != null',1)[1].split('Ui.avatar(activity, h.av',1)[0]
-        self.assertIn('authorLookups.begin(actor, authorId',lookup)
-        self.assertIn('Source.CACHE',lookup)
-        self.assertIn('return author.get();',lookup)
-        self.assertIn('authorLookups.finish(actor, authorId, ticket, true',lookup)
-        self.assertIn('authorLookups.finish(actor, authorId, ticket, false',lookup)
-        self.assertIn('notifyItemChanged(i + headerOffset())',lookup)
-        self.assertNotIn('notifyDataSetChanged()',lookup)
-        self.assertIn('java.util.Objects.equals(actor, Fb.uid())',lookup)
+        lookup=source.split('private void hydrateCommentAuthors()',1)[1].split('public void setAll(',1)[0]
+        self.assertIn('UserBatchLookup.load(new ArrayList<>(requested)',lookup)
+        self.assertIn('TickCache.put(entry.getKey(),user.tickLevel)',lookup)
+        self.assertIn('notifyItemChanged(i+headerOffset())',lookup)
+        self.assertIn('Objects.equals(actor,Fb.uid())',lookup)
+        self.assertIn('TickCache.attachCached(h.tick, c.authorId)',source)
+        self.assertNotIn('author.get(',source)
+        self.assertNotIn('TickCache.attach(h.tick, c.authorId)',source)

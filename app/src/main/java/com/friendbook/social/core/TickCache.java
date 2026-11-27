@@ -11,6 +11,17 @@ public final class TickCache {
     private TickCache() { }
     private static final BadgeLookupState<ImageView> STATE = new BadgeLookupState<>();
 
+    /** Bind only locally known badge data; batch-oriented callers hydrate profiles separately. */
+    public static void attachCached(ImageView iv,String uid) {
+        if(iv==null)return;
+        String actor=Fb.uid();
+        if(uid!=null && !uid.isEmpty() && STATE.cached(actor,uid)==null){
+            Models.User user=FastCache.getUser(uid);
+            if(user!=null)STATE.put(actor,uid,user.tickLevel==null?"none":user.tickLevel);
+        }
+        Icons.setTickBadge(iv,STATE.cached(actor,uid)==null?"none":STATE.cached(actor,uid),false);
+    }
+
     public static void attach(ImageView iv, String uid) {
         if (iv == null) return;
         String actor=Fb.uid();

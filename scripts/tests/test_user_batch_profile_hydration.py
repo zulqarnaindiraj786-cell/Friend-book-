@@ -22,8 +22,12 @@ class UserBatchProfileHydration(unittest.TestCase):
             'settings/BlockedUsersActivity.java': 'UserBatchLookup.load(',
             'core/FriendPicker.java': 'UserBatchLookup.load(',
             'admin/frag/AdminReferralsFragment.java': 'UserBatchLookup.load(',
+            'post/CommentsAdapter.java': 'UserBatchLookup.load(new ArrayList<>(requested)',
         }
         for relative, marker in checks.items():
             source = (JAVA / relative).read_text()
             self.assertIn(marker, source)
             self.assertNotIn('Fb.getUser(', source)
+            if relative == 'post/CommentsAdapter.java':
+                self.assertNotIn('author.get(', source)
+                self.assertIn('TickCache.attachCached(', source)

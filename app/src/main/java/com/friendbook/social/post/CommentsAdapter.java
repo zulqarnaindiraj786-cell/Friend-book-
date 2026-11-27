@@ -22,15 +22,12 @@ import com.friendbook.social.core.TickCache;
 import com.friendbook.social.core.Format;
 import com.friendbook.social.core.Ui;
 import com.friendbook.social.models.Models;
-import com.friendbook.social.d1.documents.DocumentReference;
-import com.friendbook.social.d1.documents.FieldValue;
-import com.friendbook.social.d1.documents.SetOptions;
-
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -63,7 +60,7 @@ public class CommentsAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
     private final Activity activity;
     private final Host host;
     private final List<Row> rows = new ArrayList<>();
-    private final CommentAuthorLookupGate authorLookups = new CommentAuthorLookupGate();
+    private int authorHydrationGeneration;
     private View headerView;
     private RecyclerView attachedList;
     private boolean showEmptyWhenNone = true;
@@ -90,10 +87,31 @@ public class CommentsAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
         this.showEmptyWhenNone = show;
     }
 
-    @Override public void onAttachedToRecyclerView(@NonNull RecyclerView list){super.onAttachedToRecyclerView(list);attachedList=list;}
+    @Override public void onAttachedToRecyclerView(@NonNull RecyclerView list){super.onAttachedToRecyclerView(list);attachedList=list;if(!rows.isEmpty())hydrateCommentAuthors();}
     @Override public void onDetachedFromRecyclerView(@NonNull RecyclerView list){if(attachedList==list)attachedList=null;super.onDetachedFromRecyclerView(list);}
 
+    /** Hydrate the loaded comment page in bounded groups, never one profile read per row. */
+    private void hydrateCommentAuthors(){
+        final String actor=Fb.uid();if(actor==null || rows.isEmpty())return;
+        final int generation=++authorHydrationGeneration;
+        LinkedHashSet<String> requested=new LinkedHashSet<>();
+        for(Row row:rows)if(row!=null && row.c!=null && row.c.authorId!=null && !row.c.authorId.isEmpty())requested.add(row.c.authorId);
+        if(requested.isEmpty())return;
+        com.friendbook.social.core.UserBatchLookup.load(new ArrayList<>(requested),users->{
+            if(generation!=authorHydrationGeneration || !java.util.Objects.equals(actor,Fb.uid())
+                    || activity.isFinishing() || activity.isDestroyed())return;
+            Set<String> hydrated=new HashSet<>();
+            for(Map.Entry<String,Models.User> entry:users.entrySet()){
+                Models.User user=entry.getValue();if(user==null)continue;
+                TickCache.put(entry.getKey(),user.tickLevel);hydrated.add(entry.getKey());
+            }
+            if(attachedList!=null && !hydrated.isEmpty())for(int i=0;i<rows.size();i++)
+                if(hydrated.contains(rows.get(i).c.authorId))notifyItemChanged(i+headerOffset());
+        });
+    }
+
     public void setAll(List<Models.Comment> all) {
+        authorHydrationGeneration++;
         final int oldCount=rows.size();
         String anchorId=null;int anchorTop=0;
         androidx.recyclerview.widget.LinearLayoutManager layout=attachedList!=null && attachedList.getLayoutManager() instanceof androidx.recyclerview.widget.LinearLayoutManager
@@ -171,6 +189,7 @@ public class CommentsAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
             }
         }
         notifyDataSetChanged();
+        hydrateCommentAuthors();
         // Older chronological pages may prepend; keep the reader on the same comment/pixel.
         if(layout!=null && anchorId!=null && rows.size()>oldCount){
             for(int i=0;i<rows.size();i++)if(anchorId.equals(rows.get(i).c.id)){layout.scrollToPositionWithOffset(i+headerOffset(),anchorTop);break;}
@@ -329,34 +348,6 @@ public class CommentsAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
                 : (c.authorName != null && !c.authorName.isEmpty() ? c.authorName : "friendbook User");
         String dispPhoto = (liveUser != null && liveUser.photoUrl != null && !liveUser.photoUrl.isEmpty())
                 ? liveUser.photoUrl : c.authorPhoto;
-        if (liveUser == null && c.authorId != null && !c.authorId.isEmpty()) {
-            final String actor = Fb.uid(), authorId = c.authorId;
-            final long ticket = authorLookups.begin(actor, authorId, android.os.SystemClock.elapsedRealtime());
-            if (ticket >= 0) {
-                DocumentReference author = Fb.db().collection("users").document(authorId);
-                author.get(com.friendbook.social.d1.documents.Source.CACHE).<com.friendbook.social.d1.documents.DocumentSnapshot>continueWithTask(cached -> {
-                    if (!java.util.Objects.equals(actor, Fb.uid()))
-                        return com.google.android.gms.tasks.Tasks.forException(new java.io.IOException("Account changed"));
-                    if (cached.isSuccessful() && cached.getResult() != null && cached.getResult().exists())
-                        return com.google.android.gms.tasks.Tasks.forResult(cached.getResult());
-                    return author.get();
-                }).addOnSuccessListener(doc -> {
-                        if (!java.util.Objects.equals(actor, Fb.uid())) return;
-                        if (!authorLookups.finish(actor, authorId, ticket, true, android.os.SystemClock.elapsedRealtime())) return;
-                        // Missing profiles are terminal for this adapter, too.
-                        // Paint only this author's current rows, not the entire list.
-                        if (doc != null && doc.exists()) com.friendbook.social.core.FastCache.putUser(Models.User.fromDoc(doc));
-                        if (doc != null && doc.exists() && attachedList != null) {
-                            for (int i = 0; i < rows.size(); i++)
-                                if (authorId.equals(rows.get(i).c.authorId)) notifyItemChanged(i + headerOffset());
-                        }
-                    }).addOnFailureListener(error -> {
-                        if (java.util.Objects.equals(actor, Fb.uid()))
-                            authorLookups.finish(actor, authorId, ticket, false, android.os.SystemClock.elapsedRealtime());
-                    });
-            }
-        }
-
         Ui.avatar(activity, h.av, dispPhoto);
         android.text.SpannableString authorLabel = new android.text.SpannableString((c.pinned ? "📌 " : "") + dispName
                 + (c.authorId != null && c.authorId.equals(postAuthorId) ? "  ◆ Creator" : ""));
@@ -364,7 +355,7 @@ public class CommentsAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
             authorLabel.setSpan(new android.text.style.ForegroundColorSpan(0xFF1A73E8),0,authorLabel.length(),android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
         }
         h.author.setText(authorLabel);
-        TickCache.attach(h.tick, c.authorId);
+        TickCache.attachCached(h.tick, c.authorId);
 
         boolean hasText = c.content != null && !c.content.isEmpty();
         h.text.setVisibility(hasText ? View.VISIBLE : View.GONE);
