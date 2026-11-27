@@ -39,7 +39,7 @@ public class ReactionMutationSummaryFreshnessTest {
    d.verify(()->D1Client.request("posts","mutation-age","reactions","GET",null,null),times(2));assertEquals(4,p.comments);
   }
  }
- @Test public void completeInitialReadMayBeReusedButConcurrentInvalidationCannotBeUndone()throws Exception{
+ @Test public void staleInitialReadCannotOverwriteReactionWriteAndInvalidationDoesNotForceCommentScan()throws Exception{
   for(boolean invalidate:new boolean[]{false,true})try(MockedStatic<Fb> fb=mockStatic(Fb.class);MockedStatic<FastCache> cache=mockStatic(FastCache.class);MockedStatic<D1Client> d=client()){
    fb.when(Fb::uid).thenReturn("mutation-read-actor-"+invalidate);String id="mutation-read-"+invalidate;
    TaskCompletionSource<JSONObject> pending=new TaskCompletionSource<>();
@@ -50,8 +50,9 @@ public class ReactionMutationSummaryFreshnessTest {
    if(invalidate)D1Reactions.invalidate("posts",id);
    pending.setResult(full(3));Shadows.shadowOf(Looper.getMainLooper()).idle();
    Models.Post p=post(id);D1Reactions.loadPost(RuntimeEnvironment.getApplication(),p,()->{});Shadows.shadowOf(Looper.getMainLooper()).idle();
-   d.verify(()->D1Client.request("posts",id,"reactions","GET",null,null),times(invalidate?1:0));
-   assertEquals(invalidate?9:3,p.comments);
+   d.verify(()->D1Client.request("posts",id,"reactions","GET",null,null),never());
+   assertEquals(invalidate?0:3,p.comments);
+   assertEquals("like",D1Reactions.mine("posts",id));
   }
  }
 }
