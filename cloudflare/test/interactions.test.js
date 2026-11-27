@@ -500,7 +500,7 @@ test('Home returns authorized reaction state and comment previews with the bound
   f.sql.exec("INSERT INTO friendbook_cf_comment_details(resource,id,removed) VALUES('posts/p1','third',1)");
   assert.equal(f.sql.prepare("SELECT total FROM friendbook_cf_visible_comment_totals WHERE resource='posts/p1'").get().total,2);
   const worker=createWorker(async token=>token);
-  const get=(uid,limit)=>worker.fetch(new Request('https://example.test/v1/firestore/query',{method:'POST',headers:{authorization:`Bearer ${uid}`,'content-type':'application/json'},body:JSON.stringify({parent:'posts',feedEngagement:true,limit,orderBy:[{field:'createdAt',direction:'DESCENDING'}]})}),{...f.env,FIREBASE_PROJECT_ID:'test'});
+  const get=(uid,limit)=>worker.fetch(new Request('https://example.test/v1/firestore/query',{method:'POST',headers:{authorization:`Bearer ${uid}`,'content-type':'application/json'},body:JSON.stringify({parent:'posts',feedEngagement:true,limit,orderBy:[{field:'createdAt',direction:'DESCENDING'}]})}),{...f.env,FIREBASE_PROJECT_ID:'test',D1_FEED_ENGAGEMENT_ENABLED:'true'});
   // Android Home requests twenty posts both for the head and older pages.
   const r=await get('user1',20);assert.equal(r.status,200,await r.clone().text());
   const {documents}=await r.json();

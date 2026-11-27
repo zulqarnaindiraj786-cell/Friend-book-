@@ -91,7 +91,7 @@ test('timestamp Home head still bundles authorized per-viewer engagement',async 
  f.sql.prepare('INSERT INTO friendbook_cf_reactions VALUES (?,?,?,?)').run('posts/p1','user1','love',1);
  f.sql.prepare('INSERT INTO friendbook_cf_comments(resource,id,uid,text,created_at) VALUES (?,?,?,?,?)').run('posts/p1','c1','author','hello',1);
  const app=createWorker(async token=>token),body={parent:'posts',filters:[],orderBy:[{field:'createdAt',direction:'DESCENDING'}],limit:1,feedEngagement:true};
- const response=await app.fetch(new Request('https://example.test/v1/firestore/query',{method:'POST',headers:{authorization:'Bearer user1','content-type':'application/json'},body:JSON.stringify(body)}),{...f.env,FIREBASE_PROJECT_ID:'test'});
+ const response=await app.fetch(new Request('https://example.test/v1/firestore/query',{method:'POST',headers:{authorization:'Bearer user1','content-type':'application/json'},body:JSON.stringify(body)}),{...f.env,FIREBASE_PROJECT_ID:'test',D1_FEED_ENGAGEMENT_ENABLED:'true'});
  assert.equal(response.status,200,await response.clone().text());const docs=(await response.json()).documents;
  assert.equal(docs.length,1);assert.deepEqual(docs[0].engagement.types,[{type:'love',count:1,mine:1}]);
  assert.equal(docs[0].engagement.comments,1);assert.equal(docs[0].engagement.preview[0].text,'hello');

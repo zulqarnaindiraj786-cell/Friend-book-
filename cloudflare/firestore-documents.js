@@ -1290,7 +1290,10 @@ async function visibleDocuments(db,uid,parent,docs,requestUserReads = new Map(),
 
 // Enrich only a bounded page that already passed the authoritative post ACL.
 async function feedEngagement(db, env, uid, body, docs, requestUserReads) {
-  if (body?.feedEngagement!==true || body.parent!=='posts' || !Number.isInteger(body.limit)
+  // Feed-wide reaction/comment enrichment causes repeat multi-table reads for
+  // every visible post. Keep it explicitly opt-in until account read demand is
+  // back under budget; the post's stored fields remain available as fallback.
+  if (env.D1_FEED_ENGAGEMENT_ENABLED!=='true' || body?.feedEngagement!==true || body.parent!=='posts' || !Number.isInteger(body.limit)
       || body.limit<1 || body.limit>MAX_FEED_ENGAGEMENT_PAGE || env.D1_INTERACTIONS_ENABLED!=='true' || !docs.length) return docs;
   try {
     const enrichCount=Number.isInteger(body.feedEngagementLimit) && body.feedEngagementLimit>0

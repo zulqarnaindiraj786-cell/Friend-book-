@@ -18,7 +18,7 @@ test('covering state lookups preserve ACL, staging, unknown state and old-schema
   else if(q.includes('SELECT resource,state FROM friendbook_cf_interaction_resources'))plain++;
   return original.prepare(q);
  }};
- const app=createWorker(async token=>token),env={...f.env,DB:db,FIREBASE_PROJECT_ID:'test'};
+ const app=createWorker(async token=>token),env={...f.env,DB:db,FIREBASE_PROJECT_ID:'test',D1_FEED_ENGAGEMENT_ENABLED:'true'};
  async function request(){
   const body={parent:'posts',filters:[],orderBy:[{field:'createdAt',direction:'DESCENDING'}],limit:3,feedEngagement:true};
   const r=await app.fetch(new Request('https://example.test/v1/firestore/query',{method:'POST',headers:{authorization:'Bearer user1','content-type':'application/json'},body:JSON.stringify(body)}),env);
