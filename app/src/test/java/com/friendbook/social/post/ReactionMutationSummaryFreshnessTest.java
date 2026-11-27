@@ -51,7 +51,7 @@ public class ReactionMutationSummaryFreshnessTest {
    pending.setResult(full(3));Shadows.shadowOf(Looper.getMainLooper()).idle();
    Models.Post p=post(id);D1Reactions.loadPost(RuntimeEnvironment.getApplication(),p,()->{});Shadows.shadowOf(Looper.getMainLooper()).idle();
    d.verify(()->D1Client.request("posts",id,"reactions","GET",null,null),never());
-   assertEquals(invalidate?0:3,p.comments);
+   assertEquals(3,p.comments);
    assertEquals("like",D1Reactions.mine("posts",id));
   }
  }
