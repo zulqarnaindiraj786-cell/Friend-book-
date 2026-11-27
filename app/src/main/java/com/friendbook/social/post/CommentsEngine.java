@@ -284,12 +284,12 @@ public class CommentsEngine {
             handle.older.putAll(handle.latest);
             for(com.friendbook.social.d1.documents.DocumentChange change:page.getDocumentChanges()) {
                 if(change.getType()==com.friendbook.social.d1.documents.DocumentChange.Type.REMOVED) {
-                    final String id=change.getDocument().getId();
-                    change.getDocument().getReference().get().addOnSuccessListener(current -> {
-                        if(!handle.active()) return;
-                        if(!current.exists()) { handle.deleted.add(id); handle.older.remove(id); handle.latest.remove(id); }
-                        handle.emit();
-                    });
+                    // The listener already carries this snapshot. Re-reading its
+                    // reference for every window shift caused one extra D1 read per removal.
+                    DocumentSnapshot removed=change.getDocument();
+                    final String id=removed.getId();
+                    if(!removed.exists()) { handle.deleted.add(id); handle.older.remove(id); handle.latest.remove(id); }
+                    else handle.older.put(id,Models.Comment.fromDoc(removed));
                 }
             }
             handle.latest.clear();

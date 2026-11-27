@@ -14,3 +14,8 @@ class CommentLoopLifecycle(unittest.TestCase):
   self.assertIn('pageHandler.postDelayed(conflictRetry,2_000L)',conflict)
   self.assertNotIn('d1Page(first,background)',conflict)
   self.assertIn('closed=true;D1_HANDLES.remove(this);listener=null;cancelConflictRetry();clearPageDeadline()',s)
+ def test_removed_comment_window_uses_delivered_snapshot_without_extra_read(self):
+  s=(JAVA/'post/CommentsEngine.java').read_text()
+  self.assertIn('DocumentSnapshot removed=change.getDocument()',s)
+  self.assertNotIn('change.getDocument().getReference().get()',s)
+  self.assertIn('if(!removed.exists())',s)
