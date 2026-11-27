@@ -32,7 +32,8 @@ test('neither the app nor the Worker runtime references removed status endpoints
 test('production app consumers and routine schedules are restored; hard stop remains available as an override', async () => {
   const config = read('wrangler.toml');
   assert.match(config, /^\s*\[triggers\]/m, 'a triggers block exists');
-  assert.match(config, /crons = \["\*\/15 \* \* \* \*", "0 \* \* \* \*"\]/, 'production crons are restored');
+  assert.match(config, /crons = \["\*\/15 \* \* \* \*"\]/, 'only the 15-minute production cron remains');
+  assert.doesNotMatch(config, /0 \* \* \* \*/, 'hourly cron is removed');
   assert.match(config, /D1_QUOTA_HARD_STOP = "false"/, 'production hard stop is off');
   assert.match(config, /D1_QUOTA_HARD_STOP = "false"/, 'preview remains available');
   assert.equal('scheduled' in worker, true, 'the Worker exports a scheduled handler');

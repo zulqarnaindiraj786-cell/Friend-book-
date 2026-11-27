@@ -59,5 +59,5 @@ test('isolated config has no application storage or service bindings and leaves 
  assert.match(cfg,/name = "friendbook-quota-monitor"/);assert.match(cfg,/crons = \["\*\/15 \* \* \* \*"\]/);
  assert.ok(!/\[\[?(?:d1_databases|r2_buckets|kv_namespaces|services|durable_objects|migrations|assets)/.test(cfg));
  const production=readFileSync(new URL('../../wrangler.toml',import.meta.url),'utf8');
- assert.match(production,/crons = \["\*\/15 \* \* \* \*", "0 \* \* \* \*"\]/);assert.match(production,/D1_QUOTA_HARD_STOP = "false"/);
+ assert.match(production,/crons = \["\*\/15 \* \* \* \*"\]/);assert.doesNotMatch(production,/0 \* \* \* \*/);assert.match(production,/D1_QUOTA_HARD_STOP = "false"/);
 });
