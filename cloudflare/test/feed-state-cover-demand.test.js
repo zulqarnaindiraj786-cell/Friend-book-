@@ -31,10 +31,11 @@ test('covering state lookups preserve ACL, staging, unknown state and old-schema
  const after=await request();assert.deepEqual(after,before);assert.equal(attempted,2);assert.equal(plain,1);
  const p1=after.find(d=>d.id==='p1'),p2=after.find(d=>d.id==='p2'),p3=after.find(d=>d.id==='p3');
  assert.deepEqual(p1.engagement.types,[{type:'love',count:1,mine:1}]);assert.ok(!Object.hasOwn(p1.data,'reactionsMap'));
- assert.ok(!Object.hasOwn(p2,'engagement'));assert.ok(Object.hasOwn(p2.data,'reactionsMap'));
+ assert.deepEqual(p2.engagement.types,[]);assert.ok(Object.hasOwn(p2.data,'reactionsMap'));
  assert.equal(p3.engagement.reactionStateUnknown,true);assert.ok(Object.hasOwn(p3.data,'reactionsMap'));
  f.sql.prepare("UPDATE friendbook_cf_interaction_resources SET state='staging' WHERE resource='posts/p1'").run();
- const changed=await request();assert.ok(!Object.hasOwn(changed.find(d=>d.id==='p1'),'engagement'),'next request sees state change');
+ const changed=await request();assert.deepEqual(changed.find(d=>d.id==='p1').engagement.types,[{type:'love',count:1,mine:1}],'staging resource still has the same live summary as detail');
+ assert.ok(Object.hasOwn(changed.find(d=>d.id==='p1').data,'reactionsMap'),'staging retains legacy document fields');
  fail=true;const unavailable=await request();assert.equal(plain,1,'a storage error must not be misclassified as missing schema');
  assert.ok(unavailable.every(d=>!Object.hasOwn(d,'engagement')),'summary failure leaves authorized documents intact');
 });

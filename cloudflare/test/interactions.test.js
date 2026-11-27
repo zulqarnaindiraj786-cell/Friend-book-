@@ -525,7 +525,7 @@ test('Home returns authorized reaction state and comment previews with the bound
   const r=await get('user1',20);assert.equal(r.status,200,await r.clone().text());
   const {documents}=await r.json();
   assert.deepEqual(documents.map(d=>d.id),['p2','p1']);
-  assert.equal(documents[0].engagement,undefined);
+  assert.equal(documents[0].engagement.comments,0);
   assert.ok(documents[0].data.commentsMap.old.content);
   assert.equal(documents[1].data.commentsMap,undefined);
   assert.equal(documents[1].data.reactionsMap,undefined);

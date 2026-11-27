@@ -16,6 +16,8 @@ FIREBASE_PROJECT_ID = "friendbook-17551"
 # Server-side authority for free verification reviews; Firebase Auth UID, not a secret.
 PAYMENT_ADMIN_UIDS = "ZlCw7oeKitPbhAcEryjnz2Do2Ky2"
 D1_INTERACTIONS_ENABLED = "true"
+# Authorize bounded, batched per-viewer engagement summaries on Home feed pages.
+D1_FEED_ENGAGEMENT_ENABLED = "true"
 # Operator authorized restoring app/API D1 consumers.
 D1_QUOTA_HARD_STOP = "false"
 # Additive indexes have an automatic fallback when absent; disable to roll back.
@@ -90,6 +92,7 @@ CF_ACCOUNT_ID = "preview-disabled"
 FIREBASE_PROJECT_ID = "preview-disabled"
 PAYMENT_ADMIN_UIDS = ""
 D1_INTERACTIONS_ENABLED = "false"
+D1_FEED_ENGAGEMENT_ENABLED = "false"
 D1_QUOTA_HARD_STOP = "false"
 FRIEND_GUARD_INDEXED = "false"
 DOCUMENT_MIRROR_MODE = "dual"

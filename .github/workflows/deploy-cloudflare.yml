@@ -45,6 +45,7 @@ jobs:
           assert cfg['name'] == 'rough-firefly-dd7b'
           assert cfg['vars']['CF_ACCOUNT_ID'] == '92f3d04598822de2e49e14561218d090'
           assert cfg['vars']['D1_INTERACTIONS_ENABLED'] == 'true'
+          assert cfg['vars']['D1_FEED_ENGAGEMENT_ENABLED'] == 'true'
           assert cfg['vars']['VIDEO_R2_ENABLED'] == 'true'
           assert cfg['vars']['VIDEO_R2_RETENTION_VERIFIED'] == 'true'
           assert cfg['vars']['FIREBASE_PROJECT_ID'] == 'friendbook-17551'

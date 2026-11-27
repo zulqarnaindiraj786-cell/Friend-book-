@@ -1385,11 +1385,13 @@ async function feedEngagement(db, env, uid, body, docs, requestUserReads) {
     // read replicas are enabled; the cache scope is the database binding itself.
     const primarySessions=typeof env.DB.withSession==='function';
     const summaryDb=primarySessions?env.DB.withSession('first-primary'):db;
-    const preloaded=await batchEngagementReads(summaryDb,resources.filter(resource=>!stateByResource.get(resource) || stateByResource.get(resource)==='verified'),uid,blocked,primarySessions?env.DB:null);
+    // Keep counts available for pending/legacy resources too: the detail
+    // endpoint computes the same viewer-visible summary from current and
+    // legacy rows. Only verified resources may discard embedded legacy maps.
+    const preloaded=await batchEngagementReads(summaryDb,resources,uid,blocked,primarySessions?env.DB:null);
     const enriched=await mapBounded(pageDocs,3,async doc=>{
       const resource=`posts/${doc.id}`;
       const state=stateByResource.get(resource);
-      if (state && state!=='verified') return doc;
       try {
         const engagement=await engagementSummary(summaryDb,resource,uid,doc.data.authorId,blocked,preloaded.get(resource));
         // Missing import metadata is not proof that a historical post had zero likes.
