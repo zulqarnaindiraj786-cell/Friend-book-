@@ -70,6 +70,21 @@ test('reaction-only reads skip canonical and legacy comment-count/preview querie
   assert.equal(payload.reactionOnly,true);assert.deepEqual(payload.types,[]);
   assert.equal(commentReads,0,'reaction-only views must not execute comment aggregate or preview SQL');
 });
+test('staging post comments are readable in ten-item cursor pages while writes stay gated', async t => {
+  const f=fixture();t.after(f.close);
+  const insert=f.sql.prepare('INSERT INTO friendbook_cf_comments(resource,id,uid,text,parent_id,created_at) VALUES (?,?,?,?,?,?)');
+  for(let i=1;i<=12;i++)insert.run('posts/p2',`c${String(i).padStart(2,'0')}`,'author',`comment ${i}`,null,i);
+  const firstResponse=await call(f.env,'comments','GET',undefined,{post:'p2',query:'?limit=10',authorize:async()=>true});
+  assert.equal(firstResponse.status,200,await firstResponse.clone().text());
+  const first=await firstResponse.json();
+  assert.equal(first.comments.length,10);assert.ok(first.next);
+  const nextResponse=await call(f.env,'comments','GET',undefined,{post:'p2',query:`?limit=10&before=${encodeURIComponent(first.next)}`,authorize:async()=>true});
+  assert.equal(nextResponse.status,200,await nextResponse.clone().text());
+  assert.equal((await nextResponse.json()).comments.length,2);
+  const blockedWrite=await call(f.env,'comments','POST',{id:'new-comment',text:'must stay gated'},{post:'p2',authorize:async()=>true});
+  assert.equal(blockedWrite.status,503);
+});
+
 test('engagement summary binds the comment actor to parameter one, not an unbound fourth parameter', async t => {
   const f=fixture(); t.after(f.close);
   const db=f.env.DB; const prepare=db.prepare; let summarySql='';
@@ -388,7 +403,8 @@ test('reaction and comment totals reflect writes from other isolates and recheck
   const updated=await (await call(f.env,'reactions')).json();
   assert.deepEqual(updated.types,[{type:'like',count:1,mine:0}]);assert.equal(updated.comments,1);
   f.sql.prepare("UPDATE friendbook_cf_interaction_resources SET state='staging' WHERE resource='posts/p1'").run();
-  assert.equal((await call(f.env,'reactions')).status,503);
+  const staged=await (await call(f.env,'reactions')).json();assert.equal(staged.comments,1);
+  assert.equal((await call(f.env,'reactions','PUT',{type:'love'})).status,503);
 });
 
 test('legacy comment count uses the lookup indexes rather than scanning all root comments', async t => {

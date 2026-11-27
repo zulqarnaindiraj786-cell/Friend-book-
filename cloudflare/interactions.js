@@ -205,7 +205,10 @@ export async function interactions(request, env, identity, match, authorize = au
       interactionResourceState(db,resource),
       authorize({...identity,db}, collection, id, undefined, context, accountReads),
     ]);
-    if (ready && ready.state !== 'verified') return json({ error: 'Resource migration not verified' }, 503);
+    // Staged resources may be browsed read-only (including cursor-paged
+    // comments); writes still require the migration verification gate.
+    if (ready && ready.state !== 'verified' && request.method !== 'GET')
+      return json({ error: 'Resource migration not verified' }, 503);
     if (!allowed) return json({ error: 'Forbidden' }, 403);
     if (!ready) {
       // Keep the insert-or-observe check atomic and in one D1 round trip.
