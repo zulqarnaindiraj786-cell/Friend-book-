@@ -104,6 +104,7 @@ public class ReelsFragment extends Fragment {
     private static final java.util.concurrent.ConcurrentHashMap<String, Long> LOCAL_REEL_TAP_TS =
             new java.util.concurrent.ConcurrentHashMap<>();
     private String initialReelId;
+    private int linkedTargetAttemptedGeneration=-1;
     private boolean followingOnlyMode = false;
     private TextView forYouPill, followingPill;
 
@@ -647,18 +648,26 @@ public class ReelsFragment extends Fragment {
                     if (added) rebuildMergedFeed(adapter == null || adapter.rawReels().isEmpty());
                 });
 
+        // The first page may already contain a deep-linked target. Defer its
+        // exact-document fallback until that page settles to avoid racing a
+        // duplicate point lookup against the same feed read.
         loadNextVideos();
-        if(initialReelId!=null && !initialReelId.isEmpty()) {
-            final int request=videoGeneration; final String target=initialReelId; final String actor=Fb.uid();
-            Fb.db().collection("reels").document(target).get().addOnSuccessListener(doc -> {
-                if(request!=videoGeneration || !java.util.Objects.equals(actor,Fb.uid()) || !isAdded()) return;
-                if(doc.exists()) { addLinkedVideo(doc,true); return; }
-                Fb.db().collection("posts").document(target).get().addOnSuccessListener(post -> {
-                    if(request==videoGeneration && java.util.Objects.equals(actor,Fb.uid()) && isAdded() && post.exists()) addLinkedVideo(post,false);
-                });
-            });
-        }
     }
+    private void loadLinkedTargetIfMissing(int generation,String actor) {
+        String target=initialReelId;
+        if(target==null || target.isEmpty() || generation!=videoGeneration || linkedTargetAttemptedGeneration==generation
+                || !java.util.Objects.equals(actor,Fb.uid()) || !isAdded())return;
+        if(loadedVideoIds.contains("reels/"+target) || loadedVideoIds.contains("posts/"+target))return;
+        linkedTargetAttemptedGeneration=generation;
+        Fb.db().collection("reels").document(target).get().addOnSuccessListener(doc -> {
+            if(generation!=videoGeneration || !java.util.Objects.equals(actor,Fb.uid()) || !isAdded())return;
+            if(doc.exists()){addLinkedVideo(doc,true);return;}
+            Fb.db().collection("posts").document(target).get().addOnSuccessListener(post -> {
+                if(generation==videoGeneration && java.util.Objects.equals(actor,Fb.uid()) && isAdded() && post.exists())addLinkedVideo(post,false);
+            });
+        });
+    }
+
     private void addLinkedVideo(DocumentSnapshot doc,boolean nativeReel) {
         if(Boolean.TRUE.equals(doc.getBoolean("safetyFlagged"))) return;
         Models.Reel reel=nativeReel?Models.Reel.fromDoc(doc):Models.Reel.fromVideoPost(Models.Post.fromDoc(doc));
@@ -713,12 +722,13 @@ public class ReelsFragment extends Fragment {
                 if (fromReels.isEmpty() && fromPosts.isEmpty() && (moreReels || moreVideoPosts)) {
                     // Skip a bounded number of successfully read but filtered pages.
                     // A network error stops here until the user retries.
-                    if (!pageFailed[0] && loadAttempts < 3) { loadAttempts++; loadNextVideos(); }
+                    if (!pageFailed[0] && loadAttempts < 3) { loadAttempts++; loadNextVideos(); return; }
                     else { reelsLoadFailed=true; rebuildMergedFeed(true); }
                 } else {
                     reelsLoadFailed=false;
                     rebuildMergedFeed(adapter == null || adapter.rawReels().isEmpty());
                 }
+                loadLinkedTargetIfMissing(generation,actor);
             }
         };
         for(boolean nativeReel:new boolean[]{true,false}) {
