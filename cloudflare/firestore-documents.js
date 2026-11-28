@@ -3567,7 +3567,7 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0, ct
     if (view === null) return json({ error: 'Forbidden' }, 403);
     if (parts[0]==='users' && parts.length===2 && url.searchParams.get('profileAudience')==='1') {
       // Counting is opt-in and a failed aggregate must not fail the profile.
-      try { view={...view,...await profileAudience(db,parts[1],uid,document.data.followers,row.update_time)}; }
+      try { view={...view,...await profileAudience(db,parts[1],uid,document.data.followers,document.data.friendsCount)}; }
       catch { /* The client can show the ordinary follower count. */ }
     }
     document.data = parts[0]==='config' ? adsView(view) : view;

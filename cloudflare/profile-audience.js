@@ -1,7 +1,8 @@
 /** Profile-only audience graph. Cache the graph per profile so different viewers share one D1 scan. */
 // The audience is a display-only profile count, not an authorization decision.
-// Keep it warm longer during viral profile revisits; profile revisions/follower
-// changes invalidate immediately, while relationship-only changes may lag 60s.
+// Avoid invalidation from unrelated profile edits. The audience depends on the
+// follower list and relationship graph, not the profile document revision.
+// Relationship-only changes may lag for this existing 60-second cache window.
 const AUDIENCE_CACHE_TTL_MS=60_000;
 const AUDIENCE_CACHE_LIMIT=256;
 const audienceCaches=new WeakMap();
@@ -10,9 +11,11 @@ function audienceCache(db) {
   if(!cache){cache=new Map();audienceCaches.set(db,cache);}
   return cache;
 }
-export async function profileAudience(db, profileId, viewerId, followers, profileRevision=null) {
+export async function profileAudience(db, profileId, viewerId, followers, friendsCount=null) {
   const followerList=Array.isArray(followers)?followers:[];
-  const signature=JSON.stringify([profileRevision,followerList]);
+  // Profile revision changes on bio/photo/last-seen edits and needlessly reruns
+  // the D1 graph query. Count/follower changes are the profile-side graph inputs.
+  const signature=JSON.stringify([friendsCount,followerList]);
   const cache=audienceCache(db), key=profileId;
   const now=Date.now(), cached=cache.get(key);
   let audience;

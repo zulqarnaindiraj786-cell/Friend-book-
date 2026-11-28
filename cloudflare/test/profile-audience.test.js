@@ -23,18 +23,23 @@ test('profile audience deduplicates followers, verified friends and pending send
   assert.deepEqual(await profileAudience(db,'bob','chris',['alice','dana'],2),{profileAudienceCount:2,profileAudienceIncludesViewer:false});
 });
 
-test('profile audience coalesces same-viewer repeats briefly and invalidates on profile revision',async()=>{
+test('profile audience ignores metadata revisions but invalidates on graph input changes',async()=>{
   let reads=0;
   const db={prepare(){return {bind(){return {all:async()=>{reads++;return {results:[{uid:'follower'},{uid:'viewer'},{uid:'friend'}]};}}}}}};
   const first=await profileAudience(db,'profile','viewer',['follower'],10);
   const repeated=await profileAudience(db,'profile','viewer',['follower'],10);
   assert.deepEqual(repeated,first);
-  assert.equal(reads,1,'a same-profile refresh during the short display-cache window avoids another graph scan');
+  assert.equal(reads,1,'same-profile refresh avoids another D1 graph query');
   const other=await profileAudience(db,'profile','friend',['follower'],10);
   assert.deepEqual(other,{profileAudienceCount:3,profileAudienceIncludesViewer:true});
   assert.equal(reads,1,'viewers share the profile graph scan while membership remains viewer-specific');
-  await profileAudience(db,'profile','viewer',['follower'],11);
-  assert.equal(reads,2,'profile writes invalidate the cached aggregate');
+  const metadataOnly=await profileAudience(db,'profile','viewer',['follower'],10);
+  assert.deepEqual(metadataOnly,first);
+  assert.equal(reads,1,'unrelated profile revisions do not trigger another graph scan');
+  await profileAudience(db,'profile','viewer',['follower'],12);
+  assert.equal(reads,2,'friend-count changes invalidate immediately');
+  await profileAudience(db,'profile','viewer',['follower','new-follower'],12);
+  assert.equal(reads,3,'follower changes invalidate immediately');
 });
 
 test('concurrent profile refreshes coalesce one D1 graph query across viewers',async()=>{
