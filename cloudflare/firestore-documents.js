@@ -379,8 +379,7 @@ async function boundedInboxPage(db,uid,spec,requestUserReads) {
       // Do not materialize another actor's chat JSON merely to inspect the
       // shared ordered head. The same source-1 membership check gates JSON;
       // authoritative canonical membership is still rechecked below.
-      const head=await db.prepare(`SELECT f.path,f.parent_path,f.collection_id,f.doc_id,
-        f.owner_uid,f.create_time,f.update_time,
+      const base=`SELECT f.path,f.parent_path,f.collection_id,f.doc_id,f.owner_uid,f.create_time,f.update_time,
         CASE WHEN m.chat_path IS NOT NULL THEN f.document_json ELSE '{}' END AS document_json,
         CAST((${inboxSqlActivity}) AS REAL) AS inbox_activity,
         CASE WHEN m.chat_path IS NOT NULL THEN 1 ELSE 0 END AS inbox_member
@@ -388,21 +387,30 @@ async function boundedInboxPage(db,uid,spec,requestUserReads) {
         LEFT JOIN friendbook_cf_chat_participants m INDEXED BY idx_cf_chat_participant_source
           ON m.participant_uid=?1 AND m.source=1 AND m.chat_path=f.path
         WHERE f.path='chats/'||f.doc_id
-          ${predicates.map(p=>' AND '+p.replaceAll('inbox_activity',`(${inboxSqlActivity})`)).join('')}
-        ORDER BY (${inboxSqlActivity}) ${direction},doc_id ${direction} LIMIT ?`)
-        .bind(uid,...bindings.slice(1),seekSize).all();
-      const rows=head.results||[];
-      if(rows.every(row=>Math.abs(row.inbox_activity)<=Number.MAX_SAFE_INTEGER && /^[\x20-\x7e]+$/.test(row.doc_id) && row.path===`chats/${row.doc_id}` && isDocumentPath(row.path))) {
-        const memberRows=rows.filter(row=>row.inbox_member===1);
-        const docs=memberRows.map(row=>rowToDocument({...row,[canonicalRootSnapshot]:true}));
-        if(docs.every((doc,i)=>inboxActivity(doc.data)===memberRows[i].inbox_activity)) {
-          const visible=await visibleDocuments(db,uid,'chats',prefilterRaw(docs,'chats',spec.filters),requestUserReads);
-          if(visible.length>=spec.limit || rows.length<seekSize)
-            return applyQuery(visible.map(doc=>({...doc,data:{...doc.data,inboxActivityAt:inboxActivity(doc.data)}})),spec);
-        }
+          ${predicates.map(p=>' AND '+p.replaceAll('inbox_activity',`(${inboxSqlActivity})`)).join('')}`;
+      const extraDirection=desc?'<':'>';
+      let headCursor=null,headSafe=true;const headVisible=[];
+      // Expensive membership sorts can be sparse in the globally recent head.
+      // Continue the indexed stream in bounded windows before paying to sort all
+      // memberships; every candidate still gets fresh authorization.
+      for(let window=0;window<4;window++) {
+        const seek=headCursor?` AND ((${inboxSqlActivity}) ${extraDirection} ? OR ((${inboxSqlActivity})=? AND f.doc_id ${extraDirection} ?))`:'';
+        const args=[uid,...bindings.slice(1),...(headCursor?[headCursor.time,headCursor.time,headCursor.id]:[]),seekSize];
+        const result=await db.prepare(`${base}${seek} ORDER BY (${inboxSqlActivity}) ${direction},f.doc_id ${direction} LIMIT ?`).bind(...args).all();
+        const rows=result.results||[];
+        if(rows.some(row=>Math.abs(row.inbox_activity)>Number.MAX_SAFE_INTEGER || !/^[\x20-\x7e]+$/.test(row.doc_id)
+          || row.path!==`chats/${row.doc_id}` || !isDocumentPath(row.path))) {headSafe=false;break;}
+        const members=rows.filter(row=>row.inbox_member===1);
+        const docs=members.map(row=>rowToDocument({...row,[canonicalRootSnapshot]:true}));
+        if(docs.some((doc,i)=>inboxActivity(doc.data)!==members[i].inbox_activity)){headSafe=false;break;}
+        const visible=await visibleDocuments(db,uid,'chats',prefilterRaw(docs,'chats',spec.filters),requestUserReads);
+        headVisible.push(...visible.map(doc=>({...doc,data:{...doc.data,inboxActivityAt:inboxActivity(doc.data)}})));
+        if(headVisible.length>=spec.limit)return applyQuery(headVisible,spec);
+        if(rows.length<seekSize)return applyQuery(headVisible,spec);
+        const tail=rows.at(-1);headCursor={time:tail.inbox_activity,id:tail.doc_id};
       }
-      // A sparse user's index attempt must not add a bounded unrelated head to
-      // every request. Retain the exact membership query during cooldown.
+      // Repeatedly sparse/unsafe shared streams yield to the exact membership
+      // query during cooldown rather than adding read work on every inbox load.
       suspendInboxSeek(db,uid);
     } catch(error) {
       if(!/no such index: idx_cf_chat_activity_seek/.test(String(error)))throw error;

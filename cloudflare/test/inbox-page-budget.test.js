@@ -132,15 +132,16 @@ test('shared activity index seeks a bounded head with parity and no per-member w
   } finally {f.sql.close();}
 });
 
-test('sparse shared head uses exact membership page once, then cools down',async()=>{
+test('sparse shared head continues in bounded windows and returns the complete member page',async()=>{
   const f=fixture(true);try {
     for(let i=0;i<100;i++)f.add(`other${i}`,{participants:['alice','eve'],lastMessageTime:1000-i});
     for(let i=0;i<20;i++)f.add(`own${i}`,{participants:['alice','bob'],lastMessageTime:100-i});
     f.expensive();assert.deepEqual(await f.query({}),await f.query({},true));
-    assert.equal(f.reads.filter(r=>r.q.includes('idx_cf_chat_activity_seek')).length,1);
-    assert.ok(f.reads.some(r=>r.q.includes('WITH quota_inbox_candidates')));
-    f.reads.length=0;await f.query({});
-    assert.ok(!f.reads.some(r=>r.q.includes('idx_cf_chat_activity_seek')));
+    assert.equal(f.reads.filter(r=>r.q.includes('idx_cf_chat_activity_seek')).length,2,
+      'the paged request advances once through the shared activity index');
+    assert.ok(!f.reads.some(r=>r.q.includes('WITH quota_inbox_candidates')),
+      'exhausting the indexed stream avoids a full membership sort');
+    assert.ok(f.reads.some(r=>r.q.includes('f.doc_id < ?')),'the next window seeks strictly after the previous activity/id tuple');
   } finally {f.sql.close();}
 });
 
