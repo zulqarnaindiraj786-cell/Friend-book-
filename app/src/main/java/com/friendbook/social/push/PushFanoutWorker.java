@@ -66,7 +66,8 @@ public final class PushFanoutWorker extends Worker {
                         FriendPostNotificationId.windowBucket(System.currentTimeMillis()));
                 for (String to : recipients) {
                     if (!uid.equals(Fb.uid())) {checkpoint.clear();return Result.success();}
-                    if(!checkpoint.select(to) || checkpoint.completed(to))continue;
+                    if(!checkpoint.select(to))continue;
+                    if(checkpoint.completed(to))continue;
                     // One inbox row per author/friend per 12-hour bucket. Even on
                     // ALREADY_EXISTS, enqueue the push: the gateway's durable per-device
                     // claim key includes this notification ID and suppresses duplicate sends.
