@@ -2733,6 +2733,36 @@ function broadcastWrites(db,path,data,owner,row,now) {
 // A page needs only yes/no membership, never the actor's full friend graph or
 // every duplicate historical friendship document. All candidates include the
 // authenticated actor, and the partial pair index excludes malformed arrays.
+async function friendPostRecipients(request,db,uid) {
+  if(request.method!=='POST')return json({error:'Method not allowed'},405);
+  let input;try{input=await request.json();}catch{return json({error:'Invalid JSON'},400);}
+  if(!input || Object.keys(input).length!==0 || !validSegment(uid) || uid.length>128)return json({error:'Invalid request'},400);
+  // Keep the activity timestamp private: this authenticated endpoint returns
+  // recipient IDs only. Seek both canonical participant positions, then apply
+  // the indexed LIMIT before the client creates any D1 notification rows.
+  try {
+    const rows=await db.prepare(`WITH friend_uids(uid) AS (
+        SELECT json_extract(document_json,'$.participants[1]') FROM friendbook_cf_firestore_documents INDEXED BY idx_cf_friend_participant_0
+          WHERE parent_path='friends' AND json_extract(document_json,'$.participants[0]')=?1
+            AND json_type(document_json,'$.participants')='array' AND json_array_length(document_json,'$.participants')=2
+        UNION
+        SELECT json_extract(document_json,'$.participants[0]') FROM friendbook_cf_firestore_documents INDEXED BY idx_cf_friend_participant_1
+          WHERE parent_path='friends' AND json_extract(document_json,'$.participants[1]')=?1
+            AND json_type(document_json,'$.participants')='array' AND json_array_length(document_json,'$.participants')=2
+      )
+      SELECT f.uid FROM friend_uids f
+      LEFT JOIN friendbook_cf_firestore_documents u ON u.path='users/'||f.uid
+      WHERE typeof(f.uid)='text' AND f.uid<>'' AND f.uid<>?1
+      ORDER BY CASE
+        WHEN json_type(u.document_json,'$.lastSeenMs') IN ('integer','real')
+          THEN CAST(json_extract(u.document_json,'$.lastSeenMs') AS REAL)
+        WHEN json_extract(u.document_json,'$.lastSeen.__type')='timestamp'
+          AND json_type(u.document_json,'$.lastSeen.millis') IN ('integer','real')
+          THEN CAST(json_extract(u.document_json,'$.lastSeen.millis') AS REAL)
+        ELSE 0 END DESC, f.uid ASC LIMIT 100`).bind(uid).all();
+    return json({recipients:(rows.results||[]).map(row=>row.uid)});
+  } catch { return json({error:'Friend recipients unavailable'},503); }
+}
 async function friendshipFacts(request,db,uid) {
   if(request.method!=='POST')return json({error:'Method not allowed'},405);
   let input;try{input=await request.json();}catch{return json({error:'Invalid JSON'},400);}
@@ -3498,6 +3528,7 @@ export async function firestoreDocuments(request, env, identity, chatRetry=0, ct
       && writingContent(url.searchParams.get('path') || url.searchParams.get('parent'))))) return json({error:'Account suspended'},403);
 
 
+  if (path === '/v1/firestore/friend-post-recipients') return friendPostRecipients(request,db,uid);
   if (path === '/v1/firestore/friendship-facts') return friendshipFacts(request,db,uid);
   if (path === '/v1/firestore/referral-status') return referralStatus(request,db,uid,now);
   if (path === '/v1/firestore/claim-referral') return claimReferral(request,db,uid,now);

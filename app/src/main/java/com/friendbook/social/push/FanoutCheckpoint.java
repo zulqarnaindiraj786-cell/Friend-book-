@@ -10,7 +10,7 @@ import java.util.*;
 final class FanoutCheckpoint {
     private static final String STORE="friend_post_fanout_progress";
     private static final long MAX_AGE_MS=7L*24*60*60*1000;
-    private static final int MAX_EVENTS=24, BATCH=10;
+    private static final int MAX_EVENTS=24, BATCH=10, MAX_RECIPIENTS=100;
     private final SharedPreferences prefs;
     private final String event;
     private final Set<String> pending=new HashSet<>();
@@ -20,6 +20,15 @@ final class FanoutCheckpoint {
         event=hash(actor+"\n"+post);
         prune(now);
         prefs.edit().putLong("m:"+event,now).apply();
+    }
+    /** Freeze a bounded recipient set across WorkManager retries without storing raw UIDs. */
+    boolean select(String recipient) {
+        String key=hash(recipient),selection="s:"+event+":"+key;
+        if(prefs.getBoolean(selection,false))return true;
+        int selected=0;String prefix="s:"+event+":";
+        for(String stored:prefs.getAll().keySet())if(stored.startsWith(prefix))selected++;
+        if(selected>=MAX_RECIPIENTS)return false;
+        return prefs.edit().putBoolean(selection,true).commit();
     }
     boolean completed(String recipient) {
         String key=hash(recipient);

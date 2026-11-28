@@ -131,6 +131,10 @@ final class D1DocumentTransport {
                 new JSONObject().put("candidates",new JSONArray(candidates)));
     }
 
+    static JSONObject friendPostRecipients() throws Exception {
+        return read("POST","/v1/firestore/friend-post-recipients",new JSONObject());
+    }
+
     static JSONObject getDocument(String path) throws Exception {return getDocument(path,false);}
 
     static JSONObject getDocument(String path, boolean profileAudience) throws Exception {

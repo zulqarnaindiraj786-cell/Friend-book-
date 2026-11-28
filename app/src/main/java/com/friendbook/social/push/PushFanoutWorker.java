@@ -57,21 +57,16 @@ public final class PushFanoutWorker extends Worker {
                 DocumentSnapshot post = Tasks.await(Fb.db().collection("posts").document(id)
                         .get(Source.SERVER), 20, TimeUnit.SECONDS);
                 if (!post.exists() || !uid.equals(post.getString("authorId"))) {checkpoint.clear();return Result.failure();}
-                QuerySnapshot friends = Tasks.await(Fb.db().collection("friends")
-                        .whereArrayContains("participants", uid).get(Source.SERVER), 20, TimeUnit.SECONDS);
+                // Worker returns canonical friends ranked by private last-active time,
+                // capped in SQL before the client creates any D1 notification rows.
+                List<String> recipients=Tasks.await(Fb.db().friendPostRecipients(),20,TimeUnit.SECONDS);
                 // Retries keep the bucket assigned when WorkManager accepted this event,
                 // including retries that happen after a 12-hour boundary.
                 long windowBucket = getInputData().getLong("friend_post_window",
                         FriendPostNotificationId.windowBucket(System.currentTimeMillis()));
-                Set<String> recipients = new TreeSet<>();
-                for (DocumentSnapshot friend : friends) {
-                    Object members = friend.get("participants");
-                    if (members instanceof List) for (Object m : (List<?>) members)
-                        if (m instanceof String && !uid.equals(m)) recipients.add((String) m);
-                }
                 for (String to : recipients) {
                     if (!uid.equals(Fb.uid())) {checkpoint.clear();return Result.success();}
-                    if(checkpoint.completed(to))continue;
+                    if(!checkpoint.select(to) || checkpoint.completed(to))continue;
                     // One inbox row per author/friend per 12-hour bucket. Even on
                     // ALREADY_EXISTS, enqueue the push: the gateway's durable per-device
                     // claim key includes this notification ID and suppresses duplicate sends.

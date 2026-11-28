@@ -280,6 +280,27 @@ public class D1DocumentStore {
         return access.task;
     }
 
+    /** Top 100 trusted friends by private last-active time for bounded post notifications. */
+    public Task<java.util.List<String>> friendPostRecipients() {
+        final String actor=authenticatedUid();
+        return runAsync(() -> {
+            if (!actor.equals(authenticatedUid())) throw new D1DocumentStoreException(
+                    D1DocumentStoreException.Code.CANCELLED,"Account changed before friend-post recipient lookup");
+            org.json.JSONArray rows=D1DocumentTransport.friendPostRecipients().optJSONArray("recipients");
+            if(rows==null || rows.length()>100)throw new D1DocumentStoreException(
+                    D1DocumentStoreException.Code.UNAVAILABLE,"Invalid friend-post recipient response");
+            java.util.LinkedHashSet<String> unique=new java.util.LinkedHashSet<>();
+            for(int i=0;i<rows.length();i++){
+                Object value=rows.opt(i);
+                if(!(value instanceof String) || ((String)value).isEmpty() || !unique.add((String)value))
+                    throw new D1DocumentStoreException(D1DocumentStoreException.Code.UNAVAILABLE,"Invalid friend-post recipient response");
+            }
+            if (!actor.equals(authenticatedUid())) throw new D1DocumentStoreException(
+                    D1DocumentStoreException.Code.CANCELLED,"Account changed during friend-post recipient lookup");
+            return new java.util.ArrayList<>(unique);
+        });
+    }
+
     /** Explicit verification-screen reconciliation, computed and awarded by the Worker. */
     public Task<org.json.JSONObject> referralStatus() {
         return runAsync(D1DocumentTransport::referralStatus);

@@ -93,7 +93,7 @@ export function createWorker(verify = verifyFirebaseToken) {
       const video = path === '/v1/videos' || Boolean(phoneVideo);
       const photo = path === '/v1/photos';
       const safety = path === '/v1/safety/scan';
-      const firestore = path === '/v1/chat/call' || path === '/v1/firestore/friendship-facts' || path === '/v1/firestore/referral-status' || path === '/v1/firestore/claim-referral' || path === '/v1/live/pk' || path === '/v1/firestore/document' || path === '/v1/firestore/query' || path === '/v1/firestore/profile-bootstrap'
+      const firestore = path === '/v1/chat/call' || path === '/v1/firestore/friend-post-recipients' || path === '/v1/firestore/friendship-facts' || path === '/v1/firestore/referral-status' || path === '/v1/firestore/claim-referral' || path === '/v1/live/pk' || path === '/v1/firestore/document' || path === '/v1/firestore/query' || path === '/v1/firestore/profile-bootstrap'
         || path === '/v1/firestore/batch' || path === '/v1/firestore/transaction' || path === '/v1/firestore/count'
         || path === '/v1/admin/recover-social' || path === '/v1/admin/moderation' || path === '/v1/admin/broadcast' || path === '/v1/firestore/story-engagement';
       const fcm = path === '/functions/v1/send-fcm-notification' || path === '/functions/v1/bulk-mentions';
