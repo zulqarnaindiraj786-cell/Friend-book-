@@ -2040,20 +2040,42 @@ async function boundedNotificationPage(db,uid,spec) {
       return db.prepare(`SELECT 1 AS hit FROM ${table} a WHERE ${where} LIMIT 1`).bind(...args).first();
     }
   };
+  const exceptional=`(a.doc_id GLOB '*[^ -~]*' OR a.path<>'notifications/'||a.doc_id OR ${standard.replaceAll('document_json','a.document_json')})`;
   const canonicalBad=await probe('friendbook_cf_firestore_documents','idx_cf_notif_exceptions',`parent_path='notifications'${byRecipient}${unreadOnly}
       AND (doc_id GLOB '*[^ -~]*' OR path<>'notifications/'||doc_id OR ${standard})`,recipientArgs);
-  if (canonicalBad) return null;
+  let exceptionRows=[];
+  if(canonicalBad) {
+    try {
+      const result=await db.prepare(`SELECT a.path,a.parent_path,a.collection_id,a.doc_id,a.owner_uid,a.document_json,a.create_time,a.update_time
+        FROM friendbook_cf_firestore_documents a INDEXED BY idx_cf_notif_exceptions
+        WHERE a.parent_path='notifications' AND json_extract(a.document_json,'$.toUserId')=?${unreadOnly.replaceAll('document_json','a.document_json')}
+          AND ${exceptional} LIMIT 513`).bind(uid).all();
+      exceptionRows=result.results||[];
+      // Bound compatibility work; very large malformed inboxes retain the exact
+      // generic evaluator rather than materializing an unbounded exception set.
+      if(exceptionRows.length>512)return null;
+    } catch(error) {
+      if(!String(error).includes('no such index: idx_cf_notif_exceptions'))throw error;
+      return null;
+    }
+  }
   const rank=`CASE WHEN json_type(a.document_json,'$.createdAt') IN ('integer','real') THEN 2 ELSE 4 END`;
   const time=`CASE WHEN json_type(a.document_json,'$.createdAt') IN ('integer','real') THEN json_extract(a.document_json,'$.createdAt') ELSE json_extract(a.document_json,'$.createdAt.millis') END`;
   const chunk=spec.limit, direction=delta?'ASC':'DESC';
   const seekSpec=delta?{...spec,orderBy:[{field:'createdAt',direction:'ASCENDING'}]}:spec;
   const visible=[];
+  const normalOnly=canonicalBad?` AND NOT ${exceptional}`:'';
   const ordered=`ORDER BY ${rank} ${direction},${time} ${direction},a.doc_id ${direction} LIMIT ?`;
   async function readStore(bound,args) {
-    return db.prepare(`SELECT a.path,a.parent_path,a.collection_id,a.doc_id,a.owner_uid,a.document_json,a.create_time,a.update_time
-      FROM friendbook_cf_firestore_documents a WHERE a.parent_path='notifications'${byRecipient}${unreadOnly}${bound}
-      ${ordered}`).bind(...args).all();
-
+    const select=`SELECT a.path,a.parent_path,a.collection_id,a.doc_id,a.owner_uid,a.document_json,a.create_time,a.update_time
+      FROM friendbook_cf_firestore_documents a`;
+    const where=` WHERE a.parent_path='notifications'${byRecipient}${unreadOnly}${normalOnly}${bound} ${ordered}`;
+    const index=unread.length?'idx_cf_notif_unread':'idx_cf_notif_page';
+    try { return await db.prepare(`${select} INDEXED BY ${index}${where}`).bind(...args).all(); }
+    catch(error) {
+      if(!String(error).includes(`no such index: ${index}`))throw error;
+      return db.prepare(`${select}${where}`).bind(...args).all();
+    }
   }
   async function readWindow() {
     if(!delta) {
@@ -2065,7 +2087,7 @@ async function boundedNotificationPage(db,uid,spec) {
         const index=unread.length?'idx_cf_notif_unread':'idx_cf_notif_page';
         const columns='a.path,a.parent_path,a.collection_id,a.doc_id,a.owner_uid,a.document_json,a.create_time,a.update_time';
         const table='friendbook_cf_firestore_documents';
-        const condition=`a.parent_path='notifications'${byRecipient}${unreadOnly}`;
+        const condition=`a.parent_path='notifications'${byRecipient}${unreadOnly}${normalOnly}`;
         try {
           const base=`SELECT ${columns},${rank} AS quota_notif_rank,${time} AS quota_notif_time FROM ${table} a INDEXED BY ${index} WHERE ${condition}`;
           const same=`${base} AND (${rank})=? AND (${time})<=? AND (${time},a.doc_id)<(?,?) ORDER BY ${time} DESC,a.doc_id DESC LIMIT ?`;
@@ -2095,7 +2117,15 @@ async function boundedNotificationPage(db,uid,spec) {
   }
   for (;;) {
     const canonical=await readWindow();
-    const docs=sortDocuments((canonical.results||[]).map(rowToDocument).filter(Boolean),seekSpec.orderBy).slice(0,chunk);
+    let exceptionalDocs=exceptionRows.map(rowToDocument).filter(Boolean);
+    if(cursor && exceptionalDocs.length) {
+      const cursorValue=cursor[0]===2?cursor[1]:{__type:'timestamp',millis:cursor[1]};
+      exceptionalDocs=exceptionalDocs.filter(doc=>{
+        const cmp=compareValues(doc.data.createdAt,cursorValue) || (doc.id<cursor[2]?-1:doc.id>cursor[2]?1:0);
+        return delta?cmp>0:cmp<0;
+      });
+    }
+    const docs=sortDocuments([...(canonical.results||[]).map(rowToDocument).filter(Boolean),...exceptionalDocs],seekSpec.orderBy).slice(0,chunk);
     if (!docs.length) break;
     const allowed=docs.filter(doc=>canReadNotification(doc.path,uid,doc.data));
     visible.push(...allowed);
