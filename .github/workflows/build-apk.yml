@@ -240,10 +240,17 @@ jobs:
           cp app/build/outputs/bundle/release/app-release.aab friendbook-playstore.aab
           cp app/build/outputs/apk/release/app-release.apk friendbook.apk
           cp app/build/outputs/mapping/release/mapping.txt friendbook-mapping.txt
+          unzip -tq friendbook-playstore.aab
+          unzip -tq friendbook.apk
+          unzip -Z1 friendbook-playstore.aab | grep -Fx 'base/manifest/AndroidManifest.xml'
+          unzip -Z1 friendbook-playstore.aab | grep -Fx 'BundleConfig.pb'
           unzip -l friendbook-playstore.aab | grep "proguard.map"
           test -s friendbook-mapping.txt && echo "Verified non-empty R8 deobfuscation mapping.txt"
+          AAB_BYTES=$(stat -c '%s' friendbook-playstore.aab)
+          test "$AAB_BYTES" -ge 1000000 || { echo "::error::AAB unexpectedly small: ${AAB_BYTES} bytes"; exit 1; }
           ls -lh friendbook-playstore.aab friendbook.apk friendbook-mapping.txt
           sha256sum friendbook.apk friendbook-playstore.aab friendbook-mapping.txt > friendbook-SHA256SUMS.txt
+          sha256sum --check friendbook-SHA256SUMS.txt
 
       - name: Upload Google Play Store Signed AAB
         uses: actions/upload-artifact@v4
@@ -285,7 +292,24 @@ jobs:
           gh release create "$TAG" friendbook.apk friendbook-playstore.aab friendbook-mapping.txt friendbook-SHA256SUMS.txt \
             --target "$GITHUB_SHA" --prerelease --latest=false \
             --title "FriendBook ${VER} (${VCODE}) — consolidated signed quota candidate" \
-            --notes "Signed candidate from source ${GITHUB_SHA}, versionCode ${VCODE}. Includes the cumulative changes in this branch. Release JVM tests and APK/AAB signatures verified. Not merged, not uploaded to Google Play, not auto-installed, and not a full-day quota guarantee. Production Latest unchanged. SHA256 checksums and R8 mapping attached."
+            --notes "Signed candidate from source ${GITHUB_SHA}, versionCode ${VCODE}. Includes the cumulative changes in this branch. APK/AAB ZIP integrity and signatures verified; remote AAB size and SHA256 verified after upload. Not merged, not uploaded to Google Play, not auto-installed, and not a full-day quota guarantee. Production Latest unchanged. SHA256 checksums and R8 mapping attached."
+          EXPECTED_BYTES=$(stat -c '%s' friendbook-playstore.aab)
+          EXPECTED_SHA=$(sha256sum friendbook-playstore.aab | awk '{print $1}')
+          for attempt in 1 2 3 4 5; do
+            ASSET_SIZE=$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${TAG}" --jq '.assets[] | select(.name=="friendbook-playstore.aab") | .size' 2>/dev/null || true)
+            ASSET_DIGEST=$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${TAG}" --jq '.assets[] | select(.name=="friendbook-playstore.aab") | .digest' 2>/dev/null || true)
+            REMOTE_BYTES=${ASSET_SIZE:-missing}
+            REMOTE_SHA=${ASSET_DIGEST#sha256:}
+            if [ "$REMOTE_BYTES" = "$EXPECTED_BYTES" ] && [ "$REMOTE_SHA" = "$EXPECTED_SHA" ]; then
+              echo "::notice::Published AAB verified: ${REMOTE_BYTES} bytes; SHA256 matches local build."
+              break
+            fi
+            if [ "$attempt" = 5 ]; then
+              echo "::error::Published AAB size/digest mismatch (local ${EXPECTED_BYTES} bytes, remote ${REMOTE_BYTES:-missing} bytes). Do not use this release asset."
+              exit 1
+            fi
+            sleep 3
+          done
 
       # Publish the owner-requested release APK + Play Store AAB so in-app updates serve the new Cloudflare APK.
       - name: Publish Signed Release APK + Play Store AAB to GitHub Releases
